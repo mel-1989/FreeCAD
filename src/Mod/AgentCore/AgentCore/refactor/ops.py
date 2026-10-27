@@ -192,6 +192,10 @@ def _looks_like_cell_or_unit(name):
     # Spreadsheet aliases may not look like cells (A1) or units (W, m, mm).
     if re.fullmatch(r"[A-Za-z]{1,2}[0-9]+", name):
         return True
+    if not re.fullmatch(r"[A-Za-z]+", name):
+        # Never hand FreeCAD's unit parser a mixed name such as "F6Noop_Length": on this build it can raise a
+        # C++ exception that Python cannot catch and the whole process exits (found by the F6+F3 corpus run).
+        return False
     try:
         FreeCAD.Units.Quantity("1 " + name)
         return True
@@ -242,6 +246,16 @@ def lift_literal(doc, obj, prop, *, target="VarSet", container=None, alias=None,
         cont.recompute()
     expr = f"{cont.Name}.{alias}"
     obj.setExpression(path, expr)
+
+    def undo_additions():
+        try:
+            if target == "VarSet":
+                cont.removeProperty(alias)
+            else:
+                cont.clear(cell)
+                cont.recompute()
+        except Exception:
+            pass
     try:
         back = obj.evalExpression(expr)
         back = back.Value if hasattr(back, "Value") else float(back)
@@ -250,6 +264,7 @@ def lift_literal(doc, obj, prop, *, target="VarSet", container=None, alias=None,
         back, mismatch = repr(exc), True
     if mismatch:
         obj.setExpression(path, None)
+        undo_additions()   # leave no orphan VarSet property or Spreadsheet cell/alias behind
         raise ValueError(f"lift of {obj.Name}.{prop} would change the value {value!r} -> {back!r}")
     return {"object": obj.Name, "property": prop, "target": target, "container": cont.Name,
             "alias": alias, "expression": expr, "value": value, "cell": cell}
@@ -365,6 +380,51 @@ def _consumers_ok(feat, body):
     return nxt
 
 
+SIZE_TYPES = ("App::PropertyLength", "App::PropertyDistance", "App::PropertyAngle")
+PROBE_FACTORS = (10.0, 0.1)
+
+
+def _size_insensitive(doc, feat, base, budget):
+    """R8: the feature still equals its base when each of its own size properties (Length, Distance,
+    Angle; one at a time) is scaled by 10 and by 0.1. A pocket that merely cuts air at its current
+    depth fails this, a pattern with one occurrence passes.
+
+    The probe runs on a copy of the whole Body in a throw-away document, so the live document is never
+    touched: no property writes, no extra recomputes and no nested transaction inside an F3 ``AgentTurn``
+    (probing in place left LinearPattern ``Spacings`` lists that FreeCAD's undo could not restore).
+    """
+    props = [p for p in feat.PropertiesList if feat.getTypeIdOfProperty(p) in SIZE_TYPES
+             and getattr(feat, p).Value != 0]
+    if not props:
+        return True
+    body = body_of(feat)
+    if body is None:
+        return False
+    active = FreeCAD.ActiveDocument.Name if FreeCAD.ActiveDocument else None
+    tmp = FreeCAD.newDocument("F6R8probe")
+    try:
+        tmp.copyObject(body, True)
+        tf, tb = tmp.getObject(feat.Name), tmp.getObject(base.Name)
+        if tf is None or tb is None:
+            return False
+        tmp.recompute(None, True)
+        for p in props:
+            orig = getattr(tf, p)
+            for f in PROBE_FACTORS:
+                setattr(tf, p, orig.Value * f)
+                tmp.recompute(None, True)
+                sa, sb = _vchecks._shape(tf), _vchecks._shape(tb)
+                if (sa is None or sb is None or (set(tf.State) & {"Invalid", "Error"})
+                        or not shapes_identical(sa, sb, budget)):
+                    return False
+            setattr(tf, p, orig)
+        return True
+    finally:
+        FreeCAD.closeDocument(tmp.Name)
+        if active and active in FreeCAD.listDocuments():
+            FreeCAD.setActiveDocument(active)
+
+
 def find_redundant(doc, *, budget=150):
     """Features that safety rules R1 to R7 prove to be no-ops. Read-only; returns one record per feature."""
     out = []
@@ -390,6 +450,8 @@ def find_redundant(doc, *, budget=150):
             sa, sb = _vchecks._shape(feat), _vchecks._shape(base)
             if sa is None or sb is None or not shapes_identical(sa, sb, budget):
                 continue                                    # R7: result geometry equals the base
+            if not _size_insensitive(doc, feat, base, budget):
+                continue                                    # R8: and stays equal under its own size properties
             out.append({"object": feat.Name, "body": body.Name, "base": base.Name,
                         "next": [c.Name for c in nxt], "tip": body.Tip is feat})
     return out

@@ -7,7 +7,7 @@ from . import geomhash
 
 
 def invariant(doc, fn, *, tol=None, rollback=True, force_recompute=True, budget=150,
-              max_deviation_bodies=40, measure_deviation=True):
+              max_deviation_bodies=geomhash.DEFAULT_DEVIATION_BODIES, measure_deviation=True):
     """Hash the geometry, run ``fn(doc)``, recompute, hash again, and fail on any change.
 
     Returns ``{"ok", "status", "before", "after", "violations", "result", "error",

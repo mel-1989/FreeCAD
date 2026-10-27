@@ -31,7 +31,7 @@ Status: **draft, not yet signed off.** The brief reserves the definition of "red
 
 ## Merging redundant features (`find_redundant`, `merge_redundant`)
 
-A feature is merged away only when **all** of R1 to R7 hold. The merge is one feature at a time, re-checking after each removal, and is meant to run under `invariant`.
+A feature is merged away only when **all** of R1 to R8 hold. The merge is one feature at a time, re-checking after each removal, and is meant to run under `invariant`.
 
 | Rule | Statement |
 |---|---|
@@ -41,16 +41,21 @@ A feature is merged away only when **all** of R1 to R7 hold. The merge is one fe
 | R4 | It is not suppressed. A suppressed feature is something the user parked, not something redundant. |
 | R5 | It has no expressions of its own. |
 | R6 | No expression anywhere in the document mentions its name or label. |
+| R8 | It still equals its base when each of its own size properties (`Length`, `Distance` or `Angle` type, one at a time) is scaled by 10 and by 0.1; the probe runs on a copy of the whole Body in a throw-away document, so the live document is never written and the check nests safely inside an F3 `AgentTurn`. A pocket that merely cuts air at today's depth fails R8; a pattern with one occurrence passes. |
 | R7 | Its resulting shape equals its base feature's shape: same type and validity, identical topology counts, volume, area, bounding box and centre of mass to 1e-9 relative, and sampled point-to-surface deviation of at most 1e-9 mm in both directions (or the same OCCT shape). |
 
 Removal rewires the next feature's `BaseFeature` to the removed feature's base, moves the body's `Tip` if the removed feature was the Tip, then removes the object from the body and the document.
 
-R7 is evidence by measurement, not a proof of equivalence: a feature could match its base today and differ after a parameter change (for example a pocket that cuts nothing at a depth of 3 mm and something at 30 mm). Decision needed from a human: whether R7 alone is enough, or whether a merge must also require the feature type to be one of a short allowlist (pattern with one occurrence, pocket or groove that removes no volume, pad or revolution that adds none).
+R7 alone is evidence by measurement, not a proof of equivalence: a feature could match its base today and differ after a parameter change (a pocket that cuts nothing at 3 mm and something at 30 mm). R8 closes that gap for size parameters by measuring the feature at 10x and 0.1x each of them; it does not cover enumerations, flags or the sketch the feature depends on, so it is still a measurement rather than a proof. Decision needed from a human: whether R7 plus R8 is enough, or whether a merge must also require the feature type to be on a short allowlist (pattern with one occurrence, pocket or groove that removes no volume, pad or revolution that adds none). A pocket that equals its base at today's depth but would cut deeper at another depth (the verifier's `AirPocket` probe) is now kept, and so is a duplicate pocket that only matches because both cut to the same depth.
+
+## What the oracle covers
+
+The point-to-surface deviation is measured for up to `geomhash.DEFAULT_DEVIATION_BODIES` (400) top-level bodies per document, and each result reports `deviation_covered` and `deviation_truncated` so a larger document is never checked silently with less; beyond the cap only the metric tolerances apply.
 
 ## Open questions for the reviewer
 
 1. Should a redundant Tip be merged (the Tip moves to the base), or only interior features?
-2. Is R7's measured equality enough, or add a type allowlist?
+2. Are R7 and R8's measured equality enough, or add a type allowlist?
 3. Should lifting be restricted to the properties that drive a feature (Length, Radius, Angle) and skip incidental ones such as `TaperAngle` = 0?
 4. Should relabelling skip objects imported from another file or referenced by a Link?
 

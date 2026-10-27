@@ -27,6 +27,7 @@ from . import deviation
 
 _TOL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tolerances.json")
 _GRID = 2.0**-20
+DEFAULT_DEVIATION_BODIES = 400   # deviation is measured for this many top-level bodies; beyond it only metrics apply
 
 _CLASS = {"darwin": "darwin-clang", "linux": "linux-gcc", "windows": "windows-msvc"}
 
@@ -91,7 +92,8 @@ def _snapped(m):
 class Snapshot:
     """Per-object geometry metrics plus copies of the top-level body shapes."""
 
-    def __init__(self, objects, bodies, shapes, validity):
+    def __init__(self, objects, bodies, shapes, validity, deviation_cap=None):
+        self.deviation_cap = deviation_cap
         self.objects = objects      # name -> {"type", "label", "state", "shape": metrics or None}
         self.bodies = bodies        # top-level solid object names
         self.shapes = shapes        # body name -> Part.Shape copy
@@ -112,10 +114,12 @@ class Snapshot:
             "objects": len(self.objects),
             "shape_objects": sum(1 for o in self.objects.values() if o["shape"] is not None),
             "bodies": list(self.bodies),
+            "deviation_covered": len(self.shapes),
+            "deviation_truncated": self.deviation_cap is not None and len(self.bodies) > self.deviation_cap,
         }
 
 
-def snapshot(doc, *, max_deviation_bodies=40):
+def snapshot(doc, *, max_deviation_bodies=DEFAULT_DEVIATION_BODIES):
     """Measure ``doc`` as it stands (no recompute). Shapes are copied for the top-level bodies."""
     objects, shapes = {}, {}
     body_names = [o.Name for o in _vchecks.bodies(doc)]
@@ -129,7 +133,7 @@ def snapshot(doc, *, max_deviation_bodies=40):
                 shapes[o.Name] = shp.copy()
         objects[o.Name] = entry
     validity = _run_checks(doc, ["validity"])["results"][0]
-    return Snapshot(objects, body_names, shapes, validity)
+    return Snapshot(objects, body_names, shapes, validity, max_deviation_bodies)
 
 
 def _failed(entry):
