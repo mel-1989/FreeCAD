@@ -22,6 +22,19 @@ def settled(doc):
     return snapshot_dump(doc)
 
 
+def restored(doc, before):
+    """Dump after an undo, judged the way ``reject`` judges one: Touched flags
+    are cleared when they are the only gap, otherwise one settling recompute.
+    (A blanket recompute would re-run objects undo merely touched; Draft's
+    WPProxy, for one, rebuilds as a 1 x 1 plane when recomputed headless.)"""
+    from AgentCore.diff import transplant
+    gaps = differences(before, snapshot_dump(doc), rel_tol=0.0, abs_tol=0.0)
+    if all("/state" in g.split(":", 1)[0] and "Touched" in g for g in gaps):
+        transplant.align_touched(doc, before)
+        return snapshot_dump(doc)
+    return settled(doc)
+
+
 class _AuthCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -36,7 +49,7 @@ class TestRejectCorpus(_AuthCase):
     """Scripted add/edit/delete turns on every F1 fixture, then reject."""
 
     def test_reject_restores_pre_turn_dump_on_every_f1_fixture(self):
-        report = {}
+        report, exact = {}, {}
         for key in db.F1_FIXTURES:
             doc = db.open_f1_fixture(key)
             try:
@@ -49,12 +62,25 @@ class TestRejectCorpus(_AuthCase):
                 res = t.reject()
                 report[key] = res
                 self.assertTrue(res["equal"], f"{key}: {res['differences'][:5]} after {done}")
+                # No tolerance at all: exact F1 dump always; byte-equal persistent
+                # properties whenever no settling recompute was needed.
+                self.assertEqual(differences(t.before, snapshot_dump(doc), rel_tol=0.0, abs_tol=0.0), [], key)
+                if not res["settled"][doc.Name]:
+                    self.assertTrue(res["exact"], key)
+                exact[key] = (res["exact"], res["settled"][doc.Name])
                 self.assertEqual(res["method"], "undo", key)
+                self.assertEqual(doc.RedoCount, 0, key)  # the rejected segments cannot be redone
+                if "deleted" in done:                 # a pre-existing feature was removed
+                    self.assertIn(done["deleted"], [f["name"] for f in cs["features"]["removed"]], key)
                 self.assertEqual((doc.UndoCount, list(doc.UndoNames)), base, key)
                 self.assertEqual(differences(t.before, settled(doc)), [], key)
             finally:
                 db.close(doc)
         self.assertEqual(sorted(report), sorted(db.F1_FIXTURES))
+        # the Assembly example re-solves differently on a recompute: reject must not recompute it
+        self.assertEqual(exact["upstream_assembly_example"], (True, False))
+        self.assertEqual(sum(1 for e, s in exact.values() if not s), len(exact) - 1, exact)
+        print(f"F3 reject corpus: (exact, settled) {exact}")
 
     def test_accept_then_undo_equals_reject_on_every_f1_fixture(self):
         drift = {}
@@ -72,16 +98,19 @@ class TestRejectCorpus(_AuthCase):
                 diffs = differences(t.after, after)
                 self.assertEqual(diffs, res["detail_drift"], key)
                 kinds = {o["name"]: o["type"] for o in after["objects"]}
-                for d in diffs:  # only derived data may drift (see AgentTurn._flatten)
+                cs = t.change_set()
+                changed = set(cs["features"]["modified"]) | {f["name"] for f in cs["features"]["added"]}
+                for d in diffs:  # only derived data of changed objects may drift (see AgentTurn._flatten)
                     parts = d.split(":", 1)[0].split("/")
                     idx = int(parts[2])
+                    self.assertIn(after["objects"][idx]["name"], changed, f"{key}: {d}")
                     if parts[3] == "detail":
                         self.assertTrue(after["objects"][idx]["type"].startswith("TechDraw::"), f"{key}: {d} {kinds}")
                     else:
                         self.assertEqual(parts[3], "state", f"{key}: {d}")
                 drift[key] = len(diffs)
                 doc.undo()
-                self.assertEqual(differences(t.before, settled(doc)), [], f"{key}: accept-then-undo != reject")
+                self.assertEqual(differences(t.before, restored(doc, t.before)), [], f"{key}: accept-then-undo != reject")
                 self.assertEqual(doc.UndoCount, base, key)
             finally:
                 db.close(doc)
@@ -194,6 +223,80 @@ class TestNested(_AuthCase):
             self.assertEqual(res["method"], "snapshot")
             self.assertTrue(res["equal"], res["differences"])
             self.assertEqual(self.doc.Block.Length.Value, 40)
+
+
+class TestRedoAfterReject(_AuthCase):
+    """A rejected turn must not come back through redo (that would bypass the token)."""
+
+    def setUp(self):
+        self.doc = db.build_holed_block("f3_redo")
+        self.doc.clearUndos()
+
+    def tearDown(self):
+        db.close(self.doc)
+
+    def test_redo_after_reject_is_empty(self):
+        self.doc.openTransaction("human")
+        self.doc.Block.Width = 33
+        self.doc.commitTransaction()
+        with AgentTurn(self.doc, label="redo bypass", verify=False) as t:
+            self.doc.Block.Length = 77
+            self.doc.openTransaction("nested")
+            self.doc.Hole.Radius = 4
+            self.doc.commitTransaction()
+            self.doc.Block.Height = 15
+        self.assertGreaterEqual(t.change_set()["transactions"]["segments"], 2)
+        res = t.reject()
+        self.assertTrue(res["exact"], res)
+        self.assertEqual(self.doc.RedoCount, 0)
+        self.assertEqual(self.doc.RedoNames, [])
+        self.assertEqual(self.doc.UndoNames, ["human"])        # the human's entry is untouched
+        self.doc.redo()
+        self.doc.redo()
+        self.assertEqual((self.doc.Block.Length.Value, self.doc.Hole.Radius.Value, self.doc.Block.Height.Value),
+                         (40, 3, 10))
+        self.assertEqual(self.doc.Block.Width.Value, 33)
+        self.assertIsNone(self.doc.getObject("AgentCoreDropRedo"))
+
+    def test_redo_after_exception_reject_is_empty(self):
+        with self.assertRaises(ValueError):
+            with AgentTurn(self.doc, label="boom", verify=False):
+                self.doc.Block.Length = 66
+                raise ValueError("agent failed")
+        self.assertEqual(self.doc.RedoCount, 0)
+        self.doc.redo()
+        self.assertEqual(self.doc.Block.Length.Value, 40)
+
+    def test_human_redo_survives_an_empty_turn(self):
+        self.doc.openTransaction("human")
+        self.doc.Block.Width = 33
+        self.doc.commitTransaction()
+        self.doc.undo()
+        with AgentTurn(self.doc, label="no-op", verify=False) as t:
+            pass
+        t.reject()
+        self.assertEqual(self.doc.RedoNames, ["human"])        # a turn that changed nothing drops nothing
+
+
+class TestFlattenDriftRule(unittest.TestCase):
+    """Which flatten differences ``accept`` tolerates (``turn._derived``)."""
+
+    DUMP = {"objects": [{"name": "Sketch", "type": "Sketcher::SketchObject"},
+                        {"name": "View", "type": "TechDraw::DrawViewPart"},
+                        {"name": "Box", "type": "Part::Box"}]}
+
+    def test_rule(self):
+        from AgentCore.diff.turn import _derived
+        allowed = {"Sketch", "View", "Box"}
+        self.assertTrue(_derived("/objects/0/state/0: 'Up-to-date' != 'Invalid'", self.DUMP, allowed))
+        self.assertTrue(_derived("/objects/1/detail/visible_edges: 4 != 0", self.DUMP, allowed))
+        self.assertFalse(_derived("/objects/2/detail/volume: 1 != 2", self.DUMP, allowed))     # not TechDraw
+        self.assertFalse(_derived("/objects/0/properties/3/value: 1 != 2", self.DUMP, allowed))  # a property
+        self.assertFalse(_derived("/objects/0/expressions: x", self.DUMP, allowed))
+        # an object the turn did not change may not drift at all
+        self.assertFalse(_derived("/objects/0/state/0: 'Up-to-date' != 'Invalid'", self.DUMP, {"View"}))
+        self.assertFalse(_derived("/objects/1/detail/visible_edges: 4 != 0", self.DUMP, {"Sketch"}))
+        self.assertFalse(_derived("/structure/x: 1 != 2", self.DUMP, allowed))
 
 
 class TestChangeSet(_AuthCase):

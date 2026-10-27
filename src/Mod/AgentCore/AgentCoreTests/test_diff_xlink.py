@@ -93,8 +93,51 @@ class TestXLink(unittest.TestCase):
             self.assertEqual(d.UndoNames, [t.undo_name], d.Name)   # one entry per document
         self.assertEqual(self.src.SrcBox.Length.Value, 20)
         self.assertIsNotNone(self.src.getObject("SrcBall"))
-        self.asm.undo()
+        self.assertTrue(res["shared_transaction"], res)            # both entries carry one transaction id,
+        self.assertEqual(res["undo_entries_by_document"], {self.asm.Name: 1, self.src.Name: 1})
+        self.asm.undo()                                             # which the GUI's undo reverts together
         self.src.undo()
+        self.assert_pre()
+
+    def test_failed_flatten_rolls_every_document_back(self):
+        """Accept is atomic: a flatten failure in the second document undoes
+        the first document's flattened entry too and ends the turn rejected."""
+        from AgentCore.diff import FlattenError, transplant
+        t = self._cross_turn(self.asm)
+        real, calls = transplant.apply, []
+
+        def failing(doc, cap, **kw):          # replay the first document, fail on the second
+            calls.append(doc.Name)
+            out = real(doc, cap, **kw)
+            if len(calls) == 2:
+                raise transplant.TransplantError("injected failure in the second document")
+            return out
+        transplant.apply = failing
+        try:
+            with self.assertRaises(transplant.TransplantError):
+                t.accept(self.auth.mint(t))
+        finally:
+            transplant.apply = real
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(t.status, "rejected")
+        self.assertIn("injected failure", t.result["accept_error"])
+        self.assertTrue(t.result["equal"], t.result["differences"])
+        self.assertEqual(t.result["methods"], {self.asm.Name: "undo", self.src.Name: "undo"})
+        for d in (self.src, self.asm):
+            self.assertEqual(d.UndoCount, 0, d.Name)               # nothing of the turn is left
+            self.assertEqual(d.RedoCount, 0, d.Name)               # and nothing can be redone
+        self.assertIsNone(self.src.getObject("SrcBall"))
+        self.assert_pre()
+        self.assertTrue(issubclass(FlattenError, Exception))
+
+    def test_reject_leaves_nothing_to_redo_in_either_document(self):
+        t = self._cross_turn(self.asm)
+        t.reject()
+        for d in (self.src, self.asm):
+            self.assertEqual(d.RedoCount, 0, d.Name)
+            d.redo()
+        self.assertEqual(self.src.SrcBox.Length.Value, 12)
+        self.assertIsNone(self.asm.getObject("LinkCyl"))
         self.assert_pre()
 
     def test_reject_from_snapshots_across_documents(self):

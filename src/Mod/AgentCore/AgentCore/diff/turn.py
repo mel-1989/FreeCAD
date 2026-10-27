@@ -37,10 +37,12 @@ How the transaction is held (headless, Python only, no C++ guard yet):
   is then *proposed*: nothing more is recorded into it.
 
 ``reject`` restores a dump equal to the pre-turn dump (see ``compare`` for
-the transient caches excluded); if the undo stack no longer holds the
-turn (another transaction landed on top, or ``UndoMaxStackSize`` trimmed it)
-it restores from the before-state snapshot instead. ``accept`` requires an
-``ApplyToken`` minted by the installed ``ApplyAuthority``.
+the transient caches excluded; ``result["exact"]`` is the no-tolerance,
+byte-level check); if the undo stack no longer holds the turn (another
+transaction landed on top, or ``UndoMaxStackSize`` trimmed it) it restores
+from the before-state snapshot instead, and it empties the redo stack the
+turn left. ``accept`` requires an ``ApplyToken`` minted by the installed
+``ApplyAuthority`` and is all or nothing across covered documents.
 """
 
 import itertools
@@ -77,26 +79,27 @@ def _shapes(doc):
     return out
 
 
-def _derived(diff_line):
-    path = diff_line.split(":", 1)[0]
-    parts = path.split("/")
-    return "/detail/" in path or (len(parts) > 3 and parts[1] == "objects" and parts[3] == "state")
+def _derived(diff_line, dump, allowed):
+    """True when a flatten difference is tolerated derived data.
 
-
-def _align_touched(doc, dump):
-    """Give objects the Touched flag they had in ``dump``."""
-    for o in dump.get("objects", []):
-        obj = doc.getObject(o["name"])
-        if obj is None:
-            continue
-        want, have = "Touched" in o["state"], "Touched" in [str(s) for s in obj.State]
-        try:
-            if want and not have:
-                obj.touch()
-            elif have and not want:
-                obj.purgeTouched()
-        except Exception:
-            pass
+    Only on objects the turn itself added or modified (``allowed``): their
+    ``state`` flags (Touched/Invalid of features the turn left broken) and,
+    on TechDraw objects only, F1's ``detail`` caches. Any difference on an
+    object the turn did not change, and any property, expression or link
+    difference anywhere, is a hard flatten failure.
+    """
+    parts = diff_line.split(":", 1)[0].split("/")
+    if len(parts) < 4 or parts[1] != "objects":
+        return False
+    try:
+        obj = dump["objects"][int(parts[2])]
+    except (ValueError, IndexError, KeyError):
+        return False
+    if obj.get("name") not in allowed:
+        return False
+    if parts[3] == "state":
+        return True
+    return parts[3] == "detail" and str(obj.get("type", "")).startswith("TechDraw::")
 
 
 class _Observer:
@@ -284,7 +287,9 @@ class AgentTurn:
             rec["before"] = _dump(d)
             rec["before_shapes"] = _shapes(d) if self.geometry_diff else {}
             if self.store is not None:
-                rec["snapshot"] = self.store.save_before(d, self.turn_id, self.label)
+                rec["snapshot"] = self.store.save_before(d, self.turn_id, self.label, dump=rec["before"])
+            rec["before_cap"] = transplant.capture(d)
+            rec["before_raw"] = compare.raw_state_of_capture(rec["before_cap"])
             rec["base_undo"] = d.UndoCount
             rec["base_names"] = list(d.UndoNames)
         self.snapshot = self._main()["snapshot"]
@@ -427,42 +432,107 @@ class AgentTurn:
         d = rec["doc"]
         return rec["undo_complete"] and (d.UndoCount, list(d.UndoNames)) == rec["exit_undo"]
 
+    # ------------------------------------------------------------ reject
     def reject(self):
-        """Undo the whole turn; returns ``{"equal", "method", "differences"}``."""
+        """Undo the whole turn.
+
+        Returns ``{"equal", "exact", "method", "methods", "settled",
+        "differences"}``. ``equal``: the F1 dump matches the pre-turn dump at
+        F1's tolerance (1e-9). ``exact``: it matches with no tolerance at all
+        and every persistent non-shape property serialises to the same bytes
+        (``compare.raw_state``). The turn's undone entries are dropped from
+        the redo stack, so a later ``redo()`` cannot bring the rejected
+        changes back without an apply token.
+        """
         if self.status not in ("open", "proposed"):
             raise TurnError(f"cannot reject a turn that is {self.status}")
         if self.status == "open":  # exception inside the body
             for rec in self._recs:
                 self._count_segments(rec)
-        methods, diffs = {}, []
+        methods = {rec["name"]: self._rewind(rec) for rec in self._recs}
+        return self._finish_reject(methods)
+
+    def _rewind(self, rec):
+        """Bring one document back to its before-state; returns the method."""
+        d, phase = rec["doc"], rec.get("phase")
+        if phase == "committed" and d.UndoNames and d.UndoNames[0] == self.undo_name:
+            d.undo()  # the one flattened entry
+            return "undo"
+        if phase == "undone":  # flatten undid the segments, nothing was replayed
+            return "undo"
+        if phase is None and self._stack_holds(rec):
+            for _ in range(rec["segments"]):
+                d.undo()
+            return "undo"
+        if rec["snapshot"] is not None:
+            self.store.restore(d, self.turn_id, transaction=None, document=d.Name)
+            return "snapshot"
+        raise TurnError(f"the undo stack of {d.Name} no longer holds this turn and there is no snapshot")
+
+    def _exact(self, rec):
+        d = rec["doc"]
+        return not compare.differences(rec["before"], _dump(d), rel_tol=0.0, abs_tol=0.0) and \
+            not compare.raw_differences(rec["before_raw"], compare.raw_state(d))
+
+    def _finish_reject(self, methods, **extra):
         for rec in self._recs:
-            d = rec["doc"]
-            method = "undo"
-            if self._stack_holds(rec):
-                for _ in range(rec["segments"]):
-                    d.undo()
-            elif rec["snapshot"] is not None:
-                method = "snapshot"
-                self.store.restore(d, self.turn_id, transaction=None, document=d.Name)
+            self._drop_redos(rec)
+        diffs, settled, exact = [], {}, {}
+        for rec in self._recs:
+            d, name = rec["doc"], rec["name"]
+            # Undo restores every property; only Touched flags are left set.
+            # Clearing them, rather than recomputing, keeps solver outputs
+            # (Assembly placements) bit for bit as they were.
+            # Undo restores every property; what it leaves behind is Touched
+            # flags. When that is the only difference, the flags are cleared
+            # instead of recomputing, which keeps solver outputs (Assembly
+            # placements) bit for bit. Anything else (Invalid flags after a
+            # Body delete is undone) gets the settling recompute.
+            gaps = compare.differences(rec["before"], _dump(d), rel_tol=0.0, abs_tol=0.0)
+            only_touched = all("/state" in x.split(":", 1)[0] and "Touched" in x for x in gaps)
+            if only_touched and not compare.raw_differences(rec["before_raw"], compare.raw_state(d)):
+                transplant.align_touched(d, rec["before"])
+                settled[name] = False
             else:
-                raise TurnError(f"the undo stack of {d.Name} no longer holds this turn and there is no snapshot")
-            methods[rec["name"]] = method
-        for rec in self._recs:
-            self._settle_outside(rec["doc"])
-        for rec in self._recs:
-            dd = compare.differences(rec["before"], _dump(rec["doc"]))
-            if dd and methods[rec["name"]] == "undo" and rec["snapshot"] is not None:
-                methods[rec["name"]] = "undo+snapshot"
-                self.store.restore(rec["doc"], self.turn_id, transaction=None, document=rec["name"])
-                self._settle_outside(rec["doc"])
-                dd = compare.differences(rec["before"], _dump(rec["doc"]))
-            prefix = "" if rec is self._main() else f"[{rec['name']}]"
+                self._settle_outside(d)
+                settled[name] = True
+            dd = compare.differences(rec["before"], _dump(d))
+            if dd and methods[name] == "undo" and rec["snapshot"] is not None:
+                methods[name] = "undo+snapshot"
+                self.store.restore(d, self.turn_id, transaction=None, document=name)
+                self._settle_outside(d)
+                settled[name] = True
+                dd = compare.differences(rec["before"], _dump(d))
+            exact[name] = self._exact(rec)
+            prefix = "" if rec is self._main() else f"[{name}]"
             diffs += [prefix + x for x in dd]
         self.status = "rejected"
         self._restore_env()
-        self.result = {"decision": "rejected", "equal": not diffs, "method": methods[self.doc.Name],
-                       "methods": methods, "differences": diffs}
+        self.result = {"decision": "rejected", "equal": not diffs, "exact": all(exact.values()),
+                       "exact_documents": exact, "method": methods[self.doc.Name], "methods": methods,
+                       "settled": settled, "differences": diffs, **extra}
         return self.result
+
+    def _drop_redos(self, rec):
+        """Empty the redo stack the rejected turn left behind.
+
+        FreeCAD has no Python call that clears only the redo stack, but opening
+        a transaction does (``Document::_openTransaction``). So a throw-away
+        object is added inside a transaction that is then aborted: the abort
+        rolls the add back and no undo entry is left.
+        """
+        d = rec["doc"]
+        if not d.RedoCount or not (rec.get("segments") or rec.get("phase")):
+            return  # a turn that recorded nothing leaves the human's redo stack alone
+        n = (d.UndoCount, list(d.UndoNames))
+        with _Active(d):
+            d.openTransaction("AgentCore: drop rejected redo")
+            try:
+                d.addObject("App::FeaturePython", "AgentCoreDropRedo")
+            finally:
+                d.abortTransaction()
+        if d.RedoCount or (d.UndoCount, list(d.UndoNames)) != n or d.getObject("AgentCoreDropRedo") is not None:
+            raise TurnError(f"could not clear the redo stack of {d.Name}")
 
     def _settle_outside(self, doc):
         n = doc.UndoCount
@@ -472,18 +542,35 @@ class AgentTurn:
         if doc.UndoCount != n:
             raise TurnError("settling recompute was recorded into a transaction")
 
+    # ------------------------------------------------------------ accept
     def accept(self, token=None):
-        """Keep the turn as exactly one undo entry per document. Needs a human-minted token."""
+        """Keep the turn as one undo entry per document, all sharing one
+        FreeCAD transaction id (so the GUI's undo reverts every document of a
+        cross-document turn together). Needs a human-minted token.
+
+        Accept is all or nothing: if flattening fails in any document, every
+        document is rolled back to its before-state, the turn ends
+        ``rejected`` (``result["accept_error"]`` says why) and the error is
+        re-raised.
+        """
         if self.status != "proposed":
             raise TurnError(f"cannot accept a turn that is {self.status}")
         _auth.verify_token(token, self.turn_id, self.digest())
-        flattened, drift = {}, []
-        for rec in self._recs:
-            if rec["segments"] and (rec["segments"] != 1 or rec["segment_names"][0] != self.undo_name):
-                if not self._stack_holds(rec):
-                    raise TurnError(f"the undo stack of {rec['name']} no longer holds this turn; cannot flatten it")
-                drift += self._flatten(rec)
-                flattened[rec["name"]] = True
+        live = [rec for rec in self._recs if rec["segments"]]
+        if len(live) > 1 or any(rec["segments"] != 1 or rec["segment_names"][0] != self.undo_name for rec in live):
+            todo = live  # several documents are always re-recorded, so they share one transaction id
+        else:
+            todo = []
+        for rec in todo:  # check every document before touching any
+            if not self._stack_holds(rec):
+                raise TurnError(f"the undo stack of {rec['name']} no longer holds this turn; cannot flatten it")
+        drift, tid, shared = [], None, len(live) <= 1
+        if todo:
+            try:
+                drift, tid, shared = self._flatten(todo)
+            except Exception as exc:
+                self._abort_accept(exc)
+                raise
         self.status = "accepted"
         if self.store is not None:
             for rec in self._recs:
@@ -491,41 +578,82 @@ class AgentTurn:
                     self.store.record(self.turn_id, document=rec["name"], status="accepted",
                                       undo_name=self.undo_name if rec["segments"] else None)
         self._restore_env()
-        self.result = {"decision": "accepted", "flattened": bool(flattened.get(self.doc.Name)),
-                       "flattened_documents": sorted(flattened),
-                       "undo_entries": 1 if self._main()["segments"] else 0, "detail_drift": drift}
+        self.result = {"decision": "accepted", "flattened": self._main() in todo,
+                       "flattened_documents": sorted(r["name"] for r in todo),
+                       "undo_entries": 1 if self._main()["segments"] else 0,
+                       "undo_entries_by_document": {r["name"]: 1 if r["segments"] else 0 for r in self._recs},
+                       "transaction_id": tid, "shared_transaction": shared, "detail_drift": drift}
         return self.result
 
-    def _flatten(self, rec):
-        doc = rec["doc"]
-        cap = transplant.capture(doc)
-        for _ in range(rec["segments"]):
-            doc.undo()
-        with _Active(doc):
-            App.setActiveTransaction(self.undo_name)
+    def _abort_accept(self, exc):
+        methods = {}
+        for rec in self._recs:
             try:
-                # No recompute: every output property is in the capture, and
-                # solvers (Assembly, Sketcher) re-run from a restored state may
-                # not land on the same solution. Touched flags are set to match.
-                problems = transplant.apply(doc, cap, recompute=False)
-                _align_touched(doc, rec["after"])
-                diffs = compare.differences(rec["after"], compare.snapshot_dump(doc))
-            finally:
-                doc.commitTransaction()
-        hard = [d for d in diffs if not _derived(d)]
-        if problems or hard:
-            raise FlattenError(f"flattened state of {doc.Name} differs from the turn's after-state: "
-                               f"{problems[:5]} {hard[:5]}")
-        # Derived, non-property data can differ from the turn's own
-        # after-state when that state was not a recompute fixed point: F1's
-        # ``detail`` caches (TechDraw edge counts and dimension values of
-        # views orphaned by a page delete) and object ``state`` flags of
-        # features left broken by the turn (Touched/Invalid after a Body
-        # delete). Every property, expression and link is still required to
-        # match; this drift is reported in ``accept()["detail_drift"]``.
-        if not doc.UndoNames or doc.UndoNames[0] != self.undo_name:
-            raise FlattenError(f"flatten did not leave one '{self.undo_name}' entry: {doc.UndoNames[:3]}")
-        rec["segments"] = 1
-        rec["segment_names"] = [self.undo_name]
-        rec["exit_undo"] = (doc.UndoCount, list(doc.UndoNames))
-        return diffs
+                methods[rec["name"]] = self._rewind(rec)
+            except Exception as inner:
+                methods[rec["name"]] = f"failed: {inner}"
+        self._finish_reject(methods, accept_error=f"{type(exc).__name__}: {exc}")
+
+    def _flatten(self, todo):
+        """Re-record the turn in ``todo``'s documents as one transaction."""
+        caps = {rec["name"]: transplant.capture(rec["doc"]) for rec in todo}
+        for rec in todo:
+            rec["phase"] = "undoing"
+            for _ in range(rec["segments"]):
+                rec["doc"].undo()
+            rec["phase"] = "undone"
+        problems, booked = {}, {}
+        # With no active document, setActiveTransaction opens an application
+        # wide transaction: every document changed while it is open records
+        # into it under the same id (a per-document booking gives each
+        # document its own id, and an unbooked document records nothing).
+        App.setActiveDocument("")
+        tid = App.setActiveTransaction(self.undo_name)
+        try:
+            # No recompute: every output property is in the capture, and
+            # solvers (Assembly, Sketcher) re-run from a restored state may
+            # not land on the same solution. Touched flags are set to match.
+            # Linked documents first, so links into them resolve.
+            for rec in reversed(todo):
+                d = rec["doc"]
+                with _Active(d):
+                    problems[rec["name"]] = transplant.apply(d, caps[rec["name"]], recompute=False)
+                    transplant.align_touched(d, rec["after"])
+                booked[rec["name"]] = d.getBookedTransactionID()
+        finally:
+            try:
+                App.closeActiveTransaction(False, tid)
+            except Exception:
+                pass
+            for rec in todo:
+                d = rec["doc"]
+                with _Active(d):
+                    if d.HasPendingTransaction:
+                        d.commitTransaction()
+                rec["phase"] = "committed"
+        drift = []
+        for rec in todo:
+            d, name = rec["doc"], rec["name"]
+            diffs = compare.differences(rec["after"], _dump(d))
+            ch = object_changes(rec["before"], rec["after"])
+            allowed = set(ch["features"]["modified"]) | {f["name"] for f in ch["features"]["added"]}
+            hard = [x for x in diffs if not _derived(x, rec["after"], allowed)]
+            if problems.get(name) or hard:
+                raise FlattenError(f"flattened state of {name} differs from the turn's after-state: "
+                                   f"{problems.get(name, [])[:5]} {hard[:5]}")
+            # Derived, non-property data of objects the turn changed can
+            # differ from the turn's own after-state when that state was not a
+            # recompute fixed point: TechDraw ``detail`` caches (edge counts
+            # and dimension values of views orphaned by a page delete) and
+            # ``state`` flags of features left broken by the turn
+            # (Touched/Invalid after a Body delete). It is reported in
+            # ``accept()["detail_drift"]``.
+            if not d.UndoNames or d.UndoNames[0] != self.undo_name:
+                raise FlattenError(f"flatten did not leave one '{self.undo_name}' entry in {name}: {d.UndoNames[:3]}")
+            rec["segments"] = 1
+            rec["segment_names"] = [self.undo_name]
+            rec["exit_undo"] = (d.UndoCount, list(d.UndoNames))
+            prefix = "" if rec is self._main() else f"[{name}]"
+            drift += [prefix + x for x in diffs]
+        ids = set(booked.values())
+        return drift, tid, len(ids) == 1 and 0 not in ids
