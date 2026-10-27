@@ -27,7 +27,20 @@ def _load(name):
     return mod
 
 
-@unittest.skipUnless(os.path.isdir(MODELS), "control repo golden models not found")
+ALLOW_MISSING = os.environ.get("CADFORK_ALLOW_MISSING_CORPUS") == "1"
+
+
+class TestCorpusPresent(unittest.TestCase):
+    def test_control_repo_corpus_exists(self):
+        # A missing corpus must never read as a pass: only CADFORK_ALLOW_MISSING_CORPUS=1 may skip it.
+        if os.path.isdir(MODELS):
+            return
+        if ALLOW_MISSING:
+            self.skipTest("control repo golden models not found (CADFORK_ALLOW_MISSING_CORPUS=1)")
+        self.fail(f"control repo corpus not found at {MODELS}; set CADFORK_CTL, or CADFORK_ALLOW_MISSING_CORPUS=1 to skip")
+
+
+@unittest.skipUnless(os.path.isdir(MODELS), "control repo golden models not found (reported by TestCorpusPresent)")
 class TestScriptedModels(unittest.TestCase):
     def build(self, name):
         helpers, mod = _load("_helpers"), _load(name)
