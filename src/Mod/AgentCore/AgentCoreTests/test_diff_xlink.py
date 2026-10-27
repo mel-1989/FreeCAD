@@ -102,6 +102,14 @@ class TestXLink(unittest.TestCase):
     def test_failed_flatten_rolls_every_document_back(self):
         """Accept is atomic: a flatten failure in the second document undoes
         the first document's flattened entry too and ends the turn rejected."""
+        self._failed_flatten(fail_on=2)
+
+    def test_failed_flatten_on_first_document_rolls_back_the_unreached_one(self):
+        """A failure in the first replay leaves the second document undone but
+        never replayed; it must count as rolled back by undo, not as failed."""
+        self._failed_flatten(fail_on=1)
+
+    def _failed_flatten(self, fail_on):
         from AgentCore.diff import FlattenError, transplant
         t = self._cross_turn(self.asm)
         real, calls = transplant.apply, []
@@ -109,7 +117,7 @@ class TestXLink(unittest.TestCase):
         def failing(doc, cap, **kw):          # replay the first document, fail on the second
             calls.append(doc.Name)
             out = real(doc, cap, **kw)
-            if len(calls) == 2:
+            if len(calls) == fail_on:
                 raise transplant.TransplantError("injected failure in the second document")
             return out
         transplant.apply = failing
@@ -118,7 +126,7 @@ class TestXLink(unittest.TestCase):
                 t.accept(self.auth.mint(t))
         finally:
             transplant.apply = real
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), fail_on)
         self.assertEqual(t.status, "rejected")
         self.assertIn("injected failure", t.result["accept_error"])
         self.assertTrue(t.result["equal"], t.result["differences"])

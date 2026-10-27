@@ -267,6 +267,20 @@ class TestRedoAfterReject(_AuthCase):
         self.doc.redo()
         self.assertEqual(self.doc.Block.Length.Value, 40)
 
+    def test_snapshot_reject_keeps_the_humans_redo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with AgentTurn(self.doc, label="snap", verify=False, store=SnapshotStore(tmp)) as t:
+                self.doc.Block.Length = 55
+            for name, prop in (("human A", "Width"), ("human B", "Height")):  # edits land on top of the turn
+                self.doc.openTransaction(name)
+                setattr(self.doc.Block, prop, 21)
+                self.doc.commitTransaction()
+            self.doc.undo()                                    # the human undoes B: B is on the redo stack
+            res = t.reject()
+            self.assertEqual(res["method"], "snapshot")
+            self.assertTrue(res["equal"], res["differences"])
+            self.assertEqual(self.doc.RedoNames, ["human B"])  # not the turn's to drop
+
     def test_human_redo_survives_an_empty_turn(self):
         self.doc.openTransaction("human")
         self.doc.Block.Width = 33

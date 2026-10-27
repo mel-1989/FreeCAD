@@ -476,7 +476,8 @@ class AgentTurn:
 
     def _finish_reject(self, methods, **extra):
         for rec in self._recs:
-            self._drop_redos(rec)
+            if methods[rec["name"]] != "snapshot":  # a snapshot restore undid nothing: the redo stack is the human's
+                self._drop_redos(rec)
         diffs, settled, exact = [], {}, {}
         for rec in self._recs:
             d, name = rec["doc"], rec["name"]
@@ -630,7 +631,8 @@ class AgentTurn:
                 with _Active(d):
                     if d.HasPendingTransaction:
                         d.commitTransaction()
-                rec["phase"] = "committed"
+                if d.UndoNames and d.UndoNames[0] == self.undo_name and d.UndoCount > rec["base_undo"]:
+                    rec["phase"] = "committed"  # holds the new entry; a document the replay never reached stays "undone"
         drift = []
         for rec in todo:
             d, name = rec["doc"], rec["name"]
