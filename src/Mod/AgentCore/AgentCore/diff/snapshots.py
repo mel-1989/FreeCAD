@@ -23,7 +23,7 @@ import time
 
 import FreeCAD as App
 
-from . import transplant
+from . import compare, transplant
 
 
 class SnapshotStore:
@@ -48,14 +48,22 @@ class SnapshotStore:
                 return e
         raise KeyError((turn_id, document))
 
-    def save_before(self, doc, turn_id, label=""):
+    def save_before(self, doc, turn_id, label="", dump=None):
+        """Write the before-state copy; ``dump`` (the turn's canonical F1
+        dump) is stored beside it so a restore can tell whether it needs a
+        recompute at all."""
         seq = len(self.entries) + 1
         folder = os.path.join(self.root, f"{seq:04d}-{turn_id}")
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, f"{doc.Name}.FCStd")
         doc.saveCopy(path)
+        dump_path = None
+        if dump is not None:
+            dump_path = os.path.join(folder, f"{doc.Name}.dump.json")
+            with open(dump_path, "w", encoding="utf-8") as f:
+                json.dump(dump, f, sort_keys=True)
         e = {"turn": turn_id, "seq": seq, "document": doc.Name, "label": label, "path": path,
-             "status": "open", "undo_name": None, "time": time.time()}
+             "dump": dump_path, "status": "open", "undo_name": None, "time": time.time()}
         self.entries.append(e)
         self._save_index()
         return dict(e)
@@ -83,6 +91,23 @@ class SnapshotStore:
             if prev and prev in App.listDocuments():
                 App.setActiveDocument(prev)
 
+    def _dump_of(self, turn_id, document):
+        p = self.entry(turn_id, document).get("dump")
+        if not p or not os.path.exists(p):
+            return None
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+
+    @staticmethod
+    def _dump(doc):
+        prev = App.ActiveDocument.Name if App.ActiveDocument else None
+        App.setActiveDocument(doc.Name)
+        try:
+            return compare.snapshot_dump(doc)
+        finally:
+            if prev and prev != doc.Name and prev in App.listDocuments():
+                App.setActiveDocument(prev)
+
     def restore(self, doc, turn_id, transaction=None, document=None):
         """Replay the before-state of ``turn_id`` into ``doc``.
 
@@ -95,14 +120,22 @@ class SnapshotStore:
             App.setActiveTransaction(transaction)
         try:
             changed = set()
-            problems = transplant.apply(doc, cap, changed=changed)
-            # Objects rebuilt from the file are recomputed once more, as after
-            # a load (solver details of re-created sketches are not saved).
-            for name in sorted(changed):
-                o = doc.getObject(name)
-                if o is not None:
-                    o.touch()
-            doc.recompute()
+            problems = transplant.apply(doc, cap, changed=changed, recompute=False)
+            # Every output property is in the file, so a recompute is needed
+            # only where the replay leaves the state short of the saved dump
+            # (solver details of re-created sketches are not saved). Skipping
+            # it otherwise keeps solver outputs (Assembly placements) exactly
+            # as saved: a solver re-run from a restored state can land on a
+            # different solution.
+            ref = self._dump_of(turn_id, document or doc.Name)
+            if ref is not None:
+                transplant.align_touched(doc, ref)
+            if ref is None or compare.differences(ref, self._dump(doc)):
+                for name in sorted(changed):
+                    o = doc.getObject(name)
+                    if o is not None:
+                        o.touch()
+                doc.recompute()
         finally:
             if transaction:
                 doc.commitTransaction()

@@ -34,6 +34,7 @@ to the document it was dumped from, which differs for a snapshot file.
 """
 
 from ..state.values import property_value
+from .compare import _unzip
 
 # Property status integers as returned by getPropertyStatus().
 _STATUS_TRANSIENT = {4, 25}
@@ -51,6 +52,13 @@ def _status(obj, name):
         return set(int(s) for s in obj.getPropertyStatus(name) if isinstance(s, int))
     except Exception:
         return set()
+
+
+def _same_content(a, b):
+    """Equal serialised content. ``dumpPropertyContent`` returns a zip whose
+    header carries the dump time, so raw bytes taken in different seconds
+    differ for the same value; the zip members are compared instead."""
+    return a == b or _unzip(a) == _unzip(b)
 
 
 def capture(doc):
@@ -90,6 +98,22 @@ def capture(doc):
             exprs = {}
         out.append({"name": o.Name, "type": o.TypeId, "dynamic": dyn, "props": props, "expressions": exprs})
     return out
+
+
+def align_touched(doc, dump):
+    """Give objects the Touched flag they had in ``dump``."""
+    for o in dump.get("objects", []):
+        obj = doc.getObject(o["name"])
+        if obj is None:
+            continue
+        want, have = "Touched" in o["state"], "Touched" in [str(s) for s in obj.State]
+        try:
+            if want and not have:
+                obj.touch()
+            elif have and not want:
+                obj.purgeTouched()
+        except Exception:
+            pass
 
 
 def _remove(doc, names):
@@ -184,7 +208,7 @@ def _apply_once(doc, cap, changed, recompute):
                     if "value" in entry:
                         if property_value(o, p, entry["type"]) == entry["value"]:
                             continue
-                    elif o.dumpPropertyContent(p) == entry["raw"]:
+                    elif _same_content(o.dumpPropertyContent(p), entry["raw"]):
                         continue
                     o.restorePropertyContent(p, entry["raw"])
                     changed.add(c["name"])

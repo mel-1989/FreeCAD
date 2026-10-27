@@ -60,7 +60,11 @@ def snapshot_dump(doc):
 
 
 def differences(a, b, path="", out=None, limit=50, rel_tol=1e-9, abs_tol=1e-9):
-    """List of human-readable differences between two canonical dumps."""
+    """List of human-readable differences between two canonical dumps.
+
+    Numbers compare with ``math.isclose`` at ``rel_tol``/``abs_tol`` (1e-9 by
+    default, F1's tolerance); pass 0 for both to compare exactly.
+    """
     out = [] if out is None else out
     if len(out) >= limit:
         return out
@@ -87,6 +91,60 @@ def differences(a, b, path="", out=None, limit=50, rel_tol=1e-9, abs_tol=1e-9):
     elif a != b:
         out.append(f"{path}: {a!r} != {b!r}")
     return out
+
+
+def _unzip(raw):
+    """Members of a ``dumpPropertyContent`` zip, without the zip header.
+
+    The header carries the time the content was dumped, so two dumps of the
+    same value differ in bytes 10 to 13; the members themselves are compared.
+    """
+    import io
+    import zipfile
+    try:
+        z = zipfile.ZipFile(io.BytesIO(bytes(raw)))
+        return tuple((n, z.read(n)) for n in sorted(z.namelist()))
+    except Exception:
+        return bytes(raw)
+
+
+def raw_state(doc):
+    """``{object: {property: serialised content}}`` plus expressions.
+
+    Byte-level twin of ``snapshot_dump`` for exactness checks: every persistent
+    property as FreeCAD serialises it (``transplant.capture``). Shape
+    properties are left out: their serialisation embeds element-map hasher
+    indices that differ between two recomputes of the same model, so shapes
+    are judged by F1's shape summary in ``snapshot_dump`` instead.
+    """
+    from . import transplant
+    return raw_state_of_capture(transplant.capture(doc))
+
+
+def raw_state_of_capture(cap):
+    """``raw_state`` of an existing ``transplant.capture`` result."""
+    out = {}
+    for o in cap:
+        props = {p: _unzip(v["raw"]) for p, v in o["props"].items()
+                 if p not in TRANSIENT_CACHES and "PropertyPartShape" not in v.get("type", "")}
+        props["@expressions"] = tuple(sorted(o["expressions"].items()))
+        out[o["name"]] = props
+    return out
+
+
+def raw_differences(a, b, limit=50):
+    """``object.property`` names whose serialised content differs."""
+    out = []
+    for n in sorted(set(a) | set(b)):
+        if n not in a or n not in b:
+            out.append(f"{n}: only in {'after' if n in b else 'before'}")
+            continue
+        for p in sorted(set(a[n]) | set(b[n])):
+            if a[n].get(p) != b[n].get(p):
+                out.append(f"{n}.{p}")
+        if len(out) >= limit:
+            break
+    return out[:limit]
 
 
 def digest(obj):
