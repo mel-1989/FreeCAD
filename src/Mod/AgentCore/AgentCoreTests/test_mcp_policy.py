@@ -34,6 +34,49 @@ class TestPolicy(unittest.TestCase):
         for code in ("doc.commitTransaction()", "doc.abortTransaction()", "doc.undo()"):
             self.assertFalse(policy.decide(policy.scan(code))[0], code)
 
+    def test_verifier_bypass_strings_refused(self):
+        """Every bypass the F4 verifier found came back allowed; now each is refused in every mode."""
+        for code in ('getattr(turn, "acc"+"ept")(1)',
+                     'f=getattr; f(turn,"accept")',
+                     'getattr(doc,"commit"+"Transaction")()',
+                     'App.closeActiveTransaction()',
+                     'App.setActiveTransaction("mine")',
+                     'FreeCAD.ActiveDocument.commitTransaction()',
+                     'from AgentCore.diff import authority as A; au=A.ApplyAuthority.install()',
+                     'import AgentCore.diff.authority',
+                     'from AgentCore.diff.authority import verify_token',
+                     'import AgentCore.diff.approver as ap',
+                     '__import__("AgentCore.diff." + "authority")',
+                     'importlib.import_module("AgentCore.diff.authority")',
+                     'n = "acc"; m = n + "ept"; getattr(t, m)()',
+                     't.__getattribute__("".join(["acc", "ept"]))()',
+                     'object.__getattribute__(t, "%sept" % "acc")()',
+                     'getattr(t, "{}ept".format("acc"))()',
+                     'getattr(doc, "odnu"[::-1])()',
+                     'setattr(authority, "_VERIFIER", None)',
+                     'vars(t)["accept"]',
+                     'A._VERIFIER.__closure__[0].cell_contents',
+                     'g = getattr\nh = g\nh(doc, "un" + "do")()'):
+            r = policy.scan(code)
+            self.assertTrue(r["refused"], code)
+            for mode in policy.MODES:
+                self.assertFalse(policy.decide(r, mode)[0], (code, mode))
+
+    def test_dynamic_access_flagged_and_strict_refuses(self):
+        for code in ("getattr(t, name)()", "f = getattr", "import gc\ngc.get_objects()",
+                     "fn.__closure__", "x = vars()", "setattr(o, k, v)"):
+            r = policy.scan(code)
+            self.assertEqual(r["refused"], [], code)
+            cats = {f["category"] for f in r["flags"]}
+            self.assertTrue(cats & {"dynamic_attr", "introspection"}, (code, r))
+            self.assertTrue(policy.decide(r, "flag")[0], code)
+            self.assertFalse(policy.decide(r, "strict")[0], code)
+
+    def test_ordinary_getattr_with_literal_is_clean(self):
+        r = policy.scan("v = getattr(doc.getObject('Box'), 'Length')\nresult = 'acc' + 'uracy'")
+        self.assertEqual(r["refused"], [])
+        self.assertEqual(r["flags"], [])
+
     def test_syntax_error(self):
         r = policy.scan("def (")
         self.assertIsNotNone(r["syntax_error"])
