@@ -11,7 +11,9 @@ things are left out, both deliberately:
   ``GeoFeature::_ElementMapVersion`` is the only one: it is empty on a freshly
   opened file and set the first time a shape changes outside a restore or a
   transaction, and undo does not clear it again (it is not part of the
-  persistent document state at all);
+  persistent document state at all); ``Part::PropertyShapeCache``
+  ``_Part_ShapeCache`` (App::Link's cache of resolved sub-shapes, filled on
+  demand and emptied whenever the link's inputs are rewritten);
 - the ``volume`` of a shape with no solids. OCCT's volume of a face or a
   datum plane is numerical noise (values like 1e167 that change on every
   rebuild); F1 keeps it, comparison does not.
@@ -22,7 +24,7 @@ import math
 
 from .. import state
 
-TRANSIENT_CACHES = frozenset({"_ElementMapVersion"})
+TRANSIENT_CACHES = frozenset({"_ElementMapVersion", "_Part_ShapeCache"})
 IGNORE_TOP = ("generator",)
 
 

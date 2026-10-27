@@ -115,23 +115,26 @@ def _remove(doc, names):
         pending = nxt
 
 
-def apply(doc, cap, rounds=3, changed=None):
+def apply(doc, cap, rounds=3, changed=None, recompute=True):
     """Make ``doc`` hold the captured state. Returns a list of problems.
 
     The sequence runs again while it still creates or removes objects (a
     delete that cascades to children the capture keeps, for example).
     ``changed``, if given, is a set that receives the names of objects that
-    were created or had a property restored.
+    were created or had a property restored. ``recompute=False`` skips the
+    recompute before removal: the capture already holds every output
+    property, and re-running solvers (Assembly, Sketcher) from a restored
+    state is not guaranteed to land on the same solution.
     """
     changed = set() if changed is None else changed
     for _ in range(rounds):
-        problems, work = _apply_once(doc, cap, changed)
+        problems, work = _apply_once(doc, cap, changed, recompute)
         if not work:
             break
     return problems
 
 
-def _apply_once(doc, cap, changed):
+def _apply_once(doc, cap, changed, recompute):
     problems = []
     work = 0
     created = set()
@@ -223,7 +226,8 @@ def _apply_once(doc, cap, changed):
                 problems.append(f"{c['name']}.{p}: restore failed: {exc}")
     # Removal last: owners such as a TechDraw page tear their children down
     # on delete, which must see the already-restored inputs.
-    doc.recompute()
+    if recompute:
+        doc.recompute()
     extra = [o.Name for o in doc.Objects if o.Name not in wanted]
     _remove(doc, extra)
     work += len(extra)

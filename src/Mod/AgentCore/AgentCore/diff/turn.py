@@ -28,8 +28,9 @@ How the transaction is held (headless, Python only, no C++ guard yet):
 - **Flattening.** ``accept`` turns K segments into exactly one undo entry:
   it captures the after-state with FreeCAD's per-property serialisation,
   undoes the K segments (back to the before-state), opens one transaction
-  and replays the captured state into it (``transplant``), then verifies the
-  F1 dump equals the after-state dump. ``reject`` needs no flattening: it
+  and replays the captured state into it (``transplant``, no recompute: the
+  outputs are replayed too), then verifies the F1 dump equals the after-state
+  dump. ``reject`` needs no flattening: it
   undoes the K segments.
 - On exit the document is settled inside the turn (``recompute()``), F2 runs
   again, the last segment is committed and the observer removed. The turn
@@ -503,12 +504,12 @@ class AgentTurn:
         with _Active(doc):
             App.setActiveTransaction(self.undo_name)
             try:
-                problems = transplant.apply(doc, cap)
-                doc.recompute()
+                # No recompute: every output property is in the capture, and
+                # solvers (Assembly, Sketcher) re-run from a restored state may
+                # not land on the same solution. Touched flags are set to match.
+                problems = transplant.apply(doc, cap, recompute=False)
+                _align_touched(doc, rec["after"])
                 diffs = compare.differences(rec["after"], compare.snapshot_dump(doc))
-                if diffs:
-                    _align_touched(doc, rec["after"])
-                    diffs = compare.differences(rec["after"], compare.snapshot_dump(doc))
             finally:
                 doc.commitTransaction()
         hard = [d for d in diffs if not _derived(d)]
