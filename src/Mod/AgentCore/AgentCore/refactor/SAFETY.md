@@ -4,7 +4,7 @@ tags: [type/method, for/human, status/live]
 
 # Refactor safety rules (F6): draft for human sign-off
 
-Status: **draft, not yet signed off.** The brief reserves the definition of "redundant" for a human decision (10 h budgeted). These are the rules the code in `ops.py` implements today, written so each can be accepted, tightened or struck. Anything not listed here is never merged.
+Status: **draft, not yet signed off.** Rewritten after the verifier's air-pocket finding (R8 fixed, R9 and R10 added). The brief reserves the definition of "redundant" for a human decision (10 h budgeted). These are the rules the code in `ops.py` implements today, written so each can be accepted, tightened or struck. Anything not listed here is never merged.
 
 ## What the geometry hash does and does not prove
 
@@ -31,7 +31,7 @@ Status: **draft, not yet signed off.** The brief reserves the definition of "red
 
 ## Merging redundant features (`find_redundant`, `merge_redundant`)
 
-A feature is merged away only when **all** of R1 to R8 hold. The merge is one feature at a time, re-checking after each removal, and is meant to run under `invariant`.
+A feature is merged away only when **all** of R1 to R10 hold. The merge is one feature at a time, re-checking after each removal, and is meant to run under `invariant`.
 
 | Rule | Statement |
 |---|---|
@@ -41,12 +41,14 @@ A feature is merged away only when **all** of R1 to R8 hold. The merge is one fe
 | R4 | It is not suppressed. A suppressed feature is something the user parked, not something redundant. |
 | R5 | It has no expressions of its own. |
 | R6 | No expression anywhere in the document mentions its name or label. |
-| R8 | It still equals its base when each of its own size properties (`Length`, `Distance` or `Angle` type, one at a time) is scaled by 10 and by 0.1; the probe runs on a copy of the whole Body in a throw-away document, so the live document is never written and the check nests safely inside an F3 `AgentTurn`. A pocket that merely cuts air at today's depth fails R8; a pattern with one occurrence passes. |
+| R8 | It still equals its base when each of its own size properties (`Length`, `Distance` or `Angle` type) is scaled by 10 and by 0.1, one at a time; a property that is zero is probed at 1 mm or 1 degree instead, so a feature whose sizes are all zero is probed rather than waved through. The probe runs on a copy of the whole Body in a throw-away document, so the live document is never written and the check nests safely inside an F3 `AgentTurn`. |
+| R9 | Its type and mode are on an explicit allow-list: `Pad` and `Pocket` in `Length` mode, `Revolution` and `Groove` in `Angle` mode, `LinearPattern` and `PolarPattern` with one occurrence. Every other type, and every open-ended mode (`UpToFace`, `ThroughAll`, `UpToFirst`, `UpToLast`, `UpToShape`, `TwoLengths`, `TwoAngles`), is never merged, however the measurements come out, because those modes depend on geometry the feature does not own (the next face, the stock behind it) and can start to cut after an unrelated edit. |
+| R10 | On the same throw-away copy, with the feature suppressed, the Body and every feature after it keep their shapes (the R7 equality, to 1e-9, deviation included). Equality of the feature with its base alone does not prove that taking it out leaves the downstream tree unchanged. |
 | R7 | Its resulting shape equals its base feature's shape: same type and validity, identical topology counts, volume, area, bounding box and centre of mass to 1e-9 relative, and sampled point-to-surface deviation of at most 1e-9 mm in both directions (or the same OCCT shape). |
 
 Removal rewires the next feature's `BaseFeature` to the removed feature's base, moves the body's `Tip` if the removed feature was the Tip, then removes the object from the body and the document.
 
-R7 alone is evidence by measurement, not a proof of equivalence: a feature could match its base today and differ after a parameter change (a pocket that cuts nothing at 3 mm and something at 30 mm). R8 closes that gap for size parameters by measuring the feature at 10x and 0.1x each of them; it does not cover enumerations, flags or the sketch the feature depends on, so it is still a measurement rather than a proof. Decision needed from a human: whether R7 plus R8 is enough, or whether a merge must also require the feature type to be on a short allowlist (pattern with one occurrence, pocket or groove that removes no volume, pad or revolution that adds none). A pocket that equals its base at today's depth but would cut deeper at another depth (the verifier's `AirPocket` probe) is now kept, and so is a duplicate pocket that only matches because both cut to the same depth.
+R7 alone is evidence by measurement, not a proof of equivalence: a feature could match its base today and differ after a parameter change (a pocket that cuts nothing at 3 mm and something at 30 mm). R8 measures the feature at 10x and 0.1x each size, R9 refuses every type and mode whose result depends on context (found by the verifier: `data/tests/PocketTest.fcstd` from upstream FreeCAD lost `Pocket001`, an `UpToFace` pocket that equalled its base at the time, under the old R8, which returned true for a feature with no non-zero size and ignored the mode), and R10 requires the downstream tree to survive the removal. Together this is still a measurement on the allow-listed kinds, not a proof; the allow-list is the conservative part. A pocket that equals its base at today's depth but would cut deeper at another depth (the verifier's `AirPocket` probe) is kept, and so is a duplicate pocket that only matches because both cut to the same depth.
 
 ## What the oracle covers
 
@@ -55,7 +57,7 @@ The point-to-surface deviation is measured for up to `geomhash.DEFAULT_DEVIATION
 ## Open questions for the reviewer
 
 1. Should a redundant Tip be merged (the Tip moves to the base), or only interior features?
-2. Are R7 and R8's measured equality enough, or add a type allowlist?
+2. Is the R9 allow-list the right size (should a one-occurrence `Mirrored`, or a `Pad` that adds no volume, be added, or `PolarPattern` dropped)?
 3. Should lifting be restricted to the properties that drive a feature (Length, Radius, Angle) and skip incidental ones such as `TaperAngle` = 0?
 4. Should relabelling skip objects imported from another file or referenced by a Link?
 

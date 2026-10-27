@@ -384,19 +384,42 @@ SIZE_TYPES = ("App::PropertyLength", "App::PropertyDistance", "App::PropertyAngl
 PROBE_FACTORS = (10.0, 0.1)
 
 
-def _size_insensitive(doc, feat, base, budget):
-    """R8: the feature still equals its base when each of its own size properties (Length, Distance,
-    Angle; one at a time) is scaled by 10 and by 0.1. A pocket that merely cuts air at its current
-    depth fails this, a pattern with one occurrence passes.
+# R9: the explicit allow-list. A feature may be merged only if its type is here and its mode is
+# the closed-ended one; every other type and every open-ended mode (UpToFace, ThroughAll, UpToFirst,
+# UpToLast, UpToShape, TwoLengths, TwoAngles) is never merged, whatever a measurement says today.
+ALLOWED_MODES = {
+    "PartDesign::Pad": {"Length"},
+    "PartDesign::Pocket": {"Length"},
+    "PartDesign::Revolution": {"Angle"},
+    "PartDesign::Groove": {"Angle"},
+}
+ALLOWED_PATTERNS = ("PartDesign::LinearPattern", "PartDesign::PolarPattern")   # only with one occurrence
 
-    The probe runs on a copy of the whole Body in a throw-away document, so the live document is never
-    touched: no property writes, no extra recomputes and no nested transaction inside an F3 ``AgentTurn``
-    (probing in place left LinearPattern ``Spacings`` lists that FreeCAD's undo could not restore).
+
+def mode_allowed(feat):
+    """R9: ``feat``'s type and mode are on the allow-list."""
+    modes = ALLOWED_MODES.get(feat.TypeId)
+    if modes is not None:
+        return str(getattr(feat, "Type", "")) in modes
+    if feat.TypeId in ALLOWED_PATTERNS:
+        return getattr(feat, "Occurrences", 0) == 1
+    return False
+
+
+def _size_props(feat):
+    return [p for p in feat.PropertiesList if feat.getTypeIdOfProperty(p) in SIZE_TYPES]
+
+
+def _removal_invariant(doc, feat, base, budget):
+    """R10 and R8 on a throw-away copy of the whole Body (the live document is never written, so the check
+    nests safely inside an F3 ``AgentTurn``; probing in place left LinearPattern ``Spacings`` lists that
+    FreeCAD's undo could not restore).
+
+    R10: with ``feat`` suppressed, the Body and every feature after it keep their shapes (identical to
+    1e-9, point-to-surface deviation included). R8: ``feat`` still equals its base when each of its own
+    size properties, zero or not, is scaled by 10 and by 0.1 (a zero one is probed at +-1 mm and 1 deg
+    instead, so a feature with only zero sizes is not waved through).
     """
-    props = [p for p in feat.PropertiesList if feat.getTypeIdOfProperty(p) in SIZE_TYPES
-             and getattr(feat, p).Value != 0]
-    if not props:
-        return True
     body = body_of(feat)
     if body is None:
         return False
@@ -404,14 +427,34 @@ def _size_insensitive(doc, feat, base, budget):
     tmp = FreeCAD.newDocument("F6R8probe")
     try:
         tmp.copyObject(body, True)
-        tf, tb = tmp.getObject(feat.Name), tmp.getObject(base.Name)
-        if tf is None or tb is None:
+        tf, tb, tbody = tmp.getObject(feat.Name), tmp.getObject(base.Name), tmp.getObject(body.Name)
+        if tf is None or tb is None or tbody is None:
             return False
         tmp.recompute(None, True)
-        for p in props:
+        order = list(tbody.Group)
+        after = [o for o in order[order.index(tf) + 1:] if o.TypeId.startswith("PartDesign::")]
+        ref = {o.Name: _vchecks._shape(o) for o in [tbody] + after}
+        ref = {n: (s.copy() if s is not None else None) for n, s in ref.items()}
+        if any(s is None for s in ref.values()) or set(tf.State) & {"Invalid", "Error"}:
+            return False
+        # R10: suppress and compare the whole body and everything downstream
+        tf.Suppressed = True
+        tmp.recompute(None, True)
+        for name, old in ref.items():
+            new = _vchecks._shape(tmp.getObject(name))
+            if new is None or not shapes_identical(new, old, budget):
+                return False
+        tf.Suppressed = False
+        tmp.recompute(None, True)
+        # R8: size sweep on the feature itself
+        for p in _size_props(tf):
             orig = getattr(tf, p)
-            for f in PROBE_FACTORS:
-                setattr(tf, p, orig.Value * f)
+            if orig.Value == 0:
+                trials = [1.0]
+            else:
+                trials = [orig.Value * f for f in PROBE_FACTORS]
+            for v in trials:
+                setattr(tf, p, v)
                 tmp.recompute(None, True)
                 sa, sb = _vchecks._shape(tf), _vchecks._shape(tb)
                 if (sa is None or sb is None or (set(tf.State) & {"Invalid", "Error"})
@@ -426,12 +469,14 @@ def _size_insensitive(doc, feat, base, budget):
 
 
 def find_redundant(doc, *, budget=150):
-    """Features that safety rules R1 to R7 prove to be no-ops. Read-only; returns one record per feature."""
+    """Features that safety rules R1 to R10 prove to be no-ops. Read-only; returns one record per feature."""
     out = []
     for body in bodies(doc):
         for feat in list(body.Group):
             if not feat.TypeId.startswith("PartDesign::") or not hasattr(feat, "BaseFeature"):
                 continue                                    # R1: PartDesign solid features only
+            if not mode_allowed(feat):
+                continue                                    # R9: type and mode on the allow-list
             base = feat.BaseFeature
             if base is None or base not in body.Group:
                 continue                                    # R2: needs a previous solid in the same body
@@ -450,8 +495,8 @@ def find_redundant(doc, *, budget=150):
             sa, sb = _vchecks._shape(feat), _vchecks._shape(base)
             if sa is None or sb is None or not shapes_identical(sa, sb, budget):
                 continue                                    # R7: result geometry equals the base
-            if not _size_insensitive(doc, feat, base, budget):
-                continue                                    # R8: and stays equal under its own size properties
+            if not _removal_invariant(doc, feat, base, budget):
+                continue                                    # R10 and R8: suppressing it changes nothing, and it stays a no-op
             out.append({"object": feat.Name, "body": body.Name, "base": base.Name,
                         "next": [c.Name for c in nxt], "tip": body.Tip is feat})
     return out
