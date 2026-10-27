@@ -64,7 +64,7 @@ Use `describe_entity` with an ID from the state, such as `Pad001:Face3`, for the
 
 ## Import and export
 
-Export never needs a change; import edits the document, so it needs one.
+Export needs no change, and while a change is open or awaiting approval it is refused, because the document then holds edits no human approved: pass `pre_turn: true` to export the state before the change. An existing file is replaced only with `overwrite: true`, and the document's own source file never. Import edits the document, so it needs a change.
 
 ```json
 {"tool": "import_export", "arguments": {"action": "export", "path": "/tmp/bracket.step"}}
@@ -83,6 +83,8 @@ Find candidate parts first with `search_parts` (`{"query": "washer m6"}`).
 | `diff_unavailable` | AgentCore.diff (F3) is not installed, so changes cannot be opened | read-only tools and verify still work |
 | `policy_refused` | the code tried to approve a change, control the transaction, or (strict mode) touch files, processes or the network | edit inside the change only |
 | `change_pending` | a change is already open or proposed | pass `discard_pending: true` to begin_change to reject it |
+| `change_aborted` | exec_code undid, redid or cleared history inside the change, or closed or decided the turn itself; the change was rejected | begin a new change and edit without touching undo or the turn |
+| `file_exists` / `refused_target` | export would replace an existing file, or the document's own source file | pick a new path, or pass `overwrite: true` for a file you mean to replace |
 | `crash` or `timeout` in verify | one verify worker died; the other checks still ran | read `results`; the server keeps serving |
 
 ## Policy
