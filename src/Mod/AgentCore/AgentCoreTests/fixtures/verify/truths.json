@@ -1,0 +1,19 @@
+{
+  "schema": "agentcore.verify.fixtures/1",
+  "note": "Analytic truths for the verify fixtures (mm, mm^2, mm^3, kg). Built by builders.py.",
+  "fixtures": {
+    "box": {"kind": "box", "dims": [10, 20, 30], "volume": 6000.0, "area": 2200.0, "com": [5, 10, 15], "bbox_size": [10, 20, 30], "thickness_min": 10.0},
+    "plate": {"kind": "box", "dims": [100, 60, 2], "volume": 12000.0, "thickness_min": 2.0},
+    "plate_thin": {"kind": "box", "dims": [100, 60, 1], "volume": 6000.0, "thickness_min": 1.0},
+    "tube": {"kind": "tube", "ro": 10, "ri": 8, "h": 30, "thickness_min": 2.0},
+    "shell": {"kind": "shell", "outer": 40, "t": 2, "volume": 17344.0, "thickness_min": 2.0},
+    "sphere_shell": {"kind": "sphere_shell", "ro": 10, "ri": 8, "thickness_min": 2.0},
+    "pair_overlap": {"kind": "pair", "size": 10, "dx": 5, "interference_volume": 500.0, "distance": 0.0},
+    "pair_gap2": {"kind": "pair", "size": 10, "dx": 12, "interference_volume": 0.0, "distance": 2.0},
+    "pair_gap05": {"kind": "pair", "size": 10, "dx": 10.5, "interference_volume": 0.0, "distance": 0.5},
+    "steel_box": {"kind": "material_box", "density_kg_m3": 7800, "material": "Steel-C15", "dims": [10, 10, 10], "mass_kg": 0.0078},
+    "aluminium_box": {"kind": "material_box", "density_kg_m3": 2700, "material": "Aluminum-6061-T6", "dims": [10, 10, 10], "mass_kg": 0.0027},
+    "bad_recompute": {"kind": "bad_recompute"},
+    "bad_shape": {"kind": "bad_shape"}
+  }
+}
