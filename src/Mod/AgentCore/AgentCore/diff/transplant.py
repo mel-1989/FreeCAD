@@ -19,7 +19,7 @@ result is a single, ordinary undo entry recorded by ``App::Transaction``.
 4. set expressions with ``setExpression`` (``ExpressionEngine``'s own Restore
    only queues them for ``onDocumentRestored``, so its raw content is not
    replayed);
-5. recompute, then remove objects that are not in the capture (dependants
+5. recompute (unless ``recompute=False``), then remove objects that are not in the capture (dependants
    first), so owners that tear children down on delete see restored inputs.
 
 Properties with ``Transient`` or ``NoPersist`` status are skipped (FreeCAD

@@ -37,7 +37,7 @@ How the transaction is held (headless, Python only, no C++ guard yet):
   is then *proposed*: nothing more is recorded into it.
 
 ``reject`` restores a dump equal to the pre-turn dump (see ``compare`` for
-the one transient cache excluded); if the undo stack no longer holds the
+the transient caches excluded); if the undo stack no longer holds the
 turn (another transaction landed on top, or ``UndoMaxStackSize`` trimmed it)
 it restores from the before-state snapshot instead. ``accept`` requires an
 ``ApplyToken`` minted by the installed ``ApplyAuthority``.

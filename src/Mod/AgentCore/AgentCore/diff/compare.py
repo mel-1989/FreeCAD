@@ -2,13 +2,13 @@
 """Canonical F1 dumps and their structural comparison.
 
 Reject equality is judged on ``AgentCore.state.dump`` (F1): every object,
-property value, expression, link list, state flag and shape summary. Two
-things are left out, both deliberately:
+property value, expression, link list, state flag and shape summary. Three
+things are left out, all deliberately:
 
 - ``generator`` (versions of the tools that wrote the dump);
 - ``TRANSIENT_CACHES``: hidden output properties with ``Prop_Transient``
   status that FreeCAD fills lazily and never writes to the FCStd.
-  ``GeoFeature::_ElementMapVersion`` is the only one: it is empty on a freshly
+  ``GeoFeature::_ElementMapVersion`` is empty on a freshly
   opened file and set the first time a shape changes outside a restore or a
   transaction, and undo does not clear it again (it is not part of the
   persistent document state at all); ``Part::PropertyShapeCache``

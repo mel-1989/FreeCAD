@@ -13,8 +13,8 @@ Recipe (the brief's definition of done, from the kernel review):
    only, within a generous radius (a quarter of the model's diagonal), so a
    face that moved or grew is reported as *modified*, not removed plus added.
 4. **Deviation.** Every matched pair is sampled: a UV grid on each face,
-   kept where the point lies in the face's domain, plus its vertices; the
-   points along its edges; the distance of each sample to the other face
+   kept where the point lies in the face's domain, plus points along its
+   edges; the distance of each sample to the other face
    (``distToShape``) is taken both ways, and the maximum is the pair's
    deviation. Pairs within the tolerance are *unchanged*.
 5. **Local booleans.** Only if some face changed: the changed region is the
