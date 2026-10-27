@@ -96,6 +96,8 @@ class TestApplyAuthority(unittest.TestCase):
         tok = self.auth.mint(t)
         t.accept(tok)
         self.doc.undo()
+        self.doc.redo()                                   # the live state equals the reviewed one again
+        self.doc.recompute()
         t.status = "proposed"                             # pretend the turn is pending again
         with self.assertRaises(TokenRefused) as cm:
             t.accept(tok)
@@ -121,9 +123,13 @@ class TestApplyAuthority(unittest.TestCase):
         with self.assertRaises(TypeError):
             pickle.dumps(self.auth.mint(t))
 
-    def test_no_module_attribute_path_mints(self):
-        """Nothing reachable by plain attribute access from the module can mint:
-        the module keeps only a verify-only function."""
+    def test_no_authority_object_reachable_from_module(self):
+        """No ApplyAuthority instance is reachable by attribute access from the
+        module, which keeps only a verify-only function. This is not "nothing
+        can mint": in a process that holds the authority, the key is readable
+        through closures (``test_diff_approver.TestKeySearchControl`` forges a
+        token that way). Agent code therefore never runs in such a process:
+        workers are sealed and the key lives in the approver (SECURITY.md)."""
         import types
         seen, todo = set(), [(auth_mod, 0)]
         while todo:

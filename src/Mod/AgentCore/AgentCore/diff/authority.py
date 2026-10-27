@@ -20,26 +20,43 @@ server of F4) can propose changes but never approve them.
   them. That is a convenience, not the boundary: a token built any other
   way (``object.__new__``) still needs a valid MAC.
 
+Process roles (see ``SECURITY.md``):
+
+- **Approver** (human side: the GUI, or ``approver.py`` for headless use)
+  holds the only ``ApplyAuthority``, and with it the HMAC key.
+- **Agent worker** (the FreeCADCmd session worker that runs ``exec_code``)
+  calls ``prepare_agent_process(approver_socket)`` before any agent code
+  runs. That seals the process: ``install()`` refuses for good, and the
+  verifier is a forwarding closure that asks the approver over its socket
+  whether a token is valid. The key never enters the worker, so nothing the
+  agent can reach there (closures, ``gc``, ``object.__new__``) can mint a
+  token the approver will honour. Without an approver socket the sealed
+  worker refuses every token.
+- **MCP server** never imports this module and has no approve path.
+
 Limits, stated plainly: inside one Python interpreter nothing is private.
 Code that deliberately introspects (``_VERIFIER.__closure__``, ``gc``
 walks) can read the secret, and code that monkeypatches ``verify_token``
-or ``AgentTurn.accept`` can skip the check. What this module guarantees is
-that no *ordinary* attribute path from an importable module reaches a
-minting capability, that the first installer wins (the GUI installs at
-startup; a second ``install()`` raises and only the holder can uninstall),
-and that every approval path goes through one verifier. The hard boundary
-is the process boundary: F4 runs the MCP server out of process and only
-forwards proposals, so agent code never shares an interpreter with this
-object.
+or ``AgentTurn.accept`` can skip the check. So in the process that holds the
+authority, no ``ApplyAuthority`` *object* is reachable by attribute access,
+the first installer wins (a second ``install()`` raises and only the holder
+can uninstall), and every approval goes through one verifier, but the key
+itself is not secret from code in that interpreter. The hard boundary is the
+process boundary: agent code runs only in sealed workers, which never hold
+the key.
 """
 
 import hashlib
 import hmac
+import os
 import secrets
 import threading
 
 _LOCK = threading.Lock()
 _VERIFIER = None  # verify-only closure of the installed authority; it cannot mint
+_SEALED = False   # True in a process that runs agent code: install() refuses
+AGENT_PROCESS_ENV = "CADFORK_AGENT_PROCESS"
+WIRE_FIELDS = ("turn_id", "digest", "nonce", "mac")
 
 
 class TokenRefused(PermissionError):
@@ -59,6 +76,21 @@ class ApplyToken:
 
     def __reduce__(self):  # no pickling a token across a process boundary
         raise TypeError("ApplyToken cannot be serialised")
+
+    def to_wire(self):
+        """Plain fields for the approver channel. Holding them grants nothing
+        a verifier would not already check: the MAC needs the approver's key."""
+        return {k: getattr(self, k, None) for k in WIRE_FIELDS}
+
+    @classmethod
+    def from_wire(cls, fields):
+        if not isinstance(fields, dict):
+            raise TokenRefused("malformed apply token")
+        tok = object.__new__(cls)
+        for k in WIRE_FIELDS:
+            if isinstance(fields.get(k), str):
+                setattr(tok, k, fields[k])
+        return tok
 
 
 def _make_core():
@@ -114,6 +146,9 @@ class ApplyAuthority:
         """Create the process-wide authority. Raises if one is installed."""
         global _VERIFIER
         with _LOCK:
+            if _SEALED or os.environ.get(AGENT_PROCESS_ENV) == "1":
+                raise RuntimeError("ApplyAuthority.install() is refused in a process that runs agent code; "
+                                   "approval belongs to the human-side approver process")
             if _VERIFIER is not None:
                 raise RuntimeError("an ApplyAuthority is already installed")
             self = object.__new__(cls)
@@ -136,6 +171,15 @@ class ApplyAuthority:
         """Token for the turn's *current* change set (human-side only)."""
         return self.__mint(turn.turn_id, turn.digest())
 
+    def mint_for(self, turn_id, digest):
+        """Token for a turn that lives in another process (the approver mints
+        for the change set the human reviewed, by id and digest)."""
+        return self.__mint(str(turn_id), str(digest))
+
+    def check(self, token, turn_id, digest):
+        """Verify (and spend) a token with this authority's own key."""
+        self.__check(token, turn_id, digest)
+
 
 def verify_token(token, turn_id, digest):
     """Check ``token`` against the installed authority; raise TokenRefused."""
@@ -147,3 +191,57 @@ def verify_token(token, turn_id, digest):
 
 def installed():
     return _VERIFIER is not None
+
+
+def sealed():
+    return _SEALED
+
+
+def _refuse_all(token, turn_id, digest):
+    raise TokenRefused("this process runs agent code and has no approver connected: nothing here can approve")
+
+
+def _remote_verifier(address, timeout):
+    """Verify-only closure that forwards a token to the approver's socket."""
+    import json
+    import socket
+
+    def check(token, turn_id, digest):
+        if token is None:
+            raise TokenRefused("no apply token: accept needs a token minted by the human-side approver")
+        wire = token.to_wire() if isinstance(token, ApplyToken) else token
+        if not isinstance(wire, dict):
+            raise TokenRefused(f"not an ApplyToken: {type(token).__name__}")
+        req = {"op": "check", "turn_id": turn_id, "digest": digest, "token": {k: wire.get(k) for k in WIRE_FIELDS}}
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(timeout)
+                s.connect(address)
+                s.sendall((json.dumps(req) + "\n").encode())
+                line = s.makefile("rb").readline()
+            resp = json.loads(line)
+        except (OSError, ValueError) as exc:
+            raise TokenRefused(f"approver unreachable, nothing is approved: {exc}") from None
+        if not resp.get("ok"):
+            raise TokenRefused(resp.get("reason") or "refused by the approver")
+
+    return check
+
+
+def prepare_agent_process(approver_socket=None, timeout=5.0):
+    """Seal this process before it runs agent code (the F4 session worker).
+
+    After this, ``ApplyAuthority.install()`` refuses and tokens are verified
+    by the approver at ``approver_socket`` (or refused outright without one).
+    Raises if an authority is already installed here: a process that holds
+    the key must not run agent code.
+    """
+    global _VERIFIER, _SEALED
+    with _LOCK:
+        if _SEALED:
+            raise RuntimeError("this process is already sealed")
+        if _VERIFIER is not None:
+            raise RuntimeError("an ApplyAuthority is installed in this process; it must not run agent code")
+        _VERIFIER = _remote_verifier(approver_socket, timeout) if approver_socket else _refuse_all
+        _SEALED = True
+        os.environ[AGENT_PROCESS_ENV] = "1"
