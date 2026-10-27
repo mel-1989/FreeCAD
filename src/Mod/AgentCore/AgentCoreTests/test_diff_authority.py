@@ -121,6 +121,34 @@ class TestApplyAuthority(unittest.TestCase):
         with self.assertRaises(TypeError):
             pickle.dumps(self.auth.mint(t))
 
+    def test_no_module_attribute_path_mints(self):
+        """Nothing reachable by plain attribute access from the module can mint:
+        the module keeps only a verify-only function."""
+        import types
+        seen, todo = set(), [(auth_mod, 0)]
+        while todo:
+            obj, depth = todo.pop()
+            if id(obj) in seen or depth > 3:
+                continue
+            seen.add(id(obj))
+            self.assertNotIsInstance(obj, ApplyAuthority)
+            if isinstance(obj, (types.ModuleType, type)) or hasattr(obj, "__dict__"):
+                for k, v in list(vars(obj).items()):
+                    if isinstance(v, types.ModuleType) and v is not auth_mod:
+                        continue
+                    todo.append((v, depth + 1))
+        self.assertFalse(hasattr(auth_mod, "_INSTALLED"))
+        self.assertFalse(hasattr(auth_mod, "_SENTINEL"))
+        self.assertFalse(hasattr(auth_mod._VERIFIER, "mint"))
+        t = self._turn()
+        self._refused(t, None, "no apply token")              # the verifier only verifies
+        self.assertTrue(t.reject()["equal"])
+
+    def test_authority_does_not_serialise(self):
+        import pickle
+        with self.assertRaises(TypeError):
+            pickle.dumps(self.auth)
+
     def test_turn_api_never_exposes_the_authority(self):
         t = self._turn()
         public = {k: getattr(t, k) for k in dir(t) if not k.startswith("__")}
