@@ -10,7 +10,7 @@ _FIX = os.path.dirname(os.path.abspath(__file__))
 if _FIX not in sys.path:
     sys.path.insert(0, _FIX)
 
-import builders  # noqa: E402
+import verify_builders as builders  # noqa: E402
 
 TRUTHS = builders.TRUTHS
 
