@@ -76,3 +76,69 @@ class TestGroundingUnavailable(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+REAL_ATTRS = """
+import Part
+s = Part.makeBox(1, 2, 3)
+v = s.Volume
+a = s.Area
+b = s.BoundBox
+w = b.XLength
+f = s.fuse(Part.makeBox(1, 1, 1))
+n = len(s.Faces)
+print(Part.makeBox(2, 2, 2).Volume, s.CenterOfMass)
+"""
+INVENTED_ATTRS = {
+    "Volumee": "import Part\nx = Part.makeBox(1, 2, 3).Volumee\n",
+    "Areaa": "import Part\ns = Part.makeBox(1, 2, 3)\nprint(s.Areaa)\n",
+    "BoundBoxx": "import Part\ns = Part.makeBox(1, 2, 3)\nprint(s.BoundBoxx.XLength)\n",
+    "XLenght": "import Part\ns = Part.makeBox(1, 2, 3)\nprint(s.BoundBox.XLenght)\n",
+    "fusee": "import Part\ns = Part.makeBox(1, 2, 3)\ns2 = s.fusee(Part.makeBox(1, 1, 1))\n",
+    "Facess": "import Part\nsolid = Part.makeCylinder(1, 2)\nfor f in solid.Facess:\n    pass\n",
+}
+
+
+@unittest.skipIf(grounding.find_pyright()[0] is None, "pyright not installed")
+class TestTopoShapeAttributes(unittest.TestCase):
+    """Part.makeBox(1, 2, 3).Volumee used to pass: the generated stubs left every Part.Shape subclass with an unknown base."""
+
+    def test_invented_attributes_fail_in_pyright_alone(self):
+        for name, src in INVENTED_ATTRS.items():
+            real = grounding.introspect_source
+            grounding.introspect_source = lambda s: []          # pyright on its own, no fallback
+            try:
+                res = grounding.check_source(src)
+            finally:
+                grounding.introspect_source = real
+            self.assertFalse(res["ok"], name)
+            self.assertTrue(any(e["rule"] == "reportAttributeAccessIssue" and name in e["message"] for e in res["errors"]), (name, res["errors"]))
+
+    def test_invented_attributes_fail_in_introspection_alone(self):
+        for name, src in INVENTED_ATTRS.items():
+            errs = grounding.introspect_source(src)
+            self.assertTrue(any(name in e["message"] for e in errs), (name, errs))
+
+    def test_real_attributes_pass_both_layers(self):
+        self.assertEqual(grounding.introspect_source(REAL_ATTRS), [])
+        res = grounding.check_source(REAL_ATTRS)
+        self.assertTrue(res["ok"], res["errors"])
+
+    def test_grounded_exec_rejects_invented_attribute(self):
+        with self.assertRaises(grounding.GroundingError):
+            grounding.grounded_exec(INVENTED_ATTRS["Volumee"], {})
+
+    def test_introspection_ignores_shadowed_and_unknown_names(self):
+        src = "import Part\ns = Part.makeBox(1, 2, 3)\ndef f(s):\n    return s.whatever\ns = 4\nprint(s.real)\n"
+        self.assertEqual(grounding.introspect_source(src), [])
+
+
+@unittest.skipIf(grounding.find_pyright()[0] is None, "pyright not installed")
+class TestStubPatch(unittest.TestCase):
+    def test_patched_stubs_resolve_the_shape_base(self):
+        exe, _ = grounding.find_pyright()
+        path = grounding.patched_stub_path(exe)
+        self.assertTrue(path)
+        text = open(path + "/Part/__init__.pyi", encoding="utf-8").read()
+        self.assertNotIn("PartModule.Geom2d", text)
+        self.assertIn("import Part.Geom2d", text)
