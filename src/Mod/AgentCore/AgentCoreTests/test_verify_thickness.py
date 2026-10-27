@@ -5,7 +5,7 @@ import unittest
 
 from AgentCore import verify
 from AgentCore.verify import thickness, tolerances
-from AgentCoreTests._verify_common import TRUTHS, Fixture
+from AgentCoreTests.fixtures.verify.verify_common import TRUTHS, Fixture
 
 CASES = ["plate", "plate_thin", "tube", "shell", "sphere_shell", "box"]
 
@@ -20,9 +20,9 @@ def measure(name, samples=5):
 class TestThickness(unittest.TestCase):
     def test_analytic_within_recorded_tolerance(self):
         tol = tolerances.load()
-        for name in CASES:
+        for name, samples in [(n, k) for n in CASES for k in (5, 9)]:
             truth = TRUTHS[name]["thickness_min"]
-            got = measure(name)
+            got = measure(name, samples)
             self.assertTrue(got["complete"])
             err = abs(got["min_thickness_mm"] - truth)
             allowed = max(tol["thickness_abs_mm"], tol["thickness_rel"] * truth)

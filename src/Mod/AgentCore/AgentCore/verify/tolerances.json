@@ -4,6 +4,7 @@
   "default": {
     "linear_mm": 1e-06,
     "volume_rel": 1e-06,
+    "area_rel": 1e-06,
     "com_mm": 1e-06,
     "mass_rel": 1e-06,
     "interference_volume_mm3": 1e-06,

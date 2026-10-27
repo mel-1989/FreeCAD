@@ -6,7 +6,7 @@ import sys
 
 import FreeCAD
 
-_FIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "verify")
+_FIX = os.path.dirname(os.path.abspath(__file__))
 if _FIX not in sys.path:
     sys.path.insert(0, _FIX)
 

@@ -10,7 +10,7 @@ import time
 import unittest
 
 from AgentCore import verify
-from AgentCoreTests._verify_common import builders
+from AgentCoreTests.fixtures.verify.verify_common import builders
 
 
 class TestPool(unittest.TestCase):

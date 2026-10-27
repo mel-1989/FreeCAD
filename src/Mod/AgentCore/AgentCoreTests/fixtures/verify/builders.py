@@ -58,6 +58,16 @@ def build(name):
     elif kind == "pair":
         _box(doc, "A", (t["size"],) * 3)
         _box(doc, "B", (t["size"],) * 3, (t["dx"], 0, 0))
+    elif kind == "box_sphere":
+        _box(doc, "A", (t["size"],) * 3)
+        sp = doc.addObject("Part::Sphere", "B")
+        sp.Radius = t["r"]
+        sp.Placement.Base = FreeCAD.Vector(*t["center"])
+    elif kind == "box_cylinder":
+        _box(doc, "A", (t["size"],) * 3)
+        cy = doc.addObject("Part::Cylinder", "B")
+        cy.Radius, cy.Height = t["r"], t["h"]
+        cy.Placement.Base = FreeCAD.Vector(*t["base"])
     elif kind == "material_box":
         b = _box(doc, "Box", t["dims"])
         b.ShapeMaterial = _material(t["material"])

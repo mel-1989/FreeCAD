@@ -8,7 +8,7 @@ import FreeCAD
 import Part
 
 from AgentCore import verify
-from AgentCoreTests._verify_common import TRUTHS, Fixture, builders
+from AgentCoreTests.fixtures.verify.verify_common import TRUTHS, Fixture, builders
 
 
 def one(doc, spec):
@@ -63,6 +63,34 @@ class TestChecksAnalytic(unittest.TestCase):
             r = one(doc, {"check": "clearance", "min": 3.0})
             self.assertFalse(r["ok"])
             self.assertTrue(any(e.startswith("A:") for e in r["entities"]))
+
+    def _assert_entities_are_closest(self, doc, rec):
+        a, b = doc.getObject(rec["a"]), doc.getObject(rec["b"])
+        for obj, other, ent in ((a, b, rec["entities"][0]), (b, a, rec["entities"][1])):
+            name, sub = ent.split(":")
+            self.assertEqual(name, obj.Name)
+            d = obj.Shape.getElement(sub).distToShape(other.Shape)[0]
+            self.assertAlmostEqual(d, rec["distance_mm"], delta=1e-6, msg=f"{ent} is {d} from {other.Name}")
+
+    def test_clearance_entities_are_actually_closest(self):
+        for name in ("pair_gap2", "pair_gap05", "box_sphere", "box_cylinder"):
+            with Fixture(name) as doc:
+                r = one(doc, {"check": "clearance", "min": 0.1})
+                rec = r["details"]["pairs"][0]
+                self.assertAlmostEqual(rec["distance_mm"], TRUTHS[name]["distance"], places=6)
+                self._assert_entities_are_closest(doc, rec)
+
+    def test_clearance_single_solution_does_not_error(self):
+        with Fixture("box_sphere") as doc:
+            self.assertTrue(one(doc, {"check": "clearance", "min": 1.0})["ok"])
+            r = one(doc, {"check": "clearance", "min": 5.0})
+            self.assertFalse(r["ok"])
+            self.assertEqual(len(r["entities"]), 2)
+
+    def test_area_tolerance_is_separate(self):
+        from AgentCore.verify import tolerances
+
+        self.assertIn("area_rel", tolerances.load())
 
     def test_material_density_mass(self):
         for name in ("steel_box", "aluminium_box"):

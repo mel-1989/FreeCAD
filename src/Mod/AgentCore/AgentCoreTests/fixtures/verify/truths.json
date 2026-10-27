@@ -11,6 +11,8 @@
     "pair_overlap": {"kind": "pair", "size": 10, "dx": 5, "interference_volume": 500.0, "distance": 0.0},
     "pair_gap2": {"kind": "pair", "size": 10, "dx": 12, "interference_volume": 0.0, "distance": 2.0},
     "pair_gap05": {"kind": "pair", "size": 10, "dx": 10.5, "interference_volume": 0.0, "distance": 0.5},
+    "box_sphere": {"kind": "box_sphere", "size": 10, "r": 2, "center": [15, 5, 5], "interference_volume": 0.0, "distance": 3.0},
+    "box_cylinder": {"kind": "box_cylinder", "size": 10, "r": 2, "h": 10, "base": [15, 5, 0], "interference_volume": 0.0, "distance": 3.0},
     "steel_box": {"kind": "material_box", "density_kg_m3": 7800, "material": "Steel-C15", "dims": [10, 10, 10], "mass_kg": 0.0078},
     "aluminium_box": {"kind": "material_box", "density_kg_m3": 2700, "material": "Aluminum-6061-T6", "dims": [10, 10, 10], "mass_kg": 0.0027},
     "bad_recompute": {"kind": "bad_recompute"},

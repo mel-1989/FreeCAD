@@ -149,9 +149,10 @@ def check_clearance(doc, params):
     for a, b in _pairs(doc, params):
         dist, pts, info = _shape(a).distToShape(_shape(b))
         rec = {"a": a.Name, "b": b.Name, "distance_mm": dist}
-        if info:
-            ia, ib = info[0], info[1]
-            ea, eb = entity(a, _sub(ia[0], ia[1])), entity(b, _sub(ib[0], ib[1]))
+        if info and pts:
+            # info is one (typeA, idxA, paramA, typeB, idxB, paramB) tuple per solution
+            sol = info[0]
+            ea, eb = entity(a, _sub(sol[0], sol[1])), entity(b, _sub(sol[3], sol[4]))
             rec["entities"] = [ea, eb]
             rec["points"] = [_vec(pts[0][0]), _vec(pts[0][1])]
         pairs.append(rec)
@@ -205,7 +206,7 @@ def check_mass(doc, params):
             com_num = [c + m * vol * dens for c, m in zip(com_num, rec["com"])]
         exp = (params.get("expect") or {}).get(o.Name)
         if exp:
-            for key, rel in (("volume_mm3", tol["volume_rel"]), ("mass_kg", tol["mass_rel"]), ("area_mm2", tol["volume_rel"])):
+            for key, rel in (("volume_mm3", tol["volume_rel"]), ("mass_kg", tol["mass_rel"]), ("area_mm2", tol["area_rel"])):
                 if key in exp:
                     got = rec[key]
                     if got is None or abs(got - exp[key]) > rel * max(abs(exp[key]), 1e-30):
