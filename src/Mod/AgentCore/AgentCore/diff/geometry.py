@@ -14,11 +14,13 @@ Recipe (the brief's definition of done, from the kernel review):
    face that moved or grew is reported as *modified*, not removed plus added.
 4. **Deviation.** Every matched pair is sampled: a UV grid on each face,
    kept where the point lies in the face's domain, plus its vertices; the
-   distance of each sample to the other face (``distToShape``) is taken both
-   ways, and the maximum is the pair's deviation. Pairs within the tolerance
-   are *unchanged*.
-5. **Local booleans.** Only if some face changed: the changed faces' bounding
-   boxes are united and slightly enlarged, both solids are cut down to that
+   points along its edges; the distance of each sample to the other face
+   (``distToShape``) is taken both ways, and the maximum is the pair's
+   deviation. Pairs within the tolerance are *unchanged*.
+5. **Local booleans.** Only if some face changed: the changed region is the
+   bounding box of the unmatched faces plus, for modified faces, the
+   deviating samples and every edge that carries one (so a planar face whose
+   hole grew contributes only the hole's edge), slightly enlarged; both solids are cut down to that
    box with ``common``, and the added and removed material is the ``cut`` of
    those two local pieces. Never a whole-solid cut of near-identical solids
    (the worst case for OCCT's General Fuse); ``region.fraction`` says how much
@@ -78,6 +80,7 @@ def _dist(sa, sb):
 
 
 def _samples(face, n):
+    """(point, edge or None) samples: a UV grid inside the domain, plus edges."""
     pts = []
     try:
         u0, u1, v0, v1 = face.ParameterRange
@@ -87,29 +90,45 @@ def _samples(face, n):
                 v = v0 + (v1 - v0) * (j + 0.5) / n
                 try:
                     if face.isPartOfDomain(u, v):
-                        pts.append(face.valueAt(u, v))
+                        pts.append((face.valueAt(u, v), None))
                 except Exception:
                     pass
     except Exception:
         pass
-    pts.extend(vx.Point for vx in face.Vertexes)
+    for e in face.Edges:
+        try:
+            pts.extend((p, e) for p in e.discretize(8))
+        except Exception:
+            pts.extend((vx.Point, e) for vx in e.Vertexes)
     if not pts:
-        pts.append(face.CenterOfMass)
+        pts.append((face.CenterOfMass, None))
     return pts
 
 
-def deviation(fa, fb, n=4):
-    """Max two-way sampled point-to-face distance between two faces."""
+def deviation(fa, fb, n=4, tol=None):
+    """Max two-way sampled point-to-face distance between two faces.
+
+    With ``tol``, returns ``(max, boxes)``: bounding boxes of the samples
+    farther than ``tol`` from the other face, widened to the whole edge a
+    deviating edge sample lies on. They bound the changed region.
+    """
     import Part
-    worst = 0.0
+    worst, boxes = 0.0, []
     for src, dst in ((fa, fb), (fb, fa)):
-        for p in _samples(src, n):
+        seen = set()
+        for p, edge in _samples(src, n):
             try:
                 d = dst.distToShape(Part.Vertex(p))[0]
             except Exception:
                 d = float("inf")
             worst = max(worst, d)
-    return worst
+            if tol is not None and d > tol:
+                if edge is None:
+                    boxes.append(App.BoundBox(p, p))
+                elif id(edge) not in seen:
+                    seen.add(id(edge))
+                    boxes.append(edge.BoundBox)
+    return worst if tol is None else (worst, boxes)
 
 
 def match_faces(faces_b, faces_a, tol=DEFAULT_TOL, radius=None):
@@ -178,14 +197,15 @@ def shape_diff(before, after, tol=DEFAULT_TOL, samples=4, booleans=True):
     fb, fa = before.Faces, after.Faces
     diag = max(_bbox_union([before.BoundBox, after.BoundBox]).DiagonalLength, 1e-9)
     pairs, ub, ua, how = match_faces(fb, fa, tol, radius=0.25 * diag)
-    modified, unchanged, worst = [], 0, 0.0
+    modified, unchanged, worst, far = [], 0, 0.0, []
     for i, j in pairs:
         n = samples if how[(i, j)] == "nearest" else max(2, samples - 1)
-        d = deviation(fb[i], fa[j], n)
+        d, pts = deviation(fb[i], fa[j], n, tol)
         worst = max(worst, d)
         if d > tol:
             modified.append({"before": f"Face{i + 1}", "after": f"Face{j + 1}", "match": how[(i, j)],
                              "max_deviation": _r(d)})
+            far.extend(pts)
         else:
             unchanged += 1
     out = {
@@ -199,7 +219,7 @@ def shape_diff(before, after, tol=DEFAULT_TOL, samples=4, booleans=True):
         "volume_after": _r(after.Volume) if after.Solids else 0.0,
     }
     if out["status"] == "modified" and booleans and before.Solids and after.Solids:
-        out["region"] = _local_booleans(before, after, fb, fa, modified, ub, ua, tol, diag)
+        out["region"] = _local_booleans(before, after, fb, fa, far, ub, ua, tol, diag)
     return out
 
 
@@ -211,11 +231,10 @@ def _r(x):
     return round(float(x), 6)
 
 
-def _local_booleans(before, after, fb, fa, modified, ub, ua, tol, diag):
+def _local_booleans(before, after, fb, fa, far, ub, ua, tol, diag):
     import Part
-    boxes = [fb[int(m["before"][4:]) - 1].BoundBox for m in modified]
-    boxes += [fa[int(m["after"][4:]) - 1].BoundBox for m in modified]
-    boxes += [fb[i].BoundBox for i in ub] + [fa[j].BoundBox for j in ua]
+    boxes = [fb[i].BoundBox for i in ub] + [fa[j].BoundBox for j in ua]
+    boxes += far
     region = _bbox_union(boxes)
     if region is None:
         return None
