@@ -5,7 +5,7 @@ A snapshot records, for every shape-bearing object, the I3 golden metrics (type,
 validity, volume, area, bounding box, centre of mass, topology counts) and keeps
 a copy of each top-level body's shape so a sampled point-to-surface deviation
 can be measured after the edit. The comparison uses I3's tolerance policy
-(``tolerances.json``, vendored) and its deviation measure (``deviation.py``,
+(``tolerances.json``, vendored, rule mirrored from the control repo's ``harness/golden/compare.py``) and its deviation measure (``deviation.py``,
 vendored), never a new measure.
 
 ``Snapshot.hash()`` is a short content hash of the metrics snapped to I3's grid
@@ -62,7 +62,7 @@ def shape_metrics(shp):
     m.update({
         "type": shp.ShapeType,
         "valid": bool(shp.isValid()),
-        "diag": max(bb.DiagonalLength, 1.0),
+        "diag": max(bb.DiagonalLength, 1e-9),
         "volume": float(shp.Volume),
         "area": float(shp.Area),
         "bbox": [bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax],
@@ -155,17 +155,21 @@ def compare_metrics(name, a, b, tol):
         if a.get(key) != b.get(key):
             out.append({"object": name, "field": key, "before": a.get(key), "after": b.get(key)})
     if "diag" in a and "diag" in b:
-        d, rt = a["diag"], tol["rel_tol"]
-        for key, scale in (("volume", d**3), ("area", d**2)):
-            if not _close(a[key], b[key], rt * scale):
-                out.append({"object": name, "field": key, "before": a[key], "after": b[key], "tolerance": rt * scale})
+        # I3's rule, mirrored from harness/golden/compare.py: volume and area are relative to the
+        # quantity itself, positions to the bounding-box diagonal, each plus abs_floor * diag**k.
+        d, rt, floor = a["diag"], tol["rel_tol"], tol.get("abs_floor", 1e-9)
+        for key, k in (("volume", 3), ("area", 2)):
+            limit = rt * max(abs(a[key]), abs(b[key])) + floor * d**k
+            if not _close(a[key], b[key], limit):
+                out.append({"object": name, "field": key, "before": a[key], "after": b[key], "tolerance": limit})
+        limit = rt * d + floor * d
         for key in ("bbox", "com"):
             va, vb = a.get(key), b.get(key)
             if va is None or vb is None:
                 if va != vb:
                     out.append({"object": name, "field": key, "before": va, "after": vb})
-            elif not all(_close(x, y, rt * d) for x, y in zip(va, vb)):
-                out.append({"object": name, "field": key, "before": va, "after": vb, "tolerance": rt * d})
+            elif not all(_close(x, y, limit) for x, y in zip(va, vb)):
+                out.append({"object": name, "field": key, "before": va, "after": vb, "tolerance": limit})
     elif ("diag" in a) != ("diag" in b):
         out.append({"object": name, "field": "bbox", "before": a.get("bbox"), "after": b.get("bbox")})
     return out
@@ -218,8 +222,10 @@ def _body_deviation(name, before, after, tol, budget):
         return [{"object": name, "field": "deviation", "error": "no shape after"}]
     meas = deviation.measure(new, old, budget)
     diag = before.objects[name]["shape"].get("diag", 1.0)
-    lim_max = max(tol["dev_max_abs"], tol["dev_max_rel"] * diag)
-    lim_rms = max(tol["dev_rms_abs"], tol["dev_rms_rel"] * diag)
+    bb = before.objects[name]["shape"].get("bbox") or []
+    coord = max((abs(v) for v in bb), default=0.0)   # distToShape accuracy scales with coordinate magnitude (I3)
+    lim_max = max(tol["dev_max_abs"], tol["dev_max_rel"] * diag, tol.get("dev_max_coord_rel", 0.0) * coord)
+    lim_rms = max(tol["dev_rms_abs"], tol["dev_rms_rel"] * diag, tol.get("dev_rms_coord_rel", 0.0) * coord)
     worst = max(meas["max_cand_to_gold"], meas["max_gold_to_cand"])
     rms = max(meas["rms_cand_to_gold"], meas["rms_gold_to_cand"])
     if worst > lim_max or rms > lim_rms:
