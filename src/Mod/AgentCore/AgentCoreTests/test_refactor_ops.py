@@ -187,7 +187,7 @@ class TestDeviationCoverage(unittest.TestCase):
 
             def nudge(d):
                 o = d.getObject("B044")
-                o.Placement = FreeCAD.Placement(o.Placement.Base + FreeCAD.Vector(5e-5, 0, 0), o.Placement.Rotation)
+                o.Placement = FreeCAD.Placement(o.Placement.Base + FreeCAD.Vector(1e-3, 0, 0), o.Placement.Rotation)   # I3's coordinate term allows 4e-4 at x=1300
 
             r = refactor.invariant(doc, nudge)
             self.assertEqual(r["before"]["deviation_covered"], 45)
