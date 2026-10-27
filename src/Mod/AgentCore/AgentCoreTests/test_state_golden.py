@@ -103,3 +103,24 @@ class TestStateGolden(unittest.TestCase):
                     gold = json.load(f)
                 problems = diff(gold, json.loads(json.dumps(snap)))
                 self.assertEqual(problems, [], key)
+
+    def test_goldens_are_machine_independent(self):
+        """No golden may embed a machine path (build dir, home, user data)."""
+        home = os.path.expanduser("~")
+        roots = {home, os.path.realpath(home), os.path.normpath(App.getResourceDir()),
+                 os.path.realpath(App.getResourceDir()), os.path.normpath(App.getHomePath())}
+        for name in sorted(os.listdir(GOLDEN)):
+            with open(os.path.join(GOLDEN, name), encoding="utf-8") as f:
+                text = f.read()
+            for r in roots:
+                self.assertNotIn(r.rstrip("/"), text, name)
+
+    def test_normalize_path(self):
+        from AgentCore.state.values import normalize_path
+        res = App.getResourceDir()
+        # the same file reached through un-normalised and normalised spellings
+        for spelling in (os.path.join(res, "Mod", "x.svg"), os.path.normpath(os.path.join(res, "Mod", "x.svg"))):
+            self.assertEqual(normalize_path(spelling), "$RESOURCE/Mod/x.svg")
+        self.assertEqual(normalize_path(os.path.join(os.path.expanduser("~"), "a", "b.txt")), "$HOME/a/b.txt")
+        self.assertEqual(normalize_path("/opt/elsewhere/b.txt"), "/opt/elsewhere/b.txt")
+        self.assertEqual(normalize_path("relative/b.txt"), "relative/b.txt")

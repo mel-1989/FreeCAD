@@ -6,6 +6,7 @@ Unknown values become ``{"unserialised": "<python type>"}``; nothing here
 ever emits a ``repr`` with a memory address.
 """
 
+import functools
 import hashlib
 import math
 import os
@@ -116,7 +117,60 @@ def shape_summary(shape):
     return out
 
 
+def _path_roots():
+    docdir = ""
+    try:
+        doc = App.ActiveDocument
+        if doc is not None and doc.FileName:
+            docdir = os.path.dirname(doc.FileName)
+    except Exception:
+        pass
+    return _path_roots_for(docdir)
+
+
+@functools.lru_cache(maxsize=32)
+def _path_roots_for(docdir):
+    """(prefix, token) pairs for machine-specific directories, longest first."""
+    roots = []
+
+    def add(path, token):
+        if not path:
+            return
+        for p in {os.path.normpath(path), os.path.realpath(path)}:
+            roots.append((p.rstrip("/") + "/", token))
+
+    for getter, token in (("getResourceDir", "$RESOURCE"), ("getUserAppDataDir", "$USERAPPDATA"),
+                          ("getHomePath", "$INSTALL"), ("getUserMacroDir", "$USERMACRO")):
+        try:
+            add(getattr(App, getter)(), token)
+        except Exception:
+            pass
+    add(docdir, "$DOCDIR")
+    add(os.path.expanduser("~"), "$HOME")
+    roots.sort(key=lambda r: -len(r[0]))
+    return tuple(roots)
+
+
+def normalize_path(s):
+    """Replace a machine-specific directory prefix by a stable token, so a
+    dump (and a golden made from it) does not depend on the build or the
+    user: ``<resource dir>/Mod/TechDraw/x.svg`` -> ``$RESOURCE/Mod/TechDraw/x.svg``."""
+    if not isinstance(s, str) or not s.startswith("/") and not (len(s) > 2 and s[1] == ":"):
+        return s
+    cands = {s, os.path.normpath(s)}
+    try:
+        cands.add(os.path.realpath(s))
+    except Exception:
+        pass
+    for prefix, token in _path_roots():
+        for c in cands:
+            if c.startswith(prefix):
+                return token + "/" + c[len(prefix):]
+    return s
+
+
 def _string(s):
+    s = normalize_path(s)
     tdir = ""
     try:
         tdir = App.ActiveDocument.TransientDir if App.ActiveDocument else ""
@@ -189,6 +243,8 @@ def property_value(obj, name, ptype):
             return link_value(v)
         if ptype == "App::PropertyFileIncluded" and isinstance(v, str):
             return os.path.basename(v)
+        if ptype in ("App::PropertyFile", "App::PropertyPath") and isinstance(v, str):
+            return normalize_path(v)
         return to_json(v)
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)[:200]}

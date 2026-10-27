@@ -1404,7 +1404,7 @@
      "group": "Template",
      "name": "Template",
      "type": "App::PropertyFile",
-     "value": "/Users/ministation01/src/cad-fork/freecad/build/release/share/Mod/TechDraw/Templates/ISO/A4_Landscape_blank.svg"
+     "value": "$RESOURCE/Mod/TechDraw/Templates/ISO/A4_Landscape_blank.svg"
     },
     {
      "group": "",
