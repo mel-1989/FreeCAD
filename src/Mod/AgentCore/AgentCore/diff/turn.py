@@ -79,6 +79,57 @@ def _shapes(doc):
     return out
 
 
+def _undo_limit(doc):
+    """Document::UndoMaxStackSize is not exposed to Python: 20 unless the GUI
+    set it from the MaxUndoSize preference."""
+    try:
+        if App.GuiUp:
+            return int(App.ParamGet("User parameter:BaseApp/Preferences/Document").GetInt("MaxUndoSize", 20))
+    except Exception:
+        pass
+    return 20
+
+
+def _geo_signature(doc):
+    """Cheap per-object geometry signature: type, topology counts, volume,
+    area and bounding box of every non-null ``Shape``. Used by ``accept`` to
+    confirm the live document still holds the reviewed geometry."""
+    out = {}
+    for o in doc.Objects:
+        try:
+            s = o.Shape if "Shape" in o.PropertiesList else None
+            if s is None or s.isNull():
+                continue
+            bb = s.BoundBox
+            box = [bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax] if bb.isValid() else []
+            out[o.Name] = (s.ShapeType, len(s.Solids), len(s.Faces), len(s.Edges), len(s.Vertexes),
+                           float(s.Volume), float(s.Area), box)
+        except Exception as exc:
+            out[o.Name] = ("error", type(exc).__name__)
+    return out
+
+
+def _geo_differences(a, b, rel=1e-9):
+    diffs = []
+    for name in sorted(set(a) | set(b)):
+        x, y = a.get(name), b.get(name)
+        if x is None or y is None:
+            diffs.append(f"{name}: shape {'added' if x is None else 'removed'} since the proposal")
+            continue
+        if len(x) != len(y) or x[:5] != y[:5]:
+            diffs.append(f"{name}: shape topology {x[:5]} -> {y[:5]}")
+            continue
+        nums_x = list(x[5:7]) + list(x[7])
+        nums_y = list(y[5:7]) + list(y[7])
+        if len(nums_x) != len(nums_y):
+            diffs.append(f"{name}: bounding box validity changed")
+            continue
+        scale = max([1.0] + [abs(v) for v in nums_x])
+        if any(abs(u - v) > rel * scale for u, v in zip(nums_x, nums_y)):
+            diffs.append(f"{name}: shape volume/area/bbox changed since the proposal")
+    return diffs
+
+
 def _derived(diff_line, dump, allowed):
     """True when a flatten difference is tolerated derived data.
 
@@ -127,6 +178,33 @@ class _Observer:
 
     def slotCloseTransaction(self, abort):
         self.turn._rebook(self.turn._recs[0])
+
+    def slotUndoDocument(self, doc):
+        self._history(doc, "undo")
+
+    def slotRedoDocument(self, doc):
+        self._history(doc, "redo")
+
+    def _history(self, doc, what):
+        """undo/redo inside a turn is tampering: the turn is aborted at its
+        exit, and an undo that reached into the human's pre-turn history is
+        redone at once, before anything can open a transaction (which would
+        empty the redo stack and lose that history for good)."""
+        rec = self.turn._rec(doc)
+        if rec is None or self.turn.status != "open":
+            return
+        rec["events"].append((what, ""))
+        self.turn._tamper(rec, f"{what}() called inside the turn")
+        if self.turn._repairing:
+            return
+        self.turn._repairing = True
+        try:
+            while doc.UndoCount < rec["base_undo"] and doc.RedoCount and not doc.Transacting:
+                doc.redo()
+        except Exception as exc:
+            self.turn._tamper(rec, f"could not restore pre-turn history after {what}: {exc}")
+        finally:
+            self.turn._repairing = False
 
     def slotBeforeChangeObject(self, obj, prop):
         try:
@@ -202,6 +280,8 @@ class AgentTurn:
         self._cs = None
         self.result = None
         self.snapshot = None
+        self.tampered = []       # history tampering seen during the turn (undo, redo, clearUndos)
+        self._repairing = False
 
     # ------------------------------------------------------------ records
     def _rec(self, doc):
@@ -226,6 +306,30 @@ class AgentTurn:
     base_names = property(lambda self: self._main()["base_names"])
     segments = property(lambda self: self._main()["segments"])
     _events = property(lambda self: self._main()["events"])
+
+    def _tamper(self, rec, why):
+        rec["tampered"] = True
+        msg = f"{rec['name']}: {why}"
+        if msg not in self.tampered:
+            self.tampered.append(msg)
+
+    def _check_history(self, rec):
+        """clearUndos (and a lost pre-turn entry) fire no observer slot; they
+        are found by the human's pre-turn undo names no longer sitting under
+        the turn's entries."""
+        d, base = rec["doc"], rec.get("base_names")
+        if base is None:
+            return
+        segs = sum(1 for e in rec["events"] if e[0] == "commit")
+        names = list(d.UndoNames)
+        expected = segs + len(base)
+        limit = _undo_limit(d)
+        if expected <= limit:  # no trimming by UndoMaxStackSize: the stack must be segments + base exactly
+            lost = names[len(names) - len(base):] != base if len(names) >= len(base) else True
+        else:  # trimmed: only a stack shorter than the limit says history was removed
+            lost = len(names) < limit
+        if lost:
+            self._tamper(rec, "pre-turn undo history was removed inside the turn (clearUndos or undo)")
 
     # ------------------------------------------------------------ booking
     def _book(self, rec):
@@ -274,7 +378,8 @@ class AgentTurn:
             if d.Transacting:
                 raise TurnError(f"document {d.Name} is undoing or redoing")
         for d in docs:
-            rec = {"doc": d, "name": d.Name, "undo_mode": d.UndoMode, "events": [], "snapshot": None}
+            rec = {"doc": d, "name": d.Name, "undo_mode": d.UndoMode, "events": [], "snapshot": None,
+                   "tampered": False}
             d.UndoMode = 1
             with _Active(d):
                 if d.HasPendingTransaction or App.getActiveTransaction() is not None:
@@ -310,14 +415,22 @@ class AgentTurn:
                 self.verify_after = self._run_verify() if self.verify else None
         finally:
             self._close_recording()
+        for rec in self._recs:
+            self._check_history(rec)
         if exc_type is not None:
             self.verify_after = None
             self.reject()
             return False
+        if self.tampered:
+            self.verify_after = None
+            res = self.reject()
+            res["aborted"] = list(self.tampered)
+            raise TurnError("agent turn aborted, undo history was touched inside it: " + "; ".join(self.tampered))
         for rec in self._recs:
             self._count_segments(rec)
             rec["after"] = _dump(rec["doc"])
             rec["after_shapes"] = _shapes(rec["doc"]) if self.geometry_diff else {}
+            rec["after_geo"] = _geo_signature(rec["doc"])
         self.status = "proposed"
         self._cs = self._build_change_set()
         return False
@@ -430,7 +543,8 @@ class AgentTurn:
     @staticmethod
     def _stack_holds(rec):
         d = rec["doc"]
-        return rec["undo_complete"] and (d.UndoCount, list(d.UndoNames)) == rec["exit_undo"]
+        return not rec.get("tampered") and rec["undo_complete"] and \
+            (d.UndoCount, list(d.UndoNames)) == rec["exit_undo"]
 
     # ------------------------------------------------------------ reject
     def reject(self):
@@ -449,6 +563,7 @@ class AgentTurn:
         if self.status == "open":  # exception inside the body
             for rec in self._recs:
                 self._count_segments(rec)
+                self._check_history(rec)
         methods = {rec["name"]: self._rewind(rec) for rec in self._recs}
         return self._finish_reject(methods)
 
@@ -464,10 +579,38 @@ class AgentTurn:
             for _ in range(rec["segments"]):
                 d.undo()
             return "undo"
+        if phase is None:
+            # The stack cannot be trusted as a whole, but the turn's own entries
+            # still on top of it are undone, so none is left for a later undo or
+            # redo to replay; the snapshot or capture restore does the rest.
+            while d.UndoNames and d.UndoNames[0] == self.undo_name and not d.Transacting:
+                n = d.UndoCount
+                d.undo()
+                if d.UndoCount >= n:
+                    break
         if rec["snapshot"] is not None:
             self.store.restore(d, self.turn_id, transaction=None, document=d.Name)
             return "snapshot"
+        if rec.get("before_cap") is not None:
+            self._restore_capture(rec)
+            return "capture"
         raise TurnError(f"the undo stack of {d.Name} no longer holds this turn and there is no snapshot")
+
+    def _restore_capture(self, rec):
+        """Replay the before-state captured on entry (no snapshot file needed).
+
+        Runs outside any transaction, so nothing lands on the undo stack."""
+        d = rec["doc"]
+        with _Active(d):
+            if d.HasPendingTransaction or App.getActiveTransaction() is not None:
+                d.commitTransaction()
+            n = d.UndoCount
+            problems = transplant.apply(d, rec["before_cap"], recompute=False)
+            transplant.align_touched(d, rec["before"])
+        if d.UndoCount != n:
+            raise TurnError(f"capture restore of {d.Name} was recorded into a transaction")
+        rec["capture_problems"] = problems
+        return problems
 
     def _exact(self, rec):
         d = rec["doc"]
@@ -476,8 +619,13 @@ class AgentTurn:
 
     def _finish_reject(self, methods, **extra):
         for rec in self._recs:
-            if methods[rec["name"]] != "snapshot":  # a snapshot restore undid nothing: the redo stack is the human's
-                self._drop_redos(rec)
+            # A snapshot or capture restore undid nothing, so the redo stack is
+            # the human's -- unless the turn's own entries sit on it (undone
+            # inside the turn or after the proposal): then redo would bring
+            # the rejected change back without a token, so it is emptied.
+            on_redo = self.undo_name in list(rec["doc"].RedoNames)
+            if on_redo or methods[rec["name"]] not in ("snapshot", "capture"):
+                self._drop_redos(rec, force=on_redo)
         diffs, settled, exact = [], {}, {}
         for rec in self._recs:
             d, name = rec["doc"], rec["name"]
@@ -504,6 +652,13 @@ class AgentTurn:
                 self._settle_outside(d)
                 settled[name] = True
                 dd = compare.differences(rec["before"], _dump(d))
+            if dd and rec.get("before_cap") is not None and not str(methods[name]).endswith("capture"):
+                methods[name] = f"{methods[name]}+capture"
+                self._restore_capture(rec)
+                if compare.differences(rec["before"], _dump(d), rel_tol=0.0, abs_tol=0.0):
+                    self._settle_outside(d)
+                    settled[name] = True
+                dd = compare.differences(rec["before"], _dump(d))
             exact[name] = self._exact(rec)
             prefix = "" if rec is self._main() else f"[{name}]"
             diffs += [prefix + x for x in dd]
@@ -514,7 +669,7 @@ class AgentTurn:
                        "settled": settled, "differences": diffs, **extra}
         return self.result
 
-    def _drop_redos(self, rec):
+    def _drop_redos(self, rec, force=False):
         """Empty the redo stack the rejected turn left behind.
 
         FreeCAD has no Python call that clears only the redo stack, but opening
@@ -523,7 +678,7 @@ class AgentTurn:
         rolls the add back and no undo entry is left.
         """
         d = rec["doc"]
-        if not d.RedoCount or not (rec.get("segments") or rec.get("phase")):
+        if not d.RedoCount or not (force or rec.get("segments") or rec.get("phase")):
             return  # a turn that recorded nothing leaves the human's redo stack alone
         n = (d.UndoCount, list(d.UndoNames))
         with _Active(d):
@@ -556,6 +711,10 @@ class AgentTurn:
         """
         if self.status != "proposed":
             raise TurnError(f"cannot accept a turn that is {self.status}")
+        drifted = self.live_differences()
+        if drifted:  # checked before the token, so a refused accept does not spend it
+            raise TurnError("the document no longer equals the reviewed after-state; accept refused: "
+                            + "; ".join(drifted[:8]))
         _auth.verify_token(token, self.turn_id, self.digest())
         live = [rec for rec in self._recs if rec["segments"]]
         if len(live) > 1 or any(rec["segments"] != 1 or rec["segment_names"][0] != self.undo_name for rec in live):
@@ -585,6 +744,18 @@ class AgentTurn:
                        "undo_entries_by_document": {r["name"]: 1 if r["segments"] else 0 for r in self._recs},
                        "transaction_id": tid, "shared_transaction": shared, "detail_drift": drift}
         return self.result
+
+    def live_differences(self):
+        """Differences between every covered document now and the after-state
+        the human reviewed (F1 dump at F1's tolerance plus the geometry
+        signature). Empty means the reviewed change set is what accept keeps."""
+        out = []
+        for rec in self._recs:
+            d = rec["doc"]
+            prefix = "" if rec is self._main() else f"[{rec['name']}]"
+            out += [prefix + x for x in compare.differences(rec["after"], _dump(d))]
+            out += [prefix + x for x in _geo_differences(rec.get("after_geo", {}), _geo_signature(d))]
+        return out
 
     def _abort_accept(self, exc):
         methods = {}
