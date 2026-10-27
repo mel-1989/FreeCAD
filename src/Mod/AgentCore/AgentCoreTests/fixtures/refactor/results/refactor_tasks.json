@@ -1,0 +1,802 @@
+[
+ {
+  "id": "m01_label_sketches",
+  "doc_name": "m01_pad.FCStd",
+  "family": "label_sketches",
+  "task": "Give every Sketcher sketch a Label that starts with \"Sk_\".",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(o.Label.startswith('Sk_') for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m01_pad.FCStd"
+ },
+ {
+  "id": "m01_label_unique",
+  "doc_name": "m01_pad.FCStd",
+  "family": "label_unique",
+  "task": "Give every PartDesign and Sketcher object a unique Label of the form <T>_<n>, where <T> is the part of its TypeId after \"::\" (for example \"Pad_1\", \"SketchObject_1\") and n counts from 1 per type in document order; Names must not change.",
+  "check": "len({o.Label for o in doc.Objects}) == len(doc.Objects) and all(o.Label.startswith(o.TypeId.split('::')[-1] + '_') for o in doc.Objects if o.TypeId.startswith(('PartDesign::', 'Sketcher::')))",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m01_pad.FCStd"
+ },
+ {
+  "id": "m01_lift_pads_varset",
+  "doc_name": "m01_pad.FCStd",
+  "family": "lift_pads_varset",
+  "task": "Move the Length of every PartDesign::Pad into an App::VarSet named \"Dims\" (one property per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='App::VarSet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m01_pad.FCStd"
+ },
+ {
+  "id": "m01_lift_pads_sheet",
+  "doc_name": "m01_pad.FCStd",
+  "family": "lift_pads_sheet",
+  "task": "Move the Length of every PartDesign::Pad into a Spreadsheet named \"Dims\" (one aliased cell per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='Spreadsheet::Sheet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m01_pad.FCStd"
+ },
+ {
+  "id": "m01_lift_all_varset",
+  "doc_name": "m01_pad.FCStd",
+  "family": "lift_all_varset",
+  "task": "Lift every literal dimension that can safely be bound (feature lengths, angles, named sketch constraints) into one App::VarSet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='App::VarSet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m01_pad.FCStd"
+ },
+ {
+  "id": "m01_lift_all_sheet",
+  "doc_name": "m01_pad.FCStd",
+  "family": "lift_all_sheet",
+  "task": "Lift every literal dimension that can safely be bound into one Spreadsheet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='Spreadsheet::Sheet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m01_pad.FCStd"
+ },
+ {
+  "id": "m01_across_bodies",
+  "doc_name": "m01_pad.FCStd",
+  "family": "across_bodies",
+  "task": "Standardise every PartDesign Body: give each body its own parameter container of its feature dimensions.",
+  "check": "any(o.TypeId in ('Spreadsheet::Sheet','App::VarSet') for o in doc.Objects)",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m01_pad.FCStd"
+ },
+ {
+  "id": "m01_label_bodies",
+  "doc_name": "m01_pad.FCStd",
+  "family": "label_bodies",
+  "task": "Set the Label of every PartDesign Body to \"Body_<Name>\" (its immutable Name after an underscore).",
+  "check": "all(o.Label=='Body_'+o.Name for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m01_pad.FCStd"
+ },
+ {
+  "id": "m01_number_pads",
+  "doc_name": "m01_pad.FCStd",
+  "family": "number_pads",
+  "task": "Relabel every PartDesign::Pad as \"Pad_1\", \"Pad_2\", ... in document order (the order of doc.Objects).",
+  "check": "[o.Label for o in doc.Objects if o.TypeId=='PartDesign::Pad'] == ['Pad_%d' % (i + 1) for i in range(len([o for o in doc.Objects if o.TypeId=='PartDesign::Pad']))]",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m01_pad.FCStd"
+ },
+ {
+  "id": "m01_note_sketches",
+  "doc_name": "m01_pad.FCStd",
+  "family": "note_sketches",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every Sketcher sketch.",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m01_pad.FCStd"
+ },
+ {
+  "id": "m01_note_property",
+  "doc_name": "m01_pad.FCStd",
+  "family": "note_property",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every PartDesign Body.",
+  "check": "all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m01_pad.FCStd"
+ },
+ {
+  "id": "m02_label_pockets",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "label_pockets",
+  "task": "Give every PartDesign::Pocket a Label that starts with \"Cut_\".",
+  "check": "any(o.TypeId=='PartDesign::Pocket' for o in doc.Objects) and all(o.Label.startswith('Cut_') for o in doc.Objects if o.TypeId=='PartDesign::Pocket')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m02_label_sketches",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "label_sketches",
+  "task": "Give every Sketcher sketch a Label that starts with \"Sk_\".",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(o.Label.startswith('Sk_') for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m02_label_unique",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "label_unique",
+  "task": "Give every PartDesign and Sketcher object a unique Label of the form <T>_<n>, where <T> is the part of its TypeId after \"::\" (for example \"Pad_1\", \"SketchObject_1\") and n counts from 1 per type in document order; Names must not change.",
+  "check": "len({o.Label for o in doc.Objects}) == len(doc.Objects) and all(o.Label.startswith(o.TypeId.split('::')[-1] + '_') for o in doc.Objects if o.TypeId.startswith(('PartDesign::', 'Sketcher::')))",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m02_lift_pads_varset",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "lift_pads_varset",
+  "task": "Move the Length of every PartDesign::Pad into an App::VarSet named \"Dims\" (one property per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='App::VarSet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m02_lift_pads_sheet",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "lift_pads_sheet",
+  "task": "Move the Length of every PartDesign::Pad into a Spreadsheet named \"Dims\" (one aliased cell per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='Spreadsheet::Sheet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m02_lift_all_varset",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "lift_all_varset",
+  "task": "Lift every literal dimension that can safely be bound (feature lengths, angles, named sketch constraints) into one App::VarSet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='App::VarSet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m02_lift_all_sheet",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "lift_all_sheet",
+  "task": "Lift every literal dimension that can safely be bound into one Spreadsheet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='Spreadsheet::Sheet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m02_across_bodies",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "across_bodies",
+  "task": "Standardise every PartDesign Body: give each body its own parameter container of its feature dimensions.",
+  "check": "any(o.TypeId in ('Spreadsheet::Sheet','App::VarSet') for o in doc.Objects)",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m02_label_bodies",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "label_bodies",
+  "task": "Set the Label of every PartDesign Body to \"Body_<Name>\" (its immutable Name after an underscore).",
+  "check": "all(o.Label=='Body_'+o.Name for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m02_number_pads",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "number_pads",
+  "task": "Relabel every PartDesign::Pad as \"Pad_1\", \"Pad_2\", ... in document order (the order of doc.Objects).",
+  "check": "[o.Label for o in doc.Objects if o.TypeId=='PartDesign::Pad'] == ['Pad_%d' % (i + 1) for i in range(len([o for o in doc.Objects if o.TypeId=='PartDesign::Pad']))]",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m02_note_sketches",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "note_sketches",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every Sketcher sketch.",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m02_note_property",
+  "doc_name": "m02_pocket.FCStd",
+  "family": "note_property",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every PartDesign Body.",
+  "check": "all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m02_pocket.FCStd"
+ },
+ {
+  "id": "m13_label_pockets",
+  "doc_name": "m13_bracket.FCStd",
+  "family": "label_pockets",
+  "task": "Give every PartDesign::Pocket a Label that starts with \"Cut_\".",
+  "check": "any(o.TypeId=='PartDesign::Pocket' for o in doc.Objects) and all(o.Label.startswith('Cut_') for o in doc.Objects if o.TypeId=='PartDesign::Pocket')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m13_bracket.FCStd"
+ },
+ {
+  "id": "m03_label_sketches",
+  "doc_name": "m03_revolve.FCStd",
+  "family": "label_sketches",
+  "task": "Give every Sketcher sketch a Label that starts with \"Sk_\".",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(o.Label.startswith('Sk_') for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m03_revolve.FCStd"
+ },
+ {
+  "id": "m03_label_unique",
+  "doc_name": "m03_revolve.FCStd",
+  "family": "label_unique",
+  "task": "Give every PartDesign and Sketcher object a unique Label of the form <T>_<n>, where <T> is the part of its TypeId after \"::\" (for example \"Pad_1\", \"SketchObject_1\") and n counts from 1 per type in document order; Names must not change.",
+  "check": "len({o.Label for o in doc.Objects}) == len(doc.Objects) and all(o.Label.startswith(o.TypeId.split('::')[-1] + '_') for o in doc.Objects if o.TypeId.startswith(('PartDesign::', 'Sketcher::')))",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m03_revolve.FCStd"
+ },
+ {
+  "id": "m04_lift_pads_varset",
+  "doc_name": "m04_fillet.FCStd",
+  "family": "lift_pads_varset",
+  "task": "Move the Length of every PartDesign::Pad into an App::VarSet named \"Dims\" (one property per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='App::VarSet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m04_fillet.FCStd"
+ },
+ {
+  "id": "m04_lift_pads_sheet",
+  "doc_name": "m04_fillet.FCStd",
+  "family": "lift_pads_sheet",
+  "task": "Move the Length of every PartDesign::Pad into a Spreadsheet named \"Dims\" (one aliased cell per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='Spreadsheet::Sheet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m04_fillet.FCStd"
+ },
+ {
+  "id": "m03_lift_all_varset",
+  "doc_name": "m03_revolve.FCStd",
+  "family": "lift_all_varset",
+  "task": "Lift every literal dimension that can safely be bound (feature lengths, angles, named sketch constraints) into one App::VarSet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='App::VarSet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m03_revolve.FCStd"
+ },
+ {
+  "id": "m03_lift_all_sheet",
+  "doc_name": "m03_revolve.FCStd",
+  "family": "lift_all_sheet",
+  "task": "Lift every literal dimension that can safely be bound into one Spreadsheet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='Spreadsheet::Sheet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m03_revolve.FCStd"
+ },
+ {
+  "id": "m03_across_bodies",
+  "doc_name": "m03_revolve.FCStd",
+  "family": "across_bodies",
+  "task": "Standardise every PartDesign Body: give each body its own parameter container of its feature dimensions.",
+  "check": "any(o.TypeId in ('Spreadsheet::Sheet','App::VarSet') for o in doc.Objects)",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m03_revolve.FCStd"
+ },
+ {
+  "id": "m03_label_bodies",
+  "doc_name": "m03_revolve.FCStd",
+  "family": "label_bodies",
+  "task": "Set the Label of every PartDesign Body to \"Body_<Name>\" (its immutable Name after an underscore).",
+  "check": "all(o.Label=='Body_'+o.Name for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m03_revolve.FCStd"
+ },
+ {
+  "id": "m04_number_pads",
+  "doc_name": "m04_fillet.FCStd",
+  "family": "number_pads",
+  "task": "Relabel every PartDesign::Pad as \"Pad_1\", \"Pad_2\", ... in document order (the order of doc.Objects).",
+  "check": "[o.Label for o in doc.Objects if o.TypeId=='PartDesign::Pad'] == ['Pad_%d' % (i + 1) for i in range(len([o for o in doc.Objects if o.TypeId=='PartDesign::Pad']))]",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m04_fillet.FCStd"
+ },
+ {
+  "id": "m03_note_sketches",
+  "doc_name": "m03_revolve.FCStd",
+  "family": "note_sketches",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every Sketcher sketch.",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m03_revolve.FCStd"
+ },
+ {
+  "id": "m03_note_property",
+  "doc_name": "m03_revolve.FCStd",
+  "family": "note_property",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every PartDesign Body.",
+  "check": "all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m03_revolve.FCStd"
+ },
+ {
+  "id": "m04_label_sketches",
+  "doc_name": "m04_fillet.FCStd",
+  "family": "label_sketches",
+  "task": "Give every Sketcher sketch a Label that starts with \"Sk_\".",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(o.Label.startswith('Sk_') for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m04_fillet.FCStd"
+ },
+ {
+  "id": "m04_label_unique",
+  "doc_name": "m04_fillet.FCStd",
+  "family": "label_unique",
+  "task": "Give every PartDesign and Sketcher object a unique Label of the form <T>_<n>, where <T> is the part of its TypeId after \"::\" (for example \"Pad_1\", \"SketchObject_1\") and n counts from 1 per type in document order; Names must not change.",
+  "check": "len({o.Label for o in doc.Objects}) == len(doc.Objects) and all(o.Label.startswith(o.TypeId.split('::')[-1] + '_') for o in doc.Objects if o.TypeId.startswith(('PartDesign::', 'Sketcher::')))",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m04_fillet.FCStd"
+ },
+ {
+  "id": "m05_lift_pads_varset",
+  "doc_name": "m05_chamfer.FCStd",
+  "family": "lift_pads_varset",
+  "task": "Move the Length of every PartDesign::Pad into an App::VarSet named \"Dims\" (one property per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='App::VarSet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m05_chamfer.FCStd"
+ },
+ {
+  "id": "m05_lift_pads_sheet",
+  "doc_name": "m05_chamfer.FCStd",
+  "family": "lift_pads_sheet",
+  "task": "Move the Length of every PartDesign::Pad into a Spreadsheet named \"Dims\" (one aliased cell per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='Spreadsheet::Sheet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m05_chamfer.FCStd"
+ },
+ {
+  "id": "m04_lift_all_varset",
+  "doc_name": "m04_fillet.FCStd",
+  "family": "lift_all_varset",
+  "task": "Lift every literal dimension that can safely be bound (feature lengths, angles, named sketch constraints) into one App::VarSet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='App::VarSet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m04_fillet.FCStd"
+ },
+ {
+  "id": "m04_lift_all_sheet",
+  "doc_name": "m04_fillet.FCStd",
+  "family": "lift_all_sheet",
+  "task": "Lift every literal dimension that can safely be bound into one Spreadsheet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='Spreadsheet::Sheet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m04_fillet.FCStd"
+ },
+ {
+  "id": "m04_across_bodies",
+  "doc_name": "m04_fillet.FCStd",
+  "family": "across_bodies",
+  "task": "Standardise every PartDesign Body: give each body its own parameter container of its feature dimensions.",
+  "check": "any(o.TypeId in ('Spreadsheet::Sheet','App::VarSet') for o in doc.Objects)",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m04_fillet.FCStd"
+ },
+ {
+  "id": "m04_label_bodies",
+  "doc_name": "m04_fillet.FCStd",
+  "family": "label_bodies",
+  "task": "Set the Label of every PartDesign Body to \"Body_<Name>\" (its immutable Name after an underscore).",
+  "check": "all(o.Label=='Body_'+o.Name for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m04_fillet.FCStd"
+ },
+ {
+  "id": "m05_number_pads",
+  "doc_name": "m05_chamfer.FCStd",
+  "family": "number_pads",
+  "task": "Relabel every PartDesign::Pad as \"Pad_1\", \"Pad_2\", ... in document order (the order of doc.Objects).",
+  "check": "[o.Label for o in doc.Objects if o.TypeId=='PartDesign::Pad'] == ['Pad_%d' % (i + 1) for i in range(len([o for o in doc.Objects if o.TypeId=='PartDesign::Pad']))]",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m05_chamfer.FCStd"
+ },
+ {
+  "id": "m04_note_sketches",
+  "doc_name": "m04_fillet.FCStd",
+  "family": "note_sketches",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every Sketcher sketch.",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m04_fillet.FCStd"
+ },
+ {
+  "id": "m04_note_property",
+  "doc_name": "m04_fillet.FCStd",
+  "family": "note_property",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every PartDesign Body.",
+  "check": "all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m04_fillet.FCStd"
+ },
+ {
+  "id": "m05_label_sketches",
+  "doc_name": "m05_chamfer.FCStd",
+  "family": "label_sketches",
+  "task": "Give every Sketcher sketch a Label that starts with \"Sk_\".",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(o.Label.startswith('Sk_') for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m05_chamfer.FCStd"
+ },
+ {
+  "id": "m05_label_unique",
+  "doc_name": "m05_chamfer.FCStd",
+  "family": "label_unique",
+  "task": "Give every PartDesign and Sketcher object a unique Label of the form <T>_<n>, where <T> is the part of its TypeId after \"::\" (for example \"Pad_1\", \"SketchObject_1\") and n counts from 1 per type in document order; Names must not change.",
+  "check": "len({o.Label for o in doc.Objects}) == len(doc.Objects) and all(o.Label.startswith(o.TypeId.split('::')[-1] + '_') for o in doc.Objects if o.TypeId.startswith(('PartDesign::', 'Sketcher::')))",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m05_chamfer.FCStd"
+ },
+ {
+  "id": "m06_lift_pads_varset",
+  "doc_name": "m06_shell.FCStd",
+  "family": "lift_pads_varset",
+  "task": "Move the Length of every PartDesign::Pad into an App::VarSet named \"Dims\" (one property per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='App::VarSet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m06_shell.FCStd"
+ },
+ {
+  "id": "m06_lift_pads_sheet",
+  "doc_name": "m06_shell.FCStd",
+  "family": "lift_pads_sheet",
+  "task": "Move the Length of every PartDesign::Pad into a Spreadsheet named \"Dims\" (one aliased cell per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='Spreadsheet::Sheet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m06_shell.FCStd"
+ },
+ {
+  "id": "m05_lift_all_varset",
+  "doc_name": "m05_chamfer.FCStd",
+  "family": "lift_all_varset",
+  "task": "Lift every literal dimension that can safely be bound (feature lengths, angles, named sketch constraints) into one App::VarSet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='App::VarSet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m05_chamfer.FCStd"
+ },
+ {
+  "id": "m05_lift_all_sheet",
+  "doc_name": "m05_chamfer.FCStd",
+  "family": "lift_all_sheet",
+  "task": "Lift every literal dimension that can safely be bound into one Spreadsheet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='Spreadsheet::Sheet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m05_chamfer.FCStd"
+ },
+ {
+  "id": "m05_across_bodies",
+  "doc_name": "m05_chamfer.FCStd",
+  "family": "across_bodies",
+  "task": "Standardise every PartDesign Body: give each body its own parameter container of its feature dimensions.",
+  "check": "any(o.TypeId in ('Spreadsheet::Sheet','App::VarSet') for o in doc.Objects)",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m05_chamfer.FCStd"
+ },
+ {
+  "id": "m05_label_bodies",
+  "doc_name": "m05_chamfer.FCStd",
+  "family": "label_bodies",
+  "task": "Set the Label of every PartDesign Body to \"Body_<Name>\" (its immutable Name after an underscore).",
+  "check": "all(o.Label=='Body_'+o.Name for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m05_chamfer.FCStd"
+ },
+ {
+  "id": "m06_number_pads",
+  "doc_name": "m06_shell.FCStd",
+  "family": "number_pads",
+  "task": "Relabel every PartDesign::Pad as \"Pad_1\", \"Pad_2\", ... in document order (the order of doc.Objects).",
+  "check": "[o.Label for o in doc.Objects if o.TypeId=='PartDesign::Pad'] == ['Pad_%d' % (i + 1) for i in range(len([o for o in doc.Objects if o.TypeId=='PartDesign::Pad']))]",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m06_shell.FCStd"
+ },
+ {
+  "id": "m05_note_sketches",
+  "doc_name": "m05_chamfer.FCStd",
+  "family": "note_sketches",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every Sketcher sketch.",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m05_chamfer.FCStd"
+ },
+ {
+  "id": "m05_note_property",
+  "doc_name": "m05_chamfer.FCStd",
+  "family": "note_property",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every PartDesign Body.",
+  "check": "all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m05_chamfer.FCStd"
+ },
+ {
+  "id": "m06_label_sketches",
+  "doc_name": "m06_shell.FCStd",
+  "family": "label_sketches",
+  "task": "Give every Sketcher sketch a Label that starts with \"Sk_\".",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(o.Label.startswith('Sk_') for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m06_shell.FCStd"
+ },
+ {
+  "id": "m06_label_unique",
+  "doc_name": "m06_shell.FCStd",
+  "family": "label_unique",
+  "task": "Give every PartDesign and Sketcher object a unique Label of the form <T>_<n>, where <T> is the part of its TypeId after \"::\" (for example \"Pad_1\", \"SketchObject_1\") and n counts from 1 per type in document order; Names must not change.",
+  "check": "len({o.Label for o in doc.Objects}) == len(doc.Objects) and all(o.Label.startswith(o.TypeId.split('::')[-1] + '_') for o in doc.Objects if o.TypeId.startswith(('PartDesign::', 'Sketcher::')))",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m06_shell.FCStd"
+ },
+ {
+  "id": "m10_lift_pads_varset",
+  "doc_name": "m10_linear_pattern.FCStd",
+  "family": "lift_pads_varset",
+  "task": "Move the Length of every PartDesign::Pad into an App::VarSet named \"Dims\" (one property per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='App::VarSet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m10_linear_pattern.FCStd"
+ },
+ {
+  "id": "m10_lift_pads_sheet",
+  "doc_name": "m10_linear_pattern.FCStd",
+  "family": "lift_pads_sheet",
+  "task": "Move the Length of every PartDesign::Pad into a Spreadsheet named \"Dims\" (one aliased cell per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='Spreadsheet::Sheet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m10_linear_pattern.FCStd"
+ },
+ {
+  "id": "m06_lift_all_varset",
+  "doc_name": "m06_shell.FCStd",
+  "family": "lift_all_varset",
+  "task": "Lift every literal dimension that can safely be bound (feature lengths, angles, named sketch constraints) into one App::VarSet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='App::VarSet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m06_shell.FCStd"
+ },
+ {
+  "id": "m06_lift_all_sheet",
+  "doc_name": "m06_shell.FCStd",
+  "family": "lift_all_sheet",
+  "task": "Lift every literal dimension that can safely be bound into one Spreadsheet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='Spreadsheet::Sheet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m06_shell.FCStd"
+ },
+ {
+  "id": "m06_across_bodies",
+  "doc_name": "m06_shell.FCStd",
+  "family": "across_bodies",
+  "task": "Standardise every PartDesign Body: give each body its own parameter container of its feature dimensions.",
+  "check": "any(o.TypeId in ('Spreadsheet::Sheet','App::VarSet') for o in doc.Objects)",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m06_shell.FCStd"
+ },
+ {
+  "id": "m06_label_bodies",
+  "doc_name": "m06_shell.FCStd",
+  "family": "label_bodies",
+  "task": "Set the Label of every PartDesign Body to \"Body_<Name>\" (its immutable Name after an underscore).",
+  "check": "all(o.Label=='Body_'+o.Name for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m06_shell.FCStd"
+ },
+ {
+  "id": "m10_number_pads",
+  "doc_name": "m10_linear_pattern.FCStd",
+  "family": "number_pads",
+  "task": "Relabel every PartDesign::Pad as \"Pad_1\", \"Pad_2\", ... in document order (the order of doc.Objects).",
+  "check": "[o.Label for o in doc.Objects if o.TypeId=='PartDesign::Pad'] == ['Pad_%d' % (i + 1) for i in range(len([o for o in doc.Objects if o.TypeId=='PartDesign::Pad']))]",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m10_linear_pattern.FCStd"
+ },
+ {
+  "id": "m06_note_sketches",
+  "doc_name": "m06_shell.FCStd",
+  "family": "note_sketches",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every Sketcher sketch.",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m06_shell.FCStd"
+ },
+ {
+  "id": "m06_note_property",
+  "doc_name": "m06_shell.FCStd",
+  "family": "note_property",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every PartDesign Body.",
+  "check": "all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m06_shell.FCStd"
+ },
+ {
+  "id": "m10_label_sketches",
+  "doc_name": "m10_linear_pattern.FCStd",
+  "family": "label_sketches",
+  "task": "Give every Sketcher sketch a Label that starts with \"Sk_\".",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(o.Label.startswith('Sk_') for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m10_linear_pattern.FCStd"
+ },
+ {
+  "id": "m10_label_unique",
+  "doc_name": "m10_linear_pattern.FCStd",
+  "family": "label_unique",
+  "task": "Give every PartDesign and Sketcher object a unique Label of the form <T>_<n>, where <T> is the part of its TypeId after \"::\" (for example \"Pad_1\", \"SketchObject_1\") and n counts from 1 per type in document order; Names must not change.",
+  "check": "len({o.Label for o in doc.Objects}) == len(doc.Objects) and all(o.Label.startswith(o.TypeId.split('::')[-1] + '_') for o in doc.Objects if o.TypeId.startswith(('PartDesign::', 'Sketcher::')))",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m10_linear_pattern.FCStd"
+ },
+ {
+  "id": "m11_lift_pads_varset",
+  "doc_name": "m11_polar_pattern.FCStd",
+  "family": "lift_pads_varset",
+  "task": "Move the Length of every PartDesign::Pad into an App::VarSet named \"Dims\" (one property per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='App::VarSet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m11_polar_pattern.FCStd"
+ },
+ {
+  "id": "m11_lift_pads_sheet",
+  "doc_name": "m11_polar_pattern.FCStd",
+  "family": "lift_pads_sheet",
+  "task": "Move the Length of every PartDesign::Pad into a Spreadsheet named \"Dims\" (one aliased cell per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='Spreadsheet::Sheet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m11_polar_pattern.FCStd"
+ },
+ {
+  "id": "m10_lift_all_varset",
+  "doc_name": "m10_linear_pattern.FCStd",
+  "family": "lift_all_varset",
+  "task": "Lift every literal dimension that can safely be bound (feature lengths, angles, named sketch constraints) into one App::VarSet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='App::VarSet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m10_linear_pattern.FCStd"
+ },
+ {
+  "id": "m10_lift_all_sheet",
+  "doc_name": "m10_linear_pattern.FCStd",
+  "family": "lift_all_sheet",
+  "task": "Lift every literal dimension that can safely be bound into one Spreadsheet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='Spreadsheet::Sheet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m10_linear_pattern.FCStd"
+ },
+ {
+  "id": "m10_across_bodies",
+  "doc_name": "m10_linear_pattern.FCStd",
+  "family": "across_bodies",
+  "task": "Standardise every PartDesign Body: give each body its own parameter container of its feature dimensions.",
+  "check": "any(o.TypeId in ('Spreadsheet::Sheet','App::VarSet') for o in doc.Objects)",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m10_linear_pattern.FCStd"
+ },
+ {
+  "id": "m10_label_bodies",
+  "doc_name": "m10_linear_pattern.FCStd",
+  "family": "label_bodies",
+  "task": "Set the Label of every PartDesign Body to \"Body_<Name>\" (its immutable Name after an underscore).",
+  "check": "all(o.Label=='Body_'+o.Name for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m10_linear_pattern.FCStd"
+ },
+ {
+  "id": "m11_number_pads",
+  "doc_name": "m11_polar_pattern.FCStd",
+  "family": "number_pads",
+  "task": "Relabel every PartDesign::Pad as \"Pad_1\", \"Pad_2\", ... in document order (the order of doc.Objects).",
+  "check": "[o.Label for o in doc.Objects if o.TypeId=='PartDesign::Pad'] == ['Pad_%d' % (i + 1) for i in range(len([o for o in doc.Objects if o.TypeId=='PartDesign::Pad']))]",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m11_polar_pattern.FCStd"
+ },
+ {
+  "id": "m10_note_sketches",
+  "doc_name": "m10_linear_pattern.FCStd",
+  "family": "note_sketches",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every Sketcher sketch.",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m10_linear_pattern.FCStd"
+ },
+ {
+  "id": "m10_note_property",
+  "doc_name": "m10_linear_pattern.FCStd",
+  "family": "note_property",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every PartDesign Body.",
+  "check": "all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m10_linear_pattern.FCStd"
+ },
+ {
+  "id": "m11_label_sketches",
+  "doc_name": "m11_polar_pattern.FCStd",
+  "family": "label_sketches",
+  "task": "Give every Sketcher sketch a Label that starts with \"Sk_\".",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(o.Label.startswith('Sk_') for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m11_polar_pattern.FCStd"
+ },
+ {
+  "id": "m11_label_unique",
+  "doc_name": "m11_polar_pattern.FCStd",
+  "family": "label_unique",
+  "task": "Give every PartDesign and Sketcher object a unique Label of the form <T>_<n>, where <T> is the part of its TypeId after \"::\" (for example \"Pad_1\", \"SketchObject_1\") and n counts from 1 per type in document order; Names must not change.",
+  "check": "len({o.Label for o in doc.Objects}) == len(doc.Objects) and all(o.Label.startswith(o.TypeId.split('::')[-1] + '_') for o in doc.Objects if o.TypeId.startswith(('PartDesign::', 'Sketcher::')))",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m11_polar_pattern.FCStd"
+ },
+ {
+  "id": "m12_lift_pads_varset",
+  "doc_name": "m12_multibody.FCStd",
+  "family": "lift_pads_varset",
+  "task": "Move the Length of every PartDesign::Pad into an App::VarSet named \"Dims\" (one property per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='App::VarSet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m12_multibody.FCStd"
+ },
+ {
+  "id": "m12_lift_pads_sheet",
+  "doc_name": "m12_multibody.FCStd",
+  "family": "lift_pads_sheet",
+  "task": "Move the Length of every PartDesign::Pad into a Spreadsheet named \"Dims\" (one aliased cell per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='Spreadsheet::Sheet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m12_multibody.FCStd"
+ },
+ {
+  "id": "m11_lift_all_varset",
+  "doc_name": "m11_polar_pattern.FCStd",
+  "family": "lift_all_varset",
+  "task": "Lift every literal dimension that can safely be bound (feature lengths, angles, named sketch constraints) into one App::VarSet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='App::VarSet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m11_polar_pattern.FCStd"
+ },
+ {
+  "id": "m11_lift_all_sheet",
+  "doc_name": "m11_polar_pattern.FCStd",
+  "family": "lift_all_sheet",
+  "task": "Lift every literal dimension that can safely be bound into one Spreadsheet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='Spreadsheet::Sheet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m11_polar_pattern.FCStd"
+ },
+ {
+  "id": "m11_across_bodies",
+  "doc_name": "m11_polar_pattern.FCStd",
+  "family": "across_bodies",
+  "task": "Standardise every PartDesign Body: give each body its own parameter container of its feature dimensions.",
+  "check": "any(o.TypeId in ('Spreadsheet::Sheet','App::VarSet') for o in doc.Objects)",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m11_polar_pattern.FCStd"
+ },
+ {
+  "id": "m11_label_bodies",
+  "doc_name": "m11_polar_pattern.FCStd",
+  "family": "label_bodies",
+  "task": "Set the Label of every PartDesign Body to \"Body_<Name>\" (its immutable Name after an underscore).",
+  "check": "all(o.Label=='Body_'+o.Name for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m11_polar_pattern.FCStd"
+ },
+ {
+  "id": "m12_number_pads",
+  "doc_name": "m12_multibody.FCStd",
+  "family": "number_pads",
+  "task": "Relabel every PartDesign::Pad as \"Pad_1\", \"Pad_2\", ... in document order (the order of doc.Objects).",
+  "check": "[o.Label for o in doc.Objects if o.TypeId=='PartDesign::Pad'] == ['Pad_%d' % (i + 1) for i in range(len([o for o in doc.Objects if o.TypeId=='PartDesign::Pad']))]",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m12_multibody.FCStd"
+ },
+ {
+  "id": "m11_note_sketches",
+  "doc_name": "m11_polar_pattern.FCStd",
+  "family": "note_sketches",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every Sketcher sketch.",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m11_polar_pattern.FCStd"
+ },
+ {
+  "id": "m11_note_property",
+  "doc_name": "m11_polar_pattern.FCStd",
+  "family": "note_property",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every PartDesign Body.",
+  "check": "all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m11_polar_pattern.FCStd"
+ },
+ {
+  "id": "m12_label_sketches",
+  "doc_name": "m12_multibody.FCStd",
+  "family": "label_sketches",
+  "task": "Give every Sketcher sketch a Label that starts with \"Sk_\".",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(o.Label.startswith('Sk_') for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m12_multibody.FCStd"
+ },
+ {
+  "id": "m12_label_unique",
+  "doc_name": "m12_multibody.FCStd",
+  "family": "label_unique",
+  "task": "Give every PartDesign and Sketcher object a unique Label of the form <T>_<n>, where <T> is the part of its TypeId after \"::\" (for example \"Pad_1\", \"SketchObject_1\") and n counts from 1 per type in document order; Names must not change.",
+  "check": "len({o.Label for o in doc.Objects}) == len(doc.Objects) and all(o.Label.startswith(o.TypeId.split('::')[-1] + '_') for o in doc.Objects if o.TypeId.startswith(('PartDesign::', 'Sketcher::')))",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m12_multibody.FCStd"
+ },
+ {
+  "id": "m13_lift_pads_varset",
+  "doc_name": "m13_bracket.FCStd",
+  "family": "lift_pads_varset",
+  "task": "Move the Length of every PartDesign::Pad into an App::VarSet named \"Dims\" (one property per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='App::VarSet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m13_bracket.FCStd"
+ },
+ {
+  "id": "m13_lift_pads_sheet",
+  "doc_name": "m13_bracket.FCStd",
+  "family": "lift_pads_sheet",
+  "task": "Move the Length of every PartDesign::Pad into a Spreadsheet named \"Dims\" (one aliased cell per pad) and bind each pad's Length to it with an expression.",
+  "check": "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='Spreadsheet::Sheet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m13_bracket.FCStd"
+ },
+ {
+  "id": "m12_lift_all_varset",
+  "doc_name": "m12_multibody.FCStd",
+  "family": "lift_all_varset",
+  "task": "Lift every literal dimension that can safely be bound (feature lengths, angles, named sketch constraints) into one App::VarSet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='App::VarSet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m12_multibody.FCStd"
+ },
+ {
+  "id": "m12_lift_all_sheet",
+  "doc_name": "m12_multibody.FCStd",
+  "family": "lift_all_sheet",
+  "task": "Lift every literal dimension that can safely be bound into one Spreadsheet named \"Parameters\".",
+  "check": "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='Spreadsheet::Sheet'",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m12_multibody.FCStd"
+ },
+ {
+  "id": "m12_across_bodies",
+  "doc_name": "m12_multibody.FCStd",
+  "family": "across_bodies",
+  "task": "Standardise every PartDesign Body: give each body its own parameter container of its feature dimensions.",
+  "check": "any(o.TypeId in ('Spreadsheet::Sheet','App::VarSet') for o in doc.Objects)",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m12_multibody.FCStd"
+ },
+ {
+  "id": "m12_label_bodies",
+  "doc_name": "m12_multibody.FCStd",
+  "family": "label_bodies",
+  "task": "Set the Label of every PartDesign Body to \"Body_<Name>\" (its immutable Name after an underscore).",
+  "check": "all(o.Label=='Body_'+o.Name for o in doc.Objects if o.TypeId=='PartDesign::Body')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m12_multibody.FCStd"
+ },
+ {
+  "id": "m13_number_pads",
+  "doc_name": "m13_bracket.FCStd",
+  "family": "number_pads",
+  "task": "Relabel every PartDesign::Pad as \"Pad_1\", \"Pad_2\", ... in document order (the order of doc.Objects).",
+  "check": "[o.Label for o in doc.Objects if o.TypeId=='PartDesign::Pad'] == ['Pad_%d' % (i + 1) for i in range(len([o for o in doc.Objects if o.TypeId=='PartDesign::Pad']))]",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m13_bracket.FCStd"
+ },
+ {
+  "id": "m12_note_sketches",
+  "doc_name": "m12_multibody.FCStd",
+  "family": "note_sketches",
+  "task": "Add a string property \"RefactorNote\" with the value \"checked\" to every Sketcher sketch.",
+  "check": "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
+  "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/corpus_work3/scripted/m12_multibody.FCStd"
+ }
+]

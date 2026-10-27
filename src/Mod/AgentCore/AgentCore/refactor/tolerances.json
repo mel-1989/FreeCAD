@@ -1,0 +1,31 @@
+{
+  "schema": "agentcore.refactor.tolerances/1",
+  "_doc": "Vendored from cad-fork fixtures/golden/tolerances.json (brief I3): the platforms block, unchanged. The fork must not import from the control repo at runtime, so the policy is copied; re-copy it when I3 recalibrates. The invariance check uses rel_tol for volume, area, centre of mass and bounding box (relative to the shape's bounding-box diagonal powers) and dev_* for sampled point-to-surface deviation.",
+  "default_platform": "darwin-clang",
+  "platforms": {
+    "darwin-clang": {
+      "calibrated": true,
+      "rel_tol": 4e-06,
+      "dev_max_abs": 1e-05,
+      "dev_max_rel": 1e-07,
+      "dev_rms_abs": 2e-06,
+      "dev_rms_rel": 2e-08
+    },
+    "linux-gcc": {
+      "calibrated": false,
+      "rel_tol": 4e-06,
+      "dev_max_abs": 1e-05,
+      "dev_max_rel": 1e-07,
+      "dev_rms_abs": 2e-06,
+      "dev_rms_rel": 2e-08
+    },
+    "windows-msvc": {
+      "calibrated": false,
+      "rel_tol": 4e-06,
+      "dev_max_abs": 1e-05,
+      "dev_max_rel": 1e-07,
+      "dev_rms_abs": 2e-06,
+      "dev_rms_rel": 2e-08
+    }
+  }
+}
