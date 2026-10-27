@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# cadfork-mcp: the AgentCore MCP server as a uvx-runnable package.
+#   uvx --from <freecad>/src/Mod/AgentCore/mcp-server cadfork-mcp --freecadcmd <path to FreeCADCmd>
+# The wheel carries the whole AgentCore package (pure Python, no dependencies); the
+# server itself never imports FreeCAD, the FreeCADCmd workers it spawns do.
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cadfork-mcp"
+version = "0.1.0"
+description = "Thin MCP server over headless FreeCAD (cad-fork AgentCore: state, verify, diff)"
+readme = "README.md"
+license = "LGPL-2.1-or-later"
+requires-python = ">=3.9"
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.scripts]
+cadfork-mcp = "AgentCore.mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+only-include = []
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"../AgentCore" = "AgentCore"
+
+[tool.hatch.build.targets.sdist.force-include]
+"../AgentCore" = "AgentCore"

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "cadfork": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "/path/to/freecad/src/Mod/AgentCore/mcp-server", "cadfork-mcp",
+               "--freecadcmd", "/path/to/FreeCADCmd", "--parts-path", "/path/to/parts"],
+      "env": {"QT_QPA_PLATFORM": "offscreen"}
+    }
+  }
+}
