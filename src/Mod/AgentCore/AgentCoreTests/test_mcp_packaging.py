@@ -9,7 +9,9 @@ import unittest
 
 from AgentCoreTests.fixtures.mcp import mcp_common as mc
 
-PKG = os.path.join(mc.AGENTCORE_SRC, "mcp-server")
+from AgentCore.paths import agentcore_source_dir  # noqa: E402
+
+PKG = os.path.join(agentcore_source_dir(), "mcp-server")
 
 
 class TestPackaging(unittest.TestCase):

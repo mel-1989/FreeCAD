@@ -9,7 +9,9 @@ import Sketcher
 
 V = App.Vector
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), *[os.pardir] * 6))
+from AgentCore.paths import source_root  # noqa: E402
+
+REPO = source_root()
 UPSTREAM = {
     "upstream_partdesign_example": "data/examples/PartDesignExample.FCStd",
     "upstream_padtest": "data/tests/PadTest.fcstd",
