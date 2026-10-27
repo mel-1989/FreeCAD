@@ -228,6 +228,33 @@ class TestServerWorkers(unittest.TestCase):
         finally:
             s.close()
 
+    def test_real_diff_through_server(self):
+        """With F3 merged: the full loop on the real AgentTurn, discard restores; before F3: diff_unavailable."""
+        from AgentCore import diff as real_diff
+
+        s = mc.make_server(stub=False)
+        try:
+            out, err = mc.call(s, "open_document", path=self.paths["box"])
+            doc = out["doc"]
+            out, err = mc.call(s, "begin_change", doc=doc)
+            if getattr(real_diff, "AgentTurn", None) is None:
+                self.assertTrue(err)
+                self.assertEqual(out["error"], "diff_unavailable")
+                return
+            self.assertFalse(err, out)
+            out, err = mc.call(s, "exec_code", doc=doc, code=mc.SCRIPT_EDIT)
+            self.assertFalse(err, out)
+            prop, err = mc.call(s, "propose_change", doc=doc, summary="real F3")
+            self.assertFalse(err, prop)
+            self.assertEqual(prop["status"], "pending_human_approval")
+            self.assertTrue(prop["change_set"], prop)
+            out, err = mc.call(s, "begin_change", doc=doc, discard_pending=True)
+            self.assertFalse(err, out)
+            st, err = mc.call(s, "get_state", doc=doc)
+            self.assertEqual(sorted(o["name"] for o in st["objects"]), ["Box"])
+        finally:
+            s.close()
+
 
 if __name__ == "__main__":
     unittest.main()

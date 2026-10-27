@@ -24,6 +24,7 @@ class AgentTurn:
         self.doc = doc
         self.before = None
         self.open = False
+        self.status = "new"
 
     def __enter__(self):
         self.before = state.dump(self.doc)
@@ -33,12 +34,20 @@ class AgentTurn:
             pass
         self.doc.openTransaction("agent turn")
         self.open = True
+        self.status = "open"
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, exc_type, exc, tb):
+        # like F3: leaving the body freezes the turn; an exception rejects it
+        if exc_type is not None:
+            self.reject()
+        elif self.status == "open":
+            self.status = "proposed"
         return False
 
     def change_set(self):
+        if self.status != "proposed":
+            raise RuntimeError(f"no change set while the turn is {self.status}")
         after = state.dump(self.doc)
         b = {o["name"]: o for o in self.before["objects"]}
         a = {o["name"]: o for o in after["objects"]}
@@ -56,6 +65,7 @@ class AgentTurn:
             self.doc.abortTransaction()
             self.doc.recompute()
             self.open = False
+        self.status = "rejected"
 
     def accept(self, token):
         if _GUI_TOKEN is None or token != _GUI_TOKEN:

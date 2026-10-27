@@ -212,8 +212,14 @@ class Session:
         return {"change": self.turn_no, "state": "open"}
 
     def _reject_quietly(self):
+        """Reject the current change. An open turn is closed through its context exit with an
+        exception, which F3 answers by rejecting; a proposed one gets ``reject()``."""
         try:
-            self.turn.reject()
+            if self.turn_state == "open":
+                exc = RuntimeError("change discarded by the agent")
+                self.turn.__exit__(type(exc), exc, None)
+            if getattr(self.turn, "status", None) != "rejected":
+                self.turn.reject()
         finally:
             self.turn = None
             self.turn_state = None
@@ -225,8 +231,9 @@ class Session:
             raise BridgeError("no_change", "no open change: call begin_change first")
         if self.turn_state == "proposed":
             return self.proposal
-        cs = self.turn.change_set()
+        self.turn.__exit__(None, None, None)  # F3: settle, verify after, close recording, build the change set
         self.turn_state = "proposed"
+        cs = self.turn.change_set()
         self.proposal = {
             "proposal_id": f"change-{self.turn_no}",
             "status": "pending_human_approval",
