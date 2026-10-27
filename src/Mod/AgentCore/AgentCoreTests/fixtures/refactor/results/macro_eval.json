@@ -1,0 +1,287 @@
+{
+ "summary": {
+  "generated": 24,
+  "parsed": 21,
+  "parse_failures": [
+   {
+    "id": "a_partdesign_pad",
+    "error": "Expecting ':' delimiter: line 4 column 638 (char 761)"
+   },
+   {
+    "id": "c_polygon_revolve",
+    "error": "Expecting ':' delimiter: line 4 column 215 (char 375)"
+   },
+   {
+    "id": "c_sweep_along_path",
+    "error": "Expecting ':' delimiter: line 4 column 386 (char 538)"
+   }
+  ],
+  "pyright_clean": 18,
+  "pyright_clean_and_test_pass": 7,
+  "headless_test_pass_all_parsed": 8,
+  "pyright_rejected": 3,
+  "pyright_rejected_but_test_would_pass": 1,
+  "pyright_clean_but_test_fail": [
+   "a_fillet_edge",
+   "a_spreadsheet_alias",
+   "a_placement_rotation",
+   "b_set_expressions_between_objects",
+   "b_varset_properties",
+   "c_sketch_rectangle_constrained",
+   "c_circle_extrude",
+   "c_wire_face_extrude",
+   "c_loft_two_wires",
+   "c_slice_shape",
+   "c_shape_queries"
+  ]
+ },
+ "rows": [
+  {
+   "id": "a_box_volume",
+   "task": "Create a box with dimensions 10x20x30 and verify its volume is 6000.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": true,
+   "run_error": null
+  },
+  {
+   "id": "a_cylinder_placement",
+   "task": "Create a cylinder of radius 5 and height 20 placed at (10, 20, 30).",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": true,
+   "run_error": null
+  },
+  {
+   "id": "a_boolean_fuse",
+   "task": "Create a box and a sphere, then fuse them into a single shape.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": true,
+   "run_error": null
+  },
+  {
+   "id": "a_partdesign_pocket",
+   "task": "Create a PartDesign Body with a 10x10x5 pad, then pocket a 5x5 square through all.",
+   "pyright_ok": false,
+   "pyright_errors": [
+    {
+     "line": 8,
+     "rule": "reportUndefinedVariable",
+     "message": "\"Part\" is not defined"
+    },
+    {
+     "line": 9,
+     "rule": "reportUndefinedVariable",
+     "message": "\"Part\" is not defined"
+    },
+    {
+     "line": 10,
+     "rule": "reportUndefinedVariable",
+     "message": "\"Part\" is not defined"
+    },
+    {
+     "line": 11,
+     "rule": "reportUndefinedVariable",
+     "message": "\"Part\" is not defined"
+    },
+    {
+     "line": 20,
+     "rule": "reportUndefinedVariable",
+     "message": "\"Part\" is not defined"
+    },
+    {
+     "line": 21,
+     "rule": "reportUndefinedVariable",
+     "message": "\"Part\" is not defined"
+    },
+    {
+     "line": 22,
+     "rule": "reportUndefinedVariable",
+     "message": "\"Part\" is not defined"
+    },
+    {
+     "line": 23,
+     "rule": "reportUndefinedVariable",
+     "message": "\"Part\" is not defined"
+    }
+   ],
+   "ran": false,
+   "check": null,
+   "run_error": "Traceback (most recent call last):\n  File \"<string>\", line 18, in <module>\n  File \"a_partdesign_pocket\", line 8, in <module>\nNameError: name 'Part' is not defined\n"
+  },
+  {
+   "id": "a_fillet_edge",
+   "task": "Create a 10x10x10 box and apply a fillet of radius 2 to one edge.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": false,
+   "check": null,
+   "run_error": "Traceback (most recent call last):\n  File \"<string>\", line 18, in <module>\n  File \"a_fillet_edge\", line 10, in <module>\nAttributeError: 'Part.Feature' object has no attribute 'Radius'\n"
+  },
+  {
+   "id": "a_spreadsheet_alias",
+   "task": "Create a spreadsheet with an alias 'width' set to 5, then use it in an expression for a box's Width.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": null,
+   "run_error": "Traceback (most recent call last):\n  File \"<string>\", line 21, in <module>\n  File \"<string>\", line 1, in <module>\nArithmeticError: Quantity::operator -(): Unit mismatch in minus operation\n"
+  },
+  {
+   "id": "a_placement_rotation",
+   "task": "Create a cylinder and rotate it 45 degrees about the Z-axis.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": false,
+   "run_error": null
+  },
+  {
+   "id": "b_rename_labels_bulk",
+   "task": "Rename all object labels in the document by appending '_renamed' to each.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": true,
+   "run_error": null
+  },
+  {
+   "id": "b_group_into_part",
+   "task": "Group two existing objects into an App::Part container.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": true,
+   "run_error": null
+  },
+  {
+   "id": "b_set_expressions_between_objects",
+   "task": "Set an expression on a box's Length property to equal a sphere's Radius property.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": null,
+   "run_error": "Traceback (most recent call last):\n  File \"<string>\", line 21, in <module>\n  File \"<string>\", line 1, in <module>\nArithmeticError: Quantity::operator -(): Unit mismatch in minus operation\n"
+  },
+  {
+   "id": "b_varset_properties",
+   "task": "Create an App::VarSet with custom properties and set their values.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": null,
+   "run_error": "Traceback (most recent call last):\n  File \"<string>\", line 21, in <module>\n  File \"<string>\", line 1, in <module>\nArithmeticError: Quantity::operator -(): Unit mismatch in minus operation\n"
+  },
+  {
+   "id": "b_custom_featurepython_execute",
+   "task": "Create a custom Part::FeaturePython object with a Proxy class that defines an execute method to set a shape.",
+   "pyright_ok": false,
+   "pyright_errors": [
+    {
+     "line": 4,
+     "rule": "reportAttributeAccessIssue",
+     "message": "\"Box\" is not a known attribute of module \"Part\""
+    },
+    {
+     "line": 7,
+     "rule": "reportCallIssue",
+     "message": "Expected 0 positional arguments"
+    }
+   ],
+   "ran": false,
+   "check": null,
+   "run_error": "Traceback (most recent call last):\n  File \"<string>\", line 18, in <module>\n  File \"b_custom_featurepython_execute\", line 7, in <module>\nTypeError: MyProxy() takes no arguments\n"
+  },
+  {
+   "id": "b_measure_volume_and_bbox",
+   "task": "Measure the volume and bounding box dimensions of a Part::Box.",
+   "pyright_ok": false,
+   "pyright_errors": [
+    {
+     "line": 11,
+     "rule": "reportAttributeAccessIssue",
+     "message": "Cannot access attribute \"Result\" for class \"Document\"\n\u00a0\u00a0Attribute \"Result\" is unknown"
+    }
+   ],
+   "ran": true,
+   "check": true,
+   "run_error": null
+  },
+  {
+   "id": "b_mirror_and_array_compound",
+   "task": "Mirror a box and create an array of two shapes combined into a Part::Compound.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": true,
+   "run_error": null
+  },
+  {
+   "id": "b_compound_from_multiple_shapes",
+   "task": "Create a Part::Compound from three primitive shapes (box, sphere, cylinder).",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": true,
+   "run_error": null
+  },
+  {
+   "id": "c_sketch_rectangle_constrained",
+   "task": "Create a sketch with a rectangle constrained by horizontal and vertical distances, then extrude it into a solid.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": false,
+   "run_error": null
+  },
+  {
+   "id": "c_circle_extrude",
+   "task": "Create a Part::Circle, extrude it into a cylinder, and verify the number of faces.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": false,
+   "run_error": null
+  },
+  {
+   "id": "c_wire_face_extrude",
+   "task": "Create a wire from edges, build a face from it, extrude into a solid, and count edges.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": false,
+   "check": null,
+   "run_error": "Traceback (most recent call last):\n  File \"<string>\", line 18, in <module>\n  File \"c_wire_face_extrude\", line 5, in <module>\nTypeError: item is not a shape\n"
+  },
+  {
+   "id": "c_loft_two_wires",
+   "task": "Create two wires at different heights and loft between them to form a solid, then verify the number of faces.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": false,
+   "check": null,
+   "run_error": "Traceback (most recent call last):\n  File \"<string>\", line 18, in <module>\n  File \"c_loft_two_wires\", line 4, in <module>\nTypeError: item is not a shape\n"
+  },
+  {
+   "id": "c_slice_shape",
+   "task": "Create a box, slice it with a plane, and verify the number of resulting solids.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": false,
+   "check": null,
+   "run_error": "Traceback (most recent call last):\n  File \"<string>\", line 18, in <module>\n  File \"c_slice_shape\", line 10, in <module>\nTypeError: argument 1 must be Base.Vector, not Part.Plane\n"
+  },
+  {
+   "id": "c_shape_queries",
+   "task": "Create a sphere and query its faces, edges, area, and center of mass.",
+   "pyright_ok": true,
+   "pyright_errors": [],
+   "ran": true,
+   "check": false,
+   "run_error": null
+  }
+ ]
+}

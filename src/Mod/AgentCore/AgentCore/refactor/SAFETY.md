@@ -18,6 +18,7 @@ Status: **draft, not yet signed off.** The brief reserves the definition of "red
 | L2 | Only unit-bearing numeric properties (`PropertyLength`, `PropertyDistance`, `PropertyAngle`) and `PropertyFloat`, and only named, driving sketch constraints of type Distance, DistanceX, DistanceY, Radius, Diameter or Angle. Read-only, hidden, output and transient properties are skipped. |
 | L3 | A property that already has an expression is never rebound. |
 | L4 | The container receives the exact current value; the expression is evaluated straight away and compared for equality with the original. Any difference removes the expression and raises. |
+| L6 | An object with a `...Python` object (Arch, Draft, BIM proxy) anywhere downstream is not lifted, because lifting touches it and everything downstream recomputes. Found by the corpus run: touching an Arch section plane's input collapses its shape to a 1 x 1 default when recomputed headless. |
 | L5 | One shared container per document (`Parameters`), created if missing. Aliases are `<ObjectName>_<Property>`, made unique, and never look like a cell address or a unit. |
 
 ## Relabel (`relabel`)
@@ -25,6 +26,7 @@ Status: **draft, not yet signed off.** The brief reserves the definition of "red
 | Rule | Statement |
 |---|---|
 | B1 | Only `Label` changes; `Name` is checked unchanged after every assignment. |
+| B3 | Only PartDesign, Sketcher and Part objects are relabelled, never a `...Python` type: a Label change touches the object and a Python proxy re-executes. Found by the corpus run: relabelling an Arch section plane changed its geometry headless. |
 | B2 | FreeCAD may append digits to keep labels unique; the label actually set is reported. Expressions that refer to an object by label are rewritten by FreeCAD itself. |
 
 ## Merging redundant features (`find_redundant`, `merge_redundant`)

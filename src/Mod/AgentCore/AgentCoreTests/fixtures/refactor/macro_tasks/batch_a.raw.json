@@ -1,0 +1,50 @@
+[
+{
+    "id": "a_box_volume",
+    "task": "Create a box with dimensions 10x20x30 and verify its volume is 6000.",
+    "macro": "import FreeCAD\nimport Part\ndoc = FreeCAD.newDocument(\"T\")\nbox = doc.addObject(\"Part::Box\", \"Box\")\nbox.Length = 10.0\nbox.Width = 20.0\nbox.Height = 30.0\ndoc.recompute()",
+    "check": "abs(doc.getObject(\"Box\").Shape.Volume - 6000) < 1e-6"
+},
+{
+    "id": "a_cylinder_placement",
+    "task": "Create a cylinder of radius 5 and height 20 placed at (10, 20, 30).",
+    "macro": "import FreeCAD\nimport Part\ndoc = FreeCAD.newDocument(\"T\")\ncyl = doc.addObject(\"Part::Cylinder\", \"Cylinder\")\ncyl.Radius = 5.0\ncyl.Height = 20.0\ncyl.Placement.Base = FreeCAD.Vector(10, 20, 30)\ndoc.recompute()",
+    "check": "doc.getObject(\"Cylinder\").Placement.Base == FreeCAD.Vector(10, 20, 30)"
+},
+{
+    "id": "a_boolean_fuse",
+    "task": "Create a box and a sphere, then fuse them into a single shape.",
+    "macro": "import FreeCAD\nimport Part\ndoc = FreeCAD.newDocument(\"T\")\nbox = doc.addObject(\"Part::Box\", \"Box\")\nbox.Length = 10\nbox.Width = 10\nbox.Height = 10\nsphere = doc.addObject(\"Part::Sphere\", \"Sphere\")\nsphere.Radius = 8\nsphere.Placement.Base = FreeCAD.Vector(5, 5, 5)\nfuse = doc.addObject(\"Part::MultiFuse\", \"Fusion\")\nfuse.Shapes = [box, sphere]\ndoc.recompute()",
+    "check": "doc.getObject(\"Fusion\").Shape.Volume > 1000"
+},
+{
+    "id": "a_partdesign_pad",
+    "task": "Create a PartDesign Body with a sketch of a 10x10 square and pad it by 5 mm.",
+    "macro": "import FreeCAD\nimport Sketcher\nimport PartDesign\ndoc = FreeCAD.newDocument(\"T\")\nbody = doc.addObject(\"PartDesign::Body\", \"Body\")\nsketch = doc.addObject(\"Sketcher::SketchObject\", \"Sketch\")\nbody.addObject(sketch)\ngeom = [Part.LineSegment(FreeCAD.Vector(0,0,0), FreeCAD.Vector(10,0,0)),\n        Part.LineSegment(FreeCAD.Vector(10,0,0), FreeCAD.Vector(10,10,0)),\n        Part.LineSegment(FreeCAD.Vector(10,10,0), FreeCAD.Vector(0,10,0)),\n        Part.LineSegment(FreeCAD.Vector(0,10,0), FreeCAD.Vector(0,0,0))]\nfor g in geom:\n    sketch.addGeometry(g, False)\npad = doc.addObject(\"PartDesign::Pad", "Pad")\npad.Sketch = sketch\npad.Length = 5.0\nbody.addObject(pad)\ndoc.recompute()",
+    "check": "abs(doc.getObject(\"Pad\").Shape.Volume - 500) < 1e-6"
+},
+{
+    "id": "a_partdesign_pocket",
+    "task": "Create a PartDesign Body with a 10x10x5 pad, then pocket a 5x5 square through all.",
+    "macro": "import FreeCAD\nimport Sketcher\nimport PartDesign\ndoc = FreeCAD.newDocument(\"T\")\nbody = doc.addObject(\"PartDesign::Body\", \"Body\")\nsketch1 = doc.addObject(\"Sketcher::SketchObject\", \"Sketch1\")\nbody.addObject(sketch1)\ngeom1 = [Part.LineSegment(FreeCAD.Vector(0,0,0), FreeCAD.Vector(10,0,0)),\n         Part.LineSegment(FreeCAD.Vector(10,0,0), FreeCAD.Vector(10,10,0)),\n         Part.LineSegment(FreeCAD.Vector(10,10,0), FreeCAD.Vector(0,10,0)),\n         Part.LineSegment(FreeCAD.Vector(0,10,0), FreeCAD.Vector(0,0,0))]\nfor g in geom1:\n    sketch1.addGeometry(g, False)\npad = doc.addObject(\"PartDesign::Pad\", \"Pad\")\npad.Sketch = sketch1\npad.Length = 5.0\nbody.addObject(pad)\nsketch2 = doc.addObject(\"Sketcher::SketchObject\", \"Sketch2\")\nbody.addObject(sketch2)\ngeom2 = [Part.LineSegment(FreeCAD.Vector(2.5,2.5,0), FreeCAD.Vector(7.5,2.5,0)),\n         Part.LineSegment(FreeCAD.Vector(7.5,2.5,0), FreeCAD.Vector(7.5,7.5,0)),\n         Part.LineSegment(FreeCAD.Vector(7.5,7.5,0), FreeCAD.Vector(2.5,7.5,0)),\n         Part.LineSegment(FreeCAD.Vector(2.5,7.5,0), FreeCAD.Vector(2.5,2.5,0))]\nfor g in geom2:\n    sketch2.addGeometry(g, False)\npocket = doc.addObject(\"PartDesign::Pocket\", \"Pocket\")\npocket.Sketch = sketch2\npocket.Type = \"ThroughAll\"\ndoc.recompute()",
+    "check": "abs(doc.getObject(\"Pocket\").Shape.Volume - 375) < 1e-6"
+},
+{
+    "id": "a_fillet_edge",
+    "task": "Create a 10x10x10 box and apply a fillet of radius 2 to one edge.",
+    "macro": "import FreeCAD\nimport Part\ndoc = FreeCAD.newDocument(\"T\")\nbox = doc.addObject(\"Part::Box\", \"Box\")\nbox.Length = 10\nbox.Width = 10\nbox.Height = 10\nfillet = doc.addObject(\"Part::Fillet\", \"Fillet\")\nfillet.Base = box\nfillet.Radius = 2.0\nfillet.Edges = [(box, [\"Edge1\"])]\ndoc.recompute()",
+    "check": "doc.getObject(\"Fillet\").Shape.Volume < 1000"
+},
+{
+    "id": "a_spreadsheet_alias",
+    "task": "Create a spreadsheet with an alias 'width' set to 5, then use it in an expression for a box's Width.",
+    "macro": "import FreeCAD\nimport Spreadsheet\ndoc = FreeCAD.newDocument(\"T\")\nss = doc.addObject(\"Spreadsheet::Sheet\", \"SS\")\nss.set(\"A1\", \"5\")\nss.setAlias(\"B1\", \"width\")\nbox = doc.addObject(\"Part::Box\", \"Box\")\nbox.setExpression(\"Width\", u\"SS.width\")\ndoc.recompute()",
+    "check": "abs(doc.getObject(\"Box\").Width - 5) < 1e-6"
+},
+{
+    "id": "a_placement_rotation",
+    "task": "Create a cylinder and rotate it 45 degrees about the Z-axis.",
+    "macro": "import FreeCAD\nimport Part\ndoc = FreeCAD.newDocument(\"T\")\ncyl = doc.addObject(\"Part::Cylinder\", \"Cylinder\")\ncyl.Radius = 5\ncyl.Height = 10\ncyl.Placement = FreeCAD.Placement(FreeCAD.Vector(0,0,0), FreeCAD.Rotation(FreeCAD.Vector(0,0,1), 45))\ndoc.recompute()",
+    "check": "doc.getObject(\"Cylinder\").Placement.Rotation.Angle == 45"
+}
+]

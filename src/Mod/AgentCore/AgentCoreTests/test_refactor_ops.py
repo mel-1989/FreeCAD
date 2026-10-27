@@ -84,6 +84,35 @@ class TestLift(unittest.TestCase):
             self.assertEqual(doc.getObject("Parameters").Pad_Length.Value, 12.345678901234567)
 
 
+class _Proxy:
+    def __init__(self, obj):
+        obj.Proxy = self
+
+    def execute(self, obj):
+        pass
+
+
+class TestPythonProxyGuard(unittest.TestCase):
+    """Corpus finding: touching an Arch section plane's inputs changed its geometry headless (SAFETY L6, B3)."""
+
+    def test_lift_and_relabel_skip_python_objects_and_their_inputs(self):
+        with Doc() as doc:
+            box = doc.addObject("Part::Box", "Upstream")
+            free = doc.addObject("Part::Box", "Free")
+            py = doc.addObject("App::FeaturePython", "ProxyObj")
+            _Proxy(py)
+            py.addProperty("App::PropertyLink", "Source", "Base")
+            py.Source = box
+            doc.recompute()
+            names = {c["object"] for c in refactor.lift_candidates(doc)}
+            self.assertIn("Free", names)
+            self.assertNotIn("Upstream", names)
+            self.assertNotIn("ProxyObj", names)
+            scheme = refactor.relabel_scheme(doc)
+            self.assertIn("Free", scheme)
+            self.assertNotIn("ProxyObj", scheme)
+
+
 class TestAcrossBodies(unittest.TestCase):
     def test_standardise_every_body(self):
         with Doc() as doc:

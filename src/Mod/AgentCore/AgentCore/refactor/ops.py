@@ -88,11 +88,16 @@ def relabel(doc, mapping):
     return {"op": "relabel", "changed": changed, "skipped": skipped, "count": len(changed)}
 
 
-def relabel_scheme(doc, only_families=("PartDesign::", "Sketcher::", "Part::", "App::")):
-    """A deterministic bulk scheme: ``<Body>_<Type><n>`` inside bodies, ``<Type><n>`` elsewhere."""
+def relabel_scheme(doc, only_families=LIFT_FAMILIES):
+    """A deterministic bulk scheme: ``<Body>_<Type><n>`` inside bodies, ``<Type><n>`` elsewhere.
+
+    Rule B3: only PartDesign, Sketcher and Part objects, never a ``...Python`` type, because a
+    Label change touches the object and a Python proxy then re-executes (an Arch section plane
+    collapses to its 1 x 1 default when re-executed headless).
+    """
     counters, mapping = {}, {}
     for o in doc.Objects:
-        if not o.TypeId.startswith(tuple(only_families)):
+        if not _is_lift_family(o) or not o.TypeId.startswith(tuple(only_families)):
             continue
         body = body_of(o)
         prefix = (_ident(body.Label) + "_") if body else ""
@@ -113,11 +118,18 @@ def _is_lift_family(obj):
         and obj.TypeId not in ("App::VarSet", "Spreadsheet::Sheet")
 
 
+def _has_python_dependents(obj):
+    """Rule L6: lifting touches ``obj``, which recomputes everything downstream; a Python proxy
+    downstream (Arch, Draft) may not recompute the same headless."""
+    return any(d.TypeId.endswith("Python") and not d.TypeId.startswith("Part::")
+               for d in obj.InListRecursive)
+
+
 def lift_candidates(doc):
     """Literal properties and named driving sketch constraints that may be lifted (rule R-L1..L3)."""
     out = []
     for o in doc.Objects:
-        if not _is_lift_family(o):
+        if not _is_lift_family(o) or _has_python_dependents(o):
             continue
         bound = {p.lstrip(".") for p, _ in o.ExpressionEngine}
         for prop in o.PropertiesList:
@@ -224,14 +236,19 @@ def lift_literal(doc, obj, prop, *, target="VarSet", container=None, alias=None,
         cell = None
     else:
         cell = _next_cell(cont)
-        cont.set(cell, f"{value!r} {unit}".strip())
+        # '=' makes the cell a formula, so "-90.0 deg" is a Quantity rather than a string
+        cont.set(cell, "=" + f"{value!r} {unit}".strip())
         cont.setAlias(cell, alias)
         cont.recompute()
     expr = f"{cont.Name}.{alias}"
     obj.setExpression(path, expr)
-    back = obj.evalExpression(expr)
-    back = back.Value if hasattr(back, "Value") else float(back)
-    if back != value:
+    try:
+        back = obj.evalExpression(expr)
+        back = back.Value if hasattr(back, "Value") else float(back)
+        mismatch = back != value
+    except Exception as exc:
+        back, mismatch = repr(exc), True
+    if mismatch:
         obj.setExpression(path, None)
         raise ValueError(f"lift of {obj.Name}.{prop} would change the value {value!r} -> {back!r}")
     return {"object": obj.Name, "property": prop, "target": target, "container": cont.Name,

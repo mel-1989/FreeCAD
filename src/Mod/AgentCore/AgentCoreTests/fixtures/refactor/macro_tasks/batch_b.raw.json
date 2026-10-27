@@ -1,0 +1,50 @@
+[
+{
+"id": "b_rename_labels_bulk",
+"task": "Rename all object labels in the document by appending '_renamed' to each.",
+"macro": "import FreeCAD\ndoc = FreeCAD.newDocument(\"T\")\nbox = doc.addObject(\"Part::Box\", \"Box\")\nbox.Label = \"Box\"\nsphere = doc.addObject(\"Part::Sphere\", \"Sphere\")\nsphere.Label = \"Sphere\"\nfor obj in doc.Objects:\n    obj.Label = obj.Label + \"_renamed\"\ndoc.recompute()",
+"check": "all('_renamed' in obj.Label for obj in doc.Objects)"
+},
+{
+"id": "b_group_into_part",
+"task": "Group two existing objects into an App::Part container.",
+"macro": "import FreeCAD\ndoc = FreeCAD.newDocument(\"T\")\nbox = doc.addObject(\"Part::Box\", \"Box\")\nsphere = doc.addObject(\"Part::Sphere\", \"Sphere\")\npart = doc.addObject(\"App::Part\", \"MyPart\")\npart.addObject(box)\npart.addObject(sphere)\ndoc.recompute()",
+"check": "len(doc.getObject('MyPart').Group) == 2"
+},
+{
+"id": "b_set_expressions_between_objects",
+"task": "Set an expression on a box's Length property to equal a sphere's Radius property.",
+"macro": "import FreeCAD\ndoc = FreeCAD.newDocument(\"T\")\nbox = doc.addObject(\"Part::Box\", \"Box\")\nsphere = doc.addObject(\"Part::Sphere\", \"Sphere\")\nsphere.Radius = 10\nbox.setExpression('Length', 'Sphere.Radius')\ndoc.recompute()",
+"check": "abs(doc.getObject('Box').Length - 10) < 1e-6"
+},
+{
+"id": "b_varset_properties",
+"task": "Create an App::VarSet with custom properties and set their values.",
+"macro": "import FreeCAD\ndoc = FreeCAD.newDocument(\"T\")\nvs = doc.addObject(\"App::VarSet\", \"MyVars\")\nvs.addProperty(\"App::PropertyLength\", \"Length\")\nvs.addProperty(\"App::PropertyAngle\", \"Angle\")\nvs.Length = 50\nvs.Angle = 45\ndoc.recompute()",
+"check": "abs(doc.getObject('MyVars').Length - 50) < 1e-6 and abs(doc.getObject('MyVars').Angle - 45) < 1e-6"
+},
+{
+"id": "b_custom_featurepython_execute",
+"task": "Create a custom Part::FeaturePython object with a Proxy class that defines an execute method to set a shape.",
+"macro": "import FreeCAD, Part\nclass MyProxy:\n    def execute(self, obj):\n        obj.Shape = Part.Box(10,10,10).toShape()\ndoc = FreeCAD.newDocument(\"T\")\nobj = doc.addObject(\"Part::FeaturePython\", \"CustomBox\")\nMyProxy(obj)\ndoc.recompute()",
+"check": "hasattr(doc.getObject('CustomBox'), 'Shape') and doc.getObject('CustomBox').Shape.Volume > 0"
+},
+{
+"id": "b_measure_volume_and_bbox",
+"task": "Measure the volume and bounding box dimensions of a Part::Box.",
+"macro": "import FreeCAD, Part\ndoc = FreeCAD.newDocument(\"T\")\nbox = doc.addObject(\"Part::Box\", \"Box\")\nbox.Length = 20\nbox.Width = 30\nbox.Height = 40\ndoc.recompute()\nvol = box.Shape.Volume\nbbox = box.Shape.BoundBox\ndoc.addObject(\"App::AnnotationLabel\", \"Result\")\ndoc.Result.Label = f\"Volume: {vol}, BBox: {bbox.XLength}x{bbox.YLength}x{bbox.ZLength}\"\ndoc.recompute()",
+"check": "abs(doc.getObject('Box').Shape.Volume - 24000) < 1e-6"
+},
+{
+"id": "b_mirror_and_array_compound",
+"task": "Mirror a box and create an array of two shapes combined into a Part::Compound.",
+"macro": "import FreeCAD, Part\ndoc = FreeCAD.newDocument(\"T\")\nbox = doc.addObject(\"Part::Box\", \"Box\")\nbox.Length = 10\nbox.Width = 10\nbox.Height = 10\ndoc.recompute()\nmirror = doc.addObject(\"Part::Mirroring\", \"Mirror\")\nmirror.Source = box\nmirror.Normal = (1,0,0)\nmirror.Base = (5,0,0)\ndoc.recompute()\ncompound = doc.addObject(\"Part::Compound\", \"Compound\")\ncompound.Links = [box, mirror]\ndoc.recompute()",
+"check": "len(doc.getObject('Compound').Shape.Solids) == 2"
+},
+{
+"id": "b_compound_from_multiple_shapes",
+"task": "Create a Part::Compound from three primitive shapes (box, sphere, cylinder).",
+"macro": "import FreeCAD, Part\ndoc = FreeCAD.newDocument(\"T\")\nbox = doc.addObject(\"Part::Box\", \"Box\")\nsphere = doc.addObject(\"Part::Sphere\", \"Sphere\")\ncylinder = doc.addObject(\"Part::Cylinder\", \"Cylinder\")\ncompound = doc.addObject(\"Part::Compound\", \"Compound\")\ncompound.Links = [box, sphere, cylinder]\ndoc.recompute()",
+"check": "len(doc.getObject('Compound').Shape.Solids) == 3"
+}
+]
