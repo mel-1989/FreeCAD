@@ -19,10 +19,24 @@ one event per reference:
 
 ``basis`` says how a verdict was reached (element map by default,
 ``"freecad"`` when FreeCAD's own reference update supplied the successor,
-``"signature"`` for geometry matching). ``stale_geometry`` is true when the
-element's owner or one of its dependencies failed or was not recomputed, so
-the verdict is about geometry that no longer reflects the edit.
+``"signature"`` for an exact geometric match, ``"element_map_structure"``
+for the unique element made by the same operation in the same role, and
+``"carrier"`` for the unique element on the same plane, axis and radius, or
+line). A successor is accepted only when it is unique; otherwise the
+reference is reported lost.
+
+The element map can also keep a name on the wrong element. A kept name whose
+geometry moved while an exact copy of the old geometry sits elsewhere is
+reported as a remap onto that copy; a kept name whose element now faces
+another way (more than a sign flip) is reported lost.
+
+``stale_geometry`` is true when the element's owner or one of its
+dependencies failed or was not recomputed. Such a reference is always
+reported ``lost`` (the would-be verdict is kept under ``provisional``),
+because nothing about stale geometry can be confirmed.
 """
+
+import re
 
 import FreeCAD as App
 
@@ -98,6 +112,78 @@ def signature(shape, short):
     return {"loose": tuple(loose), "size": strict.get("size"), "center": strict.get("center")}
 
 
+_HEAD_RE = re.compile(r"^(#[0-9a-fA-F]+:)[0-9]+")
+
+
+def mapped_tail(mapped):
+    """The structural part of a mapped name: the name with the index of its
+    leading string-hasher token wildcarded (``#14:1;:G0;XTR;:H27f:8,F`` ->
+    ``#14:*;:G0;XTR;:H27f:8,F``). Two elements with the same structure were
+    made by the same operation, from the same hashed source, in the same
+    role; only the index of the source sub-element differs."""
+    if not mapped:
+        return ""
+    m = _HEAD_RE.match(mapped)
+    return m.group(1) + "*" + mapped[m.end():] if m else ""
+
+
+def carrier(shape, short):
+    """Geometry that survives a resize: the plane a face lies on, the
+    cylinder (axis line and radius) or the line an edge lies on. Two elements
+    with the same carrier occupy the same place in space."""
+    try:
+        e = shape.getElement(short)
+    except Exception:
+        return None
+    try:
+        if short.startswith("Face"):
+            s = e.Surface
+            if s.TypeId == "Part::GeomPlane":
+                u0, u1, v0, v1 = e.ParameterRange
+                n = e.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+                return ("plane", n, n.dot(e.CenterOfMass))
+            if s.TypeId in ("Part::GeomCylinder", "Part::GeomCone", "Part::GeomSphere", "Part::GeomToroid"):
+                ax = getattr(s, "Axis", App.Vector(0, 0, 1))
+                c = s.Center
+                # foot of the axis line nearest the origin, so any point on the axis compares equal
+                foot = c - ax * ax.dot(c)
+                return (s.TypeId, ax, foot, getattr(s, "Radius", 0.0))
+            return None
+        if short.startswith("Edge"):
+            c = e.Curve
+            if c.TypeId in ("Part::GeomLine", "Part::GeomLineSegment"):
+                d = e.Vertexes[-1].Point - e.Vertexes[0].Point
+                if d.Length == 0:
+                    return None
+                d = d * (1.0 / d.Length)
+                p = e.Vertexes[0].Point
+                return ("line", d, p - d * d.dot(p))
+            if c.TypeId == "Part::GeomCircle":
+                return ("circle", c.Axis, c.Center, c.Radius)
+    except Exception:
+        return None
+    return None
+
+
+def _vec_eq(a, b, tol, sign_free=False):
+    if (a - b).Length <= tol:
+        return True
+    return sign_free and (a + b).Length <= tol
+
+
+def same_carrier(a, b):
+    if a is None or b is None or a[0] != b[0]:
+        return False
+    tol = POS_TOL * 10
+    if a[0] == "plane":
+        return _vec_eq(a[1], b[1], 1e-6) and abs(a[2] - b[2]) <= tol * max(1.0, abs(a[2]))
+    if a[0] == "line":
+        return _vec_eq(a[1], b[1], 1e-6, sign_free=True) and (a[2] - b[2]).Length <= tol * max(1.0, a[2].Length)
+    # cylinder-like faces and circles: axis, location, radius
+    return (_vec_eq(a[1], b[1], 1e-6, sign_free=True) and (a[2] - b[2]).Length <= tol * max(1.0, a[2].Length)
+            and abs(a[3] - b[3]) <= tol * max(1.0, abs(a[3])))
+
+
 def same_strict(a, b):
     if a is None or b is None or a["loose"] != b["loose"]:
         return False
@@ -106,6 +192,17 @@ def same_strict(a, b):
     if abs(a["size"] - b["size"]) > SIZE_TOL * max(1.0, abs(a["size"])):
         return False
     return (a["center"] - b["center"]).Length <= POS_TOL * max(1.0, a["center"].Length)
+
+
+def _turned(old, new):
+    """True when two loose signatures of the same kind differ in orientation
+    by more than a sign flip (a +Z face that now faces -Y)."""
+    if old[:2] != new[:2] or len(old) < 3 or len(new) < 3:
+        return False
+    a, b = old[2], new[2]
+    if a == b:
+        return False
+    return any(abs(abs(x) - abs(y)) > 1e-4 for x, y in zip(a, b))
 
 
 def _sig_json(sig):
@@ -190,6 +287,7 @@ class ReferenceTracker:
                         "linked": linked.Name, "path": path, "element_owner": owner.Name,
                         "element": element, "mapped": mapped,
                         "sig": signature(shape, element) if shape is not None else None,
+                        "carrier": carrier(shape, element) if shape is not None else None,
                         "valid_before": not sub.startswith("?") and shape is not None and signature(shape, element) is not None,
                     })
         return self
@@ -217,9 +315,39 @@ class ReferenceTracker:
                 return True
         return False
 
+    def _stale_reason(self, obj):
+        """Name the object that makes obj's geometry stale, or None."""
+        if obj is None:
+            return None
+        for o in [obj] + list(obj.OutListRecursive):
+            st = set(o.State)
+            bad = st & {"Invalid", "Error", "Touched"}
+            try:
+                if not bad and not o.isValid():
+                    bad = {"Invalid"}
+            except Exception:
+                pass
+            if bad:
+                return "%s is %s" % (o.Name, "/".join(sorted(bad)))
+        return None
+
+    def _stale(self, obj):
+        return self._stale_reason(obj) is not None
+
     def _classify(self, rec):
         ev = self._classify_inner(rec)
-        ev["stale_geometry"] = self._stale(self.doc.getObject(rec["element_owner"]))
+        why = self._stale_reason(self.doc.getObject(rec["element_owner"]))
+        ev["stale_geometry"] = why is not None
+        if why is not None and ev["outcome"] != "lost":
+            # The owner's shape no longer reflects the edit, so nothing about
+            # the reference can be confirmed. Reporting it kept or remapped
+            # would overstate stability; report a loss and keep the would-be
+            # verdict for diagnosis.
+            ev["provisional"] = {"outcome": ev["outcome"], "new_element": ev.get("new_element")}
+            ev["outcome"] = "lost"
+            ev["reason"] = "stale geometry: %s, so %s was not rebuilt" % (why, rec["element_owner"])
+        elif why is not None:
+            ev["reason"] = "%s; stale geometry: %s" % (ev.get("reason", "lost"), why)
         return ev
 
     def _classify_inner(self, rec):
@@ -267,6 +395,13 @@ class ReferenceTracker:
                                   stale=(now_sub != twin), geometry_changed=False,
                                   reason="element map kept the name on moved geometry; the original geometry is now %s" % twin)
                         return ev
+                    if rec["sig"] is not None and new_sig is not None and _turned(rec["sig"]["loose"], new_sig["loose"]):
+                        # The name survived on an element that now faces a
+                        # different way (not merely flipped by a reversal or
+                        # mirror): the name was reused by another element.
+                        ev.update(outcome="lost", reason="element map name moved to an element with another orientation: %s -> %s"
+                                  % (rec["sig"]["loose"][2:], new_sig["loose"][2:]), new_element=short, retargeted=now_sub is not None)
+                        return ev
                 if short == rec["element"]:
                     ev.update(outcome="kept", new_element=short, geometry_changed=not same_strict(rec["sig"], new_sig))
                 else:
@@ -289,6 +424,15 @@ class ReferenceTracker:
                 ev.update(outcome="remapped", new_element=found, basis="signature", property_updated=(now_sub == found),
                           stale=(now_sub != found), geometry_changed=False)
                 return ev
+            # Same operation and role in the element map (only the source
+            # index changed), or the same carrier geometry (plane, axis and
+            # radius, line): accept only a unique candidate.
+            for finder, basis in ((self._find_structural, "element_map_structure"), (self._find_carrier, "carrier")):
+                found = finder(shape, rec)
+                if found:
+                    ev.update(outcome="remapped", new_element=found, basis=basis, property_updated=(now_sub == found),
+                              stale=(now_sub != found), geometry_changed=not same_strict(rec["sig"], signature(shape, found)))
+                    return ev
             ev.update(outcome="lost", reason="mapped element name no longer in the element map",
                       retargeted=now_sub is not None)
             return ev
@@ -306,7 +450,7 @@ class ReferenceTracker:
                 if now_sub != rec["element"]:
                     ev.update(outcome="remapped", property_updated=False, stale=True)
                 return ev
-        found = self._find_strict(shape, rec) or self._find_unique_loose(shape, rec)
+        found = self._find_strict(shape, rec) or self._find_carrier(shape, rec) or self._find_unique_loose(shape, rec)
         if found:
             ev.update(outcome="remapped", new_element=found, basis="signature", property_updated=(now_sub == found),
                       stale=(now_sub != found), geometry_changed=not same_strict(rec["sig"], signature(shape, found)))
@@ -329,6 +473,21 @@ class ReferenceTracker:
             if c != skip and same_strict(rec["sig"], signature(shape, c)):
                 return c
         return None
+
+    def _find_structural(self, shape, rec):
+        tail = mapped_tail(rec["mapped"])
+        if not tail or rec["sig"] is None or shape.ElementMapSize == 0:
+            return None
+        hits = [c for c in self._candidates(shape, rec)
+                if mapped_tail(_mapped(shape, c)) == tail and (signature(shape, c) or {}).get("loose") == rec["sig"]["loose"]]
+        return hits[0] if len(hits) == 1 else None
+
+    def _find_carrier(self, shape, rec):
+        if rec.get("carrier") is None or rec["sig"] is None:
+            return None
+        hits = [c for c in self._candidates(shape, rec)
+                if (signature(shape, c) or {}).get("loose") == rec["sig"]["loose"] and same_carrier(rec["carrier"], carrier(shape, c))]
+        return hits[0] if len(hits) == 1 else None
 
     def _find_unique_loose(self, shape, rec):
         if rec["sig"] is None:
