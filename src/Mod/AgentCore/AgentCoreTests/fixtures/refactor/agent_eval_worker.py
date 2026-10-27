@@ -6,6 +6,8 @@
 # refactor:  each item {"id","doc","script","check"}: open the document, exec the script (defines edit(doc)),
 #            run refactor.invariant(doc, edit), then eval the check. Every item has a 60 s alarm.
 # summaries: each item {"id","doc"}: a compact object listing for the prompt.
+# reference: each item {"id","doc"}: what the reference refactor API achieves on the document (counts of
+#            literals it lifts, expressions it leaves in each body), used to size the task checks.
 import json
 import os
 import signal
@@ -75,7 +77,7 @@ def run_refactor(t):
         rr = res["result"]
         r["effective"] = int(rr.get("count", 0)) if isinstance(rr, dict) and isinstance(rr.get("count", 0), int) else None
         try:
-            r["check"] = bool(eval(t["check"], {"FreeCAD": FreeCAD, "doc": doc, "App": FreeCAD}))
+            r["check"] = bool(eval(t["check"], {"FreeCAD": FreeCAD, "doc": doc, "App": FreeCAD, "refactor": refactor, "ref": t.get("ref") or {}}))
         except Exception:
             r["check"] = False
             r["check_error"] = traceback.format_exc(limit=2)[-300:]
@@ -109,7 +111,26 @@ def summary(t):
     return "\n".join(lines)
 
 
-fn = {"macro": run_macro, "refactor": run_refactor, "summaries": summary}[MODE]
+def reference(t):
+    """Run the reference operations on fresh copies of the document (never saved)."""
+    from AgentCore import refactor
+    out = {}
+    for key, target in (("lift_varset", "VarSet"), ("lift_sheet", "Spreadsheet")):
+        doc = FreeCAD.openDocument(t["doc"])
+        doc.recompute(None, True)
+        out[key] = refactor.lift_all(doc, target=target)["count"]
+        FreeCAD.closeDocument(doc.Name)
+    doc = FreeCAD.openDocument(t["doc"])
+    doc.recompute(None, True)
+    refactor.across_all_bodies(doc)
+    containers = [c.Name for c in doc.Objects if c.TypeId in ("Spreadsheet::Sheet", "App::VarSet")]
+    out["bodies"] = {b.Name: sum(1 for f in b.Group for _p, e in f.ExpressionEngine if any(c in e for c in containers))
+                     for b in doc.Objects if b.TypeId == "PartDesign::Body"}
+    FreeCAD.closeDocument(doc.Name)
+    return out
+
+
+fn = {"macro": run_macro, "refactor": run_refactor, "summaries": summary, "reference": reference}[MODE]
 for t in items:
     try:
         out[t["id"]] = fn(t)
