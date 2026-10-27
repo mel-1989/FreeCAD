@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Add to ~/.codex/config.toml
+[mcp_servers.cadfork]
+command = "uvx"
+args = ["--from", "/path/to/freecad/src/Mod/AgentCore/mcp-server", "cadfork-mcp",
+        "--freecadcmd", "/path/to/FreeCADCmd", "--parts-path", "/path/to/parts"]
+
+[mcp_servers.cadfork.env]
+QT_QPA_PLATFORM = "offscreen"
