@@ -75,6 +75,16 @@ class TestLift(unittest.TestCase):
             self.assertEqual(refactor.lift_all(doc)["count"], 0)
             self.assertFalse([c for c in refactor.lift_candidates(doc) if c["object"] in ("Parameters", "Body")])
 
+    def test_alias_probe_survives_digit_names(self):
+        # "1 F6Noop_Length" in FreeCAD's unit parser used to kill the process; the alias probe must not call it.
+        with Doc() as doc:
+            body, sk, pad, sk2, pk = rb.plate_with_slot(doc)
+            lp = rb.add_noop_pattern(body, pk, sk, name="F6Noop")
+            for target in ("VarSet", "Spreadsheet"):
+                rec = refactor.lift_literal(doc, lp, "Length", target=target, container=f"P{target}")
+                self.assertEqual(rec["value"], 10.0)
+            self.assertTrue(lp.ExpressionEngine)
+
     def test_lift_exact_value_guard(self):
         with Doc() as doc:
             body, sk, pad, *_ = rb.plate_with_slot(doc)
@@ -137,6 +147,62 @@ class TestAcrossBodies(unittest.TestCase):
             self.assertTrue(r["rolled_back"])
 
 
+class TestLiftMismatchCleanup(unittest.TestCase):
+    def test_mismatch_leaves_nothing_behind(self):
+        real = refactor.ops._read
+
+        def wrong_unit(obj, prop, kind):
+            v, unit, tid = real(obj, prop, kind)
+            return v, "m", tid          # stored in metres, so the read-back differs from the literal
+
+        for target in ("VarSet", "Spreadsheet"):
+            with Doc() as doc:
+                body, sk, pad, *_ = rb.plate_with_slot(doc)
+                cont = refactor.ops._container(doc, target, None)
+                props_before = list(cont.PropertiesList)
+                cells_before = list(cont.getUsedCells()) if target == "Spreadsheet" else None
+                refactor.ops._read = wrong_unit
+                try:
+                    with self.assertRaises(ValueError):
+                        refactor.lift_literal(doc, pad, "Length", target=target)
+                finally:
+                    refactor.ops._read = real
+                self.assertFalse(pad.ExpressionEngine)
+                self.assertEqual(list(cont.PropertiesList), props_before)
+                if target == "Spreadsheet":
+                    self.assertEqual(list(cont.getUsedCells()), cells_before)
+                    self.assertEqual(cont.getAlias("A1") if hasattr(cont, "getAlias") else None, None)
+
+
+class TestDeviationCoverage(unittest.TestCase):
+    def _boxes(self, doc, n):
+        for i in range(n):
+            b = doc.addObject("Part::Box", f"B{i:03d}")
+            b.Placement = FreeCAD.Placement(FreeCAD.Vector(30 * i, 0, 0), FreeCAD.Rotation())
+        doc.recompute()
+
+    def test_body_past_the_old_cap_of_40_is_covered(self):
+        with Doc() as doc:
+            self._boxes(doc, 45)
+
+            def nudge(d):
+                o = d.getObject("B044")
+                o.Placement = FreeCAD.Placement(o.Placement.Base + FreeCAD.Vector(5e-5, 0, 0), o.Placement.Rotation)
+
+            r = refactor.invariant(doc, nudge)
+            self.assertEqual(r["before"]["deviation_covered"], 45)
+            self.assertFalse(r["before"]["deviation_truncated"])
+            self.assertFalse(r["ok"])
+            self.assertTrue(any(v["field"] in ("deviation", "bbox", "com") or "dev" in str(v) for v in r["violations"]), r["violations"])
+
+    def test_truncation_is_reported_not_silent(self):
+        with Doc() as doc:
+            self._boxes(doc, 5)
+            r = refactor.invariant(doc, lambda d: None, max_deviation_bodies=2)
+            self.assertTrue(r["before"]["deviation_truncated"])
+            self.assertEqual(r["before"]["deviation_covered"], 2)
+
+
 class TestMerge(unittest.TestCase):
     def test_noop_pattern_is_merged_invariantly(self):
         with Doc() as doc:
@@ -152,13 +218,27 @@ class TestMerge(unittest.TestCase):
             self.assertEqual(body.Tip.Name, "Pocket")
             self.assertAlmostEqual(body.Shape.Volume, vol, places=6)
 
-    def test_duplicate_pocket_is_merged(self):
+    def test_duplicate_pocket_is_not_merged_by_r8(self):
+        # Equal to its base today, but a different depth would cut deeper: parameter-sensitive, so R8 keeps it.
         with Doc() as doc:
             body, *_ = rb.plate_with_slot(doc)
             rb.add_duplicate_pocket(body)
+            self.assertEqual(refactor.find_redundant(doc), [])
+            self.assertEqual(refactor.merge_redundant(doc)["removed"], [])
+            self.assertIsNotNone(doc.getObject("PocketAgain"))
+
+    def test_air_pocket_is_not_merged(self):
+        # A pocket cutting only air at depth 3 that would cut the plate at depth 30 (the R7 risk the verifier probed).
+        with Doc() as doc:
+            body, sk, pad, sk2, pk = rb.plate_with_slot(doc)
+            air = rb.rect_sketch(body, 4.0, 4.0, "AirSketch", offset=13.0)   # 3 mm above the plate top
+            a = rb.pocket(body, air, 3.0, "AirPocket")
+            doc.recompute()
+            self.assertEqual(refactor.find_redundant(doc), [])
             r = refactor.invariant(doc, lambda d: refactor.merge_redundant(d))
-            self.assertTrue(r["ok"], r["violations"])
-            self.assertEqual(r["result"]["removed"], ["PocketAgain"])
+            self.assertTrue(r["ok"])
+            self.assertEqual(r["result"]["removed"], [])
+            self.assertIsNotNone(doc.getObject("AirPocket"))
 
     def test_real_features_are_never_merged(self):
         with Doc() as doc:

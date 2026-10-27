@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """F6 refactor ops over three scripted golden models (skipped when the control repo's models are absent).
 
-The full corpus run (137 documents) is fixtures/refactor/corpus_run.py; this is its small in-process cousin.
+The full corpus run (about 200 documents, real and scripted) is fixtures/refactor/corpus_run.py; this is its small in-process cousin.
 """
 
 import importlib.util

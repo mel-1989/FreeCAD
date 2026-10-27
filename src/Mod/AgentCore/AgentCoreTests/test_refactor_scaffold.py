@@ -61,6 +61,48 @@ class TestFeaturePython(unittest.TestCase):
         self.assertFalse(hasattr(mod, "ViewProviderF6Box"))
         self.assertEqual("FreeCADGui" in sys.modules, before)
 
+    def test_view_provider_body_runs_against_a_fake_vobj(self):
+        """The ViewProvider is executed, not just parsed: GuiUp forced on, FreeCADGui replaced by an empty
+        stand-in module (the real one is never imported), and a fake view object driving every method."""
+        import types
+
+        scaffold.write_feature_module(self.tmp.name, "F6Box")
+        had = "FreeCADGui" in sys.modules
+        old_gui = sys.modules.get("FreeCADGui")
+        sys.modules["FreeCADGui"] = types.ModuleType("FreeCADGui")        # stand-in, no GUI code
+        old_up = FreeCAD.GuiUp
+        FreeCAD.GuiUp = 1
+        try:
+            mod = scaffold.load_feature_module(self.tmp.name, "F6Box")
+        finally:
+            FreeCAD.GuiUp = old_up
+            if had:
+                sys.modules["FreeCADGui"] = old_gui
+            else:
+                sys.modules.pop("FreeCADGui", None)
+        self.assertEqual("FreeCADGui" in sys.modules, had)
+        vp_cls = mod.ViewProviderF6Box
+
+        class FakeVobj:
+            Object = None
+            Proxy = None
+
+        doc = FreeCAD.newDocument("F6vp")
+        try:
+            obj = doc.addObject("Part::FeaturePython", "Feat")
+            mod.F6Box(obj)
+            vobj = FakeVobj()
+            vobj.Object = obj
+            vp = vp_cls(vobj)
+            self.assertIs(vobj.Proxy, vp)
+            vp.attach(vobj)
+            self.assertIs(vp.Object, obj)
+            self.assertIsInstance(vp.getIcon(), str)
+            self.assertIsNone(vp.dumps())
+            self.assertIsNone(vp.loads(None))
+        finally:
+            FreeCAD.closeDocument(doc.Name)
+
     def test_create_save_reload_recompute(self):
         scaffold.write_feature_module(self.tmp.name, "F6Box")
         mod = scaffold.load_feature_module(self.tmp.name, "F6Box")
