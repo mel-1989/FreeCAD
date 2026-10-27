@@ -1,3 +1,4 @@
+# I1 merge.sh trial: harmless comment change
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 import FreeCAD as App
