@@ -102,27 +102,33 @@ class TestSession(unittest.TestCase):
             s.m_close()
 
     def test_real_diff_when_present(self):
-        """After F3 merges, begin/propose run on the real AgentTurn; before, they report diff_unavailable."""
+        """F3 is merged: begin/propose run on the real AgentTurn (no diff_unavailable branch)."""
         s = sess.Session()
         s.m_open(name="McpRealDiff")
         try:
             with mock.patch.dict(os.environ, {sess.DIFF_MODULE_ENV: ""}):
-                if getattr(real_diff, "AgentTurn", None) is None:
-                    with self.assertRaises(BridgeError) as cm:
-                        s.m_begin()
-                    self.assertEqual(cm.exception.code, "diff_unavailable")
-                    return
+                self.assertIs(sess.resolve_agent_turn(), real_diff.AgentTurn)
                 s.m_begin()
+                self.assertIsInstance(s.turn, real_diff.AgentTurn)
                 self.assertTrue(s.m_exec("doc.addObject('Part::Box', 'Box')")["ok"])
                 p = s.m_propose()
                 self.assertEqual(p["status"], "pending_human_approval")
-                self.assertIsInstance(p["change_set"], dict)
+                self.assertEqual(p["change_set"]["schema"], real_diff.SCHEMA)
+                self.assertEqual([f["name"] for f in p["change_set"]["features"]["added"]], ["Box"])
+                self.assertEqual(p["change_set"]["transactions"]["segments"], 1)
+                self.assertEqual((p["turn_id"], p["digest"]), (s.turn.turn_id, s.turn.digest()))
+                self.assertIsNotNone(s._before_snapshot())     # the session gives every turn a snapshot store
+                s.m_begin(discard_pending=True)
+                self.assertEqual(s.last_decision["decision"], "rejected")
+                self.assertEqual([o.Name for o in s.doc.Objects], [])
         finally:
             s.m_close()
 
     def test_state_describe_selection_export(self):
+        self.s.doc.addObject("Part::Box", "Box")       # pre-turn content, as if opened from a file
+        self.s.doc.recompute()
         self.s.m_begin()
-        self.s.m_exec("b = doc.addObject('Part::Box', 'Box')\nb.Length = 7")
+        self.s.m_exec("b = doc.getObject('Box')\nb.Length = 7")
         st = self.s.m_state(page=0, page_size=1)
         self.assertEqual(st["paging"]["total"], 1)
         d = self.s.m_describe("Box:Face1")
@@ -133,10 +139,16 @@ class TestSession(unittest.TestCase):
         self.assertTrue(sel["headless"])
         self.assertEqual(sel["selection"], [])
         with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(BridgeError) as cm:     # the open change is not approved
+                self.s.m_export_file(os.path.join(d, "unapproved.step"))
+            self.assertEqual(cm.exception.code, "change_pending")
+            self.assertFalse(os.path.exists(os.path.join(d, "unapproved.step")))
+            self.s._reject_quietly()
             for ext, fmt in ((".step", "STEP"), (".brep", "BREP"), (".FCStd", "FCStd")):
                 r = self.s.m_export_file(os.path.join(d, "out" + ext))
                 self.assertEqual(r["format"], fmt)
                 self.assertGreater(os.path.getsize(r["path"]), 100)
+            self.s.m_begin()
             imp = self.s.m_import_file(os.path.join(d, "out.brep"))
             self.assertEqual(len(imp["imported"]), 1)
             with self.assertRaises(BridgeError):

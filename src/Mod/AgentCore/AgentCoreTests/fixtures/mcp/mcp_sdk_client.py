@@ -57,7 +57,11 @@ async def session(cfg, mode):
         rep["proposal_status"] = p.get("status")
         await call("approve_change", proposal_id=p.get("proposal_id"))
         await call("render", doc=doc)
-        await call("import_export", doc=doc, action="export", path=os.path.join(cfg["out"], f"sdk-{mode}.step"))
+        r = await c.call_tool("import_export", {"doc": doc, "action": "export",
+                                                "path": os.path.join(cfg["out"], f"sdk-{mode}-unapproved.step")})
+        rep["unapproved_export"] = {"is_error": r.is_error, "error": (r.structured_content or {}).get("error")}
+        await call("import_export", doc=doc, action="export", path=os.path.join(cfg["out"], f"sdk-{mode}.step"),
+                   pre_turn=True)
         await call("search_parts", query="box")
 
         res = await c.list_resources()

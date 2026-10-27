@@ -229,7 +229,7 @@ class TestServerWorkers(unittest.TestCase):
             s.close()
 
     def test_real_diff_through_server(self):
-        """With F3 merged: the full loop on the real AgentTurn, discard restores; before F3: diff_unavailable."""
+        """F3 is merged: the full loop on the real AgentTurn in a worker, discard restores."""
         from AgentCore import diff as real_diff
 
         s = mc.make_server(stub=False)
@@ -237,17 +237,17 @@ class TestServerWorkers(unittest.TestCase):
             out, err = mc.call(s, "open_document", path=self.paths["box"])
             doc = out["doc"]
             out, err = mc.call(s, "begin_change", doc=doc)
-            if getattr(real_diff, "AgentTurn", None) is None:
-                self.assertTrue(err)
-                self.assertEqual(out["error"], "diff_unavailable")
-                return
-            self.assertFalse(err, out)
+            self.assertFalse(err, out)                     # no diff_unavailable branch any more
             out, err = mc.call(s, "exec_code", doc=doc, code=mc.SCRIPT_EDIT)
             self.assertFalse(err, out)
             prop, err = mc.call(s, "propose_change", doc=doc, summary="real F3")
             self.assertFalse(err, prop)
             self.assertEqual(prop["status"], "pending_human_approval")
-            self.assertTrue(prop["change_set"], prop)
+            cs = prop["change_set"]
+            self.assertEqual(cs["schema"], real_diff.SCHEMA)
+            self.assertEqual(sorted(f["name"] for f in cs["features"]["added"]), ["Hole", "Plate"])
+            self.assertGreaterEqual(cs["transactions"]["segments"], 1)
+            self.assertTrue(prop["turn_id"] and prop["digest"])
             out, err = mc.call(s, "begin_change", doc=doc, discard_pending=True)
             self.assertFalse(err, out)
             st, err = mc.call(s, "get_state", doc=doc)

@@ -31,7 +31,7 @@ class TestSdkConformance(unittest.TestCase):
             mc.save_fixtures(["box", "tube"], parts)
             cfg = {"freecadcmd": mc.freecadcmd(), "fixture": fixture, "parts": parts, "out": d,
                    "env": {"PYTHONPATH": mc.AGENTCORE_SRC, "QT_QPA_PLATFORM": "offscreen",
-                           "CADFORK_MCP_DIFF_MODULE": "mcp_stub_diff", "CADFORK_MCP_PYTHONPATH": mc.MCP_FIX,
+                           "CADFORK_MCP_PYTHONPATH": mc.MCP_FIX,  # real F3: AgentTurn from AgentCore.diff
                            "HOME": os.environ.get("HOME", ""), "PATH": os.environ.get("PATH", "")}}
             cfgp = os.path.join(d, "cfg.json")
             with open(cfgp, "w", encoding="utf-8") as fh:
@@ -48,6 +48,7 @@ class TestSdkConformance(unittest.TestCase):
             summary = json.loads(line.split(" ", 1)[1])
             for x in ("auto", "legacy"):
                 self.assertTrue(os.path.getsize(os.path.join(d, f"sdk-{x}.step")) > 100)
+                self.assertFalse(os.path.exists(os.path.join(d, f"sdk-{x}-unapproved.step")))
         if os.environ.get("CADFORK_MCP_SDK_REPORT"):
             with open(os.environ["CADFORK_MCP_SDK_REPORT"], "w", encoding="utf-8") as fh:
                 json.dump(summary, fh, indent=1, sort_keys=True)
@@ -72,6 +73,7 @@ class TestSdkConformance(unittest.TestCase):
             self.assertEqual(s["exec_result"], 15.0)
             self.assertTrue(s["verify_ok"])
             self.assertEqual(s["proposal_status"], "pending_human_approval")
+            self.assertEqual(s["unapproved_export"], {"is_error": True, "error": "change_pending"})
             self.assertGreater(s["resource_count"], 300)
             self.assertEqual(s["templates"], ["cadfork://api/{module}/{class}"])
             self.assertTrue(all(n > 100 for n in s["reads"].values()), s["reads"])

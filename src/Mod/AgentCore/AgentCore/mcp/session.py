@@ -6,8 +6,12 @@ A ``Session`` owns one open document and at most one agent change (an F3
 ``FreeCADCmd`` session worker; tests drive it in-process.
 
 Methods exposed over the bridge are listed in ``Session.METHODS``. There is no
-accept or approve method: only the GUI holds F3's apply token, so nothing that
-arrives over the bridge can apply a proposal.
+accept or approve method: nothing that arrives over the bridge can apply a
+proposal. The apply key lives only in the human-side approver process
+(``AgentCore/diff/approver.py``, or the GUI). A sealed worker polls that
+approver for the proposal's (turn id, digest) and accepts only with the token
+the approver hands out after a human approved exactly that change set; the
+approver verifies it again on accept (see ``AgentCore/diff/SECURITY.md``).
 """
 
 import contextlib
@@ -15,7 +19,9 @@ import importlib
 import io
 import json
 import os
+import shutil
 import signal
+import tempfile
 import threading
 import traceback
 
@@ -81,19 +87,69 @@ class Session:
     METHODS = ("ping", "open", "info", "state", "describe", "selection", "exec", "begin", "propose",
                "snapshot", "import_file", "export_file", "default_checks", "close", "shutdown")
 
-    def __init__(self, turn_factory=None, policy_mode="flag"):
+    def __init__(self, turn_factory=None, policy_mode="flag", approver_socket=None):
         self.doc = None
         self.source = None
         self.turn = None
         self.turn_state = None  # None | "open" | "proposed"
         self.turn_no = 0
         self.proposal = None
+        self.last_decision = None  # {"change", "decision", ...} of the last turn that ended
         self._turn_factory = turn_factory
         self.policy_mode = policy_mode
+        self.approver_socket = approver_socket
         self._audit = policy.RuntimeAudit.instance()
+        self._snapdir = None
+
+    # -- turn bookkeeping
+    def _end_turn(self, decision, **extra):
+        self.last_decision = {"change": self.turn_no, "decision": decision, **extra}
+        self.turn = None
+        self.turn_state = None
+        self.proposal = None
+
+    def _sync(self):
+        """Reconcile with the turn's own status: code run by the agent (or a
+        human in the GUI) may have ended the turn without going through us."""
+        if self.turn is None:
+            return
+        st = getattr(self.turn, "status", None)
+        if st in ("accepted", "rejected"):
+            self._end_turn(st, outside_session=True,
+                           note="the turn was decided outside the session's approval flow")
+        elif st == "proposed" and self.turn_state == "open":
+            self.turn_state = "proposed_outside"
+
+    def poll_approval(self):
+        """Ask the approver whether a human approved the pending proposal; if
+        so, accept with the approver's token. Called from the worker's loop."""
+        if self.turn is None or self.turn_state != "proposed" or not self.approver_socket:
+            return None
+        ids = self.proposal or {}
+        if not ids.get("turn_id") or not ids.get("digest"):
+            return None
+        from AgentCore.diff import approver as _approver
+        try:
+            resp = _approver.request(self.approver_socket, {"op": "poll", "turn_id": ids["turn_id"],
+                                                            "digest": ids["digest"]}, timeout=0.5)
+        except (OSError, ValueError):
+            return None
+        tok = resp.get("token") if resp.get("ok") else None
+        if not tok:
+            return None
+        from AgentCore.diff.authority import ApplyToken
+        try:
+            res = self.turn.accept(ApplyToken.from_wire(tok))
+        except Exception as exc:
+            self.proposal["accept_error"] = f"{type(exc).__name__}: {exc}"
+            self._sync()
+            return None
+        self._end_turn("accepted", result=_jsonable(res), proposal_id=ids.get("proposal_id"))
+        return res
 
     # -- dispatch
     def handle(self, method, params):
+        self._sync()
         if method in APPROVAL_METHODS:
             raise BridgeError("approval_refused",
                               "approval is human-only: the FreeCAD GUI holds F3's apply token and no bridge "
@@ -136,7 +192,7 @@ class Session:
         doc = self._need_doc()
         return {"name": doc.Name, "label": doc.Label, "file": doc.FileName or None, "source": self.source,
                 "object_count": len(doc.Objects), "change": self.turn_state,
-                "proposal_id": (self.proposal or {}).get("proposal_id")}
+                "proposal_id": (self.proposal or {}).get("proposal_id"), "last_decision": self.last_decision}
 
     def m_close(self):
         if self.doc is not None:
@@ -144,6 +200,9 @@ class Session:
                 self._reject_quietly()
             App.closeDocument(self.doc.Name)
             self.doc = None
+        if self._snapdir:
+            shutil.rmtree(self._snapdir, ignore_errors=True)
+            self._snapdir = None
         return {"closed": True}
 
     def m_shutdown(self):
@@ -203,13 +262,31 @@ class Session:
                                   f"change {self.turn_no} is {self.turn_state}; pass discard_pending=true to reject it first")
             self._reject_quietly()
         cls = self._turn_factory or resolve_agent_turn()
-        turn = cls(doc)
+        turn = cls(doc, **self._turn_kwargs(cls))
         entered = turn.__enter__()
         self.turn = entered if entered is not None else turn
         self.turn_no += 1
         self.turn_state = "open"
         self.proposal = None
         return {"change": self.turn_no, "state": "open"}
+
+    def _turn_kwargs(self, cls):
+        """A before-state snapshot store for F3's AgentTurn (reject and the
+        pre-turn export use it); stand-ins that take no ``store`` get none."""
+        import inspect
+        try:
+            if "store" not in inspect.signature(cls).parameters:
+                return {}
+        except (TypeError, ValueError):
+            return {}
+        from AgentCore.diff import SnapshotStore
+        if self._snapdir is None:
+            self._snapdir = tempfile.mkdtemp(prefix="acmcp-snap-")
+        return {"store": SnapshotStore(self._snapdir)}
+
+    def _before_snapshot(self):
+        snap = getattr(self.turn, "snapshot", None)
+        return snap.get("path") if isinstance(snap, dict) else None
 
     def _reject_quietly(self):
         """Reject the current change. An open turn is closed through its context exit with an
@@ -218,12 +295,10 @@ class Session:
             if self.turn_state == "open":
                 exc = RuntimeError("change discarded by the agent")
                 self.turn.__exit__(type(exc), exc, None)
-            if getattr(self.turn, "status", None) != "rejected":
+            if getattr(self.turn, "status", None) not in ("rejected", "accepted"):
                 self.turn.reject()
         finally:
-            self.turn = None
-            self.turn_state = None
-            self.proposal = None
+            self._end_turn("rejected")
 
     def m_propose(self, summary=""):
         self._need_doc()
@@ -231,17 +306,32 @@ class Session:
             raise BridgeError("no_change", "no open change: call begin_change first")
         if self.turn_state == "proposed":
             return self.proposal
-        self.turn.__exit__(None, None, None)  # F3: settle, verify after, close recording, build the change set
+        if self.turn_state == "proposed_outside":
+            self._reject_quietly()
+            raise BridgeError("change_aborted", "the change was closed by code inside exec_code, not by "
+                              "propose_change; it was rejected")
+        try:
+            self.turn.__exit__(None, None, None)  # F3: settle, verify after, close recording, build the change set
+        except Exception as exc:
+            if getattr(self.turn, "status", None) not in ("rejected", "accepted"):
+                self._reject_quietly()
+            else:
+                self._end_turn(self.turn.status)
+            raise BridgeError("change_aborted", f"{type(exc).__name__}: {exc}")
         self.turn_state = "proposed"
         cs = self.turn.change_set()
+        ids = {}
+        if callable(getattr(self.turn, "digest", None)):
+            ids = {"turn_id": self.turn.turn_id, "digest": self.turn.digest()}
         self.proposal = {
             "proposal_id": f"change-{self.turn_no}",
             "status": "pending_human_approval",
             "summary": summary,
+            **ids,
             "change_set": _jsonable(cs),
-            "apply": "Only a human can accept this, in the FreeCAD GUI change-set panel (F3 holds the apply "
-                     "token there). The MCP server cannot approve it. Call begin_change with "
-                     "discard_pending=true to withdraw it.",
+            "apply": "Only a human can accept this, in the FreeCAD GUI change-set panel or the approver "
+                     "process, which hold the apply key. The MCP server cannot approve it. Call "
+                     "begin_change with discard_pending=true to withdraw it.",
         }
         return self.proposal
 
@@ -299,7 +389,40 @@ class Session:
                           "note": "flags are advisory: exec_code is confined to the change, not sandboxed"}}
         if tb:
             res["error"] = tb
+        aborted = self._check_turn_after_exec()
+        if aborted:
+            res["status"], res["ok"] = "change_aborted", False
+            res["change_aborted"] = aborted
         return res
+
+    def _check_turn_after_exec(self):
+        """Abort the change when the agent's code tampered with it: undo/redo/
+        clearUndos inside the turn (F3 records it), or closed/decided the turn
+        itself instead of going through propose_change."""
+        t = self.turn
+        if t is None:
+            return None
+        st = getattr(t, "status", "open")
+        why = list(getattr(t, "tampered", None) or [])
+        if st != "open":
+            why.append(f"the turn was moved to {st!r} by code inside exec_code")
+        if not why:
+            return None
+        try:
+            if st == "open":
+                exc = RuntimeError("change aborted: " + "; ".join(why))
+                t.__exit__(type(exc), exc, None)
+            elif st == "proposed":
+                t.reject()
+            elif st == "accepted":  # accepted without the approver: take the entry back off the model
+                d = getattr(t, "doc", None)
+                if d is not None and list(d.UndoNames)[:1] == [getattr(t, "undo_name", None)]:
+                    d.undo()
+                    why.append("the self-accepted entry was undone")
+        except Exception as exc:
+            why.append(f"reject failed: {type(exc).__name__}: {exc}")
+        self._end_turn(getattr(t, "status", "rejected"), aborted=why)
+        return why
 
     # -- files
     def m_snapshot(self, path):
@@ -335,10 +458,55 @@ class Session:
         doc.recompute()
         return {"imported": sorted(o.Name for o in doc.Objects if o.Name not in before), "path": path}
 
-    def m_export_file(self, path, objects=None):
+    def m_export_file(self, path, objects=None, overwrite=False, pre_turn=False):
+        """Export the document (or objects) to STEP, BREP or FCStd.
+
+        - While a change is open or proposed, the live document holds edits no
+          human approved, so export is refused unless ``pre_turn=True``, which
+          exports the before-state of the change instead (from its snapshot).
+        - An existing file is never overwritten unless ``overwrite=True``, and
+          the session's own source file never (save the model in the GUI).
+        - After writing, the file is checked to exist and to have changed.
+        """
         doc = self._need_doc()
         path = os.path.abspath(os.path.expanduser(path))
         low = path.lower()
+        if not low.endswith(FCSTD_EXT + STEP_EXT + BREP_EXT):
+            raise BridgeError("unsupported_format", "export to .step/.stp, .brep or .FCStd")
+        protected = {os.path.realpath(p) for p in (self.source, doc.FileName) if p}
+        if os.path.realpath(path) in protected:
+            raise BridgeError("refused_target", f"{path} is the document's own source file; export elsewhere")
+        if os.path.exists(path) and not overwrite:
+            raise BridgeError("file_exists", f"{path} exists; pass overwrite=true to replace it")
+        if os.path.isdir(path):
+            raise BridgeError("refused_target", f"{path} is a directory")
+        src_doc, temp_doc = doc, None
+        if self.turn is not None:
+            if not pre_turn:
+                raise BridgeError("change_pending",
+                                  f"change {self.turn_no} is {self.turn_state} and not approved: export would write "
+                                  "unapproved edits. Pass pre_turn=true to export the state before the change, or "
+                                  "export after the change is accepted or withdrawn")
+            snap = self._before_snapshot()
+            if not snap or not os.path.exists(snap):
+                raise BridgeError("pre_turn_unavailable", "this change has no before-state snapshot to export from")
+            temp_doc = App.openDocument(snap, hidden=True)
+            src_doc = temp_doc
+        try:
+            before = _stat_sig(path)
+            res = self._export_from(src_doc, path, low, objects)
+        finally:
+            if temp_doc is not None:
+                App.closeDocument(temp_doc.Name)
+                App.setActiveDocument(doc.Name)
+        after = _stat_sig(path)
+        if after is None or after == before:
+            raise BridgeError("export_failed", f"nothing was written to {path}")
+        res.update({"bytes": after[0], "pre_turn": bool(self.turn is not None and pre_turn),
+                    "overwrote": before is not None})
+        return res
+
+    def _export_from(self, doc, path, low, objects):
         if low.endswith(FCSTD_EXT):
             doc.saveCopy(path)
             return {"path": path, "format": "FCStd", "objects": [o.Name for o in doc.Objects]}
@@ -366,7 +534,17 @@ class Session:
             fmt = "BREP"
         else:
             raise BridgeError("unsupported_format", "export to .step/.stp, .brep or .FCStd")
-        return {"path": path, "format": fmt, "objects": [o.Name for o in objs], "bytes": os.path.getsize(path)}
+        return {"path": path, "format": fmt, "objects": [o.Name for o in objs]}
+
+
+def _stat_sig(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    import hashlib
+    with open(path, "rb") as fh:
+        return (st.st_size, st.st_mtime_ns, hashlib.sha256(fh.read()).hexdigest())
 
 
 def _safe_name(s):

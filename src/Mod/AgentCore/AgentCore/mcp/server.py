@@ -100,9 +100,14 @@ TOOLS = [
     _tool("render", "Render", "Image of the model. Unavailable until I4 (GUI rendering in a VM or CI).",
           {"doc": _DOC, "view": {"type": "string"}}, read_only=True),
     _tool("import_export", "Import or export",
-          "Export the document or objects to .step/.stp, .brep or .FCStd, or import .step/.stp/.brep into the open change.",
+          "Export the document or objects to .step/.stp, .brep or .FCStd, or import .step/.stp/.brep into the open change. "
+          "Export is refused while a change is open or awaiting approval (pre_turn=true exports the state before it) "
+          "and never replaces an existing file unless overwrite=true.",
           {"doc": _DOC, "action": {"type": "string", "enum": ["import", "export"]}, "path": {"type": "string"},
-           "objects": {"type": "array", "items": {"type": "string"}}}, required=("action", "path")),
+           "objects": {"type": "array", "items": {"type": "string"}},
+           "overwrite": {"type": "boolean", "description": "export: replace an existing file (default false)"},
+           "pre_turn": {"type": "boolean", "description": "export: during a change, export the state before it"}},
+          required=("action", "path")),
     _tool("search_parts", "Search parts",
           "Search the local parts corpus (FCStd, STEP, BREP under the configured roots) by words in names, labels, types.",
           {"query": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100},
@@ -129,7 +134,7 @@ class DocHandle:
 
 class Server:
     def __init__(self, freecadcmd=None, parts_path=None, pool_size=2, verify_timeout=120.0, exec_policy="flag",
-                 worker_env=None, worker_start_timeout=90.0):
+                 worker_env=None, worker_start_timeout=90.0, approver_socket=None):
         if exec_policy not in policy.MODES:
             raise ValueError(f"exec policy must be one of {policy.MODES}")
         self.freecadcmd = find_freecadcmd(freecadcmd)
@@ -138,6 +143,8 @@ class Server:
         self.verify_timeout = verify_timeout
         self.exec_policy = exec_policy
         self.worker_env = dict(worker_env or {})
+        if approver_socket:  # only a path: the server holds no key and no approve path
+            self.worker_env["CADFORK_MCP_APPROVER_SOCKET"] = os.path.abspath(approver_socket)
         self.worker_start_timeout = worker_start_timeout
         self.docs = {}
         self.order = []
@@ -443,11 +450,15 @@ class Server:
                 "message": "render is unavailable until I4: headless FreeCADCmd has no 3D view, and GUI rendering "
                            "runs only in a Linux VM or CI. Use get_state, describe_entity and verify instead."}
 
-    def t_import_export(self, action, path, doc=None, objects=None):
+    def t_import_export(self, action, path, doc=None, objects=None, overwrite=False, pre_turn=False):
         h = self._handle(doc)
         if action == "export":
-            return {"doc": h.id, **self._call(h, "export_file", {"path": path, "objects": objects}, timeout=600)}
+            return {"doc": h.id, **self._call(h, "export_file", {"path": path, "objects": objects,
+                                                                  "overwrite": bool(overwrite),
+                                                                  "pre_turn": bool(pre_turn)}, timeout=600)}
         if action == "import":
+            if overwrite or pre_turn:
+                raise ToolError("bad_argument", "overwrite and pre_turn apply to export only")
             if objects:
                 raise ToolError("bad_argument", "objects applies to export only")
             return {"doc": h.id, **self._call(h, "import_file", {"path": path}, timeout=600)}
@@ -534,6 +545,8 @@ def main(argv=None):
     ap.add_argument("--verify-timeout", type=float, default=120.0, help="seconds per verify check")
     ap.add_argument("--exec-policy", choices=policy.MODES, default="flag",
                     help="flag: run exec_code and flag file/process/network access; strict: refuse flagged code")
+    ap.add_argument("--approver-socket", help="socket of the human-side approver process (AgentCore/diff/approver.py) "
+                                              "that session workers ask before accepting a proposal")
     ap.add_argument("--version", action="store_true")
     ap.add_argument("--list-tools", action="store_true", help="print the tool names and exit")
     a = ap.parse_args(argv)
@@ -545,7 +558,7 @@ def main(argv=None):
         return 0
     try:
         srv = Server(freecadcmd=a.freecadcmd, parts_path=a.parts_path, pool_size=a.pool_size,
-                     verify_timeout=a.verify_timeout, exec_policy=a.exec_policy)
+                     verify_timeout=a.verify_timeout, exec_policy=a.exec_policy, approver_socket=a.approver_socket)
     except FileNotFoundError as e:
         print(f"cadfork-mcp: {e}", file=sys.stderr)
         return 2

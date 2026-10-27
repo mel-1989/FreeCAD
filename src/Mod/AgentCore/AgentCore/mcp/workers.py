@@ -90,6 +90,7 @@ class SessionWorker:
             "CADFORK_MCP_TOKEN": self.token,
             "CADFORK_MCP_PYTHONPATH": os.pathsep.join(pypath),
             "CADFORK_MCP_POLICY": policy_mode,
+            "CADFORK_AGENT_PROCESS": "1",  # runs agent code: installing an apply authority is refused there
         })
         with open(self.log, "wb") as lf:
             self.proc = subprocess.Popen(
