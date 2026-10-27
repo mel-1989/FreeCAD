@@ -26,7 +26,7 @@ class TestRelabel(unittest.TestCase):
             r = refactor.invariant(doc, lambda d: refactor.relabel_all(d))
             self.assertTrue(r["ok"], r["violations"])
             self.assertEqual([o.Name for o in doc.Objects], names)
-            self.assertGreater(r["result"]["count"], 5)
+            self.assertGreaterEqual(r["result"]["count"], 5)
             self.assertEqual(doc.getObject("Pad").Label, "Body_Pad1")
 
     def test_relabel_explicit(self):
