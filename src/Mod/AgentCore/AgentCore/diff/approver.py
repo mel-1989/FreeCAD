@@ -55,11 +55,14 @@ class Approver:
     def approve(self, turn_id, digest):
         key = (str(turn_id), str(digest))
         with self._lock:
-            if key in self._spent:
-                raise ValueError(f"turn {turn_id} with this change set was already applied")
+            # A spent pair may be approved again: the worker spends the token
+            # before flattening, so an accept that then fails and rolls back
+            # must not lock the human out. Replay is still impossible, since
+            # every token carries a fresh nonce and each nonce is spent once.
             tok = self._auth.mint_for(*key)
             self._approved[key] = tok
             self._denied.discard(key)
+            self._spent.discard(key)
             return tok.to_wire()
 
     def deny(self, turn_id, digest):

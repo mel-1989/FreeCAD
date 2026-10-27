@@ -8,6 +8,7 @@ import gc
 import hashlib
 import hmac
 import sys
+import types
 
 
 def key_candidates():
@@ -19,7 +20,7 @@ def key_candidates():
             found.append(bytes(v))
 
     for o in gc.get_objects():
-        cl = getattr(o, "__closure__", None) if callable(o) else None
+        cl = o.__closure__ if isinstance(o, types.FunctionType) else None
         for c in cl or ():
             try:
                 add(c.cell_contents)

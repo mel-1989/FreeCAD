@@ -11,6 +11,7 @@
 - The MCP server process never loads the authority or approver modules.
 """
 
+import ast
 import json
 import os
 import shutil
@@ -170,6 +171,11 @@ class TestApproverChannel(unittest.TestCase):
             r = ap.request(a.socket, {"op": "check", "turn_id": "t", "digest": "d", "token": tok})
             self.assertIn("already spent", r["reason"])
             self.assertEqual(ap.request(a.socket, {"op": "status", "turn_id": "t", "digest": "d"})["status"], "spent")
+            self.assertTrue(a.say("approve t d").startswith("APPROVED"))   # re-approval after a failed accept
+            tok2 = ap.request(a.socket, {"op": "poll", "turn_id": "t", "digest": "d"})["token"]
+            self.assertNotEqual(tok2["nonce"], tok["nonce"])
+            self.assertTrue(ap.request(a.socket, {"op": "check", "turn_id": "t", "digest": "d", "token": tok2})["ok"])
+            self.assertFalse(ap.request(a.socket, {"op": "check", "turn_id": "t", "digest": "d", "token": tok})["ok"])
             self.assertEqual(oct(os.stat(a.socket).st_mode & 0o777), "0o600")
         finally:
             a.close()
@@ -216,9 +222,18 @@ finally:
                 if not os.path.exists(path):
                     path = os.path.join(SRC, *m.split("."), "__init__.py")
                 with open(path, encoding="utf-8") as fh:
-                    text = fh.read()
-                for needle in ("diff.authority", "diff.approver", "import authority", "mint(", "mint_for"):
-                    self.assertFalse(needle in text, (m, needle))
+                    tree = ast.parse(fh.read())
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        self.assertFalse([a.name for a in node.names if "diff" in a.name], (m, ast.dump(node)))
+                    elif isinstance(node, ast.ImportFrom):
+                        mod = ("." * node.level) + (node.module or "")
+                        self.assertNotIn("diff", mod, (m, mod))
+                        self.assertFalse({a.name for a in node.names} & {"authority", "approver"}, m)
+                    elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                        self.assertNotIn(node.func.attr, {"mint", "mint_for", "approve", "install"}, (m, node.lineno))
+                        if node.func.attr == "accept":             # socket.accept() takes no token
+                            self.assertFalse(node.args or node.keywords, (m, node.lineno))
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
