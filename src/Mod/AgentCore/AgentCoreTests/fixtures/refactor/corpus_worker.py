@@ -15,12 +15,20 @@ sys.path.insert(0, os.environ["CADFORK_F6_AGENTCORE"])
 import FreeCAD  # noqa: E402
 
 from AgentCore import refactor  # noqa: E402
+from AgentCore import state  # noqa: E402
 from AgentCore.refactor import geomhash  # noqa: E402
+
+try:
+    from AgentCore.diff import AgentTurn, SnapshotStore
+    from AgentCore.diff import compare as diff_compare
+    from AgentCore.diff import snapshot_dump
+except ImportError:  # F3 not in this tree
+    AgentTurn = SnapshotStore = diff_compare = snapshot_dump = None
 
 PATH = os.environ["CADFORK_F6_DOC"]
 OUT = os.environ["CADFORK_F6_OUT"]
 MAX_ATTEMPTS = 6
-LIFT_LIMIT = 40
+LIFT_LIMIT = None   # no cap: every candidate literal in every document is lifted
 ORIGINAL_TYPES = ("PartDesign::Pad", "PartDesign::Pocket", "PartDesign::Revolution", "PartDesign::Groove")
 
 
@@ -101,6 +109,76 @@ def sabotage(doc):
     return {"count": 0, "how": "nothing to sabotage"}
 
 
+def _turn_and_reject(doc, body, entry):
+    """Run ``body(doc)`` inside one AgentTurn (with F3's snapshot store as the fallback), reject the turn, and
+    record whether F3's own equality, the F1/F3 canonical dump and the geometry snapshot all say "identical"."""
+    import tempfile
+    for _ in range(2):          # reach FreeCAD's recompute fixed point first (LinearPattern Spacings settle on the 2nd pass)
+        doc.recompute(None, True)
+    before_geo = geomhash.snapshot(doc)
+    with tempfile.TemporaryDirectory(prefix="f6-reject-") as tmp:
+        store = SnapshotStore(tmp)          # F3's before-state copy: the designed fallback when undo alone is not exact
+        with AgentTurn(doc, verify=False, geometry_diff=False, store=store) as turn:
+            before_state = snapshot_dump(doc)   # the document as the turn saw it at entry
+            body(doc)
+            doc.recompute(None, True)
+        cs = turn.change_set()
+        res = turn.reject()
+    state_diff = diff_compare.differences(before_state, snapshot_dump(doc))     # F3's canonical dump, 1e-9 tolerance
+    geo_diff = geomhash.compare(before_geo, geomhash.snapshot(doc))
+    ok = res.get("equal", False) and not state_diff and not geo_diff
+    entry.update({"status": "pass" if ok else "fail", "ok": ok, "method": res.get("method"),
+                  "turn_equal": res.get("equal"), "state_differences": state_diff[:5],
+                  "geometry_violations": geo_diff[:5], "turn_differences": res.get("differences", [])[:5],
+                  "change_set_nonempty": bool(cs)})
+    return entry
+
+
+def run_reject(doc, entry):
+    """F6 + F3: relabel, lift and merge inside one AgentTurn, then turn.reject()."""
+    if AgentTurn is None:
+        entry.update({"status": "skipped", "ok": None, "error": "AgentCore.diff.AgentTurn absent"})
+        return entry
+    added, _ = inject_noops(doc)
+    entry["injected"] = added
+
+    def body(d):
+        refactor.relabel_all(d)
+        refactor.lift_all(d, target="VarSet", limit=LIFT_LIMIT)
+        refactor.merge_redundant(d)
+    return _turn_and_reject(doc, body, entry)
+
+
+def run_reject_baseline(doc, entry):
+    """No F6 code at all: the turn does the same kinds of edit with plain FreeCAD calls (re-assign, to the same
+    value, the first size property of every PartDesign feature; remove the injected no-op patterns the way a
+    merge would, rewiring BaseFeature and Tip by hand). If this also fails to reject cleanly the cause is F3 or
+    FreeCAD, not a refactor."""
+    if AgentTurn is None:
+        entry.update({"status": "skipped", "ok": None})
+        return entry
+    added, _ = inject_noops(doc)       # same pre-turn document as the reject run
+    entry["injected"] = added
+
+    def body(d):
+        for o in d.Objects:
+            if o.TypeId.startswith("PartDesign::") and o.TypeId != "PartDesign::Body" and o.Name not in added:
+                for p in ("Length", "Angle", "Radius"):
+                    if p in o.PropertiesList and not o.ExpressionEngine:
+                        setattr(o, p, getattr(o, p).Value)
+                        break
+        for n in added:
+            lp = d.getObject(n)
+            if lp is None:
+                continue
+            b, prev = refactor.ops.body_of(lp), lp.BaseFeature
+            if b is not None:
+                b.Tip = prev
+                b.removeObject(lp)
+            d.removeObject(n)
+    return _turn_and_reject(doc, body, entry)
+
+
 def run_op(op):
     doc, attempts, errors = open_clean()
     t0 = time.time()
@@ -109,6 +187,10 @@ def run_op(op):
         if errors:
             entry.update({"status": "unclean", "errors": errors})
             return entry
+        if op == "reject":
+            return run_reject(doc, entry)
+        if op == "reject_baseline":
+            return run_reject_baseline(doc, entry)
         if op == "control":
             fn = lambda d: None
         elif op == "relabel":
@@ -155,7 +237,7 @@ def run_op(op):
 
 
 result = {"doc": PATH, "ops": {}}
-for op in ("control", "relabel", "lift_varset", "lift_sheet", "across_bodies", "merge", "sabotage"):
+for op in ("control", "relabel", "lift_varset", "lift_sheet", "across_bodies", "merge", "reject", "reject_baseline", "sabotage"):
     result["ops"][op] = run_op(op)
     with open(OUT, "w") as fh:
         json.dump(result, fh, indent=1, sort_keys=True)

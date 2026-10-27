@@ -20,7 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 HOME = os.path.expanduser(os.environ.get("CADFORK_HOME", "~/src/cad-fork"))
 CTL = os.path.expanduser(os.environ.get("CADFORK_CTL", "~/_agents/repos/app development/cad-fork"))
 CMD = os.path.join(HOME, "freecad/build/release/bin/FreeCADCmd")
-OPS = ("relabel", "lift_varset", "lift_sheet", "across_bodies", "merge")
+OPS = ("relabel", "lift_varset", "lift_sheet", "across_bodies", "merge", "reject")
 
 
 def fc(script_env, script, timeout):
@@ -55,6 +55,9 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--results", default=os.path.join(HERE, "results", "corpus.json"))
     ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--extra-manifest", default=os.path.join(HERE, "results", "freecad_library_manifest.json"),
+                    help="JSON list of {id, path, sha256} public FreeCAD-library files downloaded to --extra-dir")
+    ap.add_argument("--extra-dir", default="", help="directory holding <id>.FCStd for each manifest entry")
     ap.add_argument("--only", default="", help="substring filter on document name (debugging)")
     ARGS = ap.parse_args()
     ARGS.agentcore = os.path.join(os.path.abspath(ARGS.worktree), "src/Mod/AgentCore")
@@ -74,6 +77,13 @@ def main():
         if rel.lower().endswith(".fcstd"):
             full = os.path.join(HOME, "freecad", rel)
             (docs.__setitem__(rel, full) if os.path.exists(full) else missing.append(rel))
+    if ARGS.extra_dir:
+        for e in json.load(open(ARGS.extra_manifest)):
+            full = os.path.join(ARGS.extra_dir, e["id"] + ".FCStd")
+            if os.path.exists(full):
+                docs["freecad-library/" + e["path"]] = full
+            else:
+                missing.append("freecad-library/" + e["path"])
     docs = {k: v for k, v in docs.items() if ARGS.only in k}
     jobs = [(path, os.path.join(out, "res_" + name.replace("/", "__") + ".json")) for name, path in docs.items()]
     for _, o in jobs:
@@ -111,6 +121,10 @@ def summarise(results):
                 incomplete.setdefault(name, f"{op} missing")
                 continue
             s = per_op[op]
+            if r.get("status") == "skipped":
+                s.setdefault("skipped", 0)
+                s["skipped"] += 1
+                continue
             s["run"] += 1
             if r.get("status") == "pass":
                 s["pass"] += 1
@@ -118,6 +132,9 @@ def summarise(results):
                 s["crash"].append(name)
             else:
                 s["fail"].append({"doc": name, "status": r.get("status"), "violations": r.get("violations")})
+            if not r.get("effective"):
+                s.setdefault("zero_effect_docs", 0)
+                s["zero_effect_docs"] += 1
             if r.get("effective"):
                 s["effective_docs"] += 1
                 s["effective_changes"] += r["effective"]
@@ -132,8 +149,17 @@ def summarise(results):
                 sab["detected"] += 1
             else:
                 sab["missed"].append(name)
-    total_run = sum(s["run"] for s in per_op.values())
-    total_pass = sum(s["pass"] for s in per_op.values())
+    rb = {"baseline_fail_too": [], "f6_only_fail": []}
+    for name, res in results.items():
+        if res["ops"].get("control", {}).get("status") != "pass":
+            continue
+        rj, bl = res["ops"].get("reject"), res["ops"].get("reject_baseline")
+        if rj and rj.get("status") == "fail":
+            (rb["baseline_fail_too"] if bl and bl.get("status") == "fail" else rb["f6_only_fail"]).append(name)
+    per_op["reject"]["attribution"] = rb
+    inv = [s for op, s in per_op.items() if op != "reject"]     # the F3 reject check is not an invariance check
+    total_run = sum(s["run"] for s in inv)
+    total_pass = sum(s["pass"] for s in inv)
     return {"documents_total": len(results), "documents_clean": clean_docs, "excluded_unstable": excluded,
             "incomplete": incomplete, "per_op": per_op, "sabotage": sab, "invariance_runs": total_run, "invariance_passes": total_pass,
             "pass_rate": (total_pass / total_run) if total_run else None}
