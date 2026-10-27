@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """F6 refactor operations: relabel, lift into VarSet or Spreadsheet, across bodies, conservative merge."""
 
+import os
 import unittest
 
 import FreeCAD
 
 from AgentCore import refactor
 from AgentCoreTests.fixtures.refactor import refactor_builders as rb
+
+
+def shapes_equal(a, b):
+    from AgentCore.refactor.ops import shapes_identical
+    return shapes_identical(a.Shape, b.Shape)
 
 
 class Doc:
@@ -187,7 +193,7 @@ class TestDeviationCoverage(unittest.TestCase):
 
             def nudge(d):
                 o = d.getObject("B044")
-                o.Placement = FreeCAD.Placement(o.Placement.Base + FreeCAD.Vector(5e-5, 0, 0), o.Placement.Rotation)
+                o.Placement = FreeCAD.Placement(o.Placement.Base + FreeCAD.Vector(1e-3, 0, 0), o.Placement.Rotation)   # I3's coordinate term allows 4e-4 at x=1300
 
             r = refactor.invariant(doc, nudge)
             self.assertEqual(r["before"]["deviation_covered"], 45)
@@ -239,6 +245,64 @@ class TestMerge(unittest.TestCase):
             self.assertTrue(r["ok"])
             self.assertEqual(r["result"]["removed"], [])
             self.assertIsNotNone(doc.getObject("AirPocket"))
+
+    def _air_through_all(self, doc, mode):
+        body, sk, pad, sk2, pk = rb.plate_with_slot(doc)
+        air = rb.rect_sketch(body, 4.0, 4.0, "AirSketch", offset=13.0)   # 3 mm above the plate top
+        a = rb.pocket(body, air, 3.0, "AirPocket")
+        a.Type = mode
+        a.Reversed = True                                              # cuts upward, into air, in any mode
+        doc.recompute()
+        return body, a
+
+    def test_open_ended_modes_are_never_merged(self):
+        # R9: ThroughAll and UpToFirst pockets (UpToFace is the upstream PocketTest below) that cut only air today are parameter- or
+        # context-sensitive (a later edit to the plate or a sketch move makes them cut), so they stay.
+        for mode in ("ThroughAll", "UpToFirst"):
+            with Doc() as doc:
+                body, a = self._air_through_all(doc, mode)
+                if mode == "ThroughAll":
+                    self.assertTrue(shapes_equal(a, a.BaseFeature), mode)   # the premise: a geometric no-op today
+                self.assertEqual(refactor.find_redundant(doc), [], mode)
+                self.assertEqual(refactor.merge_redundant(doc)["removed"], [], mode)
+                self.assertIsNotNone(doc.getObject("AirPocket"), mode)
+
+    def test_zero_size_length_pocket_is_not_merged(self):
+        # R8 used to pass any feature with no non-zero size property without probing anything.
+        with Doc() as doc:
+            body, a = self._air_through_all(doc, "Length")
+            a.Length = 0.0
+            doc.recompute()
+            self.assertEqual(refactor.find_redundant(doc), [])
+
+    def test_allow_list_and_removal_check_gate_the_merge(self):
+        from AgentCore.refactor import ops
+        with Doc() as doc:
+            body, sk, pad, sk2, pk = rb.plate_with_slot(doc)
+            self.assertTrue(ops.mode_allowed(pk))           # a Length-mode pocket is on the list
+            lp = rb.add_noop_pattern(body, pk, sk)
+            self.assertTrue(ops.mode_allowed(lp))
+            lp.Occurrences = 2
+            self.assertFalse(ops.mode_allowed(lp))          # a real pattern is not a no-op candidate
+            pad.Type = "UpToLast"
+            self.assertFalse(ops.mode_allowed(pad))
+
+    def test_upstream_pocket_test_document_keeps_pocket001(self):
+        # The verifier's finding: data/tests/PocketTest.fcstd from upstream FreeCAD lost Pocket001 (an UpToFace pocket).
+        path = os.path.expanduser("~/src/cad-fork/freecad/data/tests/PocketTest.fcstd")
+        if not os.path.exists(path):
+            if os.environ.get("CADFORK_ALLOW_MISSING_CORPUS") == "1":
+                self.skipTest("upstream PocketTest.fcstd not found")
+            self.fail("upstream PocketTest.fcstd not found: " + path)
+        doc = FreeCAD.openDocument(path)
+        try:
+            doc.recompute(None, True)
+            self.assertIsNotNone(doc.getObject("Pocket001"))
+            self.assertEqual(refactor.find_redundant(doc), [])
+            self.assertEqual(refactor.merge_redundant(doc)["removed"], [])
+            self.assertIsNotNone(doc.getObject("Pocket001"))
+        finally:
+            FreeCAD.closeDocument(doc.Name)
 
     def test_real_features_are_never_merged(self):
         with Doc() as doc:

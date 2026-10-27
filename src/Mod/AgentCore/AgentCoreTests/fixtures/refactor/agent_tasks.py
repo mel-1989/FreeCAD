@@ -178,46 +178,61 @@ def macro_tasks(n=100, seed=7):
     return out[:n]
 
 
-def refactor_tasks(summaries, n=100):
-    """summaries: {doc file name: object listing text}. A task applies when its precondition holds on the listing."""
+def refactor_tasks(summaries, n=100, refs=None):
+    """summaries: {doc file name: object listing text}. A task applies when its precondition holds on the listing.
+
+    ``refs`` ({doc file name: reference counts from agent_eval_worker.py's ``reference`` mode}) sizes the lift and
+    across-bodies checks: they require that the literals were really replaced by expressions bound to the
+    container (at least as many as the reference API binds) and that every body changed. A document where the
+    reference binds nothing gets no such task, so a vacuous task cannot pass."""
+    refs = refs if refs is not None else {}
     kinds = [
         ("label_sketches", "Give every Sketcher sketch a Label that starts with \"Sk_\".",
          "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(o.Label.startswith('Sk_') for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
-         lambda s: "Sketcher::SketchObject" in s),
+         lambda s, r: "Sketcher::SketchObject" in s),
         ("label_unique", "Give every PartDesign and Sketcher object a unique Label of the form <T>_<n>, where <T> is the part of its TypeId after \"::\" (for example \"Pad_1\", \"SketchObject_1\") and n counts from 1 per type in document order; Names must not change.",
          "len({o.Label for o in doc.Objects}) == len(doc.Objects) and all(o.Label.startswith(o.TypeId.split('::')[-1] + '_') for o in doc.Objects if o.TypeId.startswith(('PartDesign::', 'Sketcher::')))",
-         lambda s: "PartDesign::" in s),
+         lambda s, r: "PartDesign::" in s),
         ("lift_pads_varset", "Move the Length of every PartDesign::Pad into an App::VarSet named \"Dims\" (one property per pad) and bind each pad's Length to it with an expression.",
          "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='App::VarSet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
-         lambda s: "PartDesign::Pad" in s),
+         lambda s, r: "PartDesign::Pad" in s),
         ("lift_pads_sheet", "Move the Length of every PartDesign::Pad into a Spreadsheet named \"Dims\" (one aliased cell per pad) and bind each pad's Length to it with an expression.",
          "doc.getObject('Dims') is not None and doc.getObject('Dims').TypeId=='Spreadsheet::Sheet' and all(any(p=='Length' for p,e in o.ExpressionEngine) for o in doc.Objects if o.TypeId=='PartDesign::Pad')",
-         lambda s: "PartDesign::Pad" in s),
-        ("lift_all_varset", "Lift every literal dimension that can safely be bound (feature lengths, angles, named sketch constraints) into one App::VarSet named \"Parameters\".",
-         "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='App::VarSet'", lambda s: "PartDesign::" in s),
-        ("lift_all_sheet", "Lift every literal dimension that can safely be bound into one Spreadsheet named \"Parameters\".",
-         "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='Spreadsheet::Sheet'", lambda s: "PartDesign::" in s),
-        ("across_bodies", "Standardise every PartDesign Body: give each body its own parameter container of its feature dimensions.",
-         "any(o.TypeId in ('Spreadsheet::Sheet','App::VarSet') for o in doc.Objects)", lambda s: "PartDesign::Body" in s),
+         lambda s, r: "PartDesign::Pad" in s),
+        ("lift_all_varset", "Lift every literal dimension that can safely be bound (feature lengths, angles, named sketch constraints) into one App::VarSet named \"Parameters\", so that each of those properties is driven by an expression that reads its value from the VarSet.",
+         "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='App::VarSet' and ref['lift_varset'] > 0 "
+         "and sum(1 for o in doc.Objects for _p, e in o.ExpressionEngine if 'Parameters.' in e) >= ref['lift_varset']",
+         lambda s, r: "PartDesign::" in s and r.get("lift_varset", 0) > 0),
+        ("lift_all_sheet", "Lift every literal dimension that can safely be bound into one Spreadsheet named \"Parameters\", so that each of those properties is driven by an expression that reads its value from a cell alias.",
+         "doc.getObject('Parameters') is not None and doc.getObject('Parameters').TypeId=='Spreadsheet::Sheet' and ref['lift_sheet'] > 0 "
+         "and sum(1 for o in doc.Objects for _p, e in o.ExpressionEngine if 'Parameters.' in e) >= ref['lift_sheet']",
+         lambda s, r: "PartDesign::" in s and r.get("lift_sheet", 0) > 0),
+        ("across_bodies", "In every PartDesign Body, replace the literal dimensions of its features by expressions that read them from a Spreadsheet or VarSet (a container shared by the bodies is fine). No body may be left unparameterised.",
+         "len(ref['bodies']) > 0 and all(sum(1 for f in b.Group for _p, e in f.ExpressionEngine if any(c.Name in e for c in doc.Objects if c.TypeId in ('Spreadsheet::Sheet','App::VarSet'))) >= max(1, ref['bodies'].get(b.Name, 0)) "
+         "for b in doc.Objects if b.TypeId == 'PartDesign::Body')",
+         lambda s, r: "PartDesign::Body" in s and bool(r.get("bodies")) and all(v > 0 for v in r["bodies"].values())),
         ("label_bodies", "Set the Label of every PartDesign Body to \"Body_<Name>\" (its immutable Name after an underscore).",
-         "all(o.Label=='Body_'+o.Name for o in doc.Objects if o.TypeId=='PartDesign::Body')", lambda s: "PartDesign::Body" in s),
+         "all(o.Label=='Body_'+o.Name for o in doc.Objects if o.TypeId=='PartDesign::Body')", lambda s, r: "PartDesign::Body" in s),
         ("number_pads", "Relabel every PartDesign::Pad as \"Pad_1\", \"Pad_2\", ... in document order (the order of doc.Objects).",
          "[o.Label for o in doc.Objects if o.TypeId=='PartDesign::Pad'] == ['Pad_%d' % (i + 1) for i in range(len([o for o in doc.Objects if o.TypeId=='PartDesign::Pad']))]",
-         lambda s: "PartDesign::Pad" in s),
+         lambda s, r: "PartDesign::Pad" in s),
         ("label_pockets", "Give every PartDesign::Pocket a Label that starts with \"Cut_\".",
          "any(o.TypeId=='PartDesign::Pocket' for o in doc.Objects) and all(o.Label.startswith('Cut_') for o in doc.Objects if o.TypeId=='PartDesign::Pocket')",
-         lambda s: "PartDesign::Pocket" in s),
+         lambda s, r: "PartDesign::Pocket" in s),
         ("note_sketches", "Add a string property \"RefactorNote\" with the value \"checked\" to every Sketcher sketch.",
          "any(o.TypeId=='Sketcher::SketchObject' for o in doc.Objects) and all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='Sketcher::SketchObject')",
-         lambda s: "Sketcher::SketchObject" in s),
+         lambda s, r: "Sketcher::SketchObject" in s),
         ("note_property", "Add a string property \"RefactorNote\" with the value \"checked\" to every PartDesign Body.",
-         "all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='PartDesign::Body')", lambda s: "PartDesign::Body" in s),
+         "all(getattr(o,'RefactorNote',None)=='checked' for o in doc.Objects if o.TypeId=='PartDesign::Body')", lambda s, r: "PartDesign::Body" in s),
     ]
     out = []
     for name, text in sorted(summaries.items()):
         for k, task, check, applies in kinds:
-            if applies(text):
-                out.append({"id": f"{name[:3]}_{k}", "doc_name": name, "family": k, "task": task, "check": check})
+            if applies(text, refs.get(name, {})):
+                t = {"id": f"{name[:3]}_{k}", "doc_name": name, "family": k, "task": task, "check": check}
+                if "ref[" in check:
+                    t["ref"] = refs[name]
+                out.append(t)
     # round-robin across families so a cut at n keeps all of them
     by_fam = {}
     for t in out:

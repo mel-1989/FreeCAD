@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """F6 invariance checker: no-op passes, every seeded mutant is caught (mutation score 100%), rollback restores."""
 
+import json
+import os
 import unittest
 
 import FreeCAD
+import Part
 
 from AgentCore import refactor
 from AgentCore.refactor import geomhash
@@ -120,3 +123,40 @@ class TestMutationScore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTolerancePolicy(unittest.TestCase):
+    """I3's rule (harness/golden/compare.py): relative to the quantity, not to the bbox diagonal cubed."""
+
+    def violations(self, a, b):
+        return geomhash.compare_metrics("x", geomhash.shape_metrics(a), geomhash.shape_metrics(b), geomhash.load_tolerances())
+
+    def test_thin_plate_height_change_is_caught(self):
+        # 100 x 100 x 0.5 against 0.50005 high: a 1e-4 relative volume change that the old diag**3 scale (about 11 mm3) hid.
+        v = self.violations(Part.makeBox(100, 100, 0.5), Part.makeBox(100, 100, 0.50005))
+        self.assertIn("volume", [x["field"] for x in v], v)
+
+    def test_noise_inside_policy_passes(self):
+        # 1e-7 relative is far inside rel_tol 4e-6
+        self.assertEqual(self.violations(Part.makeBox(100, 100, 0.5), Part.makeBox(100, 100, 0.5 * (1 + 1e-7))), [])
+
+    def test_invariant_flags_thin_plate_edit_end_to_end(self):
+        with Doc() as doc:
+            box = doc.addObject("Part::Box", "Plate")
+            box.Length, box.Width, box.Height = 100, 100, 0.5
+            doc.recompute()
+            r = refactor.invariant(doc, lambda d: setattr(d.getObject("Plate"), "Height", 0.50005))
+            self.assertFalse(r["ok"])
+            self.assertTrue(any(v["field"] == "volume" for v in r["violations"]), r["violations"])
+
+    def test_vendored_policy_matches_control_repo(self):
+        ctl = os.path.expanduser(os.environ.get("CADFORK_CTL", "~/_agents/repos/app development/cad-fork"))
+        path = os.path.join(ctl, "fixtures", "golden", "tolerances.json")
+        if not os.path.exists(path):
+            if os.environ.get("CADFORK_ALLOW_MISSING_CORPUS") == "1":
+                self.skipTest("control repo tolerances not found")
+            self.fail("control repo tolerances not found: " + path)
+        ctl_pol = json.load(open(path))["platforms"]
+        for cls, block in ctl_pol.items():
+            mine = geomhash.load_tolerances(cls)
+            self.assertEqual(mine, {k: v for k, v in block.items() if k != "calibrated"}, cls)

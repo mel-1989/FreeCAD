@@ -175,8 +175,9 @@ def gen_macro_tasks(n, work):
 
 
 def macro_prompt(t, prev=None, feedback=None):
-    base = (f"Task: {t['task']}\nA test will evaluate this expression after your macro runs (it must be true):\n"
-            f"    {t['check']}\n")
+    # The requirement is given in words only: the check expression is never shown to the model.
+    base = (f"Task: {t['task']}\nA hidden test inspects the document after your macro runs and checks that the model "
+            f"matches the task (names, sizes, placements, expressions).\n")
     if prev is None:
         return base
     return (base + f"\nYour previous macro:\n```python\n{prev}```\nIt failed before or during its test with:\n{feedback}\n"
@@ -226,7 +227,7 @@ def macro_eval(a):
                     s["feedback"] = "runtime error:\n" + r["error"]
                 else:
                     status = "check_false"
-                    s["feedback"] = "the macro ran but the test expression evaluated false"
+                    s["feedback"] = "the macro ran without error but the resulting document did not satisfy the task (re-read the task: object names, sizes, placement, expressions)"
             s["history"].append(status)
             if status == "pass":
                 s["done"] = True
@@ -273,6 +274,11 @@ def Counter_of(seq):
 
 # ------------------------------------------------------------------------------------------- refactor
 
+def refactor_prompt(summary, t):
+    """The refactor prompt: the document listing and the task in words. The check expression is never shown."""
+    return f"Document objects:\n{summary}\n\nTask: {t['task']}\n"
+
+
 def refactor_eval(a):
     work = os.path.abspath(a.work)
     os.makedirs(work, exist_ok=True)
@@ -281,7 +287,9 @@ def refactor_eval(a):
     docs = [os.path.join(os.path.abspath(a.corpus), f) for f in docs]
     summ_res = run_worker("summaries", [{"id": os.path.basename(d), "doc": d} for d in docs], ac, work, "summ")
     summaries = {k: v for k, v in summ_res.items() if isinstance(v, str)}
-    tasks = agent_tasks.refactor_tasks({os.path.basename(d): summaries[os.path.basename(d)] for d in docs}, a.tasks)
+    ref_res = run_worker("reference", [{"id": os.path.basename(d), "doc": d} for d in docs], ac, work, "ref")
+    refs = {k: v for k, v in ref_res.items() if isinstance(v, dict) and "bodies" in v}
+    tasks = agent_tasks.refactor_tasks({os.path.basename(d): summaries[os.path.basename(d)] for d in docs}, a.tasks, refs)
     for t in tasks:
         t["doc"] = os.path.join(os.path.abspath(a.corpus), t["doc_name"])
     json.dump(tasks, open(os.path.join(work, "refactor_tasks.json"), "w"), indent=1)
@@ -292,12 +300,12 @@ def refactor_eval(a):
 
     def gen_script(tp):
         t, p = tp
-        user = f"Document objects:\n{summaries[t['doc_name']]}\n\nTask: {t['task']}\nA test will check (must be true afterwards): {t['check']}\n"
+        user = refactor_prompt(summaries[t["doc_name"]], t)
         return code_of(ask(system, user, max_tokens=2000, temperature=0.7))
     scripts = pmap(gen_script, runs, 8)
-    items = [{"id": f"{t['id']}#{p}", "doc": t["doc"], "script": sc, "check": t["check"]} for (t, p), sc in zip(runs, scripts)]
+    items = [{"id": f"{t['id']}#{p}", "doc": t["doc"], "script": sc, "check": t["check"], "ref": t.get("ref")} for (t, p), sc in zip(runs, scripts)]
     res = run_chunks("refactor", items, ac, work, "refactor_", chunk=25, jobs=3)
-    noop_items = [{"id": t["id"], "doc": t["doc"], "script": "def edit(doc):\n    return None\n", "check": t["check"]} for t in tasks]
+    noop_items = [{"id": t["id"], "doc": t["doc"], "script": "def edit(doc):\n    return None\n", "check": t["check"], "ref": t.get("ref")} for t in tasks]
     noop = run_chunks("refactor", noop_items, ac, work, "refactor_noop_", chunk=25, jobs=3)
     vacuous = sorted(k for k, v in noop.items() if v.get("check"))
     rows = []
@@ -336,7 +344,7 @@ def main():
     ap.add_argument("--corpus", default="")
     ap.add_argument("--tasks", type=int, default=100)
     ap.add_argument("--passes", type=int, default=5)
-    ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--rounds", type=int, default=3)   # the number reported in the README is at this default
     ap.add_argument("--out", default="")
     a = ap.parse_args()
     summary, rows = macro_eval(a) if a.kind == "macro" else refactor_eval(a)
