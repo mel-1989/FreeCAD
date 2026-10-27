@@ -34,7 +34,8 @@ def save_fixtures(names, directory):
 def make_server(stub=True, **kw):
     from AgentCore.mcp.server import Server
 
-    return Server(freecadcmd=freecadcmd(), worker_env=STUB_ENV if stub else {}, **kw)
+    env = kw.pop("worker_env", STUB_ENV if stub else {})
+    return Server(freecadcmd=freecadcmd(), worker_env=env, **kw)
 
 
 def call(server, name, **args):
