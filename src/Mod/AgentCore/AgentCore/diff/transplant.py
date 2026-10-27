@@ -23,7 +23,12 @@ result is a single, ordinary undo entry recorded by ``App::Transaction``.
    first), so owners that tear children down on delete see restored inputs.
 
 Properties with ``Transient`` or ``NoPersist`` status are skipped (FreeCAD
-does not save them either). XLink properties are compared by their F1 value
+does not save them either), except transient links such as PartDesign's
+``_Body`` back-link, which an owner sets when it adopts a feature on load and
+which are replayed last, compared by F1 value. ``Proxy`` (the Python object
+of a feature) is replayed only into objects ``apply`` creates: re-serialising
+a live proxy gives different bytes for the same state, and replaying it would
+re-run proxy code on objects the capture did not change. XLink properties are compared by their F1 value
 rather than their raw bytes, because the raw form stores a file path relative
 to the document it was dumped from, which differs for a snapshot file.
 """
@@ -61,18 +66,21 @@ def capture(doc):
                                 "doc": o.getDocumentationOfProperty(p) or ""})
                 except Exception:
                     pass
-            if st & (_STATUS_TRANSIENT | _STATUS_NOPERSIST):
-                continue
             try:
                 ptype = o.getTypeIdOfProperty(p)
             except Exception:
                 ptype = ""
+            late = False
+            if st & (_STATUS_TRANSIENT | _STATUS_NOPERSIST):
+                if "PropertyLink" not in ptype:
+                    continue
+                late = True  # transient back-links (PartDesign ``_Body``): set by the owner, replayed last
             try:
                 raw = o.dumpPropertyContent(p)
             except Exception:
                 continue
-            entry = {"type": ptype, "raw": raw}
-            if ptype.startswith(_XLINK_PREFIX):
+            entry = {"type": ptype, "raw": raw, "late": late}
+            if ptype.startswith(_XLINK_PREFIX) or late:
                 entry["value"] = property_value(o, p, ptype)
             props[p] = entry
         props.pop("ExpressionEngine", None)  # its Restore defers to onDocumentRestored; replayed below
@@ -107,28 +115,34 @@ def _remove(doc, names):
         pending = nxt
 
 
-def apply(doc, cap, rounds=3):
+def apply(doc, cap, rounds=3, changed=None):
     """Make ``doc`` hold the captured state. Returns a list of problems.
 
     The sequence runs again while it still creates or removes objects (a
     delete that cascades to children the capture keeps, for example).
+    ``changed``, if given, is a set that receives the names of objects that
+    were created or had a property restored.
     """
+    changed = set() if changed is None else changed
     for _ in range(rounds):
-        problems, work = _apply_once(doc, cap)
+        problems, work = _apply_once(doc, cap, changed)
         if not work:
             break
     return problems
 
 
-def _apply_once(doc, cap):
+def _apply_once(doc, cap, changed):
     problems = []
     work = 0
+    created = set()
     want = [c["name"] for c in cap]
     wanted = set(want)
     for c in cap:
         if doc.getObject(c["name"]) is None:
             o = doc.addObject(c["type"], c["name"])
             work += 1
+            created.add(c["name"])
+            changed.add(c["name"])
             if o.Name != c["name"]:
                 problems.append(f"{c['name']}: re-created as {o.Name}")
     for c in cap:
@@ -149,16 +163,20 @@ def _apply_once(doc, cap):
                 except Exception as exc:
                     problems.append(f"{c['name']}.{d['name']}: add failed: {exc}")
     for _pass in range(2):
-        changed = 0
+        n_restored = 0
         for c in cap:
             o = doc.getObject(c["name"])
             if o is None:
                 continue
             for p, entry in c["props"].items():
+                if entry.get("late"):
+                    continue
                 if p not in o.PropertiesList:
                     if _pass:
                         problems.append(f"{c['name']}.{p}: property missing")
                     continue
+                if p == "Proxy" and c["name"] not in created:
+                    continue  # a live proxy keeps its state; re-serialised proxies differ byte-wise
                 try:
                     if "value" in entry:
                         if property_value(o, p, entry["type"]) == entry["value"]:
@@ -166,11 +184,12 @@ def _apply_once(doc, cap):
                     elif o.dumpPropertyContent(p) == entry["raw"]:
                         continue
                     o.restorePropertyContent(p, entry["raw"])
-                    changed += 1
+                    changed.add(c["name"])
+                    n_restored += 1
                 except Exception as exc:
                     if _pass:
                         problems.append(f"{c['name']}.{p}: restore failed: {exc}")
-        if not changed:
+        if not n_restored:
             break
     for c in cap:
         o = doc.getObject(c["name"])
@@ -187,8 +206,21 @@ def _apply_once(doc, cap):
             if have.get(path) != expr:
                 try:
                     o.setExpression(path, expr)
+                    changed.add(c["name"])
                 except Exception as exc:
                     problems.append(f"{c['name']}.{path}: expression failed: {exc}")
+    for c in cap:
+        o = doc.getObject(c["name"])
+        for p, entry in c["props"].items():
+            if not entry.get("late") or o is None or p not in o.PropertiesList:
+                continue
+            try:
+                if property_value(o, p, entry["type"]) != entry["value"]:
+                    o.restorePropertyContent(p, entry["raw"])
+                    changed.add(c["name"])
+                    work += 1
+            except Exception as exc:
+                problems.append(f"{c['name']}.{p}: restore failed: {exc}")
     # Removal last: owners such as a TechDraw page tear their children down
     # on delete, which must see the already-restored inputs.
     doc.recompute()

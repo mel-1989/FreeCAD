@@ -42,11 +42,11 @@ class SnapshotStore:
             json.dump(self.entries, f, indent=1, sort_keys=True)
         os.replace(tmp, self.index_path)
 
-    def entry(self, turn_id):
+    def entry(self, turn_id, document=None):
         for e in self.entries:
-            if e["turn"] == turn_id:
+            if e["turn"] == turn_id and (document is None or e["document"] == document):
                 return e
-        raise KeyError(turn_id)
+        raise KeyError((turn_id, document))
 
     def save_before(self, doc, turn_id, label=""):
         seq = len(self.entries) + 1
@@ -60,35 +60,48 @@ class SnapshotStore:
         self._save_index()
         return dict(e)
 
-    def record(self, turn_id, **fields):
-        self.entry(turn_id).update(fields)
+    def record(self, turn_id, document=None, **fields):
+        self.entry(turn_id, document).update(fields)
         self._save_index()
 
     # ----------------------------------------------------------- restore
-    def capture_snapshot(self, turn_id):
-        """Capture of a snapshot, read from a hidden temporary document."""
-        e = self.entry(turn_id)
+    def capture_snapshot(self, turn_id, document=None):
+        """Capture of a snapshot, read from a hidden temporary document.
+
+        Documents the snapshot pulls in through XLinks are closed again.
+        """
+        e = self.entry(turn_id, document)
         prev = App.ActiveDocument.Name if App.ActiveDocument else None
+        open_before = set(App.listDocuments())
         tmp = App.openDocument(e["path"], True, True)
         try:
             return transplant.capture(tmp)
         finally:
-            App.closeDocument(tmp.Name)
+            for name in list(App.listDocuments()):
+                if name not in open_before:
+                    App.closeDocument(name)
             if prev and prev in App.listDocuments():
                 App.setActiveDocument(prev)
 
-    def restore(self, doc, turn_id, transaction=None):
+    def restore(self, doc, turn_id, transaction=None, document=None):
         """Replay the before-state of ``turn_id`` into ``doc``.
 
         ``transaction``: an undo-entry name to record the restore under, or
         None to apply it outside any transaction (used by reject).
         """
-        cap = self.capture_snapshot(turn_id)
+        cap = self.capture_snapshot(turn_id, document or doc.Name)
         if transaction:
             App.setActiveDocument(doc.Name)
             App.setActiveTransaction(transaction)
         try:
-            problems = transplant.apply(doc, cap)
+            changed = set()
+            problems = transplant.apply(doc, cap, changed=changed)
+            # Objects rebuilt from the file are recomputed once more, as after
+            # a load (solver details of re-created sketches are not saved).
+            for name in sorted(changed):
+                o = doc.getObject(name)
+                if o is not None:
+                    o.touch()
             doc.recompute()
         finally:
             if transaction:
@@ -99,9 +112,9 @@ class SnapshotStore:
 
     def revert(self, doc, turn_id):
         """Return ``doc`` to the state before ``turn_id``. Returns the method used."""
-        start = self.entry(turn_id)
+        start = self.entry(turn_id, doc.Name)
         later = [e for e in self.entries if e["document"] == doc.Name and e["seq"] >= start["seq"]
-                 and e["status"] == "accepted"]
+                 and e["status"] == "accepted" and e["undo_name"]]
         names = [e["undo_name"] for e in sorted(later, key=lambda e: -e["seq"])]
         method = "snapshot"
         if names and list(doc.UndoNames[: len(names)]) == names:
@@ -111,7 +124,7 @@ class SnapshotStore:
                 doc.recompute()
             method = "undo"
         else:
-            self.restore(doc, turn_id, transaction=f"Revert to before {turn_id}")
+            self.restore(doc, turn_id, transaction=f"Revert to before {turn_id}", document=doc.Name)
         for e in later:
             e["status"] = "reverted"
         self._save_index()

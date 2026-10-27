@@ -11,7 +11,10 @@ things are left out, both deliberately:
   ``GeoFeature::_ElementMapVersion`` is the only one: it is empty on a freshly
   opened file and set the first time a shape changes outside a restore or a
   transaction, and undo does not clear it again (it is not part of the
-  persistent document state at all).
+  persistent document state at all);
+- the ``volume`` of a shape with no solids. OCCT's volume of a face or a
+  datum plane is numerical noise (values like 1e167 that change on every
+  rebuild); F1 keeps it, comparison does not.
 """
 
 import json
@@ -41,6 +44,9 @@ def _strip(d):
     for o in d.get("objects", []):
         o = dict(o)
         o["properties"] = [p for p in o.get("properties", []) if p.get("name") not in TRANSIENT_CACHES]
+        sh = o.get("shape")
+        if isinstance(sh, dict) and not sh.get("solids") and "volume" in sh:
+            o["shape"] = {k: v for k, v in sh.items() if k != "volume"}
         objs.append(o)
     d["objects"] = objs
     return d
