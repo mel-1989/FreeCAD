@@ -1,0 +1,10584 @@
+{
+ "document": {
+  "label": "AssemblyExample",
+  "meta": {
+   "Comment": "",
+   "Company": "",
+   "CreatedBy": "",
+   "License": "CC-BY 4.0",
+   "LicenseURL": "https://creativecommons.org/licenses/by/4.0/",
+   "UnitSystem": "Standard (mm, kg, s, degree)"
+  },
+  "name": "AssemblyExample",
+  "object_count": 54,
+  "roots": [
+   "Assembly",
+   "Group"
+  ]
+ },
+ "objects": [
+  {
+   "detail": {
+    "components": [
+     "BasePin",
+     "Base",
+     "Boom",
+     "Stick",
+     "Bucket",
+     "BucketLink2",
+     "BucketLink1",
+     "BoomCylinderOuter",
+     "BoomCylinderInner",
+     "StickCylinderInner",
+     "StickCylinderOuter",
+     "BucketCylinderInner",
+     "BucketCylinderOuter",
+     "GroundedJoint",
+     "Revolute",
+     "Revolute001",
+     "Revolute002",
+     "Slider",
+     "Cylindrical",
+     "Revolute003",
+     "Slider001",
+     "Revolute004",
+     "Cylindrical001",
+     "Revolute005",
+     "Slider002",
+     "Revolute006",
+     "Revolute007",
+     "Revolute008",
+     "Cylindrical002",
+     "Cylindrical003"
+    ],
+    "grounded": [
+     {
+      "joint": "GroundedJoint",
+      "object": "BasePin"
+     }
+    ],
+    "joints": [
+     "Revolute",
+     "Revolute001",
+     "Revolute002",
+     "Slider",
+     "Cylindrical",
+     "Revolute003",
+     "Slider001",
+     "Revolute004",
+     "Cylindrical001",
+     "Revolute005",
+     "Slider002",
+     "Revolute006",
+     "Revolute007",
+     "Revolute008",
+     "Cylindrical002",
+     "Cylindrical003"
+    ]
+   },
+   "expressions": [],
+   "in_list": [],
+   "kind": "assembly",
+   "label": "Assembly",
+   "name": "Assembly",
+   "out_list": [
+    "Base",
+    "BasePin",
+    "Boom",
+    "BoomCylinderInner",
+    "BoomCylinderOuter",
+    "Bucket",
+    "BucketCylinderInner",
+    "BucketCylinderOuter",
+    "BucketLink1",
+    "BucketLink2",
+    "Cylindrical",
+    "Cylindrical001",
+    "Cylindrical002",
+    "Cylindrical003",
+    "GroundedJoint",
+    "Joints",
+    "Origin",
+    "Revolute",
+    "Revolute001",
+    "Revolute002",
+    "Revolute003",
+    "Revolute004",
+    "Revolute005",
+    "Revolute006",
+    "Revolute007",
+    "Revolute008",
+    "Slider",
+    "Slider001",
+    "Slider002",
+    "Stick",
+    "StickCylinderInner",
+    "StickCylinderOuter"
+   ],
+   "properties": [
+    {
+     "group": "",
+     "name": "Color",
+     "type": "App::PropertyColor",
+     "value": [
+      1.0,
+      1.0,
+      1.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Base",
+     "name": "Group",
+     "type": "App::PropertyLinkList",
+     "value": [
+      {
+       "object": "Joints"
+      },
+      {
+       "object": "BasePin"
+      },
+      {
+       "object": "Base"
+      },
+      {
+       "object": "Boom"
+      },
+      {
+       "object": "Stick"
+      },
+      {
+       "object": "Bucket"
+      },
+      {
+       "object": "BucketLink2"
+      },
+      {
+       "object": "BucketLink1"
+      },
+      {
+       "object": "BoomCylinderOuter"
+      },
+      {
+       "object": "BoomCylinderInner"
+      },
+      {
+       "object": "StickCylinderInner"
+      },
+      {
+       "object": "StickCylinderOuter"
+      },
+      {
+       "object": "BucketCylinderInner"
+      },
+      {
+       "object": "BucketCylinderOuter"
+      },
+      {
+       "object": "GroundedJoint"
+      },
+      {
+       "object": "Revolute"
+      },
+      {
+       "object": "Revolute001"
+      },
+      {
+       "object": "Revolute002"
+      },
+      {
+       "object": "Slider"
+      },
+      {
+       "object": "Cylindrical"
+      },
+      {
+       "object": "Revolute003"
+      },
+      {
+       "object": "Slider001"
+      },
+      {
+       "object": "Revolute004"
+      },
+      {
+       "object": "Cylindrical001"
+      },
+      {
+       "object": "Revolute005"
+      },
+      {
+       "object": "Slider002"
+      },
+      {
+       "object": "Revolute006"
+      },
+      {
+       "object": "Revolute007"
+      },
+      {
+       "object": "Revolute008"
+      },
+      {
+       "object": "Cylindrical002"
+      },
+      {
+       "object": "Cylindrical003"
+      }
+     ]
+    },
+    {
+     "group": "",
+     "name": "Id",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Assembly"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "License",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "LicenseURL",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Material",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "",
+     "name": "Meta",
+     "type": "App::PropertyMap",
+     "value": {}
+    },
+    {
+     "group": "",
+     "name": "Origin",
+     "type": "App::PropertyLink",
+     "value": {
+      "object": "Origin"
+     }
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "Type",
+     "type": "App::PropertyString",
+     "value": "Assembly"
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Base",
+     "name": "_GroupTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Assembly::AssemblyObject"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Revolute",
+    "Revolute001",
+    "Revolute002"
+   ],
+   "kind": "other",
+   "label": "Base001",
+   "name": "Base",
+   "out_list": [
+    "Shape001"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Base001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -206.517029,
+       99.415699,
+       364.268005
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       -0.002316,
+       0.999997
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape001"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -206.517029,
+       99.415699,
+       364.268005
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       -0.002316,
+       0.999997
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "GroundedJoint",
+    "Revolute"
+   ],
+   "kind": "other",
+   "label": "BasePin001",
+   "name": "BasePin",
+   "out_list": [
+    "Shape012"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BasePin001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -206.517029,
+       40.255699,
+       364.268005
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape012"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -206.517029,
+       40.255699,
+       364.268005
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Cylindrical",
+    "Revolute001",
+    "Revolute003",
+    "Revolute004"
+   ],
+   "kind": "other",
+   "label": "Boom001",
+   "name": "Boom",
+   "out_list": [
+    "Shape"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Boom001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -202.931688,
+       230.969516,
+       229.246703
+      ],
+      "rotation": [
+       -0.224433,
+       0.00052,
+       -0.002257,
+       0.974487
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -202.931688,
+       230.969516,
+       229.246703
+      ],
+      "rotation": [
+       -0.224433,
+       0.00052,
+       -0.002257,
+       0.974487
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Cylindrical",
+    "Slider"
+   ],
+   "kind": "other",
+   "label": "BoomCylinderInner001",
+   "name": "BoomCylinderInner",
+   "out_list": [
+    "Shape016"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BoomCylinderInner001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -208.726584,
+       108.582358,
+       238.805298
+      ],
+      "rotation": [
+       -0.203372,
+       0.000471,
+       -0.002268,
+       0.979099
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape016"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -208.726584,
+       108.582358,
+       238.805298
+      ],
+      "rotation": [
+       -0.203372,
+       0.000471,
+       -0.002268,
+       0.979099
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Revolute002",
+    "Slider"
+   ],
+   "kind": "other",
+   "label": "BoomCylinderOuter001",
+   "name": "BoomCylinderOuter",
+   "out_list": [
+    "Shape020"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BoomCylinderOuter001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -209.106386,
+       136.254194,
+       268.963196
+      ],
+      "rotation": [
+       -0.203372,
+       0.000471,
+       -0.002268,
+       0.979099
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape020"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -209.106386,
+       136.254194,
+       268.963196
+      ],
+      "rotation": [
+       -0.203372,
+       0.000471,
+       -0.002268,
+       0.979099
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Revolute007",
+    "Revolute008"
+   ],
+   "kind": "other",
+   "label": "Bucket001",
+   "name": "Bucket",
+   "out_list": [
+    "Shape015"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Bucket001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -210.075321,
+       432.194061,
+       196.619554
+      ],
+      "rotation": [
+       -0.231218,
+       0.000536,
+       -0.002254,
+       0.972899
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape015"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -210.075321,
+       432.194061,
+       196.619554
+      ],
+      "rotation": [
+       -0.231218,
+       0.000536,
+       -0.002254,
+       0.972899
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Cylindrical003",
+    "Slider002"
+   ],
+   "kind": "other",
+   "label": "BucketCylinderInner001",
+   "name": "BucketCylinderInner",
+   "out_list": [
+    "Shape018"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BucketCylinderInner001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -205.355086,
+       395.972045,
+       110.555053
+      ],
+      "rotation": [
+       -0.264791,
+       0.000613,
+       -0.002234,
+       0.964303
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape018"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -205.355086,
+       395.972045,
+       110.555053
+      ],
+      "rotation": [
+       -0.264791,
+       0.000613,
+       -0.002234,
+       0.964303
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Revolute005",
+    "Slider002"
+   ],
+   "kind": "other",
+   "label": "BucketCylinderOuter001",
+   "name": "BucketCylinderOuter",
+   "out_list": [
+    "Shape022"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BucketCylinderOuter001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -205.403441,
+       417.479906,
+       46.504501
+      ],
+      "rotation": [
+       -0.273196,
+       0.000633,
+       -0.002228,
+       0.961956
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape022"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -205.403441,
+       417.479906,
+       46.504501
+      ],
+      "rotation": [
+       -0.273196,
+       0.000633,
+       -0.002228,
+       0.961956
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Cylindrical002",
+    "Revolute008"
+   ],
+   "kind": "other",
+   "label": "BucketLink004",
+   "name": "BucketLink1",
+   "out_list": [
+    "Shape014"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BucketLink004"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -212.088944,
+       -2.432104,
+       -20.386286
+      ],
+      "rotation": [
+       -0.487513,
+       0.001129,
+       -0.002023,
+       0.873112
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape014"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -212.088944,
+       -2.432104,
+       -20.386286
+      ],
+      "rotation": [
+       -0.487513,
+       0.001129,
+       -0.002023,
+       0.873112
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Cylindrical002",
+    "Cylindrical003",
+    "Revolute006"
+   ],
+   "kind": "other",
+   "label": "BucketLink003",
+   "name": "BucketLink2",
+   "out_list": [
+    "Shape019"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BucketLink003"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -215.534833,
+       -1246.72964,
+       276.477159
+      ],
+      "rotation": [
+       0.916797,
+       -0.002124,
+       0.000925,
+       -0.399348
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape019"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -215.534833,
+       -1246.72964,
+       276.477159
+      ],
+      "rotation": [
+       0.916797,
+       -0.002124,
+       0.000925,
+       -0.399348
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Cylindrical",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      -5.248,
+      -279.099718,
+      331.152955
+     ],
+     "rotation": [
+      0.653281,
+      -0.270598,
+      0.653281,
+      -0.270598
+     ]
+    },
+    "placement2": {
+     "base": [
+      -17.97582,
+      -407.377117,
+      273.864379
+     ],
+     "rotation": [
+      0.5,
+      0.5,
+      -0.5,
+      -0.5
+     ]
+    },
+    "reference1": {
+     "object": "BoomCylinderInner",
+     "subs": [
+      "Edge7",
+      "Edge7"
+     ]
+    },
+    "reference2": {
+     "object": "Boom",
+     "subs": [
+      "Edge53",
+      "Edge53"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Cylindrical",
+   "name": "Cylindrical",
+   "out_list": [
+    "Boom",
+    "BoomCylinderInner"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Cylindrical"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Cylindrical"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -5.248,
+       -279.099718,
+       331.152955
+      ],
+      "rotation": [
+       0.653281,
+       -0.270598,
+       0.653281,
+       -0.270598
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -17.97582,
+       -407.377117,
+       273.864379
+      ],
+      "rotation": [
+       0.5,
+       0.5,
+       -0.5,
+       -0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BoomCylinderInner",
+      "subs": [
+       "Edge7",
+       "Edge7"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Boom",
+      "subs": [
+       "Edge53",
+       "Edge53"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Cylindrical",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      -7.2,
+      -669.12,
+      324.36
+     ],
+     "rotation": [
+      0.276289,
+      0.650895,
+      0.276289,
+      0.650895
+     ]
+    },
+    "placement2": {
+     "base": [
+      -9.328,
+      -640.875691,
+      200.519946
+     ],
+     "rotation": [
+      0.645974,
+      -0.287606,
+      0.645974,
+      -0.287606
+     ]
+    },
+    "reference1": {
+     "object": "Stick",
+     "subs": [
+      "Edge57",
+      "Edge57"
+     ]
+    },
+    "reference2": {
+     "object": "StickCylinderInner",
+     "subs": [
+      "Face4",
+      "Face4"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Cylindrical001",
+   "name": "Cylindrical001",
+   "out_list": [
+    "Stick",
+    "StickCylinderInner"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Cylindrical"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Cylindrical001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -7.2,
+       -669.12,
+       324.36
+      ],
+      "rotation": [
+       0.276289,
+       0.650895,
+       0.276289,
+       0.650895
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -9.328,
+       -640.875691,
+       200.519946
+      ],
+      "rotation": [
+       0.645974,
+       -0.287606,
+       0.645974,
+       -0.287606
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Stick",
+      "subs": [
+       "Edge57",
+       "Edge57"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "StickCylinderInner",
+      "subs": [
+       "Face4",
+       "Face4"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Cylindrical",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      -2.9,
+      -1003.615499,
+      157.674521
+     ],
+     "rotation": [
+      0.5,
+      0.5,
+      0.5,
+      0.5
+     ]
+    },
+    "placement2": {
+     "base": [
+      2.781084,
+      -1049.051744,
+      187.81593
+     ],
+     "rotation": [
+      -0.5,
+      -0.5,
+      -0.5,
+      -0.5
+     ]
+    },
+    "reference1": {
+     "object": "BucketLink1",
+     "subs": [
+      "Edge25",
+      "Edge25"
+     ]
+    },
+    "reference2": {
+     "object": "BucketLink2",
+     "subs": [
+      "Face13",
+      "Face13"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Cylindrical002",
+   "name": "Cylindrical002",
+   "out_list": [
+    "BucketLink1",
+    "BucketLink2"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Cylindrical"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Cylindrical002"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -2.9,
+       -1003.615499,
+       157.674521
+      ],
+      "rotation": [
+       0.5,
+       0.5,
+       0.5,
+       0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       2.781084,
+       -1049.051744,
+       187.81593
+      ],
+      "rotation": [
+       -0.5,
+       -0.5,
+       -0.5,
+       -0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BucketLink1",
+      "subs": [
+       "Edge25",
+       "Edge25"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BucketLink2",
+      "subs": [
+       "Face13",
+       "Face13"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Cylindrical",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      0.211998,
+      -1091.566523,
+      289.301811
+     ],
+     "rotation": [
+      0.459229,
+      -0.537688,
+      0.459229,
+      -0.537688
+     ]
+    },
+    "placement2": {
+     "base": [
+      2.781084,
+      -1049.051744,
+      187.81593
+     ],
+     "rotation": [
+      -0.5,
+      -0.5,
+      -0.5,
+      -0.5
+     ]
+    },
+    "reference1": {
+     "object": "BucketCylinderInner",
+     "subs": [
+      "Face3",
+      "Face3"
+     ]
+    },
+    "reference2": {
+     "object": "BucketLink2",
+     "subs": [
+      "Face13",
+      "Face13"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Cylindrical003",
+   "name": "Cylindrical003",
+   "out_list": [
+    "BucketCylinderInner",
+    "BucketLink2"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Cylindrical"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Cylindrical003"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.211998,
+       -1091.566523,
+       289.301811
+      ],
+      "rotation": [
+       0.459229,
+       -0.537688,
+       0.459229,
+       -0.537688
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       2.781084,
+       -1049.051744,
+       187.81593
+      ],
+      "rotation": [
+       -0.5,
+       -0.5,
+       -0.5,
+       -0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BucketCylinderInner",
+      "subs": [
+       "Face3",
+       "Face3"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BucketLink2",
+      "subs": [
+       "Face13",
+       "Face13"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "other",
+   "label": "GroundedJoint",
+   "name": "GroundedJoint",
+   "out_list": [
+    "BasePin"
+   ],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "GroundedJoint"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Ground",
+     "name": "ObjectToGround",
+     "type": "App::PropertyLinkGlobal",
+     "value": {
+      "object": "BasePin"
+     }
+    },
+    {
+     "group": "Ground",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -206.517029,
+       40.255699,
+       364.268005
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "GroundedJoint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "group",
+   "label": "CAD",
+   "name": "Group",
+   "out_list": [
+    "Shape",
+    "Shape001",
+    "Shape012",
+    "Shape013",
+    "Shape014",
+    "Shape015",
+    "Shape016",
+    "Shape017",
+    "Shape018",
+    "Shape019",
+    "Shape020",
+    "Shape021",
+    "Shape022"
+   ],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Group",
+     "type": "App::PropertyLinkList",
+     "value": [
+      {
+       "object": "Shape001"
+      },
+      {
+       "object": "Shape012"
+      },
+      {
+       "object": "Shape013"
+      },
+      {
+       "object": "Shape014"
+      },
+      {
+       "object": "Shape015"
+      },
+      {
+       "object": "Shape016"
+      },
+      {
+       "object": "Shape017"
+      },
+      {
+       "object": "Shape018"
+      },
+      {
+       "object": "Shape019"
+      },
+      {
+       "object": "Shape020"
+      },
+      {
+       "object": "Shape021"
+      },
+      {
+       "object": "Shape022"
+      },
+      {
+       "object": "Shape"
+      }
+     ]
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "CAD"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_GroupTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::DocumentObjectGroup"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly"
+   ],
+   "kind": "group",
+   "label": "Joints",
+   "name": "Joints",
+   "out_list": [
+    "Cylindrical",
+    "Cylindrical001",
+    "Cylindrical002",
+    "Cylindrical003",
+    "GroundedJoint",
+    "Revolute",
+    "Revolute001",
+    "Revolute002",
+    "Revolute003",
+    "Revolute004",
+    "Revolute005",
+    "Revolute006",
+    "Revolute007",
+    "Revolute008",
+    "Slider",
+    "Slider001",
+    "Slider002"
+   ],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Group",
+     "type": "App::PropertyLinkList",
+     "value": [
+      {
+       "object": "GroundedJoint"
+      },
+      {
+       "object": "Revolute"
+      },
+      {
+       "object": "Revolute001"
+      },
+      {
+       "object": "Revolute002"
+      },
+      {
+       "object": "Slider"
+      },
+      {
+       "object": "Cylindrical"
+      },
+      {
+       "object": "Revolute003"
+      },
+      {
+       "object": "Slider001"
+      },
+      {
+       "object": "Revolute004"
+      },
+      {
+       "object": "Cylindrical001"
+      },
+      {
+       "object": "Revolute005"
+      },
+      {
+       "object": "Slider002"
+      },
+      {
+       "object": "Revolute006"
+      },
+      {
+       "object": "Revolute007"
+      },
+      {
+       "object": "Revolute008"
+      },
+      {
+       "object": "Cylindrical002"
+      },
+      {
+       "object": "Cylindrical003"
+      }
+     ]
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Joints"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_GroupTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Assembly::JointGroup"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly"
+   ],
+   "kind": "origin",
+   "label": "Origin",
+   "name": "Origin",
+   "out_list": [
+    "Origin001",
+    "XY_Plane",
+    "XZ_Plane",
+    "X_Axis",
+    "YZ_Plane",
+    "Y_Axis",
+    "Z_Axis"
+   ],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Group",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Origin"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "OriginFeatures",
+     "type": "App::PropertyLinkList",
+     "value": [
+      {
+       "object": "X_Axis"
+      },
+      {
+       "object": "Y_Axis"
+      },
+      {
+       "object": "Z_Axis"
+      },
+      {
+       "object": "XY_Plane"
+      },
+      {
+       "object": "XZ_Plane"
+      },
+      {
+       "object": "YZ_Plane"
+      },
+      {
+       "object": "Origin001"
+      }
+     ]
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Base",
+     "name": "_GroupTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Origin"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Origin"
+   ],
+   "kind": "origin",
+   "label": "Ursprung",
+   "name": "Origin001",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Ursprung"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "Role",
+     "type": "App::PropertyString",
+     "value": "Origin"
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": ""
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Point"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Revolute",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      0.0,
+      59.16,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.707107,
+      0.707107
+     ]
+    },
+    "placement2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.707107,
+      0.707107,
+      0.0,
+      0.0
+     ]
+    },
+    "reference1": {
+     "object": "BasePin",
+     "subs": [
+      "Face1",
+      "Edge2"
+     ]
+    },
+    "reference2": {
+     "object": "Base",
+     "subs": [
+      "Edge107",
+      "Edge107"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Revolute",
+   "name": "Revolute",
+   "out_list": [
+    "Base",
+    "BasePin"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Revolute"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Revolute"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       59.16,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.707107,
+       0.707107
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.707107,
+       0.707107,
+       0.0,
+       0.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BasePin",
+      "subs": [
+       "Face1",
+       "Edge2"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Base",
+      "subs": [
+       "Edge107",
+       "Edge107"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Revolute",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      -32.97582,
+      -255.877117,
+      42.364379
+     ],
+     "rotation": [
+      0.5,
+      0.5,
+      0.5,
+      0.5
+     ]
+    },
+    "placement2": {
+     "base": [
+      -30.0,
+      -80.0,
+      15.0
+     ],
+     "rotation": [
+      -0.5,
+      -0.5,
+      0.5,
+      0.5
+     ]
+    },
+    "reference1": {
+     "object": "Boom",
+     "subs": [
+      "Face1",
+      "Edge5"
+     ]
+    },
+    "reference2": {
+     "object": "Base",
+     "subs": [
+      "Edge61",
+      "Edge61"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Revolute001",
+   "name": "Revolute001",
+   "out_list": [
+    "Base",
+    "Boom"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 45.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": -45.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Revolute"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Revolute001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -32.97582,
+       -255.877117,
+       42.364379
+      ],
+      "rotation": [
+       0.5,
+       0.5,
+       0.5,
+       0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -30.0,
+       -80.0,
+       15.0
+      ],
+      "rotation": [
+       -0.5,
+       -0.5,
+       0.5,
+       0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Boom",
+      "subs": [
+       "Face1",
+       "Edge5"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Base",
+      "subs": [
+       "Edge61",
+       "Edge61"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Revolute",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      -12.24,
+      -144.249783,
+      144.249783
+     ],
+     "rotation": [
+      0.653281,
+      0.270598,
+      0.653281,
+      0.270598
+     ]
+    },
+    "placement2": {
+     "base": [
+      -15.0,
+      -38.044442,
+      94.459258
+     ],
+     "rotation": [
+      0.5,
+      -0.5,
+      0.5,
+      -0.5
+     ]
+    },
+    "reference1": {
+     "object": "BoomCylinderOuter",
+     "subs": [
+      "Edge8",
+      "Edge8"
+     ]
+    },
+    "reference2": {
+     "object": "Base",
+     "subs": [
+      "Edge34",
+      "Edge34"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Revolute002",
+   "name": "Revolute002",
+   "out_list": [
+    "Base",
+    "BoomCylinderOuter"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Revolute"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Revolute002"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -12.24,
+       -144.249783,
+       144.249783
+      ],
+      "rotation": [
+       0.653281,
+       0.270598,
+       0.653281,
+       0.270598
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -15.0,
+       -38.044442,
+       94.459258
+      ],
+      "rotation": [
+       0.5,
+       -0.5,
+       0.5,
+       -0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BoomCylinderOuter",
+      "subs": [
+       "Edge8",
+       "Edge8"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Base",
+      "subs": [
+       "Edge34",
+       "Edge34"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Revolute",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      12.66,
+      -506.596491,
+      35.837211
+     ],
+     "rotation": [
+      0.660141,
+      0.253404,
+      0.660141,
+      0.253404
+     ]
+    },
+    "placement2": {
+     "base": [
+      12.02418,
+      -385.877117,
+      162.364379
+     ],
+     "rotation": [
+      0.5,
+      0.5,
+      -0.5,
+      -0.5
+     ]
+    },
+    "reference1": {
+     "object": "StickCylinderOuter",
+     "subs": [
+      "Face2",
+      "Edge3"
+     ]
+    },
+    "reference2": {
+     "object": "Boom",
+     "subs": [
+      "Edge66",
+      "Edge66"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Revolute003",
+   "name": "Revolute003",
+   "out_list": [
+    "Boom",
+    "StickCylinderOuter"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": -23.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": -48.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Revolute"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Revolute003"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       12.66,
+       -506.596491,
+       35.837211
+      ],
+      "rotation": [
+       0.660141,
+       0.253404,
+       0.660141,
+       0.253404
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       12.02418,
+       -385.877117,
+       162.364379
+      ],
+      "rotation": [
+       0.5,
+       0.5,
+       -0.5,
+       -0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "StickCylinderOuter",
+      "subs": [
+       "Face2",
+       "Edge3"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Boom",
+      "subs": [
+       "Edge66",
+       "Edge66"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Revolute",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      -14.7,
+      -729.503374,
+      315.526645
+     ],
+     "rotation": [
+      0.276289,
+      0.650895,
+      0.276289,
+      0.650895
+     ]
+    },
+    "placement2": {
+     "base": [
+      -17.97582,
+      -590.877117,
+      332.364379
+     ],
+     "rotation": [
+      0.5,
+      0.5,
+      -0.5,
+      -0.5
+     ]
+    },
+    "reference1": {
+     "object": "Stick",
+     "subs": [
+      "Edge41",
+      "Edge41"
+     ]
+    },
+    "reference2": {
+     "object": "Boom",
+     "subs": [
+      "Edge51",
+      "Edge51"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Revolute004",
+   "name": "Revolute004",
+   "out_list": [
+    "Boom",
+    "Stick"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Revolute"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Revolute004"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -14.7,
+       -729.503374,
+       315.526645
+      ],
+      "rotation": [
+       0.276289,
+       0.650895,
+       0.276289,
+       0.650895
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -17.97582,
+       -590.877117,
+       332.364379
+      ],
+      "rotation": [
+       0.5,
+       0.5,
+       -0.5,
+       -0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Stick",
+      "subs": [
+       "Edge41",
+       "Edge41"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Boom",
+      "subs": [
+       "Edge51",
+       "Edge51"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Revolute",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      -7.14,
+      -885.252874,
+      359.79438
+     ],
+     "rotation": [
+      0.704416,
+      -0.061628,
+      0.704416,
+      -0.061628
+     ]
+    },
+    "placement2": {
+     "base": [
+      -7.2,
+      -734.094771,
+      347.624761
+     ],
+     "rotation": [
+      0.276289,
+      0.650895,
+      0.276289,
+      0.650895
+     ]
+    },
+    "reference1": {
+     "object": "BucketCylinderOuter",
+     "subs": [
+      "Face6",
+      "Face6"
+     ]
+    },
+    "reference2": {
+     "object": "Stick",
+     "subs": [
+      "Edge56",
+      "Edge56"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Revolute005",
+   "name": "Revolute005",
+   "out_list": [
+    "BucketCylinderOuter",
+    "Stick"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": -120.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": -145.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Revolute"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Revolute005"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -7.14,
+       -885.252874,
+       359.79438
+      ],
+      "rotation": [
+       0.704416,
+       -0.061628,
+       0.704416,
+       -0.061628
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -7.2,
+       -734.094771,
+       347.624761
+      ],
+      "rotation": [
+       0.276289,
+       0.650895,
+       0.276289,
+       0.650895
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BucketCylinderOuter",
+      "subs": [
+       "Face6",
+       "Face6"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Stick",
+      "subs": [
+       "Edge56",
+       "Edge56"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Revolute",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      -12.218916,
+      -987.051748,
+      204.815944
+     ],
+     "rotation": [
+      -0.707107,
+      0.0,
+      -0.707107,
+      0.0
+     ]
+    },
+    "placement2": {
+     "base": [
+      -14.7,
+      -1006.044788,
+      276.187529
+     ],
+     "rotation": [
+      0.276289,
+      0.650895,
+      0.276289,
+      0.650895
+     ]
+    },
+    "reference1": {
+     "object": "BucketLink2",
+     "subs": [
+      "Edge49",
+      "Edge49"
+     ]
+    },
+    "reference2": {
+     "object": "Stick",
+     "subs": [
+      "Face20",
+      "Edge10"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Revolute006",
+   "name": "Revolute006",
+   "out_list": [
+    "BucketLink2",
+    "Stick"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Revolute"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Revolute006"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -12.218916,
+       -987.051748,
+       204.815944
+      ],
+      "rotation": [
+       -0.707107,
+       0.0,
+       -0.707107,
+       0.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -14.7,
+       -1006.044788,
+       276.187529
+      ],
+      "rotation": [
+       0.276289,
+       0.650895,
+       0.276289,
+       0.650895
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BucketLink2",
+      "subs": [
+       "Edge49",
+       "Edge49"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Stick",
+      "subs": [
+       "Face20",
+       "Edge10"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Revolute",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      -9.9,
+      -1088.34,
+      200.94
+     ],
+     "rotation": [
+      0.5,
+      0.5,
+      0.5,
+      0.5
+     ]
+    },
+    "placement2": {
+     "base": [
+      -14.7,
+      -1031.216782,
+      271.858471
+     ],
+     "rotation": [
+      0.276289,
+      0.650895,
+      0.276289,
+      0.650895
+     ]
+    },
+    "reference1": {
+     "object": "Bucket",
+     "subs": [
+      "Edge139",
+      "Edge139"
+     ]
+    },
+    "reference2": {
+     "object": "Stick",
+     "subs": [
+      "Face20",
+      "Edge6"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Revolute007",
+   "name": "Revolute007",
+   "out_list": [
+    "Bucket",
+    "Stick"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Revolute"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Revolute007"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -9.9,
+       -1088.34,
+       200.94
+      ],
+      "rotation": [
+       0.5,
+       0.5,
+       0.5,
+       0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -14.7,
+       -1031.216782,
+       271.858471
+      ],
+      "rotation": [
+       0.276289,
+       0.650895,
+       0.276289,
+       0.650895
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Bucket",
+      "subs": [
+       "Edge139",
+       "Edge139"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Stick",
+      "subs": [
+       "Face20",
+       "Edge6"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Revolute",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      -9.9,
+      -1018.98,
+      112.2
+     ],
+     "rotation": [
+      0.5,
+      0.5,
+      0.5,
+      0.5
+     ]
+    },
+    "placement2": {
+     "base": [
+      -9.9,
+      -1099.44,
+      240.39
+     ],
+     "rotation": [
+      0.5,
+      0.5,
+      0.5,
+      0.5
+     ]
+    },
+    "reference1": {
+     "object": "BucketLink1",
+     "subs": [
+      "Face11",
+      "Face11"
+     ]
+    },
+    "reference2": {
+     "object": "Bucket",
+     "subs": [
+      "Face65",
+      "Edge2"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Revolute008",
+   "name": "Revolute008",
+   "out_list": [
+    "Bucket",
+    "BucketLink1"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Revolute"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Revolute008"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -9.9,
+       -1018.98,
+       112.2
+      ],
+      "rotation": [
+       0.5,
+       0.5,
+       0.5,
+       0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -9.9,
+       -1099.44,
+       240.39
+      ],
+      "rotation": [
+       0.5,
+       0.5,
+       0.5,
+       0.5
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BucketLink1",
+      "subs": [
+       "Face11",
+       "Face11"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "Bucket",
+      "subs": [
+       "Face65",
+       "Edge2"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Boom",
+    "Group"
+   ],
+   "kind": "part_feature",
+   "label": "Boom",
+   "name": "Shape",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Boom"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 172924.36697,
+    "bbox": [
+     -32.97582,
+     -605.377117,
+     27.864379,
+     27.02418,
+     -241.377117,
+     346.864379
+    ],
+    "edges": 87,
+    "element_map_size": 0,
+    "faces": 31,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 58,
+    "volume": 1204575.248752
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Base",
+    "Group"
+   ],
+   "kind": "part_feature",
+   "label": "Base",
+   "name": "Shape001",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Base"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 52655.5088,
+    "bbox": [
+     -44.0,
+     -94.481879,
+     0.0,
+     44.0,
+     25.0,
+     106.0
+    ],
+    "edges": 122,
+    "element_map_size": 0,
+    "faces": 44,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 78,
+    "volume": 241280.939512
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "BasePin",
+    "Group"
+   ],
+   "kind": "part_feature",
+   "label": "BasePin",
+   "name": "Shape012",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BasePin"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 6911.503838,
+    "bbox": [
+     -10.0,
+     49.16,
+     0.0,
+     10.0,
+     69.16,
+     100.0
+    ],
+    "edges": 3,
+    "element_map_size": 0,
+    "faces": 3,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 2,
+    "volume": 31415.926536
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Group",
+    "Stick"
+   ],
+   "kind": "part_feature",
+   "label": "Stick",
+   "name": "Shape013",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Stick"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 63214.458151,
+    "bbox": [
+     -14.7,
+     -1044.516782,
+     258.558471,
+     15.3,
+     -656.12,
+     368.394018
+    ],
+    "edges": 66,
+    "element_map_size": 0,
+    "faces": 24,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 44,
+    "volume": 333942.178607
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "BucketLink1",
+    "Group"
+   ],
+   "kind": "part_feature",
+   "label": "BucketLink1",
+   "name": "Shape014",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BucketLink1"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 6947.397983,
+    "bbox": [
+     -9.9,
+     -1026.98,
+     104.2,
+     20.1,
+     -995.615499,
+     165.674521
+    ],
+    "edges": 54,
+    "element_map_size": 0,
+    "faces": 22,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 34,
+    "volume": 12304.424386
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Bucket",
+    "Group"
+   ],
+   "kind": "part_feature",
+   "label": "Bucket",
+   "name": "Shape015",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Bucket"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 70112.200007,
+    "bbox": [
+     -46.4,
+     -1189.48751,
+     123.863762,
+     56.6,
+     -1080.84,
+     247.889983
+    ],
+    "edges": 247,
+    "element_map_size": 0,
+    "faces": 97,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 152,
+    "volume": 58312.053574
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "BoomCylinderInner",
+    "Group"
+   ],
+   "kind": "part_feature",
+   "label": "BoomCylinderInner",
+   "name": "Shape016",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BoomCylinderInner"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 8569.711926,
+    "bbox": [
+     -5.248,
+     -291.099718,
+     202.954495,
+     9.752,
+     -150.901258,
+     343.152955
+    ],
+    "edges": 9,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 6,
+    "volume": 22989.416924
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Group",
+    "StickCylinderInner"
+   ],
+   "kind": "part_feature",
+   "label": "StickCylinderInner",
+   "name": "Shape017",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "StickCylinderInner"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 8569.711926,
+    "bbox": [
+     -9.328,
+     -652.875691,
+     78.762481,
+     5.672,
+     -506.58762,
+     212.519946
+    ],
+    "edges": 9,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 6,
+    "volume": 22989.416924
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "BucketCylinderInner",
+    "Group"
+   ],
+   "kind": "part_feature",
+   "label": "BucketCylinderInner",
+   "name": "Shape018",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BucketCylinderInner"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 5335.389,
+    "bbox": [
+     -7.288,
+     -1100.566523,
+     280.301811,
+     7.712,
+     -917.877236,
+     320.181682
+    ],
+    "edges": 9,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 6,
+    "volume": 9045.578366
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "BucketLink2",
+    "Group"
+   ],
+   "kind": "part_feature",
+   "label": "BucketLink2",
+   "name": "Shape019",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BucketLink2"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 8895.053813,
+    "bbox": [
+     -21.218916,
+     -1057.051744,
+     179.81593,
+     26.781084,
+     -979.051727,
+     217.38103
+    ],
+    "edges": 57,
+    "element_map_size": 0,
+    "faces": 23,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 38,
+    "volume": 17079.259884
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "BoomCylinderOuter",
+    "Group"
+   ],
+   "kind": "part_feature",
+   "label": "BoomCylinderOuter",
+   "name": "Shape020",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BoomCylinderOuter"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 21055.652114,
+    "bbox": [
+     -12.24,
+     -272.236111,
+     129.249783,
+     17.76,
+     -129.249783,
+     272.236111
+    ],
+    "edges": 12,
+    "element_map_size": 0,
+    "faces": 8,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 8,
+    "volume": 48197.411441
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Group",
+    "StickCylinderOuter"
+   ],
+   "kind": "part_feature",
+   "label": "StickCylinderOuter",
+   "name": "Shape021",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "StickCylinderOuter"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 21055.652114,
+    "bbox": [
+     -17.34,
+     -640.365562,
+     20.837211,
+     12.66,
+     -491.596491,
+     157.689993
+    ],
+    "edges": 12,
+    "element_map_size": 0,
+    "faces": 8,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 8,
+    "volume": 48197.411441
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "BucketCylinderOuter",
+    "Group"
+   ],
+   "kind": "part_feature",
+   "label": "BucketCylinderOuter",
+   "name": "Shape022",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "BucketCylinderOuter"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "0.15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 11524.316807,
+    "bbox": [
+     -7.14,
+     -1054.696889,
+     324.191695,
+     7.86,
+     -875.252874,
+     369.79438
+    ],
+    "edges": 18,
+    "element_map_size": 0,
+    "faces": 10,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 12,
+    "volume": 16011.734991
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Slider",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      2.252,
+      -213.158949,
+      265.212186
+     ],
+     "rotation": [
+      0.0,
+      -0.382683,
+      0.92388,
+      0.0
+     ]
+    },
+    "placement2": {
+     "base": [
+      2.76,
+      -265.165043,
+      265.165043
+     ],
+     "rotation": [
+      0.0,
+      -0.382683,
+      0.92388,
+      0.0
+     ]
+    },
+    "reference1": {
+     "object": "BoomCylinderInner",
+     "subs": [
+      "Face1",
+      "Face1"
+     ]
+    },
+    "reference2": {
+     "object": "BoomCylinderOuter",
+     "subs": [
+      "Face1",
+      "Edge3"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Slider",
+   "name": "Slider",
+   "out_list": [
+    "BoomCylinderInner",
+    "BoomCylinderOuter"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Slider"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Slider"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 80.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 52.008597
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       2.252,
+       -213.158949,
+       265.212186
+      ],
+      "rotation": [
+       0.0,
+       -0.382683,
+       0.92388,
+       0.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       2.76,
+       -265.165043,
+       265.165043
+      ],
+      "rotation": [
+       0.0,
+       -0.382683,
+       0.92388,
+       0.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BoomCylinderInner",
+      "subs": [
+       "Face1",
+       "Face1"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BoomCylinderOuter",
+      "subs": [
+       "Face1",
+       "Edge3"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Slider",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      -1.828,
+      -571.574218,
+      138.120619
+     ],
+     "rotation": [
+      0.0,
+      -0.406737,
+      0.913545,
+      0.0
+     ]
+    },
+    "placement2": {
+     "base": [
+      -2.34,
+      -633.674256,
+      150.258544
+     ],
+     "rotation": [
+      0.0,
+      -0.406737,
+      0.913545,
+      0.0
+     ]
+    },
+    "reference1": {
+     "object": "StickCylinderInner",
+     "subs": [
+      "Face1",
+      "Face1"
+     ]
+    },
+    "reference2": {
+     "object": "StickCylinderOuter",
+     "subs": [
+      "Face6",
+      "Edge3"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Slider001",
+   "name": "Slider001",
+   "out_list": [
+    "StickCylinderInner",
+    "StickCylinderOuter"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Slider"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Slider001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 80.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 63.277216
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -1.828,
+       -571.574218,
+       138.120619
+      ],
+      "rotation": [
+       0.0,
+       -0.406737,
+       0.913545,
+       0.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -2.34,
+       -633.674256,
+       150.258544
+      ],
+      "rotation": [
+       0.0,
+       -0.406737,
+       0.913545,
+       0.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "StickCylinderInner",
+      "subs": [
+       "Face1",
+       "Face1"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "StickCylinderOuter",
+      "subs": [
+       "Face6",
+       "Edge3"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": {
+    "angle": {
+     "unit": "Angle",
+     "value": 0.0
+    },
+    "distance": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "distance2": {
+     "unit": "Length",
+     "value": 0.0
+    },
+    "joint_type": "Slider",
+    "offset1": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "offset2": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    "placement1": {
+     "base": [
+      0.212,
+      -1000.724363,
+      303.689796
+     ],
+     "rotation": [
+      0.0,
+      -0.760406,
+      0.649448,
+      0.0
+     ]
+    },
+    "placement2": {
+     "base": [
+      0.36,
+      -974.048605,
+      344.137297
+     ],
+     "rotation": [
+      0.0,
+      -0.766044,
+      0.642788,
+      0.0
+     ]
+    },
+    "reference1": {
+     "object": "BucketCylinderInner",
+     "subs": [
+      "Face1",
+      "Face1"
+     ]
+    },
+    "reference2": {
+     "object": "BucketCylinderOuter",
+     "subs": [
+      "Face1",
+      "Face1"
+     ]
+    }
+   },
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Joints"
+   ],
+   "kind": "joint",
+   "label": "Slider002",
+   "name": "Slider002",
+   "out_list": [
+    "BucketCylinderInner",
+    "BucketCylinderOuter"
+   ],
+   "properties": [
+    {
+     "group": "Joint",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMax",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "AngleMin",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Detach1",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Detach2",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Joint",
+     "name": "Distance",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint",
+     "name": "Distance2",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMax",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableAngleMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMax",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Limits",
+     "name": "EnableLengthMin",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Fixed",
+      "Revolute",
+      "Cylindrical",
+      "Slider",
+      "Ball",
+      "Distance",
+      "Parallel",
+      "Perpendicular",
+      "Angle",
+      "RackPinion",
+      "Screw",
+      "Gears",
+      "Belt"
+     ],
+     "group": "Joint",
+     "name": "JointType",
+     "type": "App::PropertyEnumeration",
+     "value": "Slider"
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Slider002"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMax",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Limits",
+     "name": "LengthMin",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Offset1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Offset2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Placement1",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.212,
+       -1000.724363,
+       303.689796
+      ],
+      "rotation": [
+       0.0,
+       -0.760406,
+       0.649448,
+       0.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Placement2",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.36,
+       -974.048605,
+       344.137297
+      ],
+      "rotation": [
+       0.0,
+       -0.766044,
+       0.642788,
+       0.0
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 1",
+     "name": "Reference1",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BucketCylinderInner",
+      "subs": [
+       "Face1",
+       "Face1"
+      ]
+     }
+    },
+    {
+     "group": "Joint Connector 2",
+     "name": "Reference2",
+     "type": "App::PropertyXLinkSub",
+     "value": {
+      "object": "BucketCylinderOuter",
+      "subs": [
+       "Face1",
+       "Face1"
+      ]
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Suppressed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": "Joint",
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::FeaturePython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Cylindrical001",
+    "Revolute004",
+    "Revolute005",
+    "Revolute006",
+    "Revolute007"
+   ],
+   "kind": "other",
+   "label": "Stick001",
+   "name": "Stick",
+   "out_list": [
+    "Shape013"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Stick001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -205.468867,
+       390.407572,
+       208.420868
+      ],
+      "rotation": [
+       -0.201771,
+       0.000467,
+       -0.002269,
+       0.97943
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape013"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -205.468867,
+       390.407572,
+       208.420868
+      ],
+      "rotation": [
+       -0.201771,
+       0.000467,
+       -0.002269,
+       0.97943
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Cylindrical001",
+    "Slider001"
+   ],
+   "kind": "other",
+   "label": "StickCylinderInner001",
+   "name": "StickCylinderInner",
+   "out_list": [
+    "Shape017"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "StickCylinderInner001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -203.708961,
+       310.952162,
+       236.711256
+      ],
+      "rotation": [
+       -0.303362,
+       0.000703,
+       -0.002207,
+       0.952873
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape017"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -203.708961,
+       310.952162,
+       236.711256
+      ],
+      "rotation": [
+       -0.303362,
+       0.000703,
+       -0.002207,
+       0.952873
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Assembly",
+    "Revolute003",
+    "Slider001"
+   ],
+   "kind": "other",
+   "label": "StickCylinderOuter001",
+   "name": "StickCylinderOuter",
+   "out_list": [
+    "Shape021"
+   ],
+   "properties": [
+    {
+     "group": " Link",
+     "name": "ColoredElements",
+     "type": "App::PropertyLinkSubHidden",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "ElementCount",
+     "type": "App::PropertyIntegerConstraint",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "ElementList",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "StickCylinderOuter001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkClaimChild",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Disabled",
+      "Enabled",
+      "Owned",
+      "Tracking"
+     ],
+     "group": " Link",
+     "name": "LinkCopyOnChange",
+     "type": "App::PropertyEnumeration",
+     "value": "Disabled"
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeGroup",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeSource",
+     "type": "App::PropertyXLink",
+     "value": null
+    },
+    {
+     "group": " Link",
+     "name": "LinkCopyOnChangeTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkExecute",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": " Link",
+     "name": "LinkPlacement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -203.027058,
+       347.623248,
+       221.921805
+      ],
+      "rotation": [
+       -0.303362,
+       0.000703,
+       -0.002207,
+       0.952873
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "LinkTransform",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": " Link",
+     "name": "LinkedObject",
+     "type": "App::PropertyXLink",
+     "value": {
+      "object": "Shape021"
+     }
+    },
+    {
+     "group": " Link",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       -203.027058,
+       347.623248,
+       221.921805
+      ],
+      "rotation": [
+       -0.303362,
+       0.000703,
+       -0.002207,
+       0.952873
+      ]
+     }
+    },
+    {
+     "group": " Link",
+     "name": "PlacementList",
+     "type": "App::PropertyPlacementList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "Scale",
+     "type": "App::PropertyFloat",
+     "value": 1.0
+    },
+    {
+     "group": " Link",
+     "name": "ScaleList",
+     "type": "App::PropertyVectorList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "ScaleVector",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    },
+    {
+     "group": " Link",
+     "name": "ShowElement",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": " Link",
+     "name": "VisibilityList",
+     "type": "App::PropertyBoolList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_ChildCache",
+     "type": "App::PropertyLinkList",
+     "value": []
+    },
+    {
+     "group": " Link",
+     "name": "_LinkOwner",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": " Link",
+     "name": "_LinkTouched",
+     "type": "App::PropertyBool",
+     "value": false
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Link"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Origin"
+   ],
+   "kind": "origin",
+   "label": "XY-plane",
+   "name": "XY_Plane",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "XY-plane"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "Role",
+     "type": "App::PropertyString",
+     "value": "XY_Plane"
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": ""
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Plane"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Origin"
+   ],
+   "kind": "origin",
+   "label": "XZ-plane",
+   "name": "XZ_Plane",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "XZ-plane"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.707107,
+       0.0,
+       0.0,
+       0.707107
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "Role",
+     "type": "App::PropertyString",
+     "value": "XZ_Plane"
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": ""
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Plane"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Origin"
+   ],
+   "kind": "origin",
+   "label": "X-axis",
+   "name": "X_Axis",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "X-axis"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "Role",
+     "type": "App::PropertyString",
+     "value": "X_Axis"
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": ""
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Line"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Origin"
+   ],
+   "kind": "origin",
+   "label": "YZ-plane",
+   "name": "YZ_Plane",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "YZ-plane"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.5,
+       0.5,
+       0.5,
+       0.5
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "Role",
+     "type": "App::PropertyString",
+     "value": "YZ_Plane"
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": ""
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Plane"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Origin"
+   ],
+   "kind": "origin",
+   "label": "Y-axis",
+   "name": "Y_Axis",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Y-axis"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.5,
+       0.5,
+       0.5,
+       0.5
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "Role",
+     "type": "App::PropertyString",
+     "value": "Y_Axis"
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": ""
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Line"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Origin"
+   ],
+   "kind": "origin",
+   "label": "Z-axis",
+   "name": "Z_Axis",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Z-axis"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.5,
+       -0.5,
+       0.5,
+       0.5
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "Role",
+     "type": "App::PropertyString",
+     "value": "Z_Axis"
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": ""
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "App::Line"
+  }
+ ],
+ "paging": {
+  "page": 0,
+  "page_size": 54,
+  "pages": 1,
+  "total": 54
+ },
+ "schema": "agentcore.state/1"
+}

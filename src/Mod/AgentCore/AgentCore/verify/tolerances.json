@@ -1,0 +1,32 @@
+{
+  "schema": "agentcore.verify.tolerances/1",
+  "note": "Do not hard-code tolerances in checks. Values are millimetres, mm^3 or relative fractions. per_os entries override default (platform.system()). thickness.* values were measured on the analytic fixtures; see test_verify_thickness.py.",
+  "default": {
+    "linear_mm": 1e-06,
+    "volume_rel": 1e-06,
+    "area_rel": 1e-06,
+    "com_mm": 1e-06,
+    "mass_rel": 1e-06,
+    "interference_volume_mm3": 1e-06,
+    "clearance_abs_mm": 1e-06,
+    "thickness_abs_mm": 0.0001,
+    "thickness_rel": 1e-05
+  },
+  "per_os": {
+    "Darwin": {},
+    "Linux": {},
+    "Windows": {}
+  },
+  "thickness_measured": {
+    "note": "Measured on macOS arm64, OCCT of the baseline build b4fcc8e, samples=5 and 9. thickness_abs_mm is set ~1e11 above the measured error to absorb cross-OS float differences; the check is exact for plates, tubes, shells and sphere shells because rays are normal to both walls. No claim is made for freeform or non-parallel walls.",
+    "max_abs_error_mm": 1.6e-15,
+    "cases": [
+      "plate",
+      "plate_thin",
+      "tube",
+      "shell",
+      "sphere_shell",
+      "box"
+    ]
+  }
+}

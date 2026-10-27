@@ -1,0 +1,303 @@
+[
+ {
+  "id": "block_pad_length",
+  "fixture": "built_partdesign_block",
+  "question": "What is the length of the Pad feature, in mm?",
+  "kind": "number",
+  "truth": 6.0
+ },
+ {
+  "id": "block_pad_alias",
+  "fixture": "built_partdesign_block",
+  "question": "Which spreadsheet alias drives the Pad's Length through an expression? Give the alias name only.",
+  "kind": "string",
+  "truth": "thickness"
+ },
+ {
+  "id": "block_cell_b1",
+  "fixture": "built_partdesign_block",
+  "question": "What is the value of spreadsheet cell B1 of the sheet 'Params', in mm (number only)?",
+  "kind": "number",
+  "truth": 6.0
+ },
+ {
+  "id": "block_varset_vars",
+  "fixture": "built_partdesign_block",
+  "question": "List the user variables defined in the VarSet named 'Vars'.",
+  "kind": "set",
+  "truth": [
+   "Count",
+   "HoleRadius"
+  ]
+ },
+ {
+  "id": "block_body_tip",
+  "fixture": "built_partdesign_block",
+  "question": "Which feature is the Tip of the Body? Give its object name.",
+  "kind": "string",
+  "truth": "Fillet"
+ },
+ {
+  "id": "block_body_features",
+  "fixture": "built_partdesign_block",
+  "question": "List the object names of everything in the Body's Group (excluding the Origin).",
+  "kind": "set",
+  "truth": [
+   "Sketch",
+   "Pad",
+   "HoleSketch",
+   "Pocket",
+   "Fillet"
+  ]
+ },
+ {
+  "id": "block_fillet_radius",
+  "fixture": "built_partdesign_block",
+  "question": "What is the Fillet's radius in mm?",
+  "kind": "number",
+  "truth": 1.0
+ },
+ {
+  "id": "block_sketch_full",
+  "fixture": "built_partdesign_block",
+  "question": "Is the sketch named 'Sketch' fully constrained? Answer true or false.",
+  "kind": "bool",
+  "truth": true
+ },
+ {
+  "id": "block_body_volume",
+  "fixture": "built_partdesign_block",
+  "question": "What is the volume of the Body's final solid, in cubic mm?",
+  "kind": "number",
+  "truth": 3475.75222
+ },
+ {
+  "id": "block_fillet_faces",
+  "fixture": "built_partdesign_block",
+  "question": "How many faces does the Fillet feature's shape have?",
+  "kind": "int",
+  "truth": 8
+ },
+ {
+  "id": "block_pad_inlist",
+  "fixture": "built_partdesign_block",
+  "question": "Which objects directly depend on (link to) the object 'Pad'? List their names.",
+  "kind": "set",
+  "truth": [
+   "Body",
+   "HoleSketch",
+   "Pocket"
+  ]
+ },
+ {
+  "id": "block_pocket_type",
+  "fixture": "built_partdesign_block",
+  "question": "What is the Pocket feature's Type setting (its enumeration value)?",
+  "kind": "string",
+  "truth": "ThroughAll"
+ },
+ {
+  "id": "block_holesketch_support",
+  "fixture": "built_partdesign_block",
+  "question": "To which object is the sketch 'HoleSketch' attached? Give the object name.",
+  "kind": "string",
+  "truth": "Pad"
+ },
+ {
+  "id": "sk_under_dof",
+  "fixture": "built_sketch_states",
+  "question": "How many degrees of freedom remain in the sketch 'Under'?",
+  "kind": "int",
+  "truth": 14
+ },
+ {
+  "id": "sk_redundant_sketch",
+  "fixture": "built_sketch_states",
+  "question": "Which sketch has redundant constraints? Give its name.",
+  "kind": "string",
+  "truth": "Over"
+ },
+ {
+  "id": "sk_redundant_ids",
+  "fixture": "built_sketch_states",
+  "question": "List the redundant constraint numbers the solver reports for sketch 'Over' (as reported by FreeCAD, 1-based).",
+  "kind": "set",
+  "truth": [
+   3,
+   4
+  ]
+ },
+ {
+  "id": "sk_under_geometry",
+  "fixture": "built_sketch_states",
+  "question": "How many geometry elements does the sketch 'Under' contain?",
+  "kind": "int",
+  "truth": 5
+ },
+ {
+  "id": "sk_full_constraints",
+  "fixture": "built_sketch_states",
+  "question": "How many constraints does the sketch 'Full' have?",
+  "kind": "int",
+  "truth": 11
+ },
+ {
+  "id": "sk_fully_constrained_set",
+  "fixture": "built_sketch_states",
+  "question": "List the names of all sketches that are fully constrained.",
+  "kind": "set",
+  "truth": [
+   "Full"
+  ]
+ },
+ {
+  "id": "td_template_file",
+  "fixture": "built_techdraw",
+  "question": "What is the file name (basename only) of the drawing template used by the page 'Page'?",
+  "kind": "string",
+  "truth": "A4_Landscape_blank.svg"
+ },
+ {
+  "id": "td_view_count",
+  "fixture": "built_techdraw",
+  "question": "How many items (views and dimensions) are on the page 'Page'?",
+  "kind": "int",
+  "truth": 3
+ },
+ {
+  "id": "td_dimension_text",
+  "fixture": "built_techdraw",
+  "question": "What text does the dimension 'Dimension' display?",
+  "kind": "string",
+  "truth": "40.00 mm"
+ },
+ {
+  "id": "td_topview_source",
+  "fixture": "built_techdraw",
+  "question": "Which 3D object is the source of the drawing view 'TopView'? Give its name.",
+  "kind": "string",
+  "truth": "Cut"
+ },
+ {
+  "id": "td_cut_volume",
+  "fixture": "built_techdraw",
+  "question": "What is the volume of the object 'Cut' in cubic mm?",
+  "kind": "number",
+  "truth": 9497.345175
+ },
+ {
+  "id": "td_cyl_radius",
+  "fixture": "built_techdraw",
+  "question": "What is the radius of the cylinder 'Cyl' in mm?",
+  "kind": "number",
+  "truth": 4.0
+ },
+ {
+  "id": "crank_feature_count",
+  "fixture": "upstream_crank",
+  "question": "How many objects of type Part::Feature are in the document?",
+  "kind": "int",
+  "truth": 8
+ },
+ {
+  "id": "crank_largest_volume",
+  "fixture": "upstream_crank",
+  "question": "Which object has the solid with the largest volume? Give its name.",
+  "kind": "string",
+  "truth": "Shape001"
+ },
+ {
+  "id": "crank_object_count",
+  "fixture": "upstream_crank",
+  "question": "How many objects does the document contain in total?",
+  "kind": "int",
+  "truth": 16
+ },
+ {
+  "id": "crank_shape001_xsize",
+  "fixture": "upstream_crank",
+  "question": "What is the extent of object 'Shape001' along the X axis (bounding box XMax - XMin), in mm?",
+  "kind": "number",
+  "truth": 25.0
+ },
+ {
+  "id": "crank_shape005_faces",
+  "fixture": "upstream_crank",
+  "question": "How many faces does the shape of 'Shape005' have?",
+  "kind": "int",
+  "truth": 6
+ },
+ {
+  "id": "pad_pad001_length",
+  "fixture": "upstream_padtest",
+  "question": "What is the Length of the feature 'Pad001', in mm?",
+  "kind": "number",
+  "truth": 10.0
+ },
+ {
+  "id": "pad_body_tip",
+  "fixture": "upstream_padtest",
+  "question": "Which feature is the Tip of the Body? Give its object name.",
+  "kind": "string",
+  "truth": "Pad002"
+ },
+ {
+  "id": "pad_body_volume",
+  "fixture": "upstream_padtest",
+  "question": "What is the volume of the Body's final solid, in cubic mm?",
+  "kind": "number",
+  "truth": 269462.847857
+ },
+ {
+  "id": "pad_sketch002_support",
+  "fixture": "upstream_padtest",
+  "question": "To which object is 'Sketch002' attached? Give the object name.",
+  "kind": "string",
+  "truth": "DatumPlane001"
+ },
+ {
+  "id": "pad_sketch002_full",
+  "fixture": "upstream_padtest",
+  "question": "Is 'Sketch002' fully constrained? Answer true or false.",
+  "kind": "bool",
+  "truth": false
+ },
+ {
+  "id": "asm_revolute_count",
+  "fixture": "upstream_assembly_example",
+  "question": "How many joints of type Revolute does the assembly have?",
+  "kind": "int",
+  "truth": 9
+ },
+ {
+  "id": "asm_grounded",
+  "fixture": "upstream_assembly_example",
+  "question": "Which object is grounded in the assembly? Give the grounded object's name.",
+  "kind": "string",
+  "truth": "BasePin"
+ },
+ {
+  "id": "asm_joint_count",
+  "fixture": "upstream_assembly_example",
+  "question": "How many joints (not counting the grounding joint) does the assembly have?",
+  "kind": "int",
+  "truth": 16
+ },
+ {
+  "id": "asm_slider_refs",
+  "fixture": "upstream_assembly_example",
+  "question": "Which two objects does the joint 'Slider' connect? Give the names of its two referenced objects.",
+  "kind": "set",
+  "truth": [
+   "BoomCylinderInner",
+   "BoomCylinderOuter"
+  ]
+ },
+ {
+  "id": "asm_shape013_label",
+  "fixture": "upstream_assembly_example",
+  "question": "What is the Label of the object named 'Shape013'?",
+  "kind": "string",
+  "truth": "Stick"
+ }
+]
