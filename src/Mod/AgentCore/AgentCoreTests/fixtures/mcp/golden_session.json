@@ -1,0 +1,699 @@
+{
+ "change_set": {
+  "added": [
+   "Hole",
+   "Plate"
+  ],
+  "modified": [
+   {
+    "name": "Box",
+    "properties": [
+     "Length"
+    ]
+   }
+  ],
+  "removed": [],
+  "schema": "mcp-stub-diff/1"
+ },
+ "document": {
+  "document": {
+   "label": "box",
+   "meta": {
+    "Comment": "",
+    "Company": "",
+    "CreatedBy": "",
+    "License": "All rights reserved",
+    "LicenseURL": "https://en.wikipedia.org/wiki/All_rights_reserved",
+    "UnitSystem": "Standard (mm, kg, s, \u00b0)"
+   },
+   "name": "box",
+   "object_count": 3,
+   "roots": [
+    "Plate"
+   ]
+  },
+  "objects": [
+   {
+    "detail": null,
+    "expressions": [],
+    "in_list": [
+     "Plate"
+    ],
+    "kind": "part_feature",
+    "label": "Box",
+    "name": "Box",
+    "out_list": [],
+    "properties": [
+     {
+      "enum": [
+       "Engine 3D",
+       "Engine Plane",
+       "Engine Line",
+       "Engine Point"
+      ],
+      "group": "Attachment",
+      "name": "AttacherEngine",
+      "type": "App::PropertyEnumeration",
+      "value": "Engine 3D"
+     },
+     {
+      "group": "Attachment",
+      "name": "AttacherType",
+      "type": "App::PropertyString",
+      "value": "Attacher::AttachEngine3D"
+     },
+     {
+      "group": "Attachment",
+      "name": "AttachmentOffset",
+      "type": "App::PropertyPlacement",
+      "value": {
+       "base": [
+        0.0,
+        0.0,
+        0.0
+       ],
+       "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+       ]
+      }
+     },
+     {
+      "group": "Attachment",
+      "name": "AttachmentSupport",
+      "type": "App::PropertyLinkSubList",
+      "value": []
+     },
+     {
+      "group": "Box",
+      "name": "Height",
+      "type": "App::PropertyLength",
+      "value": {
+       "unit": "Length",
+       "value": 30.0
+      }
+     },
+     {
+      "group": "Base",
+      "name": "Label",
+      "type": "App::PropertyString",
+      "value": "Box"
+     },
+     {
+      "group": "Base",
+      "name": "Label2",
+      "type": "App::PropertyString",
+      "value": ""
+     },
+     {
+      "group": "Box",
+      "name": "Length",
+      "type": "App::PropertyLength",
+      "value": {
+       "unit": "Length",
+       "value": 30.0
+      }
+     },
+     {
+      "enum": [
+       "Deactivated",
+       "Translate",
+       "ObjectXY",
+       "ObjectXZ",
+       "ObjectYZ",
+       "FlatFace",
+       "TangentPlane",
+       "NormalToEdge",
+       "FrenetNB",
+       "FrenetTN",
+       "FrenetTB",
+       "Concentric",
+       "SectionOfRevolution",
+       "ThreePointsPlane",
+       "ThreePointsNormal",
+       "Folding",
+       "ObjectX",
+       "ObjectY",
+       "ObjectZ",
+       "AxisOfCurvature",
+       "Directrix1",
+       "Directrix2",
+       "Asymptote1",
+       "Asymptote2",
+       "Tangent",
+       "Normal",
+       "Binormal",
+       "TangentU",
+       "TangentV",
+       "TwoPointLine",
+       "IntersectionLine",
+       "ProximityLine",
+       "ObjectOrigin",
+       "Focus1",
+       "Focus2",
+       "OnEdge",
+       "CenterOfCurvature",
+       "CenterOfMass",
+       "IntersectionPoint",
+       "Vertex",
+       "ProximityPoint1",
+       "ProximityPoint2",
+       "AxisOfInertia1",
+       "AxisOfInertia2",
+       "AxisOfInertia3",
+       "InertialCS",
+       "FaceNormal",
+       "OZX",
+       "OZY",
+       "OXY",
+       "OXZ",
+       "OYZ",
+       "OYX",
+       "ParallelPlane",
+       "MidPoint",
+       "MidPlane"
+      ],
+      "group": "Attachment",
+      "name": "MapMode",
+      "type": "App::PropertyEnumeration",
+      "value": "Deactivated"
+     },
+     {
+      "group": "Attachment",
+      "name": "MapPathParameter",
+      "type": "App::PropertyFloat",
+      "value": 0.0
+     },
+     {
+      "group": "Attachment",
+      "name": "MapReversed",
+      "type": "App::PropertyBool",
+      "value": false
+     },
+     {
+      "group": "",
+      "name": "Placement",
+      "type": "App::PropertyPlacement",
+      "value": {
+       "base": [
+        0.0,
+        0.0,
+        0.0
+       ],
+       "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+       ]
+      }
+     },
+     {
+      "group": "",
+      "name": "ShapeMaterial",
+      "type": "Materials::PropertyMaterial",
+      "value": {
+       "unserialised": "Material"
+      }
+     },
+     {
+      "group": "",
+      "name": "Visibility",
+      "type": "App::PropertyBool",
+      "value": true
+     },
+     {
+      "group": "Box",
+      "name": "Width",
+      "type": "App::PropertyLength",
+      "value": {
+       "unit": "Length",
+       "value": 20.0
+      }
+     },
+     {
+      "group": "Base",
+      "name": "_ElementMapVersion",
+      "type": "App::PropertyString",
+      "value": "15.70200.5"
+     }
+    ],
+    "proxy": null,
+    "shape": {
+     "area": 4200.0,
+     "bbox": [
+      0.0,
+      0.0,
+      0.0,
+      30.0,
+      20.0,
+      30.0
+     ],
+     "edges": 12,
+     "element_map_size": 0,
+     "faces": 6,
+     "null": false,
+     "shape_type": "Solid",
+     "shells": 1,
+     "solids": 1,
+     "valid": true,
+     "vertexes": 8,
+     "volume": 18000.0
+    },
+    "state": [
+     "Up-to-date"
+    ],
+    "type": "Part::Box"
+   },
+   {
+    "detail": null,
+    "expressions": [],
+    "in_list": [
+     "Plate"
+    ],
+    "kind": "part_feature",
+    "label": "Hole",
+    "name": "Hole",
+    "out_list": [],
+    "properties": [
+     {
+      "group": "Cylinder",
+      "name": "Angle",
+      "type": "App::PropertyAngle",
+      "value": {
+       "unit": "Angle",
+       "value": 360.0
+      }
+     },
+     {
+      "enum": [
+       "Engine 3D",
+       "Engine Plane",
+       "Engine Line",
+       "Engine Point"
+      ],
+      "group": "Attachment",
+      "name": "AttacherEngine",
+      "type": "App::PropertyEnumeration",
+      "value": "Engine 3D"
+     },
+     {
+      "group": "Attachment",
+      "name": "AttacherType",
+      "type": "App::PropertyString",
+      "value": "Attacher::AttachEngine3D"
+     },
+     {
+      "group": "Attachment",
+      "name": "AttachmentOffset",
+      "type": "App::PropertyPlacement",
+      "value": {
+       "base": [
+        0.0,
+        0.0,
+        0.0
+       ],
+       "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+       ]
+      }
+     },
+     {
+      "group": "Attachment",
+      "name": "AttachmentSupport",
+      "type": "App::PropertyLinkSubList",
+      "value": []
+     },
+     {
+      "group": "Prism",
+      "name": "FirstAngle",
+      "type": "App::PropertyAngle",
+      "value": {
+       "unit": "Angle",
+       "value": 0.0
+      }
+     },
+     {
+      "group": "Cylinder",
+      "name": "Height",
+      "type": "App::PropertyLength",
+      "value": {
+       "unit": "Length",
+       "value": 50.0
+      }
+     },
+     {
+      "group": "Base",
+      "name": "Label",
+      "type": "App::PropertyString",
+      "value": "Hole"
+     },
+     {
+      "group": "Base",
+      "name": "Label2",
+      "type": "App::PropertyString",
+      "value": ""
+     },
+     {
+      "enum": [
+       "Deactivated",
+       "Translate",
+       "ObjectXY",
+       "ObjectXZ",
+       "ObjectYZ",
+       "FlatFace",
+       "TangentPlane",
+       "NormalToEdge",
+       "FrenetNB",
+       "FrenetTN",
+       "FrenetTB",
+       "Concentric",
+       "SectionOfRevolution",
+       "ThreePointsPlane",
+       "ThreePointsNormal",
+       "Folding",
+       "ObjectX",
+       "ObjectY",
+       "ObjectZ",
+       "AxisOfCurvature",
+       "Directrix1",
+       "Directrix2",
+       "Asymptote1",
+       "Asymptote2",
+       "Tangent",
+       "Normal",
+       "Binormal",
+       "TangentU",
+       "TangentV",
+       "TwoPointLine",
+       "IntersectionLine",
+       "ProximityLine",
+       "ObjectOrigin",
+       "Focus1",
+       "Focus2",
+       "OnEdge",
+       "CenterOfCurvature",
+       "CenterOfMass",
+       "IntersectionPoint",
+       "Vertex",
+       "ProximityPoint1",
+       "ProximityPoint2",
+       "AxisOfInertia1",
+       "AxisOfInertia2",
+       "AxisOfInertia3",
+       "InertialCS",
+       "FaceNormal",
+       "OZX",
+       "OZY",
+       "OXY",
+       "OXZ",
+       "OYZ",
+       "OYX",
+       "ParallelPlane",
+       "MidPoint",
+       "MidPlane"
+      ],
+      "group": "Attachment",
+      "name": "MapMode",
+      "type": "App::PropertyEnumeration",
+      "value": "Deactivated"
+     },
+     {
+      "group": "Attachment",
+      "name": "MapPathParameter",
+      "type": "App::PropertyFloat",
+      "value": 0.0
+     },
+     {
+      "group": "Attachment",
+      "name": "MapReversed",
+      "type": "App::PropertyBool",
+      "value": false
+     },
+     {
+      "group": "",
+      "name": "Placement",
+      "type": "App::PropertyPlacement",
+      "value": {
+       "base": [
+        15.0,
+        5.0,
+        -1.0
+       ],
+       "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+       ]
+      }
+     },
+     {
+      "group": "Cylinder",
+      "name": "Radius",
+      "type": "App::PropertyLength",
+      "value": {
+       "unit": "Length",
+       "value": 2.5
+      }
+     },
+     {
+      "group": "Prism",
+      "name": "SecondAngle",
+      "type": "App::PropertyAngle",
+      "value": {
+       "unit": "Angle",
+       "value": 0.0
+      }
+     },
+     {
+      "group": "",
+      "name": "ShapeMaterial",
+      "type": "Materials::PropertyMaterial",
+      "value": {
+       "unserialised": "Material"
+      }
+     },
+     {
+      "group": "",
+      "name": "Visibility",
+      "type": "App::PropertyBool",
+      "value": true
+     },
+     {
+      "group": "Base",
+      "name": "_ElementMapVersion",
+      "type": "App::PropertyString",
+      "value": "15.70200.5"
+     }
+    ],
+    "proxy": null,
+    "shape": {
+     "area": 824.668072,
+     "bbox": [
+      12.5,
+      2.5,
+      -1.0,
+      17.5,
+      7.5,
+      49.0
+     ],
+     "edges": 3,
+     "element_map_size": 0,
+     "faces": 3,
+     "null": false,
+     "shape_type": "Solid",
+     "shells": 1,
+     "solids": 1,
+     "valid": true,
+     "vertexes": 2,
+     "volume": 981.747704
+    },
+    "state": [
+     "Up-to-date"
+    ],
+    "type": "Part::Cylinder"
+   },
+   {
+    "detail": null,
+    "expressions": [],
+    "in_list": [],
+    "kind": "part_feature",
+    "label": "Plate",
+    "name": "Plate",
+    "out_list": [
+     "Box",
+     "Hole"
+    ],
+    "properties": [
+     {
+      "group": "",
+      "name": "Base",
+      "type": "App::PropertyLink",
+      "value": {
+       "object": "Box"
+      }
+     },
+     {
+      "group": "Boolean",
+      "name": "History",
+      "type": "Part::PropertyShapeHistory",
+      "value": null
+     },
+     {
+      "group": "Base",
+      "name": "Label",
+      "type": "App::PropertyString",
+      "value": "Plate"
+     },
+     {
+      "group": "Base",
+      "name": "Label2",
+      "type": "App::PropertyString",
+      "value": ""
+     },
+     {
+      "group": "",
+      "name": "Placement",
+      "type": "App::PropertyPlacement",
+      "value": {
+       "base": [
+        0.0,
+        0.0,
+        0.0
+       ],
+       "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+       ]
+      }
+     },
+     {
+      "group": "Boolean",
+      "name": "Refine",
+      "type": "App::PropertyBool",
+      "value": true
+     },
+     {
+      "group": "",
+      "name": "ShapeMaterial",
+      "type": "Materials::PropertyMaterial",
+      "value": {
+       "unserialised": "Material"
+      }
+     },
+     {
+      "group": "",
+      "name": "Tool",
+      "type": "App::PropertyLink",
+      "value": {
+       "object": "Hole"
+      }
+     },
+     {
+      "group": "",
+      "name": "Visibility",
+      "type": "App::PropertyBool",
+      "value": true
+     },
+     {
+      "group": "Base",
+      "name": "_ElementMapVersion",
+      "type": "App::PropertyString",
+      "value": "15.70200.5"
+     }
+    ],
+    "proxy": null,
+    "shape": {
+     "area": 4631.96899,
+     "bbox": [
+      0.0,
+      0.0,
+      0.0,
+      30.0,
+      20.0,
+      30.0
+     ],
+     "edges": 15,
+     "element_map_size": 32,
+     "faces": 7,
+     "null": false,
+     "shape_type": "Compound",
+     "shells": 1,
+     "solids": 1,
+     "valid": true,
+     "vertexes": 10,
+     "volume": 17410.951377
+    },
+    "state": [
+     "Up-to-date"
+    ],
+    "type": "Part::Cut"
+   }
+  ],
+  "paging": {
+   "page": 0,
+   "page_size": 3,
+   "pages": 1,
+   "total": 3
+  }
+ },
+ "exec_result": {
+  "faces": 7,
+  "volume": 17410.951377
+ },
+ "log": [
+  {
+   "isError": false,
+   "tool": "open_document"
+  },
+  {
+   "isError": false,
+   "tool": "get_state"
+  },
+  {
+   "isError": false,
+   "tool": "begin_change"
+  },
+  {
+   "isError": false,
+   "tool": "exec_code"
+  },
+  {
+   "isError": false,
+   "tool": "verify"
+  },
+  {
+   "isError": false,
+   "tool": "propose_change"
+  },
+  {
+   "isError": false,
+   "tool": "get_state"
+  }
+ ],
+ "verify": [
+  {
+   "check": "recompute",
+   "ok": true,
+   "status": "ok"
+  },
+  {
+   "check": "validity",
+   "ok": true,
+   "status": "ok"
+  },
+  {
+   "check": "mass",
+   "ok": true,
+   "status": "ok"
+  }
+ ]
+}

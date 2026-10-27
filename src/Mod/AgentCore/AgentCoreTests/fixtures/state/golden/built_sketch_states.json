@@ -1,0 +1,1452 @@
+{
+ "document": {
+  "label": "f1_sketch_states",
+  "meta": {
+   "Comment": "",
+   "Company": "",
+   "CreatedBy": "",
+   "License": "All rights reserved",
+   "LicenseURL": "https://en.wikipedia.org/wiki/All_rights_reserved",
+   "UnitSystem": "Standard (mm, kg, s, \u00b0)"
+  },
+  "name": "f1_sketch_states",
+  "object_count": 3,
+  "roots": [
+   "Full",
+   "Over",
+   "Under"
+  ]
+ },
+ "objects": [
+  {
+   "detail": {
+    "attachment": {
+     "map_mode": "Deactivated",
+     "support": []
+    },
+    "constraints": [
+     {
+      "active": true,
+      "driving": true,
+      "first": 0,
+      "first_pos": 2,
+      "index": 0,
+      "name": "",
+      "second": 1,
+      "second_pos": 1,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Coincident",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 1,
+      "first_pos": 2,
+      "index": 1,
+      "name": "",
+      "second": 2,
+      "second_pos": 1,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Coincident",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 2,
+      "first_pos": 2,
+      "index": 2,
+      "name": "",
+      "second": 3,
+      "second_pos": 1,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Coincident",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 3,
+      "first_pos": 2,
+      "index": 3,
+      "name": "",
+      "second": 0,
+      "second_pos": 1,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Coincident",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 0,
+      "first_pos": 0,
+      "index": 4,
+      "name": "",
+      "second": -2000,
+      "second_pos": 0,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Horizontal",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 2,
+      "first_pos": 0,
+      "index": 5,
+      "name": "",
+      "second": -2000,
+      "second_pos": 0,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Horizontal",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 1,
+      "first_pos": 0,
+      "index": 6,
+      "name": "",
+      "second": -2000,
+      "second_pos": 0,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Vertical",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 3,
+      "first_pos": 0,
+      "index": 7,
+      "name": "",
+      "second": -2000,
+      "second_pos": 0,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Vertical",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 0,
+      "first_pos": 1,
+      "index": 8,
+      "name": "",
+      "second": -1,
+      "second_pos": 1,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Coincident",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 0,
+      "first_pos": 1,
+      "index": 9,
+      "name": "",
+      "second": 0,
+      "second_pos": 2,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "DistanceX",
+      "value": 8.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 1,
+      "first_pos": 1,
+      "index": 10,
+      "name": "",
+      "second": 1,
+      "second_pos": 2,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "DistanceY",
+      "value": 5.0
+     }
+    ],
+    "dependent_parameters": [],
+    "external_geometry": [],
+    "geometry": [
+     {
+      "construction": false,
+      "endPoint": [
+       8.0,
+       0.0,
+       0.0
+      ],
+      "firstParameter": 0.0,
+      "index": 0,
+      "lastParameter": 8.0,
+      "startPoint": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "type": "Part::GeomLineSegment"
+     },
+     {
+      "construction": false,
+      "endPoint": [
+       8.0,
+       5.0,
+       0.0
+      ],
+      "firstParameter": 0.0,
+      "index": 1,
+      "lastParameter": 5.0,
+      "startPoint": [
+       8.0,
+       0.0,
+       0.0
+      ],
+      "type": "Part::GeomLineSegment"
+     },
+     {
+      "construction": false,
+      "endPoint": [
+       0.0,
+       5.0,
+       0.0
+      ],
+      "firstParameter": 0.0,
+      "index": 2,
+      "lastParameter": 8.0,
+      "startPoint": [
+       8.0,
+       5.0,
+       0.0
+      ],
+      "type": "Part::GeomLineSegment"
+     },
+     {
+      "construction": false,
+      "endPoint": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "firstParameter": 0.0,
+      "index": 3,
+      "lastParameter": 5.0,
+      "startPoint": [
+       0.0,
+       5.0,
+       0.0
+      ],
+      "type": "Part::GeomLineSegment"
+     }
+    ],
+    "solver": {
+     "conflicting": [],
+     "dof": 0,
+     "fully_constrained": true,
+     "malformed": [],
+     "partially_redundant": [],
+     "redundant": [],
+     "status": 0
+    }
+   },
+   "expressions": [],
+   "in_list": [],
+   "kind": "sketch",
+   "label": "Full",
+   "name": "Full",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Sketch",
+     "name": "ArcFitTolerance",
+     "type": "App::PropertyPrecision",
+     "value": 1e-06
+    },
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine Plane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEnginePlane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Sketch",
+     "name": "Constraints",
+     "type": "Sketcher::PropertyConstraintList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "Sketch",
+     "name": "Exports",
+     "type": "App::PropertyLinkListHidden",
+     "value": []
+    },
+    {
+     "group": "Sketch",
+     "name": "ExternalGeo",
+     "type": "Part::PropertyGeometryList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "Sketch",
+     "name": "ExternalGeometry",
+     "type": "App::PropertyLinkSubList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "Sketch",
+     "name": "ExternalTypes",
+     "type": "App::PropertyIntegerList",
+     "value": [
+      0
+     ]
+    },
+    {
+     "group": "Sketch",
+     "name": "FullyConstrained",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Sketch",
+     "name": "Geometry",
+     "type": "Part::PropertyGeometryList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "",
+     "name": "InternalShape",
+     "type": "Part::PropertyPartShape",
+     "value": {
+      "area": 40.0,
+      "bbox": [
+       0.0,
+       0.0,
+       0.0,
+       8.0,
+       5.0,
+       0.0
+      ],
+      "edges": 4,
+      "element_map_size": 25,
+      "faces": 1,
+      "null": false,
+      "shape_type": "Face",
+      "shells": 0,
+      "solids": 0,
+      "valid": true,
+      "vertexes": 4,
+      "volume": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Full"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Internal Geometry",
+     "name": "MakeInternals",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "15.70200.5"
+    },
+    {
+     "group": "Base",
+     "name": "_InternalFaceVersion",
+     "type": "App::PropertyInteger",
+     "value": 2
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 0.0,
+    "bbox": [
+     0.0,
+     0.0,
+     0.0,
+     8.0,
+     5.0,
+     0.0
+    ],
+    "edges": 4,
+    "element_map_size": 12,
+    "faces": 0,
+    "null": false,
+    "shape_type": "Wire",
+    "shells": 0,
+    "solids": 0,
+    "valid": true,
+    "vertexes": 4,
+    "volume": 0.0
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Sketcher::SketchObject"
+  },
+  {
+   "detail": {
+    "attachment": {
+     "map_mode": "Deactivated",
+     "support": []
+    },
+    "constraints": [
+     {
+      "active": true,
+      "driving": true,
+      "first": 0,
+      "first_pos": 0,
+      "index": 0,
+      "name": "",
+      "second": -2000,
+      "second_pos": 0,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Horizontal",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 0,
+      "first_pos": 1,
+      "index": 1,
+      "name": "",
+      "second": 0,
+      "second_pos": 2,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "DistanceX",
+      "value": 4.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 0,
+      "first_pos": 0,
+      "index": 2,
+      "name": "",
+      "second": -2000,
+      "second_pos": 0,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Distance",
+      "value": 4.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 0,
+      "first_pos": 0,
+      "index": 3,
+      "name": "",
+      "second": -2000,
+      "second_pos": 0,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Horizontal",
+      "value": 0.0
+     }
+    ],
+    "dependent_parameters": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      1
+     ]
+    ],
+    "external_geometry": [],
+    "geometry": [
+     {
+      "construction": false,
+      "endPoint": [
+       4.0,
+       0.0,
+       0.0
+      ],
+      "firstParameter": 0.0,
+      "index": 0,
+      "lastParameter": 4.0,
+      "startPoint": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "type": "Part::GeomLineSegment"
+     }
+    ],
+    "solver": {
+     "conflicting": [],
+     "dof": 2,
+     "fully_constrained": false,
+     "malformed": [],
+     "partially_redundant": [],
+     "redundant": [
+      3,
+      4
+     ],
+     "status": -2
+    }
+   },
+   "expressions": [],
+   "in_list": [],
+   "kind": "sketch",
+   "label": "Over",
+   "name": "Over",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Sketch",
+     "name": "ArcFitTolerance",
+     "type": "App::PropertyPrecision",
+     "value": 1e-06
+    },
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine Plane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEnginePlane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Sketch",
+     "name": "Constraints",
+     "type": "Sketcher::PropertyConstraintList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "Sketch",
+     "name": "Exports",
+     "type": "App::PropertyLinkListHidden",
+     "value": []
+    },
+    {
+     "group": "Sketch",
+     "name": "ExternalGeo",
+     "type": "Part::PropertyGeometryList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "Sketch",
+     "name": "ExternalGeometry",
+     "type": "App::PropertyLinkSubList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "Sketch",
+     "name": "ExternalTypes",
+     "type": "App::PropertyIntegerList",
+     "value": [
+      0
+     ]
+    },
+    {
+     "group": "Sketch",
+     "name": "FullyConstrained",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Sketch",
+     "name": "Geometry",
+     "type": "Part::PropertyGeometryList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "",
+     "name": "InternalShape",
+     "type": "Part::PropertyPartShape",
+     "value": {
+      "null": true
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Over"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Internal Geometry",
+     "name": "MakeInternals",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "15.70200.5"
+    },
+    {
+     "group": "Base",
+     "name": "_InternalFaceVersion",
+     "type": "App::PropertyInteger",
+     "value": 2
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "null": true
+   },
+   "state": [
+    "Invalid",
+    "Touched"
+   ],
+   "type": "Sketcher::SketchObject"
+  },
+  {
+   "detail": {
+    "attachment": {
+     "map_mode": "Deactivated",
+     "support": []
+    },
+    "constraints": [
+     {
+      "active": true,
+      "driving": true,
+      "first": 0,
+      "first_pos": 2,
+      "index": 0,
+      "name": "",
+      "second": 1,
+      "second_pos": 1,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Coincident",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 1,
+      "first_pos": 2,
+      "index": 1,
+      "name": "",
+      "second": 2,
+      "second_pos": 1,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Coincident",
+      "value": 0.0
+     },
+     {
+      "active": true,
+      "driving": true,
+      "first": 2,
+      "first_pos": 2,
+      "index": 2,
+      "name": "",
+      "second": 0,
+      "second_pos": 1,
+      "third": -2000,
+      "third_pos": 0,
+      "type": "Coincident",
+      "value": 0.0
+     }
+    ],
+    "dependent_parameters": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      1
+     ],
+     [
+      1,
+      1
+     ],
+     [
+      2,
+      1
+     ],
+     [
+      2,
+      1
+     ],
+     [
+      3,
+      0
+     ],
+     [
+      3,
+      1
+     ],
+     [
+      4,
+      0
+     ],
+     [
+      4,
+      1
+     ],
+     [
+      4,
+      1
+     ],
+     [
+      4,
+      1
+     ]
+    ],
+    "external_geometry": [],
+    "geometry": [
+     {
+      "construction": false,
+      "endPoint": [
+       6.0,
+       0.0,
+       0.0
+      ],
+      "firstParameter": 0.0,
+      "index": 0,
+      "lastParameter": 6.0,
+      "startPoint": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "type": "Part::GeomLineSegment"
+     },
+     {
+      "construction": false,
+      "endPoint": [
+       3.0,
+       4.0,
+       0.0
+      ],
+      "firstParameter": 0.0,
+      "index": 1,
+      "lastParameter": 5.0,
+      "startPoint": [
+       6.0,
+       0.0,
+       0.0
+      ],
+      "type": "Part::GeomLineSegment"
+     },
+     {
+      "construction": false,
+      "endPoint": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "firstParameter": 0.0,
+      "index": 2,
+      "lastParameter": 5.0,
+      "startPoint": [
+       3.0,
+       4.0,
+       0.0
+      ],
+      "type": "Part::GeomLineSegment"
+     },
+     {
+      "center": [
+       3.0,
+       1.5,
+       0.0
+      ],
+      "construction": true,
+      "firstParameter": 0.0,
+      "index": 3,
+      "lastParameter": 6.283185,
+      "location": [
+       3.0,
+       1.5,
+       0.0
+      ],
+      "radius": 0.8,
+      "type": "Part::GeomCircle"
+     },
+     {
+      "center": [
+       10.0,
+       0.0,
+       0.0
+      ],
+      "construction": false,
+      "endPoint": [
+       10.141474,
+       1.99499,
+       0.0
+      ],
+      "firstParameter": 0.0,
+      "index": 4,
+      "lastParameter": 1.5,
+      "location": [
+       10.0,
+       0.0,
+       0.0
+      ],
+      "radius": 2.0,
+      "startPoint": [
+       12.0,
+       0.0,
+       0.0
+      ],
+      "type": "Part::GeomArcOfCircle"
+     }
+    ],
+    "solver": {
+     "conflicting": [],
+     "dof": 14,
+     "fully_constrained": false,
+     "malformed": [],
+     "partially_redundant": [],
+     "redundant": [],
+     "status": 0
+    }
+   },
+   "expressions": [],
+   "in_list": [],
+   "kind": "sketch",
+   "label": "Under",
+   "name": "Under",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Sketch",
+     "name": "ArcFitTolerance",
+     "type": "App::PropertyPrecision",
+     "value": 1e-06
+    },
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine Plane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEnginePlane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Sketch",
+     "name": "Constraints",
+     "type": "Sketcher::PropertyConstraintList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "Sketch",
+     "name": "Exports",
+     "type": "App::PropertyLinkListHidden",
+     "value": []
+    },
+    {
+     "group": "Sketch",
+     "name": "ExternalGeo",
+     "type": "Part::PropertyGeometryList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "Sketch",
+     "name": "ExternalGeometry",
+     "type": "App::PropertyLinkSubList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "Sketch",
+     "name": "ExternalTypes",
+     "type": "App::PropertyIntegerList",
+     "value": [
+      0
+     ]
+    },
+    {
+     "group": "Sketch",
+     "name": "FullyConstrained",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Sketch",
+     "name": "Geometry",
+     "type": "Part::PropertyGeometryList",
+     "value": {
+      "see": "detail"
+     }
+    },
+    {
+     "group": "",
+     "name": "InternalShape",
+     "type": "Part::PropertyPartShape",
+     "value": {
+      "area": 12.0,
+      "bbox": [
+       0.0,
+       0.0,
+       0.0,
+       6.0,
+       4.0,
+       0.0
+      ],
+      "edges": 3,
+      "element_map_size": 7,
+      "faces": 1,
+      "null": false,
+      "shape_type": "Face",
+      "shells": 0,
+      "solids": 0,
+      "valid": true,
+      "vertexes": 3,
+      "volume": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Under"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Internal Geometry",
+     "name": "MakeInternals",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "15.70200.5"
+    },
+    {
+     "group": "Base",
+     "name": "_InternalFaceVersion",
+     "type": "App::PropertyInteger",
+     "value": 2
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 0.0,
+    "bbox": [
+     0.0,
+     0.0,
+     0.0,
+     12.0,
+     4.0,
+     0.0
+    ],
+    "edges": 4,
+    "element_map_size": 9,
+    "faces": 0,
+    "null": false,
+    "shape_type": "Compound",
+    "shells": 0,
+    "solids": 0,
+    "valid": true,
+    "vertexes": 5,
+    "volume": 0.0
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Sketcher::SketchObject"
+  }
+ ],
+ "paging": {
+  "page": 0,
+  "page_size": 3,
+  "pages": 1,
+  "total": 3
+ },
+ "schema": "agentcore.state/1"
+}

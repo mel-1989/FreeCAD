@@ -1,0 +1,43 @@
+{
+  "schema": "agentcore.refactor.tolerances/2",
+  "_doc": "Vendored from cad-fork fixtures/golden/tolerances.json (brief I3): the platforms block, complete (abs_floor, determinism_rel and dev_*_coord_rel included). The fork must not import from the control repo at runtime, so the policy is copied; re-copy it when I3 recalibrates. test_refactor_invariant.py checks the numbers against the control repo file when it is present. The comparison mirrors harness/golden/compare.py: volume and area are relative to the quantity (rel_tol*max(|a|,|b|)), positions relative to the bounding-box diagonal, each plus abs_floor*diag**k; deviation limits are max(abs, rel*diag, coord_rel*largest |bbox coordinate|).",
+  "default_platform": "darwin-clang",
+  "platforms": {
+    "darwin-clang": {
+      "calibrated": true,
+      "rel_tol": 4e-06,
+      "dev_max_abs": 1e-05,
+      "dev_max_rel": 1e-07,
+      "dev_rms_abs": 2e-06,
+      "dev_rms_rel": 2e-08,
+      "abs_floor": 1e-09,
+      "determinism_rel": 1e-08,
+      "dev_max_coord_rel": 3e-07,
+      "dev_rms_coord_rel": 6e-08
+    },
+    "linux-gcc": {
+      "calibrated": false,
+      "rel_tol": 4e-06,
+      "dev_max_abs": 1e-05,
+      "dev_max_rel": 1e-07,
+      "dev_rms_abs": 2e-06,
+      "dev_rms_rel": 2e-08,
+      "abs_floor": 1e-09,
+      "determinism_rel": 1e-08,
+      "dev_max_coord_rel": 3e-07,
+      "dev_rms_coord_rel": 6e-08
+    },
+    "windows-msvc": {
+      "calibrated": false,
+      "rel_tol": 4e-06,
+      "dev_max_abs": 1e-05,
+      "dev_max_rel": 1e-07,
+      "dev_rms_abs": 2e-06,
+      "dev_rms_rel": 2e-08,
+      "abs_floor": 1e-09,
+      "determinism_rel": 1e-08,
+      "dev_max_coord_rel": 3e-07,
+      "dev_rms_coord_rel": 6e-08
+    }
+  }
+}

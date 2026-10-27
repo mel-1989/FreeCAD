@@ -1,0 +1,386 @@
+[
+ {
+  "id": "lib00",
+  "path": "Architectural Parts/Beams/Precast Concrete/Precast_Beam_for_Slabs_BIM_Parametric.FCStd",
+  "bytes": 296782,
+  "sha256": "85b660f17446733a10000d2d2a99dc1b6df2b2bd6f4fc7404968e7c0fd8ad669"
+ },
+ {
+  "id": "lib01",
+  "path": "Architectural Parts/Doors/Wood/Single door with transom and trims.FCStd",
+  "bytes": 34928,
+  "sha256": "9846527af8cf5a0893cdf78db7fd21df710cdee326b746d594d03cf3ac290d14"
+ },
+ {
+  "id": "lib02",
+  "path": "Architectural Parts/Symbols/People symbols/Woman03.FCStd",
+  "bytes": 21992,
+  "sha256": "9c662f145bdb2c10bb1da78922ba8db7febb64954e98a966abb25e679a3b42d8"
+ },
+ {
+  "id": "lib03",
+  "path": "Computing/Storage/SD/SD_card.FCStd",
+  "bytes": 58540,
+  "sha256": "e5e8d866b5a693c89650d8d63d70bd57905ae5a9a7f58a073bdfaa3522112529"
+ },
+ {
+  "id": "lib04",
+  "path": "Electrical Parts/Motors/Stepper/28BYJ-48/28BYJ-48_gear_horn.fcstd",
+  "bytes": 135847,
+  "sha256": "41c751b134db55b13f0e34babb259838403b0ce09e2a9254dddc6e3d4a2ea945"
+ },
+ {
+  "id": "lib05",
+  "path": "Electrical Parts/Winch/Winch-Model1-Parts/Winch-Model1-Assembly-Cable-Guide.fcstd",
+  "bytes": 43813,
+  "sha256": "cff00b0641acd997d9334c9a49c02b9abe25d22545f219680d0ed87ebd52e9d3"
+ },
+ {
+  "id": "lib06",
+  "path": "Electronics Parts/Connectors/power-connectors/jack_DC_2.1mm_PCB.fcstd",
+  "bytes": 54326,
+  "sha256": "fc74559fc5205d79bf5b4345329fcbc6e7d2544cd5e107310e078f71224cb89e"
+ },
+ {
+  "id": "lib07",
+  "path": "Electronics Parts/Headers/2.54mm-pitch/male/straight/3x6-male-pin-header.fcstd",
+  "bytes": 264747,
+  "sha256": "cbb803c6f0ad69c3d28d572000457c1c497761e18e1a1bf7628a50174d625fd3"
+ },
+ {
+  "id": "lib08",
+  "path": "Electronics Parts/Miscellaneous/DaggerPod.FCStd",
+  "bytes": 10319,
+  "sha256": "9fc01fc223800bf3576c91c09a7e9070fa76b84f098c7404937aa4cd4d732fd3"
+ },
+ {
+  "id": "lib09",
+  "path": "Electronics Parts/Switch/Limit switch/Microswitch_SPDT_Horizontal_L.FCStd",
+  "bytes": 375068,
+  "sha256": "7bb83a8cec9cb956a08acc91e50be4e9af7ece0d8d425c46cd831c4a420b584f"
+ },
+ {
+  "id": "lib10",
+  "path": "Generic objects/Scale Models/Cement mixer truck/cabin_door.FCStd",
+  "bytes": 34478,
+  "sha256": "8c8a52bb33fae5253caa1af8d4e43378856722652c8ce8076aba427c18a8b947"
+ },
+ {
+  "id": "lib11",
+  "path": "HVAC/Ducts/Rectangular/Conections/Extended_retangular_bend.FCStd",
+  "bytes": 97276,
+  "sha256": "a2ce4fe30bc9c6d092fa6ca8fc7403c1b291494156a34370f2ffaf83ef52d42b"
+ },
+ {
+  "id": "lib12",
+  "path": "Industrial Design/Shelf/IKEA_Kallax_77x42cm.FCStd",
+  "bytes": 14217,
+  "sha256": "b3b5d3ed42703ee4fd4806f8c7fc48b22a1f779fa8ee45b5cea1d965298ace01"
+ },
+ {
+  "id": "lib13",
+  "path": "Logistics/Shipping Containers/20_Feet_ISO_Container/front-cover_top.FCStd",
+  "bytes": 17422,
+  "sha256": "31edb2d749d9665a2f124cfd0880c66bf9497c26defa2c568ce9c8b295b9cee0"
+ },
+ {
+  "id": "lib14",
+  "path": "Mechanical Parts/Bearings/parametric_ball_bearing/Parametric_Ball_Bearing.fcstd",
+  "bytes": 68159,
+  "sha256": "1d91aa2557329d6d106407cf8489a1fca785679bf946be7efc7a437568d54a5a"
+ },
+ {
+  "id": "lib15",
+  "path": "Mechanical Parts/Chains/Sprocket/ISO 606/Simplex \u00bdx\u215b/Sprocket ANSI simplex \u00bdx\u215b z08.FCStd",
+  "bytes": 315213,
+  "sha256": "aa12107384e62594f947e8504d55802926e721409d2ebb0086c37e61382fd183"
+ },
+ {
+  "id": "lib16",
+  "path": "Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Metric/Close/M16/M16CloseMean.FCStd",
+  "bytes": 3113,
+  "sha256": "aa48365278c6ee1bedb99fbb77af5e66f9927be5b8e976711f6472a660c4eeda"
+ },
+ {
+  "id": "lib17",
+  "path": "Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Metric/Close/M64/M64CloseMax.FCStd",
+  "bytes": 3115,
+  "sha256": "d61ba64ccb0d758ff09a4d5640cf691b3e6cf3ee0fb38e53920b334b9a4191d7"
+ },
+ {
+  "id": "lib18",
+  "path": "Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Metric/Loose/M24/M24LooseMax.FCStd",
+  "bytes": 3113,
+  "sha256": "7eae1ca1b3d41189c13a823bb842d7e7d93566a7ba81b321605991aff7a0675f"
+ },
+ {
+  "id": "lib19",
+  "path": "Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Metric/Loose/M80/M80LooseMin.FCStd",
+  "bytes": 3109,
+  "sha256": "f66ea048e0c6de3e26f94cac283deef7c557fef3ca7455b7bbe3df5dd2c0c2b8"
+ },
+ {
+  "id": "lib20",
+  "path": "Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Metric/Normal/M36/M36NormalMin.FCStd",
+  "bytes": 3106,
+  "sha256": "f4548b06a2406479ec29eebc3fc69a4087f7ef01d77b6f5f5176e4f54fbffa9b"
+ },
+ {
+  "id": "lib21",
+  "path": "Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Unified/Close/U_1_1s4/U_1_1s4CloseMean.FCStd",
+  "bytes": 3121,
+  "sha256": "f02783bafdbf00560a71a7e3243fce8abd7f2e719e3464e41756610552250a4f"
+ },
+ {
+  "id": "lib22",
+  "path": "Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Unified/Close/U_Number_3/U_Number_3CloseMax.FCStd",
+  "bytes": 3116,
+  "sha256": "0dfbb6c09819bd8667fc1c8c817087f166afca515c54c29f4ef61a4277815e1e"
+ },
+ {
+  "id": "lib23",
+  "path": "Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Unified/Loose/U_5s16/U_5s16LooseMax.FCStd",
+  "bytes": 3119,
+  "sha256": "1efd825c16ab13292c15b0dc5a14b4e803643571fc8ea15b0a4bb3f640823744"
+ },
+ {
+  "id": "lib24",
+  "path": "Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Unified/Normal/U_1/U_1NormalMin.FCStd",
+  "bytes": 3116,
+  "sha256": "2443f9c7c29e37e5c6c6bcc01c4dfec089199a3fcdd52e30d50296516f8d747a"
+ },
+ {
+  "id": "lib25",
+  "path": "Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Unified/Normal/U_Number_1/U_Number_1NormalMin.FCStd",
+  "bytes": 3118,
+  "sha256": "cb5d83e1f4022c294ed1956caf599c6d13d4a6782bdc267efb6cdf2e2ff39121"
+ },
+ {
+  "id": "lib26",
+  "path": "Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M10x12 ISO4762 8,8 A2K.FCStd",
+  "bytes": 10903,
+  "sha256": "aac2e3ce9d6e5cc12a5b7bff80cf36f3e9a12165f14bbac20b5a0cb1c811a34c"
+ },
+ {
+  "id": "lib27",
+  "path": "Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M12x160 ISO4762 8,8 A2K.FCStd",
+  "bytes": 11188,
+  "sha256": "1461de965524c20dbfe6c63fd468df5a42c3c0d7ac423fc0f2bffa859b545f1c"
+ },
+ {
+  "id": "lib28",
+  "path": "Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M14x60 ISO4762 8,8 A2K.FCStd",
+  "bytes": 11521,
+  "sha256": "320e9b22588efdac48c95ddc9558bf283d41b1edcb4306e3159b963cb2d51190"
+ },
+ {
+  "id": "lib29",
+  "path": "Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M2,5x25 ISO4762 8,8 A2K.FCStd",
+  "bytes": 11553,
+  "sha256": "698a8b826faf6697e6da69568f43c8c1e044183d07d03fd188b1be64dfe32d8f"
+ },
+ {
+  "id": "lib30",
+  "path": "Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M24x190 ISO4762 8,8 A2K.FCStd",
+  "bytes": 11517,
+  "sha256": "df2be3cee7d055bf6f03c23515c6657aa0b6c18d2581deef2ef3a69ab7ec0368"
+ },
+ {
+  "id": "lib31",
+  "path": "Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M30x400 ISO4762 8,8 A2K.FCStd",
+  "bytes": 11394,
+  "sha256": "ceb22b2f88acd3791853c4363ee51f199715d6b9ecaf29f156c76ebfbb6a6231"
+ },
+ {
+  "id": "lib32",
+  "path": "Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M42x180 ISO4762 8,8 A2K.FCStd",
+  "bytes": 11486,
+  "sha256": "dd0297d7eee1fca3a997e6eb33fb617e974ea2a3e04a22235b22f0de11786d68"
+ },
+ {
+  "id": "lib33",
+  "path": "Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M5x130 ISO4762 8,8 A2K.FCStd",
+  "bytes": 10925,
+  "sha256": "d77f670a2efe4d056cc610ff9acd0d989c2dcfd2cf5a52cf2a95ed109eb7bee9"
+ },
+ {
+  "id": "lib34",
+  "path": "Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M6x14 ISO4762 8,8 A2K.FCStd",
+  "bytes": 10861,
+  "sha256": "14bf4dfdd81d9fc58d486ccdf17434e9b2cd4e4e86556004374b1b6e7174170c"
+ },
+ {
+  "id": "lib35",
+  "path": "Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M8x160 ISO4762 8,8 A2K.FCStd",
+  "bytes": 11651,
+  "sha256": "043ac88cbb0daae82dac9406359dba50000f1980b159a627e58fb57e5f2d60dc"
+ },
+ {
+  "id": "lib36",
+  "path": "Mechanical Parts/Fasteners/Nuts/Metric/ISO4032_Hex_Nut_M10.fcstd",
+  "bytes": 37952,
+  "sha256": "7ac1a85a7a9b5fc336104c02942c98ed2bab9eb886f84237b2b6eb35f764b89c"
+ },
+ {
+  "id": "lib37",
+  "path": "Mechanical Parts/Fasteners/Washers/Metric/DIN127_CLASS_B_M14GrowerWasher.fcstd",
+  "bytes": 85445,
+  "sha256": "644dd19963cd966d7a32587f12e76a246487e2b3c8e03dad9f46a8c43aa67c93"
+ },
+ {
+  "id": "lib38",
+  "path": "Mechanical Parts/Fasteners/Washers/Metric/DIN463_M4TabWasher.fcstd",
+  "bytes": 20437,
+  "sha256": "63cba5d6022e111e8403d978d0a2d814cbcc1f21aedeea999110012e79b5b848"
+ },
+ {
+  "id": "lib39",
+  "path": "Mechanical Parts/Fasteners/Washers/Metric/ISO7091DIN126_CLASS_C_M18FlatWasher.fcstd",
+  "bytes": 12294,
+  "sha256": "8a4743f9d9ffa7f61b802c9acf0d9eef760a8ee0af8e089e519589713de3edcd"
+ },
+ {
+  "id": "lib40",
+  "path": "Mechanical Parts/Fasteners/Washers/Metric/ISO7092DIN433_M4FlatWasher.fcstd",
+  "bytes": 12166,
+  "sha256": "6119c724a93d8cfab12e86918768695007ebe746df8ea81c8895a1799a6eea41"
+ },
+ {
+  "id": "lib41",
+  "path": "Mechanical Parts/Profiles EN/BOSCH/Profile Bosh 40x40mm.FCStd",
+  "bytes": 112351,
+  "sha256": "97048befab881635bca6f2898fd703071870aca918d33ab60580f7d305da6a32"
+ },
+ {
+  "id": "lib42",
+  "path": "Mechanical Parts/Profiles EN/DIN1025-3 HE-A-Profiles/HE-A-Profile 500 DIN1025-3 S235JR.FCStd",
+  "bytes": 7256,
+  "sha256": "115feec7160fccb63c9430b420d7e5bf906971e108389804826b2f36ee83608e"
+ },
+ {
+  "id": "lib43",
+  "path": "Mechanical Parts/Profiles EN/DIN1025-5 IPE-Profiles/IPE-Profile 300 DIN1025-5 S235JR.FCStd",
+  "bytes": 8030,
+  "sha256": "93f073ad5e5f1fb8eafbbd388391d124239c67fe6ddf92f001aeb58bce923867"
+ },
+ {
+  "id": "lib44",
+  "path": "Mechanical Parts/Profiles EN/EN10056 Equal Angle Bars/Angle Bar L160x160x10 EN10056 S235JR.FCStd",
+  "bytes": 5809,
+  "sha256": "713b259720a9d87ace9e958032b100f293e1030177691fb1bde84ce1e34ab2ae"
+ },
+ {
+  "id": "lib45",
+  "path": "Mechanical Parts/Profiles EN/EN10056 Equal Angle Bars/Angle Bar L60x60x8 EN10056 S235JR.FCStd",
+  "bytes": 5613,
+  "sha256": "31988a98ac7533b8ea4a0a0834cf8e3baeccc2d58e3a90d9f20ce06aa2117796"
+ },
+ {
+  "id": "lib46",
+  "path": "Mechanical Parts/Profiles EN/EN10056 Unequal Angle Bars/Angle Bar 140x90x10 EN10056 S235JR.FCStd",
+  "bytes": 5732,
+  "sha256": "ef72da672265d32f0ae38f927a95aa3433d7bf15f8c6cda3149ee82496dcf511"
+ },
+ {
+  "id": "lib47",
+  "path": "Mechanical Parts/Profiles EN/EN10056 Unequal Angle Bars/Angle Bar 70x50x7 EN10056 S235JR.FCStd",
+  "bytes": 5650,
+  "sha256": "56e13ba5acd884cd04af37662ca1c419203b91912896d7ef7c5585f2483bcc05"
+ },
+ {
+  "id": "lib48",
+  "path": "Mechanical Parts/Profiles EN/EN10058 Flat steel bars/Flat Bar 120x25 EN10058 S235JR.FCStd",
+  "bytes": 4202,
+  "sha256": "cb1b6ab73861f1fd383833a3b8067c608b786f855aa60c3ba59e45af838ee72c"
+ },
+ {
+  "id": "lib49",
+  "path": "Mechanical Parts/Profiles EN/EN10058 Flat steel bars/Flat Bar 150x5 EN10058 S235JR.FCStd",
+  "bytes": 4207,
+  "sha256": "53fe4ec7d38864d84a6e94b7852fe76b1343801da5c7bc464e2e5421a6d23479"
+ },
+ {
+  "id": "lib50",
+  "path": "Mechanical Parts/Profiles EN/EN10058 Flat steel bars/Flat Bar 30x20 EN10058 S235JR.FCStd",
+  "bytes": 4205,
+  "sha256": "6136c027f7e58efe5f814163f8a5f82f3c2e9f7ebae42899419ffa085610c449"
+ },
+ {
+  "id": "lib51",
+  "path": "Mechanical Parts/Profiles EN/EN10058 Flat steel bars/Flat Bar 50x40 EN10058 S235JR.FCStd",
+  "bytes": 4185,
+  "sha256": "182f647f398412b31ca7ac3179557ef9e10f429eac3ee6a9bd6a7e2cbd4b2a30"
+ },
+ {
+  "id": "lib52",
+  "path": "Mechanical Parts/Profiles EN/EN10058 Flat steel bars/Flat Bar 80x40 EN10058 S235JR.FCStd",
+  "bytes": 4186,
+  "sha256": "fabd6ab200745139c4cc742b3722f8ec845a9195f53b8c93c5b3c7376843ed16"
+ },
+ {
+  "id": "lib53",
+  "path": "Mechanical Parts/Profiles EN/EN10059 Square steel bars/Square Bar 35 EN10059 S235JR.FCStd",
+  "bytes": 4181,
+  "sha256": "bb7b42d7a2f8b78f412c83c83a1817415fbf4db50c7d567cb9c56a4bee2a5467"
+ },
+ {
+  "id": "lib54",
+  "path": "Mechanical Parts/Profiles EN/EN10060 Round steel bars/Round Bar 250 EN10060 S235JR.FCStd",
+  "bytes": 3628,
+  "sha256": "0c2faa4fcbb2c798e48578577ce4901e3cbbd4bb9d8619fde9bf4e4c9837d17d"
+ },
+ {
+  "id": "lib55",
+  "path": "Mechanical Parts/Profiles EN/EN10219 Rectangular Hollow Sections/Rectangular hollow section 100x50x4 EN10219 S235JRH.FCStd",
+  "bytes": 7009,
+  "sha256": "841332eee820e4950f595b00176eda24f8b54f4fcd511cb3ec5100e72c03dbfd"
+ },
+ {
+  "id": "lib56",
+  "path": "Mechanical Parts/Profiles EN/EN10219 Rectangular Hollow Sections/Rectangular hollow section 160x80x10 EN10219 S235JRH.FCStd",
+  "bytes": 7093,
+  "sha256": "710deaed853b4048b8fab5d370e278c902f88498dabe97c18d52267bced249d5"
+ },
+ {
+  "id": "lib57",
+  "path": "Mechanical Parts/Profiles EN/EN10219 Rectangular Hollow Sections/Rectangular hollow section 260x180x16 EN10219 S235JRH.FCStd",
+  "bytes": 7101,
+  "sha256": "aee4846c64cb3d7568581e51d56b162bb1607c24d070ab1f1e6bae23827e0f3d"
+ },
+ {
+  "id": "lib58",
+  "path": "Mechanical Parts/Profiles EN/EN10219 Rectangular Hollow Sections/Rectangular hollow section 50x30x3.6 EN10219 S235JRH.FCStd",
+  "bytes": 8206,
+  "sha256": "4ebaed0dbfb7cc3a18304f58aefcc1dbcefca6a3f5aed67046b161a84e4e8c9c"
+ },
+ {
+  "id": "lib59",
+  "path": "Mechanical Parts/Profiles EN/EN10219 Square Hollow Sections/Square hollow section 100x100x8 EN10219 S235JRH.FCStd",
+  "bytes": 7435,
+  "sha256": "19acc96edbd75b8402ec91e72d5048bb668303dd551f9089c29b6f5424743ccb"
+ },
+ {
+  "id": "lib60",
+  "path": "Mechanical Parts/Profiles EN/EN10219 Square Hollow Sections/Square hollow section 200x200x12.5 EN10219 S235JRH.FCStd",
+  "bytes": 7732,
+  "sha256": "0183f7015f99e9e9060e60817823cb7dba54a1d9dc7547f5b5b65383fa7c76c4"
+ },
+ {
+  "id": "lib61",
+  "path": "Mechanical Parts/Profiles EN/EN10219 Square Hollow Sections/Square hollow section 30x30x2.5 EN10219 S235JRH.FCStd",
+  "bytes": 7073,
+  "sha256": "361ecc41f6fae4b3da8144d99931f81f59c18591db87bd21aa7d201fee9852c4"
+ },
+ {
+  "id": "lib62",
+  "path": "Mechanical Parts/Profiles EN/EN10219 Square Hollow Sections/Square hollow section 70x70x6.3 EN10219 S235JRH.FCStd",
+  "bytes": 7875,
+  "sha256": "b3b6b3a412027679d513d7fc2a7506effad85e60b63edb3e1ad5e19589120348"
+ },
+ {
+  "id": "lib63",
+  "path": "Mechanical Parts/Wheels/Wheel-RC-1:8-17mm-hex/Wheel-RC-1:8-17mm-hex.FCStd",
+  "bytes": 21167,
+  "sha256": "df08fdf9d6a9936367079cc105d5d1adc781b20b36f0f3e9f6f98d99016e55ba"
+ }
+]

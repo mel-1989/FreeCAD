@@ -150,6 +150,7 @@ macro(InitializeFreeCADBuildOptions)
 
     option(BUILD_FEM "Build the FreeCAD FEM module" ON)
     option(BUILD_TEMPLATE "Build the FreeCAD template module which is only for testing purposes" OFF)
+    option(BUILD_AGENTCORE "Build the AgentCore module (headless AI-agent layer, cad-fork)" ON)
     option(BUILD_ADDONMGR "Build the FreeCAD addon manager module" ON)
     option(BUILD_BIM "Build the FreeCAD BIM module" ON)
     option(BUILD_DRAFT "Build the FreeCAD draft module" ON)

@@ -1,0 +1,1708 @@
+{
+ "document": {
+  "label": "f1_techdraw",
+  "meta": {
+   "Comment": "",
+   "Company": "",
+   "CreatedBy": "",
+   "License": "All rights reserved",
+   "LicenseURL": "https://en.wikipedia.org/wiki/All_rights_reserved",
+   "UnitSystem": "Standard (mm, kg, s, \u00b0)"
+  },
+  "name": "f1_techdraw",
+  "object_count": 8,
+  "roots": [
+   "Page"
+  ]
+ },
+ "objects": [
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Cut"
+   ],
+   "kind": "part_feature",
+   "label": "Box",
+   "name": "Box",
+   "out_list": [],
+   "properties": [
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine 3D"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEngine3D"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Box",
+     "name": "Height",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 10.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Box"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Box",
+     "name": "Length",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 40.0
+     }
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Box",
+     "name": "Width",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 25.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 3300.0,
+    "bbox": [
+     0.0,
+     0.0,
+     0.0,
+     40.0,
+     25.0,
+     10.0
+    ],
+    "edges": 12,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 8,
+    "volume": 10000.0
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Box"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "FrontView",
+    "TopView"
+   ],
+   "kind": "part_feature",
+   "label": "Cut",
+   "name": "Cut",
+   "out_list": [
+    "Box",
+    "Cyl"
+   ],
+   "properties": [
+    {
+     "group": "",
+     "name": "Base",
+     "type": "App::PropertyLink",
+     "value": {
+      "object": "Box"
+     }
+    },
+    {
+     "group": "Boolean",
+     "name": "History",
+     "type": "Part::PropertyShapeHistory",
+     "value": null
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Cut"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Boolean",
+     "name": "Refine",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Tool",
+     "type": "App::PropertyLink",
+     "value": {
+      "object": "Cyl"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 3450.796447,
+    "bbox": [
+     0.0,
+     0.0,
+     0.0,
+     40.0,
+     25.0,
+     10.0
+    ],
+    "edges": 15,
+    "element_map_size": 32,
+    "faces": 7,
+    "null": false,
+    "shape_type": "Compound",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 10,
+    "volume": 9497.345175
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Cut"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Cut"
+   ],
+   "kind": "part_feature",
+   "label": "Cyl",
+   "name": "Cyl",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Cylinder",
+     "name": "Angle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 360.0
+     }
+    },
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine 3D"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEngine3D"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Prism",
+     "name": "FirstAngle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Cylinder",
+     "name": "Height",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 30.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Cyl"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       20.0,
+       12.5,
+       -5.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Cylinder",
+     "name": "Radius",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 4.0
+     }
+    },
+    {
+     "group": "Prism",
+     "name": "SecondAngle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "15.70200.5"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 854.513202,
+    "bbox": [
+     16.0,
+     8.5,
+     -5.0,
+     24.0,
+     16.5,
+     25.0
+    ],
+    "edges": 3,
+    "element_map_size": 0,
+    "faces": 3,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 2,
+    "volume": 1507.964474
+   },
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "Part::Cylinder"
+  },
+  {
+   "detail": {
+    "dimension_type": "DistanceX",
+    "raw_value": 40.0,
+    "references_2d": [
+     {
+      "object": "TopView",
+      "subs": [
+       "Edge1"
+      ]
+     }
+    ],
+    "references_3d": [],
+    "text": "40.00 mm"
+   },
+   "expressions": [],
+   "in_list": [
+    "Page"
+   ],
+   "kind": "techdraw_dimension",
+   "label": "Dimension",
+   "name": "Dimension",
+   "out_list": [
+    "TopView"
+   ],
+   "properties": [
+    {
+     "group": "Override",
+     "name": "AngleOverride",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Format",
+     "name": "Arbitrary",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Format",
+     "name": "ArbitraryTolerances",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Area",
+     "name": "AreaLeaderPoint",
+     "type": "App::PropertyVector",
+     "value": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "group": "References",
+     "name": "BoxCorners",
+     "type": "App::PropertyVectorList",
+     "value": [
+      [
+       -20.0,
+       -12.5,
+       0.0
+      ],
+      [
+       20.0,
+       12.5,
+       0.0
+      ]
+     ]
+    },
+    {
+     "group": "Base",
+     "name": "Caption",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Base",
+     "name": "CaptionLocation",
+     "type": "App::PropertyVector",
+     "value": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "enum": [
+      "Top",
+      "Bottom",
+      "Left",
+      "Right",
+      "NoSnap"
+     ],
+     "group": "Base",
+     "name": "CaptionSnap",
+     "type": "App::PropertyEnumeration",
+     "value": "Bottom"
+    },
+    {
+     "group": "",
+     "name": "EqualTolerance",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Override",
+     "name": "ExtensionAngle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Format",
+     "name": "FormatSpec",
+     "type": "App::PropertyString",
+     "value": "%.2w"
+    },
+    {
+     "group": "Format",
+     "name": "FormatSpecOverTolerance",
+     "type": "App::PropertyString",
+     "value": "%+.2w"
+    },
+    {
+     "group": "Format",
+     "name": "FormatSpecUnderTolerance",
+     "type": "App::PropertyString",
+     "value": "%+.2w"
+    },
+    {
+     "group": "",
+     "name": "Inverted",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Dimension"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Override",
+     "name": "LineAngle",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "LockPosition",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "True",
+      "Projected"
+     ],
+     "group": "",
+     "name": "MeasureType",
+     "type": "App::PropertyEnumeration",
+     "value": "Projected"
+    },
+    {
+     "group": "",
+     "name": "OverTolerance",
+     "type": "App::PropertyQuantityConstraint",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "",
+     "name": "References2D",
+     "type": "App::PropertyLinkSubList",
+     "value": [
+      {
+       "object": "TopView",
+       "subs": [
+        "Edge1"
+       ]
+      }
+     ]
+    },
+    {
+     "group": "",
+     "name": "References3D",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Rotation",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "References",
+     "name": "SavedGeometry",
+     "type": "Part::PropertyTopoShapeList",
+     "value": [
+      {
+       "area": 0.0,
+       "bbox": [
+        -20.0,
+        12.5,
+        0.0,
+        20.0,
+        12.5,
+        0.0
+       ],
+       "edges": 1,
+       "element_map_size": 0,
+       "faces": 0,
+       "null": false,
+       "shape_type": "Edge",
+       "shells": 0,
+       "solids": 0,
+       "valid": true,
+       "vertexes": 2,
+       "volume": 0.0
+      }
+     ]
+    },
+    {
+     "group": "Base",
+     "name": "Scale",
+     "type": "App::PropertyFloatConstraint",
+     "value": 1.0
+    },
+    {
+     "enum": [
+      "Page",
+      "Automatic",
+      "Custom"
+     ],
+     "group": "Base",
+     "name": "ScaleType",
+     "type": "App::PropertyEnumeration",
+     "value": "Page"
+    },
+    {
+     "group": "",
+     "name": "ShowSupplementary",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Format",
+     "name": "ShowUnits",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "TheoreticalExact",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "enum": [
+      "Distance",
+      "DistanceX",
+      "DistanceY",
+      "DistanceZ",
+      "Radius",
+      "Diameter",
+      "Angle",
+      "Angle3Pt",
+      "Area"
+     ],
+     "group": "",
+     "name": "Type",
+     "type": "App::PropertyEnumeration",
+     "value": "DistanceX"
+    },
+    {
+     "group": "",
+     "name": "UnderTolerance",
+     "type": "App::PropertyQuantityConstraint",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Area",
+     "name": "UseActualArea",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Area",
+     "name": "UseAreaLeaderPoint",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "X",
+     "type": "App::PropertyDistance",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Y",
+     "type": "App::PropertyDistance",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "TechDraw::DrawViewDimension"
+  },
+  {
+   "detail": {
+    "direction": [
+     0.0,
+     -1.0,
+     0.0
+    ],
+    "hidden_edges": 0,
+    "scale": 1.0,
+    "sources": [
+     "Cut"
+    ],
+    "visible_edges": 4,
+    "x": 100.0,
+    "y": 80.0
+   },
+   "expressions": [],
+   "in_list": [
+    "Page"
+   ],
+   "kind": "techdraw_view",
+   "label": "FrontView",
+   "name": "FrontView",
+   "out_list": [
+    "Cut"
+   ],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Caption",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Base",
+     "name": "CaptionLocation",
+     "type": "App::PropertyVector",
+     "value": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "enum": [
+      "Top",
+      "Bottom",
+      "Left",
+      "Right",
+      "NoSnap"
+     ],
+     "group": "Base",
+     "name": "CaptionSnap",
+     "type": "App::PropertyEnumeration",
+     "value": "Bottom"
+    },
+    {
+     "group": "Cosmetics",
+     "name": "CenterLines",
+     "type": "TechDraw::PropertyCenterLineList",
+     "value": []
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "CoarseView",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Cosmetics",
+     "name": "CosmeticEdges",
+     "type": "TechDraw::PropertyCosmeticEdgeList",
+     "value": []
+    },
+    {
+     "group": "Cosmetics",
+     "name": "CosmeticVertexes",
+     "type": "TechDraw::PropertyCosmeticVertexList",
+     "value": []
+    },
+    {
+     "group": "Projection",
+     "name": "Direction",
+     "type": "App::PropertyVector",
+     "value": [
+      0.0,
+      -1.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Projection",
+     "name": "Focus",
+     "type": "App::PropertyDistance",
+     "value": {
+      "unit": "Length",
+      "value": 100.0
+     }
+    },
+    {
+     "group": "Cosmetics",
+     "name": "GeomFormats",
+     "type": "TechDraw::PropertyGeomFormatList",
+     "value": []
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "HardHidden",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "IsoCount",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "IsoHidden",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "IsoVisible",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "FrontView"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Base",
+     "name": "LockPosition",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Projection",
+     "name": "Perspective",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "Rotation",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Scale",
+     "type": "App::PropertyFloatConstraint",
+     "value": 1.0
+    },
+    {
+     "enum": [
+      "Page",
+      "Automatic",
+      "Custom"
+     ],
+     "group": "Base",
+     "name": "ScaleType",
+     "type": "App::PropertyEnumeration",
+     "value": "Page"
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "ScrubCount",
+     "type": "App::PropertyInteger",
+     "value": 1
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "SeamHidden",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "SeamVisible",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "SmoothHidden",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "SmoothVisible",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Projection",
+     "name": "Source",
+     "type": "App::PropertyLinkList",
+     "value": [
+      {
+       "object": "Cut"
+      }
+     ]
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "X",
+     "type": "App::PropertyDistance",
+     "value": {
+      "unit": "Length",
+      "value": 100.0
+     }
+    },
+    {
+     "group": "Projection",
+     "name": "XDirection",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Projection",
+     "name": "XSource",
+     "type": "App::PropertyXLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Y",
+     "type": "App::PropertyDistance",
+     "value": {
+      "unit": "Length",
+      "value": 80.0
+     }
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "TechDraw::DrawViewPart"
+  },
+  {
+   "detail": {
+    "scale": 1.0,
+    "template": "Template",
+    "template_file": "A4_Landscape_blank.svg",
+    "views": [
+     {
+      "name": "Dimension",
+      "type": "TechDraw::DrawViewDimension"
+     },
+     {
+      "name": "FrontView",
+      "type": "TechDraw::DrawViewPart"
+     },
+     {
+      "name": "TopView",
+      "type": "TechDraw::DrawViewPart"
+     }
+    ]
+   },
+   "expressions": [],
+   "in_list": [],
+   "kind": "techdraw_page",
+   "label": "Page",
+   "name": "Page",
+   "out_list": [
+    "Dimension",
+    "FrontView",
+    "Template",
+    "TopView"
+   ],
+   "properties": [
+    {
+     "group": "Page",
+     "name": "KeepUpdated",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Page"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Page",
+     "name": "NextBalloonIndex",
+     "type": "App::PropertyInteger",
+     "value": 1
+    },
+    {
+     "enum": [
+      "First angle",
+      "Third angle"
+     ],
+     "group": "",
+     "name": "ProjectionType",
+     "type": "App::PropertyEnumeration",
+     "value": "First angle"
+    },
+    {
+     "group": "Page",
+     "name": "Scale",
+     "type": "App::PropertyFloatConstraint",
+     "value": 1.0
+    },
+    {
+     "group": "Page",
+     "name": "Template",
+     "type": "App::PropertyLink",
+     "value": {
+      "object": "Template"
+     }
+    },
+    {
+     "group": "Page",
+     "name": "Views",
+     "type": "App::PropertyLinkList",
+     "value": [
+      {
+       "object": "TopView"
+      },
+      {
+       "object": "FrontView"
+      },
+      {
+       "object": "Dimension"
+      }
+     ]
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "TechDraw::DrawPage"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [
+    "Page"
+   ],
+   "kind": "other",
+   "label": "Template",
+   "name": "Template",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Page Properties",
+     "name": "EditableTexts",
+     "type": "App::PropertyMap",
+     "value": {}
+    },
+    {
+     "group": "Page Properties",
+     "name": "Height",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 210.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Template"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "enum": [
+      "Portrait",
+      "Landscape"
+     ],
+     "group": "",
+     "name": "Orientation",
+     "type": "App::PropertyEnumeration",
+     "value": "Landscape"
+    },
+    {
+     "group": "Template",
+     "name": "PageResult",
+     "type": "App::PropertyFileIncluded",
+     "value": "A4_Landscape_blank.svg"
+    },
+    {
+     "group": "Template",
+     "name": "Template",
+     "type": "App::PropertyFile",
+     "value": "$RESOURCE/Mod/TechDraw/Templates/ISO/A4_Landscape_blank.svg"
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Page Properties",
+     "name": "Width",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 297.0
+     }
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "TechDraw::DrawSVGTemplate"
+  },
+  {
+   "detail": {
+    "direction": [
+     0.0,
+     0.0,
+     1.0
+    ],
+    "hidden_edges": 0,
+    "scale": 1.0,
+    "sources": [
+     "Cut"
+    ],
+    "visible_edges": 5,
+    "x": 100.0,
+    "y": 150.0
+   },
+   "expressions": [],
+   "in_list": [
+    "Dimension",
+    "Page"
+   ],
+   "kind": "techdraw_view",
+   "label": "TopView",
+   "name": "TopView",
+   "out_list": [
+    "Cut"
+   ],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Caption",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Base",
+     "name": "CaptionLocation",
+     "type": "App::PropertyVector",
+     "value": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "enum": [
+      "Top",
+      "Bottom",
+      "Left",
+      "Right",
+      "NoSnap"
+     ],
+     "group": "Base",
+     "name": "CaptionSnap",
+     "type": "App::PropertyEnumeration",
+     "value": "Bottom"
+    },
+    {
+     "group": "Cosmetics",
+     "name": "CenterLines",
+     "type": "TechDraw::PropertyCenterLineList",
+     "value": []
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "CoarseView",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Cosmetics",
+     "name": "CosmeticEdges",
+     "type": "TechDraw::PropertyCosmeticEdgeList",
+     "value": []
+    },
+    {
+     "group": "Cosmetics",
+     "name": "CosmeticVertexes",
+     "type": "TechDraw::PropertyCosmeticVertexList",
+     "value": []
+    },
+    {
+     "group": "Projection",
+     "name": "Direction",
+     "type": "App::PropertyVector",
+     "value": [
+      0.0,
+      0.0,
+      1.0
+     ]
+    },
+    {
+     "group": "Projection",
+     "name": "Focus",
+     "type": "App::PropertyDistance",
+     "value": {
+      "unit": "Length",
+      "value": 100.0
+     }
+    },
+    {
+     "group": "Cosmetics",
+     "name": "GeomFormats",
+     "type": "TechDraw::PropertyGeomFormatList",
+     "value": []
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "HardHidden",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "IsoCount",
+     "type": "App::PropertyInteger",
+     "value": 0
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "IsoHidden",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "IsoVisible",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "TopView"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Base",
+     "name": "LockPosition",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Projection",
+     "name": "Perspective",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "Base",
+     "name": "Rotation",
+     "type": "App::PropertyAngle",
+     "value": {
+      "unit": "Angle",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Scale",
+     "type": "App::PropertyFloatConstraint",
+     "value": 1.0
+    },
+    {
+     "enum": [
+      "Page",
+      "Automatic",
+      "Custom"
+     ],
+     "group": "Base",
+     "name": "ScaleType",
+     "type": "App::PropertyEnumeration",
+     "value": "Page"
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "ScrubCount",
+     "type": "App::PropertyInteger",
+     "value": 1
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "SeamHidden",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "SeamVisible",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "SmoothHidden",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "HLR Parameters",
+     "name": "SmoothVisible",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Projection",
+     "name": "Source",
+     "type": "App::PropertyLinkList",
+     "value": [
+      {
+       "object": "Cut"
+      }
+     ]
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "X",
+     "type": "App::PropertyDistance",
+     "value": {
+      "unit": "Length",
+      "value": 100.0
+     }
+    },
+    {
+     "group": "Projection",
+     "name": "XDirection",
+     "type": "App::PropertyVector",
+     "value": [
+      1.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Projection",
+     "name": "XSource",
+     "type": "App::PropertyXLinkList",
+     "value": []
+    },
+    {
+     "group": "Base",
+     "name": "Y",
+     "type": "App::PropertyDistance",
+     "value": {
+      "unit": "Length",
+      "value": 150.0
+     }
+    }
+   ],
+   "proxy": null,
+   "shape": null,
+   "state": [
+    "Up-to-date"
+   ],
+   "type": "TechDraw::DrawViewPart"
+  }
+ ],
+ "paging": {
+  "page": 0,
+  "page_size": 8,
+  "pages": 1,
+  "total": 8
+ },
+ "schema": "agentcore.state/1"
+}
