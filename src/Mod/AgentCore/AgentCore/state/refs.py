@@ -16,6 +16,12 @@ one event per reference:
   ``stale`` is true.
 - ``lost``: the element no longer exists. ``now_points_to`` reports what the
   property resolves to now, so a silent retarget is visible.
+
+``basis`` says how a verdict was reached (element map by default,
+``"freecad"`` when FreeCAD's own reference update supplied the successor,
+``"signature"`` for geometry matching). ``stale_geometry`` is true when the
+element's owner or one of its dependencies failed or was not recomputed, so
+the verdict is about geometry that no longer reflects the edit.
 """
 
 import FreeCAD as App
@@ -201,7 +207,22 @@ class ReferenceTracker:
             return pairs[rec["index"]], None
         return None, "reference removed from property"
 
+    def _stale(self, obj):
+        """True when obj or anything it depends on failed or was not recomputed."""
+        if obj is None:
+            return False
+        for o in [obj] + list(obj.OutListRecursive):
+            st = o.State
+            if "Invalid" in st or "Touched" in st or "Error" in st:
+                return True
+        return False
+
     def _classify(self, rec):
+        ev = self._classify_inner(rec)
+        ev["stale_geometry"] = self._stale(self.doc.getObject(rec["element_owner"]))
+        return ev
+
+    def _classify_inner(self, rec):
         ev = {k: rec[k] for k in ("owner", "property", "index", "linked", "element_owner", "element")}
         ev["mapped"] = rec["mapped"] or None
         ev["before"] = _sig_json(rec["sig"])
@@ -228,6 +249,24 @@ class ReferenceTracker:
             short = _short_for(shape, rec["mapped"])
             if short:
                 new_sig = signature(shape, short)
+                if rec["sig"] is not None and new_sig is not None and rec["sig"]["loose"][:2] != new_sig["loose"][:2]:
+                    # Same topological name, different kind of geometry (a
+                    # plane became a cylinder): the reference no longer means
+                    # what it meant. Report it rather than keep it silently.
+                    ev.update(outcome="lost", reason="element changed geometric type: %s -> %s" % (rec["sig"]["loose"][1], new_sig["loose"][1]),
+                              new_element=short, retargeted=now_sub is not None)
+                    return ev
+                if not same_strict(rec["sig"], new_sig):
+                    # The element map says "same element", but it moved and
+                    # another element now sits exactly where it was. That is
+                    # the classic toponaming flip (e.g. a pad's caps trading
+                    # names); trust the geometry and report it.
+                    twin = self._find_strict(shape, rec, exclude=short)
+                    if twin:
+                        ev.update(outcome="remapped", new_element=twin, basis="signature", property_updated=(now_sub == twin),
+                                  stale=(now_sub != twin), geometry_changed=False,
+                                  reason="element map kept the name on moved geometry; the original geometry is now %s" % twin)
+                        return ev
                 if short == rec["element"]:
                     ev.update(outcome="kept", new_element=short, geometry_changed=not same_strict(rec["sig"], new_sig))
                 else:
@@ -235,6 +274,20 @@ class ReferenceTracker:
                               stale=(now_sub != short), geometry_changed=not same_strict(rec["sig"], new_sig))
                 if now_sub != short and ev["outcome"] == "kept":
                     ev.update(outcome="remapped", property_updated=False, stale=True)
+                return ev
+            # The mapped name is gone. FreeCAD's own _updateElementReference
+            # may have rewritten the property onto a successor element; report
+            # that as a remap (never silently), provided it is still the same
+            # kind of element. Otherwise try an exact geometric match.
+            if (now_sub and now_sub != rec["element"] and now_sig is not None and rec["sig"] is not None
+                    and now_sig["loose"][:2] == rec["sig"]["loose"][:2]):
+                ev.update(outcome="remapped", new_element=now_sub, basis="freecad", property_updated=True, stale=False,
+                          geometry_changed=not same_strict(rec["sig"], now_sig))
+                return ev
+            found = self._find_strict(shape, rec)
+            if found:
+                ev.update(outcome="remapped", new_element=found, basis="signature", property_updated=(now_sub == found),
+                          stale=(now_sub != found), geometry_changed=False)
                 return ev
             ev.update(outcome="lost", reason="mapped element name no longer in the element map",
                       retargeted=now_sub is not None)
@@ -268,11 +321,12 @@ class ReferenceTracker:
         n = {"Face": len(shape.Faces), "Edge": len(shape.Edges), "Vertex": len(shape.Vertexes)}[etype]
         return [f"{etype}{i}" for i in range(1, n + 1)]
 
-    def _find_strict(self, shape, rec):
+    def _find_strict(self, shape, rec, exclude=None):
         if rec["sig"] is None:
             return None
+        skip = rec["element"] if exclude is None else exclude
         for c in self._candidates(shape, rec):
-            if c != rec["element"] and same_strict(rec["sig"], signature(shape, c)):
+            if c != skip and same_strict(rec["sig"], signature(shape, c)):
                 return c
         return None
 

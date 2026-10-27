@@ -1,0 +1,3167 @@
+{
+ "document": {
+  "label": "Crank",
+  "meta": {
+   "Comment": "",
+   "Company": "",
+   "CreatedBy": "",
+   "License": "All rights reserved",
+   "LicenseURL": "http://en.wikipedia.org/wiki/All_rights_reserved",
+   "UnitSystem": "Standard (mm, kg, s, \u00b0)"
+  },
+  "name": "Crank",
+  "object_count": 16,
+  "roots": [
+   "DWire",
+   "DWire001",
+   "DWire002",
+   "DWire003",
+   "DWire004",
+   "DWire005",
+   "DWire006",
+   "DWire007",
+   "Shape",
+   "Shape001",
+   "Shape002",
+   "Shape003",
+   "Shape004",
+   "Shape005",
+   "Shape006",
+   "Shape007"
+  ]
+ },
+ "objects": [
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "DWire",
+   "name": "DWire",
+   "out_list": [],
+   "properties": [
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine Plane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEnginePlane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Draft",
+     "name": "Base",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "Draft",
+     "name": "ChamferSize",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Closed",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Draft",
+     "name": "End",
+     "type": "App::PropertyVector",
+     "value": [
+      0.0,
+      20.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "FilletRadius",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "DWire"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Draft",
+     "name": "Length",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 130.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "MakeFace",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Points",
+     "type": "App::PropertyVectorList",
+     "value": [
+      [
+       0.0,
+       0.0,
+       0.0
+      ],
+      [
+       45.0,
+       0.0,
+       0.0
+      ],
+      [
+       45.0,
+       20.0,
+       0.0
+      ],
+      [
+       0.0,
+       20.0,
+       0.0
+      ]
+     ]
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Start",
+     "type": "App::PropertyVector",
+     "value": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "Tool",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": "Wire",
+   "shape": {
+    "area": 900.0,
+    "bbox": [
+     0.0,
+     0.0,
+     0.0,
+     45.0,
+     20.0,
+     0.0
+    ],
+    "edges": 4,
+    "element_map_size": 0,
+    "faces": 1,
+    "null": false,
+    "shape_type": "Face",
+    "shells": 0,
+    "solids": 0,
+    "valid": true,
+    "vertexes": 4,
+    "volume": 0.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Part2DObjectPython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "DWire001",
+   "name": "DWire001",
+   "out_list": [],
+   "properties": [
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine Plane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEnginePlane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Draft",
+     "name": "Base",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "Draft",
+     "name": "ChamferSize",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Closed",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Draft",
+     "name": "End",
+     "type": "App::PropertyVector",
+     "value": [
+      25.0,
+      20.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "FilletRadius",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "DWire001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Draft",
+     "name": "Length",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 370.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "MakeFace",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Points",
+     "type": "App::PropertyVectorList",
+     "value": [
+      [
+       0.0,
+       20.0,
+       0.0
+      ],
+      [
+       0.0,
+       180.0,
+       0.0
+      ],
+      [
+       25.0,
+       180.0,
+       0.0
+      ],
+      [
+       25.0,
+       20.0,
+       0.0
+      ]
+     ]
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Start",
+     "type": "App::PropertyVector",
+     "value": [
+      0.0,
+      20.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "Tool",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": "Wire",
+   "shape": {
+    "area": 4000.0,
+    "bbox": [
+     0.0,
+     20.0,
+     0.0,
+     25.0,
+     180.0,
+     0.0
+    ],
+    "edges": 4,
+    "element_map_size": 0,
+    "faces": 1,
+    "null": false,
+    "shape_type": "Face",
+    "shells": 0,
+    "solids": 0,
+    "valid": true,
+    "vertexes": 4,
+    "volume": 0.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Part2DObjectPython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "DWire002",
+   "name": "DWire002",
+   "out_list": [],
+   "properties": [
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine Plane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEnginePlane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Draft",
+     "name": "Base",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "Draft",
+     "name": "ChamferSize",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Closed",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Draft",
+     "name": "End",
+     "type": "App::PropertyVector",
+     "value": [
+      45.0,
+      180.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "FilletRadius",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "DWire002"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Draft",
+     "name": "Length",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 130.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "MakeFace",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Points",
+     "type": "App::PropertyVectorList",
+     "value": [
+      [
+       0.0,
+       180.0,
+       0.0
+      ],
+      [
+       0.0,
+       200.0,
+       0.0
+      ],
+      [
+       45.0,
+       200.0,
+       0.0
+      ],
+      [
+       45.0,
+       180.0,
+       0.0
+      ]
+     ]
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Start",
+     "type": "App::PropertyVector",
+     "value": [
+      0.0,
+      180.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "Tool",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": "Wire",
+   "shape": {
+    "area": 900.0,
+    "bbox": [
+     0.0,
+     180.0,
+     0.0,
+     45.0,
+     200.0,
+     0.0
+    ],
+    "edges": 4,
+    "element_map_size": 0,
+    "faces": 1,
+    "null": false,
+    "shape_type": "Face",
+    "shells": 0,
+    "solids": 0,
+    "valid": true,
+    "vertexes": 4,
+    "volume": 0.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Part2DObjectPython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "DWire003",
+   "name": "DWire003",
+   "out_list": [],
+   "properties": [
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine Plane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEnginePlane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Draft",
+     "name": "Base",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "Draft",
+     "name": "ChamferSize",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Closed",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Draft",
+     "name": "End",
+     "type": "App::PropertyVector",
+     "value": [
+      25.0,
+      20.0,
+      9.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "FilletRadius",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "DWire003"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Draft",
+     "name": "Length",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 338.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "MakeFace",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Points",
+     "type": "App::PropertyVectorList",
+     "value": [
+      [
+       25.0,
+       20.0,
+       0.0
+      ],
+      [
+       25.0,
+       180.0,
+       0.0
+      ],
+      [
+       25.0,
+       180.0,
+       9.0
+      ],
+      [
+       25.0,
+       20.0,
+       9.0
+      ]
+     ]
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Start",
+     "type": "App::PropertyVector",
+     "value": [
+      25.0,
+      20.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "Tool",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": "Wire",
+   "shape": {
+    "area": 1440.0,
+    "bbox": [
+     25.0,
+     20.0,
+     0.0,
+     25.0,
+     180.0,
+     9.0
+    ],
+    "edges": 4,
+    "element_map_size": 0,
+    "faces": 1,
+    "null": false,
+    "shape_type": "Face",
+    "shells": 0,
+    "solids": 0,
+    "valid": true,
+    "vertexes": 4,
+    "volume": 0.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Part2DObjectPython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "DWire004",
+   "name": "DWire004",
+   "out_list": [],
+   "properties": [
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine Plane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEnginePlane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Draft",
+     "name": "Base",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "Draft",
+     "name": "ChamferSize",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Closed",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Draft",
+     "name": "End",
+     "type": "App::PropertyVector",
+     "value": [
+      45.0,
+      180.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "FilletRadius",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "DWire004"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Draft",
+     "name": "Length",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 107.941151
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "MakeFace",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Points",
+     "type": "App::PropertyVectorList",
+     "value": [
+      [
+       45.0,
+       200.0,
+       0.0
+      ],
+      [
+       68.0,
+       200.0,
+       25.0
+      ],
+      [
+       68.0,
+       180.0,
+       25.0
+      ],
+      [
+       45.0,
+       180.0,
+       0.0
+      ]
+     ]
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Start",
+     "type": "App::PropertyVector",
+     "value": [
+      45.0,
+      200.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "Tool",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": "Wire",
+   "shape": {
+    "area": 679.41151,
+    "bbox": [
+     45.0,
+     180.0,
+     0.0,
+     68.0,
+     200.0,
+     25.0
+    ],
+    "edges": 4,
+    "element_map_size": 0,
+    "faces": 1,
+    "null": false,
+    "shape_type": "Face",
+    "shells": 0,
+    "solids": 0,
+    "valid": true,
+    "vertexes": 4,
+    "volume": 0.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Part2DObjectPython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "DWire005",
+   "name": "DWire005",
+   "out_list": [],
+   "properties": [
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine Plane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEnginePlane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Draft",
+     "name": "Base",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "Draft",
+     "name": "ChamferSize",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Closed",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Draft",
+     "name": "End",
+     "type": "App::PropertyVector",
+     "value": [
+      68.0,
+      20.0,
+      25.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "FilletRadius",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "DWire005"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Draft",
+     "name": "Length",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 352.966043
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "MakeFace",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Points",
+     "type": "App::PropertyVectorList",
+     "value": [
+      [
+       68.0,
+       180.0,
+       25.0
+      ],
+      [
+       56.7,
+       180.0,
+       13.0
+      ],
+      [
+       56.7,
+       20.0,
+       13.0
+      ],
+      [
+       68.0,
+       20.0,
+       25.0
+      ]
+     ]
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Start",
+     "type": "App::PropertyVector",
+     "value": [
+      68.0,
+      180.0,
+      25.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "Tool",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": "Wire",
+   "shape": {
+    "area": 2637.283451,
+    "bbox": [
+     56.7,
+     20.0,
+     13.0,
+     68.0,
+     180.0,
+     25.0
+    ],
+    "edges": 4,
+    "element_map_size": 0,
+    "faces": 1,
+    "null": false,
+    "shape_type": "Face",
+    "shells": 0,
+    "solids": 0,
+    "valid": true,
+    "vertexes": 4,
+    "volume": 0.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Part2DObjectPython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "DWire006",
+   "name": "DWire006",
+   "out_list": [],
+   "properties": [
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine Plane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEnginePlane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Draft",
+     "name": "Base",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "Draft",
+     "name": "ChamferSize",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Closed",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Draft",
+     "name": "End",
+     "type": "App::PropertyVector",
+     "value": [
+      45.0,
+      20.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "FilletRadius",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "DWire006"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Draft",
+     "name": "Length",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 107.941151
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "MakeFace",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Points",
+     "type": "App::PropertyVectorList",
+     "value": [
+      [
+       45.0,
+       0.0,
+       0.0
+      ],
+      [
+       68.0,
+       0.0,
+       25.0
+      ],
+      [
+       68.0,
+       20.0,
+       25.0
+      ],
+      [
+       45.0,
+       20.0,
+       0.0
+      ]
+     ]
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Start",
+     "type": "App::PropertyVector",
+     "value": [
+      45.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "Tool",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": "Wire",
+   "shape": {
+    "area": 679.41151,
+    "bbox": [
+     45.0,
+     0.0,
+     0.0,
+     68.0,
+     20.0,
+     25.0
+    ],
+    "edges": 4,
+    "element_map_size": 0,
+    "faces": 1,
+    "null": false,
+    "shape_type": "Face",
+    "shells": 0,
+    "solids": 0,
+    "valid": true,
+    "vertexes": 4,
+    "volume": 0.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Part2DObjectPython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "DWire007",
+   "name": "DWire007",
+   "out_list": [],
+   "properties": [
+    {
+     "enum": [
+      "Engine 3D",
+      "Engine Plane",
+      "Engine Line",
+      "Engine Point"
+     ],
+     "group": "Attachment",
+     "name": "AttacherEngine",
+     "type": "App::PropertyEnumeration",
+     "value": "Engine Plane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttacherType",
+     "type": "App::PropertyString",
+     "value": "Attacher::AttachEnginePlane"
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentOffset",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Attachment",
+     "name": "AttachmentSupport",
+     "type": "App::PropertyLinkSubList",
+     "value": []
+    },
+    {
+     "group": "Draft",
+     "name": "Base",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "Draft",
+     "name": "ChamferSize",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Closed",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Draft",
+     "name": "End",
+     "type": "App::PropertyVector",
+     "value": [
+      68.0,
+      200.0,
+      25.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "FilletRadius",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 0.0
+     }
+    },
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "DWire007"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "Draft",
+     "name": "Length",
+     "type": "App::PropertyLength",
+     "value": {
+      "unit": "Length",
+      "value": 420.0
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "MakeFace",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "enum": [
+      "Deactivated",
+      "Translate",
+      "ObjectXY",
+      "ObjectXZ",
+      "ObjectYZ",
+      "FlatFace",
+      "TangentPlane",
+      "NormalToEdge",
+      "FrenetNB",
+      "FrenetTN",
+      "FrenetTB",
+      "Concentric",
+      "SectionOfRevolution",
+      "ThreePointsPlane",
+      "ThreePointsNormal",
+      "Folding",
+      "ObjectX",
+      "ObjectY",
+      "ObjectZ",
+      "AxisOfCurvature",
+      "Directrix1",
+      "Directrix2",
+      "Asymptote1",
+      "Asymptote2",
+      "Tangent",
+      "Normal",
+      "Binormal",
+      "TangentU",
+      "TangentV",
+      "TwoPointLine",
+      "IntersectionLine",
+      "ProximityLine",
+      "ObjectOrigin",
+      "Focus1",
+      "Focus2",
+      "OnEdge",
+      "CenterOfCurvature",
+      "CenterOfMass",
+      "IntersectionPoint",
+      "Vertex",
+      "ProximityPoint1",
+      "ProximityPoint2",
+      "AxisOfInertia1",
+      "AxisOfInertia2",
+      "AxisOfInertia3",
+      "InertialCS",
+      "FaceNormal",
+      "OZX",
+      "OZY",
+      "OXY",
+      "OXZ",
+      "OYZ",
+      "OYX",
+      "ParallelPlane",
+      "MidPoint",
+      "MidPlane"
+     ],
+     "group": "Attachment",
+     "name": "MapMode",
+     "type": "App::PropertyEnumeration",
+     "value": "Deactivated"
+    },
+    {
+     "group": "Attachment",
+     "name": "MapPathParameter",
+     "type": "App::PropertyFloat",
+     "value": 0.0
+    },
+    {
+     "group": "Attachment",
+     "name": "MapReversed",
+     "type": "App::PropertyBool",
+     "value": false
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Points",
+     "type": "App::PropertyVectorList",
+     "value": [
+      [
+       68.0,
+       200.0,
+       25.0
+      ],
+      [
+       68.0,
+       200.0,
+       35.0
+      ],
+      [
+       68.0,
+       0.0,
+       35.0
+      ],
+      [
+       68.0,
+       0.0,
+       25.0
+      ],
+      [
+       68.0,
+       200.0,
+       25.0
+      ]
+     ]
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "Draft",
+     "name": "Start",
+     "type": "App::PropertyVector",
+     "value": [
+      68.0,
+      200.0,
+      25.0
+     ]
+    },
+    {
+     "group": "Draft",
+     "name": "Tool",
+     "type": "App::PropertyLink",
+     "value": null
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": "Wire",
+   "shape": {
+    "area": 2000.0,
+    "bbox": [
+     68.0,
+     0.0,
+     25.0,
+     68.0,
+     200.0,
+     35.0
+    ],
+    "edges": 4,
+    "element_map_size": 0,
+    "faces": 1,
+    "null": false,
+    "shape_type": "Face",
+    "shells": 0,
+    "solids": 0,
+    "valid": true,
+    "vertexes": 4,
+    "volume": 0.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Part2DObjectPython"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "Shape",
+   "name": "Shape",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Shape"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 2320.0,
+    "bbox": [
+     0.0,
+     0.0,
+     0.0,
+     45.0,
+     20.0,
+     4.0
+    ],
+    "edges": 12,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 8,
+    "volume": 3600.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "Shape001",
+   "name": "Shape001",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Shape001"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 9480.0,
+    "bbox": [
+     0.0,
+     20.0,
+     0.0,
+     25.0,
+     180.0,
+     4.0
+    ],
+    "edges": 12,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 8,
+    "volume": 16000.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "Shape002",
+   "name": "Shape002",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Shape002"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 2320.0,
+    "bbox": [
+     0.0,
+     180.0,
+     0.0,
+     45.0,
+     200.0,
+     4.0
+    ],
+    "edges": 12,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 8,
+    "volume": 3600.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "Shape003",
+   "name": "Shape003",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Shape003"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 4160.0,
+    "bbox": [
+     25.0,
+     20.0,
+     0.0,
+     25.0,
+     180.0,
+     13.0
+    ],
+    "edges": 12,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 8,
+    "volume": 0.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "Shape004",
+   "name": "Shape004",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Shape004"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 1702.82302,
+    "bbox": [
+     45.0,
+     180.0,
+     0.0,
+     68.0,
+     200.0,
+     29.0
+    ],
+    "edges": 12,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 8,
+    "volume": 1840.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "Shape005",
+   "name": "Shape005",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Shape005"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 6644.966902,
+    "bbox": [
+     56.7,
+     20.0,
+     13.0,
+     68.0,
+     180.0,
+     29.0
+    ],
+    "edges": 12,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 8,
+    "volume": 7232.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "Shape006",
+   "name": "Shape006",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Shape006"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 1702.82302,
+    "bbox": [
+     45.0,
+     0.0,
+     0.0,
+     68.0,
+     20.0,
+     29.0
+    ],
+    "edges": 12,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 8,
+    "volume": 1840.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Feature"
+  },
+  {
+   "detail": null,
+   "expressions": [],
+   "in_list": [],
+   "kind": "part_feature",
+   "label": "Shape007",
+   "name": "Shape007",
+   "out_list": [],
+   "properties": [
+    {
+     "group": "Base",
+     "name": "Label",
+     "type": "App::PropertyString",
+     "value": "Shape007"
+    },
+    {
+     "group": "Base",
+     "name": "Label2",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
+     "group": "",
+     "name": "Placement",
+     "type": "App::PropertyPlacement",
+     "value": {
+      "base": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "rotation": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "group": "",
+     "name": "ShapeMaterial",
+     "type": "Materials::PropertyMaterial",
+     "value": {
+      "unserialised": "Material"
+     }
+    },
+    {
+     "group": "",
+     "name": "Visibility",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
+     "group": "Base",
+     "name": "_ElementMapVersion",
+     "type": "App::PropertyString",
+     "value": "?"
+    }
+   ],
+   "proxy": null,
+   "shape": {
+    "area": 5600.0,
+    "bbox": [
+     68.0,
+     0.0,
+     25.0,
+     68.0,
+     200.0,
+     39.0
+    ],
+    "edges": 12,
+    "element_map_size": 0,
+    "faces": 6,
+    "null": false,
+    "shape_type": "Solid",
+    "shells": 1,
+    "solids": 1,
+    "valid": true,
+    "vertexes": 8,
+    "volume": 0.0
+   },
+   "state": [
+    "Touched"
+   ],
+   "type": "Part::Feature"
+  }
+ ],
+ "paging": {
+  "page": 0,
+  "page_size": 16,
+  "pages": 1,
+  "total": 16
+ },
+ "schema": "agentcore.state/1"
+}

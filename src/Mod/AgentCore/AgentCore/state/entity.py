@@ -241,8 +241,7 @@ def describe_entity(obj, subname):
             words.append(f"length {_num(sub.Length)} mm")
     else:
         out["geometry"] = "Point"
-        words.append("vertex")
-        words.append("at (%s)" % ", ".join(_num(c) for c in (sub.Point.x, sub.Point.y, sub.Point.z)))
+        words.append("vertex at (%s)" % ", ".join(_num(c) for c in (sub.Point.x, sub.Point.y, sub.Point.z)))
     try:
         out["center"] = vec(sub.CenterOfMass)
     except Exception:

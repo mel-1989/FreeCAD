@@ -122,7 +122,7 @@ def dump(doc, page=None, page_size=None):
     if page is None and page_size is None:
         sel, page_no, size = objs, 0, max(total, 1)
     else:
-        size = int(page_size or DEFAULT_PAGE_SIZE)
+        size = int(DEFAULT_PAGE_SIZE if page_size is None else page_size)
         if size < 1:
             raise ValueError("page_size must be >= 1")
         page_no = int(page or 0)
