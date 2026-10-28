@@ -237,6 +237,28 @@ finally:
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
+    def test_deny_revokes_a_token_already_polled(self):
+        d = short_dir("acapp-")
+        a = Approver(d)
+        try:
+            from AgentCore.diff import approver as ap
+            q = {"turn_id": "t", "digest": "d"}
+            self.assertTrue(a.say("approve t d").startswith("APPROVED"))
+            tok = ap.request(a.socket, dict(q, op="poll"))["token"]
+            self.assertTrue(a.say("deny t d").startswith("DENIED"))
+            r = ap.request(a.socket, dict(q, op="check", token=tok))
+            self.assertFalse(r["ok"])
+            self.assertIn("revoked", r["reason"])
+            self.assertEqual(ap.request(a.socket, dict(q, op="status"))["status"], "denied")
+            # a later approval mints a fresh token; the pre-deny one stays dead
+            self.assertTrue(a.say("approve t d").startswith("APPROVED"))
+            tok2 = ap.request(a.socket, dict(q, op="poll"))["token"]
+            self.assertFalse(ap.request(a.socket, dict(q, op="check", token=tok))["ok"])
+            self.assertTrue(ap.request(a.socket, dict(q, op="check", token=tok2))["ok"])
+        finally:
+            a.close()
+            shutil.rmtree(d, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

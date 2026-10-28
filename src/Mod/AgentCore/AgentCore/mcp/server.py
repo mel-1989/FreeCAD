@@ -128,7 +128,8 @@ class DocHandle:
         self.source = source
         self.new_name = new_name
         self.worker = None
-        self.checkpoint = None  # pre-change snapshot, the respawn source while a change is open
+        self.checkpoint = None  # last committed state (pre-change while a change is open, post-accept after): the respawn source
+        self.checkpoint_path = None  # where the worker refreshes it on an accept
         self.lost = None        # set when the worker died; reported once on respawn
 
 
@@ -281,7 +282,11 @@ class Server:
         return h
 
     def _spawn(self, h, source):
-        w = SessionWorker(self.freecadcmd, extra_env=self.worker_env, policy_mode=self.exec_policy,
+        env = dict(self.worker_env or {})
+        if h.checkpoint_path is None:
+            h.checkpoint_path = os.path.join(self._tmp, f"{h.id}-checkpoint.FCStd")
+        env["CADFORK_MCP_CHECKPOINT"] = h.checkpoint_path  # the worker rewrites it atomically on every accept
+        w = SessionWorker(self.freecadcmd, extra_env=env, policy_mode=self.exec_policy,
                           start_timeout=self.worker_start_timeout)
         try:
             if source:
@@ -304,7 +309,8 @@ class Server:
             self._spawn(h, src)
         except (WorkerStartError, BridgeError, OSError, ConnectionError, TimeoutError) as e:
             raise ToolError("session_lost", f"could not respawn the session worker: {e}")
-        h.checkpoint = None
+        # The checkpoint stays: the respawned document holds exactly that state, so a second crash
+        # must restore it too (clearing it fell back to the original source and lost accepted work).
         if h.lost is None:
             h.lost = {"respawned_from": src or "empty document"}
         return h.worker
@@ -423,22 +429,20 @@ class Server:
 
     def t_begin_change(self, doc=None, discard_pending=False):
         h = self._handle(doc)
-        if h.checkpoint and discard_pending:
-            # A change is open: the existing checkpoint already holds the pre-change state.
-            res = self._call(h, "begin", {"discard_pending": True})
-            return {"doc": h.id, **res, "checkpoint": "pre-change snapshot kept for crash recovery"}
-        ck = os.path.join(self._tmp, f"{h.id}-checkpoint.FCStd")
-        self._call(h, "snapshot", {"path": ck})
-        try:
+        if self._call(h, "info", {}).get("change") is not None:
+            # A change is open or proposed: the document holds unapproved edits, so it must never become
+            # the checkpoint. Without discard_pending the worker refuses (change_pending); with it the
+            # change is rejected and the existing checkpoint already holds the last committed state.
             res = self._call(h, "begin", {"discard_pending": bool(discard_pending)})
-        except ToolError:
-            if not h.checkpoint:
-                try:
-                    os.unlink(ck)
-                except OSError:
-                    pass
-            raise
+            return {"doc": h.id, **res, "checkpoint": "pre-change snapshot kept for crash recovery"}
+        if h.checkpoint_path is None:
+            h.checkpoint_path = os.path.join(self._tmp, f"{h.id}-checkpoint.FCStd")
+        ck = h.checkpoint_path
+        tmp = ck[:-len(".FCStd")] + ".new.FCStd"  # not ck + ".tmp": saveCopy uses that name itself
+        self._call(h, "snapshot", {"path": tmp})
+        os.replace(tmp, ck)  # atomic: a crash never leaves a torn checkpoint
         h.checkpoint = ck
+        res = self._call(h, "begin", {"discard_pending": bool(discard_pending)})
         return {"doc": h.id, **res, "checkpoint": "pre-change snapshot kept for crash recovery"}
 
     def t_propose_change(self, doc=None, summary=""):

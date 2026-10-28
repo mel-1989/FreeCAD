@@ -1,7 +1,7 @@
 {
  "documents": {
   "data/examples/ArchDetail.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/examples/ArchDetail.FCStd",
+   "doc": "$FC_SRC/data/examples/ArchDetail.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -156,7 +156,7 @@
    "returncode": 0
   },
   "data/examples/AssemblyExample.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/examples/AssemblyExample.FCStd",
+   "doc": "$FC_SRC/data/examples/AssemblyExample.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -360,7 +360,7 @@
    "returncode": 0
   },
   "data/examples/BIMExample.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/examples/BIMExample.FCStd",
+   "doc": "$FC_SRC/data/examples/BIMExample.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -515,7 +515,7 @@
    "returncode": 0
   },
   "data/examples/EngineBlock.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/examples/EngineBlock.FCStd",
+   "doc": "$FC_SRC/data/examples/EngineBlock.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -739,7 +739,7 @@
    "returncode": 0
   },
   "data/examples/FEMExample.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/examples/FEMExample.FCStd",
+   "doc": "$FC_SRC/data/examples/FEMExample.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -907,7 +907,7 @@
    "returncode": 0
   },
   "data/examples/PartDesignExample.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/examples/PartDesignExample.FCStd",
+   "doc": "$FC_SRC/data/examples/PartDesignExample.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -1130,7 +1130,7 @@
    "returncode": 0
   },
   "data/examples/draft_test_objects.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/examples/draft_test_objects.FCStd",
+   "doc": "$FC_SRC/data/examples/draft_test_objects.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -1343,7 +1343,7 @@
    "returncode": 0
   },
   "data/tests/Crank.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/tests/Crank.fcstd",
+   "doc": "$FC_SRC/data/tests/Crank.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -1547,7 +1547,7 @@
    "returncode": 0
   },
   "data/tests/PadTest.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/tests/PadTest.fcstd",
+   "doc": "$FC_SRC/data/tests/PadTest.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -1625,7 +1625,7 @@
    "returncode": 0
   },
   "data/tests/PocketTest.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/tests/PocketTest.fcstd",
+   "doc": "$FC_SRC/data/tests/PocketTest.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -1848,7 +1848,7 @@
    "returncode": 0
   },
   "data/tests/ProjectTest.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/tests/ProjectTest.FCStd",
+   "doc": "$FC_SRC/data/tests/ProjectTest.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -2003,7 +2003,7 @@
    "returncode": 0
   },
   "data/tests/TestVRMLTextures.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/data/tests/TestVRMLTextures.FCStd",
+   "doc": "$FC_SRC/data/tests/TestVRMLTextures.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -2158,7 +2158,7 @@
    "returncode": 0
   },
   "freecad-library/Architectural Parts/Beams/Precast Concrete/Precast_Beam_for_Slabs_BIM_Parametric.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib00.FCStd",
+   "doc": "$WORK/f6fix/lib/lib00.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -2388,7 +2388,7 @@
    "returncode": 0
   },
   "freecad-library/Architectural Parts/Doors/Wood/Single door with transom and trims.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib01.FCStd",
+   "doc": "$WORK/f6fix/lib/lib01.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -2543,7 +2543,7 @@
    "returncode": 0
   },
   "freecad-library/Architectural Parts/Symbols/People symbols/Woman03.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib02.FCStd",
+   "doc": "$WORK/f6fix/lib/lib02.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -2698,7 +2698,7 @@
    "returncode": 0
   },
   "freecad-library/Computing/Storage/SD/SD_card.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib03.FCStd",
+   "doc": "$WORK/f6fix/lib/lib03.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -2902,7 +2902,7 @@
    "returncode": 0
   },
   "freecad-library/Electrical Parts/Motors/Stepper/28BYJ-48/28BYJ-48_gear_horn.fcstd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib04.FCStd",
+   "doc": "$WORK/f6fix/lib/lib04.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -3115,7 +3115,7 @@
    "returncode": 0
   },
   "freecad-library/Electrical Parts/Winch/Winch-Model1-Parts/Winch-Model1-Assembly-Cable-Guide.fcstd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib05.FCStd",
+   "doc": "$WORK/f6fix/lib/lib05.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -3319,7 +3319,7 @@
    "returncode": 0
   },
   "freecad-library/Electronics Parts/Connectors/power-connectors/jack_DC_2.1mm_PCB.fcstd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib06.FCStd",
+   "doc": "$WORK/f6fix/lib/lib06.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -3424,7 +3424,7 @@
    "returncode": 0
   },
   "freecad-library/Electronics Parts/Headers/2.54mm-pitch/male/straight/3x6-male-pin-header.fcstd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib07.FCStd",
+   "doc": "$WORK/f6fix/lib/lib07.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -3502,7 +3502,7 @@
    "returncode": 0
   },
   "freecad-library/Electronics Parts/Miscellaneous/DaggerPod.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib08.FCStd",
+   "doc": "$WORK/f6fix/lib/lib08.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -3706,7 +3706,7 @@
    "returncode": 0
   },
   "freecad-library/Electronics Parts/Switch/Limit switch/Microswitch_SPDT_Horizontal_L.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib09.FCStd",
+   "doc": "$WORK/f6fix/lib/lib09.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -3919,7 +3919,7 @@
    "returncode": 0
   },
   "freecad-library/Generic objects/Scale Models/Cement mixer truck/cabin_door.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib10.FCStd",
+   "doc": "$WORK/f6fix/lib/lib10.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -4153,7 +4153,7 @@
    "returncode": 0
   },
   "freecad-library/HVAC/Ducts/Rectangular/Conections/Extended_retangular_bend.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib11.FCStd",
+   "doc": "$WORK/f6fix/lib/lib11.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -4240,7 +4240,7 @@
    "returncode": 0
   },
   "freecad-library/Industrial Design/Shelf/IKEA_Kallax_77x42cm.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib12.FCStd",
+   "doc": "$WORK/f6fix/lib/lib12.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -4464,7 +4464,7 @@
    "returncode": 0
   },
   "freecad-library/Logistics/Shipping Containers/20_Feet_ISO_Container/front-cover_top.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib13.FCStd",
+   "doc": "$WORK/f6fix/lib/lib13.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -4677,7 +4677,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Bearings/parametric_ball_bearing/Parametric_Ball_Bearing.fcstd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib14.FCStd",
+   "doc": "$WORK/f6fix/lib/lib14.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -4881,7 +4881,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Chains/Sprocket/ISO 606/Simplex \u00bdx\u215b/Sprocket ANSI simplex \u00bdx\u215b z08.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib15.FCStd",
+   "doc": "$WORK/f6fix/lib/lib15.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -5094,7 +5094,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Metric/Close/M16/M16CloseMean.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib16.FCStd",
+   "doc": "$WORK/f6fix/lib/lib16.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -5312,7 +5312,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Metric/Close/M64/M64CloseMax.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib17.FCStd",
+   "doc": "$WORK/f6fix/lib/lib17.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -5530,7 +5530,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Metric/Loose/M24/M24LooseMax.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib18.FCStd",
+   "doc": "$WORK/f6fix/lib/lib18.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -5748,7 +5748,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Metric/Loose/M80/M80LooseMin.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib19.FCStd",
+   "doc": "$WORK/f6fix/lib/lib19.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -5966,7 +5966,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Metric/Normal/M36/M36NormalMin.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib20.FCStd",
+   "doc": "$WORK/f6fix/lib/lib20.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -6184,7 +6184,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Unified/Close/U_1_1s4/U_1_1s4CloseMean.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib21.FCStd",
+   "doc": "$WORK/f6fix/lib/lib21.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -6402,7 +6402,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Unified/Close/U_Number_3/U_Number_3CloseMax.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib22.FCStd",
+   "doc": "$WORK/f6fix/lib/lib22.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -6620,7 +6620,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Unified/Loose/U_5s16/U_5s16LooseMax.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib23.FCStd",
+   "doc": "$WORK/f6fix/lib/lib23.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -6838,7 +6838,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Unified/Normal/U_1/U_1NormalMin.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib24.FCStd",
+   "doc": "$WORK/f6fix/lib/lib24.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -7056,7 +7056,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolt Clearance Hole Cylinders/Unified/Normal/U_Number_1/U_Number_1NormalMin.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib25.FCStd",
+   "doc": "$WORK/f6fix/lib/lib25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -7274,7 +7274,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M10x12 ISO4762 8,8 A2K.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib26.FCStd",
+   "doc": "$WORK/f6fix/lib/lib26.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -7471,7 +7471,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M12x160 ISO4762 8,8 A2K.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib27.FCStd",
+   "doc": "$WORK/f6fix/lib/lib27.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -7668,7 +7668,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M14x60 ISO4762 8,8 A2K.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib28.FCStd",
+   "doc": "$WORK/f6fix/lib/lib28.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -7865,7 +7865,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M2,5x25 ISO4762 8,8 A2K.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib29.FCStd",
+   "doc": "$WORK/f6fix/lib/lib29.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -8062,7 +8062,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M24x190 ISO4762 8,8 A2K.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib30.FCStd",
+   "doc": "$WORK/f6fix/lib/lib30.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -8259,7 +8259,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M30x400 ISO4762 8,8 A2K.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib31.FCStd",
+   "doc": "$WORK/f6fix/lib/lib31.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -8456,7 +8456,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M42x180 ISO4762 8,8 A2K.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib32.FCStd",
+   "doc": "$WORK/f6fix/lib/lib32.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -8653,7 +8653,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M5x130 ISO4762 8,8 A2K.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib33.FCStd",
+   "doc": "$WORK/f6fix/lib/lib33.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -8850,7 +8850,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M6x14 ISO4762 8,8 A2K.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib34.FCStd",
+   "doc": "$WORK/f6fix/lib/lib34.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -9047,7 +9047,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Bolts & Screws/Metric/ISO4762 Hexagon socket head cap screws/Screw M8x160 ISO4762 8,8 A2K.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib35.FCStd",
+   "doc": "$WORK/f6fix/lib/lib35.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -9244,7 +9244,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Nuts/Metric/ISO4032_Hex_Nut_M10.fcstd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib36.FCStd",
+   "doc": "$WORK/f6fix/lib/lib36.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -9448,7 +9448,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Washers/Metric/DIN127_CLASS_B_M14GrowerWasher.fcstd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib37.FCStd",
+   "doc": "$WORK/f6fix/lib/lib37.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -9672,7 +9672,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Washers/Metric/DIN463_M4TabWasher.fcstd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib38.FCStd",
+   "doc": "$WORK/f6fix/lib/lib38.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -9750,7 +9750,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Washers/Metric/ISO7091DIN126_CLASS_C_M18FlatWasher.fcstd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib39.FCStd",
+   "doc": "$WORK/f6fix/lib/lib39.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -9968,7 +9968,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Fasteners/Washers/Metric/ISO7092DIN433_M4FlatWasher.fcstd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib40.FCStd",
+   "doc": "$WORK/f6fix/lib/lib40.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -10186,7 +10186,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/BOSCH/Profile Bosh 40x40mm.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib41.FCStd",
+   "doc": "$WORK/f6fix/lib/lib41.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -10264,7 +10264,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/DIN1025-3 HE-A-Profiles/HE-A-Profile 500 DIN1025-3 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib42.FCStd",
+   "doc": "$WORK/f6fix/lib/lib42.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -10342,7 +10342,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/DIN1025-5 IPE-Profiles/IPE-Profile 300 DIN1025-5 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib43.FCStd",
+   "doc": "$WORK/f6fix/lib/lib43.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -10420,7 +10420,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10056 Equal Angle Bars/Angle Bar L160x160x10 EN10056 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib44.FCStd",
+   "doc": "$WORK/f6fix/lib/lib44.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -10624,7 +10624,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10056 Equal Angle Bars/Angle Bar L60x60x8 EN10056 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib45.FCStd",
+   "doc": "$WORK/f6fix/lib/lib45.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -10828,7 +10828,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10056 Unequal Angle Bars/Angle Bar 140x90x10 EN10056 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib46.FCStd",
+   "doc": "$WORK/f6fix/lib/lib46.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -11032,7 +11032,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10056 Unequal Angle Bars/Angle Bar 70x50x7 EN10056 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib47.FCStd",
+   "doc": "$WORK/f6fix/lib/lib47.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -11236,7 +11236,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10058 Flat steel bars/Flat Bar 120x25 EN10058 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib48.FCStd",
+   "doc": "$WORK/f6fix/lib/lib48.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -11314,7 +11314,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10058 Flat steel bars/Flat Bar 150x5 EN10058 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib49.FCStd",
+   "doc": "$WORK/f6fix/lib/lib49.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -11392,7 +11392,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10058 Flat steel bars/Flat Bar 30x20 EN10058 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib50.FCStd",
+   "doc": "$WORK/f6fix/lib/lib50.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -11470,7 +11470,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10058 Flat steel bars/Flat Bar 50x40 EN10058 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib51.FCStd",
+   "doc": "$WORK/f6fix/lib/lib51.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -11548,7 +11548,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10058 Flat steel bars/Flat Bar 80x40 EN10058 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib52.FCStd",
+   "doc": "$WORK/f6fix/lib/lib52.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -11626,7 +11626,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10059 Square steel bars/Square Bar 35 EN10059 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib53.FCStd",
+   "doc": "$WORK/f6fix/lib/lib53.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -11704,7 +11704,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10060 Round steel bars/Round Bar 250 EN10060 S235JR.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib54.FCStd",
+   "doc": "$WORK/f6fix/lib/lib54.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -11908,7 +11908,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10219 Rectangular Hollow Sections/Rectangular hollow section 100x50x4 EN10219 S235JRH.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib55.FCStd",
+   "doc": "$WORK/f6fix/lib/lib55.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -12112,7 +12112,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10219 Rectangular Hollow Sections/Rectangular hollow section 160x80x10 EN10219 S235JRH.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib56.FCStd",
+   "doc": "$WORK/f6fix/lib/lib56.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -12316,7 +12316,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10219 Rectangular Hollow Sections/Rectangular hollow section 260x180x16 EN10219 S235JRH.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib57.FCStd",
+   "doc": "$WORK/f6fix/lib/lib57.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -12520,7 +12520,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10219 Rectangular Hollow Sections/Rectangular hollow section 50x30x3.6 EN10219 S235JRH.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib58.FCStd",
+   "doc": "$WORK/f6fix/lib/lib58.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -12724,7 +12724,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10219 Square Hollow Sections/Square hollow section 100x100x8 EN10219 S235JRH.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib59.FCStd",
+   "doc": "$WORK/f6fix/lib/lib59.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -12928,7 +12928,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10219 Square Hollow Sections/Square hollow section 200x200x12.5 EN10219 S235JRH.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib60.FCStd",
+   "doc": "$WORK/f6fix/lib/lib60.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -13132,7 +13132,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10219 Square Hollow Sections/Square hollow section 30x30x2.5 EN10219 S235JRH.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib61.FCStd",
+   "doc": "$WORK/f6fix/lib/lib61.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -13336,7 +13336,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Profiles EN/EN10219 Square Hollow Sections/Square hollow section 70x70x6.3 EN10219 S235JRH.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib62.FCStd",
+   "doc": "$WORK/f6fix/lib/lib62.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -13540,7 +13540,7 @@
    "returncode": 0
   },
   "freecad-library/Mechanical Parts/Wheels/Wheel-RC-1:8-17mm-hex/Wheel-RC-1:8-17mm-hex.FCStd": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/lib/lib63.FCStd",
+   "doc": "$WORK/f6fix/lib/lib63.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -13744,7 +13744,7 @@
    "returncode": 0
   },
   "m01_pad": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m01_pad.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m01_pad.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -13967,7 +13967,7 @@
    "returncode": 0
   },
   "m01_pad_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m01_pad_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m01_pad_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -14190,7 +14190,7 @@
    "returncode": 0
   },
   "m01_pad_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m01_pad_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m01_pad_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -14413,7 +14413,7 @@
    "returncode": 0
   },
   "m01_pad_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m01_pad_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m01_pad_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -14636,7 +14636,7 @@
    "returncode": 0
   },
   "m01_pad_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m01_pad_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m01_pad_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -14859,7 +14859,7 @@
    "returncode": 0
   },
   "m01_pad_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m01_pad_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m01_pad_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -15082,7 +15082,7 @@
    "returncode": 0
   },
   "m02_pocket": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m02_pocket.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m02_pocket.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -15316,7 +15316,7 @@
    "returncode": 0
   },
   "m02_pocket_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m02_pocket_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m02_pocket_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -15550,7 +15550,7 @@
    "returncode": 0
   },
   "m02_pocket_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m02_pocket_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m02_pocket_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -15784,7 +15784,7 @@
    "returncode": 0
   },
   "m02_pocket_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m02_pocket_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m02_pocket_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -16018,7 +16018,7 @@
    "returncode": 0
   },
   "m02_pocket_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m02_pocket_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m02_pocket_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -16252,7 +16252,7 @@
    "returncode": 0
   },
   "m02_pocket_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m02_pocket_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m02_pocket_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -16486,7 +16486,7 @@
    "returncode": 0
   },
   "m03_revolve": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m03_revolve.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m03_revolve.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -16700,7 +16700,7 @@
    "returncode": 0
   },
   "m03_revolve_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m03_revolve_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m03_revolve_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -16914,7 +16914,7 @@
    "returncode": 0
   },
   "m03_revolve_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m03_revolve_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m03_revolve_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -17128,7 +17128,7 @@
    "returncode": 0
   },
   "m03_revolve_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m03_revolve_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m03_revolve_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -17342,7 +17342,7 @@
    "returncode": 0
   },
   "m03_revolve_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m03_revolve_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m03_revolve_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -17556,7 +17556,7 @@
    "returncode": 0
   },
   "m03_revolve_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m03_revolve_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m03_revolve_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -17770,7 +17770,7 @@
    "returncode": 0
   },
   "m04_fillet": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m04_fillet.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m04_fillet.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -17983,7 +17983,7 @@
    "returncode": 0
   },
   "m04_fillet_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m04_fillet_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m04_fillet_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -18196,7 +18196,7 @@
    "returncode": 0
   },
   "m04_fillet_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m04_fillet_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m04_fillet_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -18409,7 +18409,7 @@
    "returncode": 0
   },
   "m04_fillet_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m04_fillet_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m04_fillet_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -18622,7 +18622,7 @@
    "returncode": 0
   },
   "m04_fillet_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m04_fillet_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m04_fillet_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -18835,7 +18835,7 @@
    "returncode": 0
   },
   "m04_fillet_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m04_fillet_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m04_fillet_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -19048,7 +19048,7 @@
    "returncode": 0
   },
   "m05_chamfer": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m05_chamfer.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m05_chamfer.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -19261,7 +19261,7 @@
    "returncode": 0
   },
   "m05_chamfer_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m05_chamfer_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m05_chamfer_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -19474,7 +19474,7 @@
    "returncode": 0
   },
   "m05_chamfer_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m05_chamfer_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m05_chamfer_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -19687,7 +19687,7 @@
    "returncode": 0
   },
   "m05_chamfer_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m05_chamfer_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m05_chamfer_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -19900,7 +19900,7 @@
    "returncode": 0
   },
   "m05_chamfer_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m05_chamfer_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m05_chamfer_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -20113,7 +20113,7 @@
    "returncode": 0
   },
   "m05_chamfer_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m05_chamfer_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m05_chamfer_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -20326,7 +20326,7 @@
    "returncode": 0
   },
   "m06_shell": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m06_shell.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m06_shell.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -20549,7 +20549,7 @@
    "returncode": 0
   },
   "m06_shell_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m06_shell_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m06_shell_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -20772,7 +20772,7 @@
    "returncode": 0
   },
   "m06_shell_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m06_shell_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m06_shell_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -20995,7 +20995,7 @@
    "returncode": 0
   },
   "m06_shell_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m06_shell_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m06_shell_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -21218,7 +21218,7 @@
    "returncode": 0
   },
   "m06_shell_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m06_shell_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m06_shell_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -21441,7 +21441,7 @@
    "returncode": 0
   },
   "m06_shell_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m06_shell_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m06_shell_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -21664,7 +21664,7 @@
    "returncode": 0
   },
   "m07_boolean": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m07_boolean.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m07_boolean.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -21877,7 +21877,7 @@
    "returncode": 0
   },
   "m07_boolean_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m07_boolean_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m07_boolean_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -22090,7 +22090,7 @@
    "returncode": 0
   },
   "m07_boolean_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m07_boolean_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m07_boolean_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -22303,7 +22303,7 @@
    "returncode": 0
   },
   "m07_boolean_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m07_boolean_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m07_boolean_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -22516,7 +22516,7 @@
    "returncode": 0
   },
   "m07_boolean_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m07_boolean_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m07_boolean_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -22729,7 +22729,7 @@
    "returncode": 0
   },
   "m07_boolean_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m07_boolean_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m07_boolean_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -22942,7 +22942,7 @@
    "returncode": 0
   },
   "m08_loft": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m08_loft.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m08_loft.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -23146,7 +23146,7 @@
    "returncode": 0
   },
   "m08_loft_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m08_loft_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m08_loft_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -23350,7 +23350,7 @@
    "returncode": 0
   },
   "m08_loft_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m08_loft_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m08_loft_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -23554,7 +23554,7 @@
    "returncode": 0
   },
   "m08_loft_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m08_loft_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m08_loft_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -23758,7 +23758,7 @@
    "returncode": 0
   },
   "m08_loft_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m08_loft_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m08_loft_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -23962,7 +23962,7 @@
    "returncode": 0
   },
   "m08_loft_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m08_loft_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m08_loft_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -24166,7 +24166,7 @@
    "returncode": 0
   },
   "m09_sweep": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m09_sweep.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m09_sweep.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -24370,7 +24370,7 @@
    "returncode": 0
   },
   "m09_sweep_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m09_sweep_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m09_sweep_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -24574,7 +24574,7 @@
    "returncode": 0
   },
   "m09_sweep_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m09_sweep_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m09_sweep_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -24778,7 +24778,7 @@
    "returncode": 0
   },
   "m09_sweep_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m09_sweep_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m09_sweep_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -24982,7 +24982,7 @@
    "returncode": 0
   },
   "m09_sweep_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m09_sweep_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m09_sweep_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -25186,7 +25186,7 @@
    "returncode": 0
   },
   "m09_sweep_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m09_sweep_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m09_sweep_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -25390,7 +25390,7 @@
    "returncode": 0
   },
   "m10_linear_pattern": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m10_linear_pattern.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m10_linear_pattern.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -25613,7 +25613,7 @@
    "returncode": 0
   },
   "m10_linear_pattern_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m10_linear_pattern_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m10_linear_pattern_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -25836,7 +25836,7 @@
    "returncode": 0
   },
   "m10_linear_pattern_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m10_linear_pattern_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m10_linear_pattern_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -26059,7 +26059,7 @@
    "returncode": 0
   },
   "m10_linear_pattern_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m10_linear_pattern_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m10_linear_pattern_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -26282,7 +26282,7 @@
    "returncode": 0
   },
   "m10_linear_pattern_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m10_linear_pattern_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m10_linear_pattern_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -26505,7 +26505,7 @@
    "returncode": 0
   },
   "m10_linear_pattern_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m10_linear_pattern_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m10_linear_pattern_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -26728,7 +26728,7 @@
    "returncode": 0
   },
   "m11_polar_pattern": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m11_polar_pattern.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m11_polar_pattern.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -26951,7 +26951,7 @@
    "returncode": 0
   },
   "m11_polar_pattern_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m11_polar_pattern_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m11_polar_pattern_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -27174,7 +27174,7 @@
    "returncode": 0
   },
   "m11_polar_pattern_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m11_polar_pattern_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m11_polar_pattern_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -27397,7 +27397,7 @@
    "returncode": 0
   },
   "m11_polar_pattern_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m11_polar_pattern_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m11_polar_pattern_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -27620,7 +27620,7 @@
    "returncode": 0
   },
   "m11_polar_pattern_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m11_polar_pattern_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m11_polar_pattern_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -27843,7 +27843,7 @@
    "returncode": 0
   },
   "m11_polar_pattern_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m11_polar_pattern_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m11_polar_pattern_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -28066,7 +28066,7 @@
    "returncode": 0
   },
   "m12_multibody": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m12_multibody.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m12_multibody.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -28293,7 +28293,7 @@
    "returncode": 0
   },
   "m12_multibody_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m12_multibody_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m12_multibody_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -28520,7 +28520,7 @@
    "returncode": 0
   },
   "m12_multibody_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m12_multibody_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m12_multibody_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -28747,7 +28747,7 @@
    "returncode": 0
   },
   "m12_multibody_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m12_multibody_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m12_multibody_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -28974,7 +28974,7 @@
    "returncode": 0
   },
   "m12_multibody_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m12_multibody_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m12_multibody_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -29201,7 +29201,7 @@
    "returncode": 0
   },
   "m12_multibody_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m12_multibody_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m12_multibody_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -29428,7 +29428,7 @@
    "returncode": 0
   },
   "m13_bracket": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m13_bracket.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m13_bracket.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -29662,7 +29662,7 @@
    "returncode": 0
   },
   "m13_bracket_x0p6": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m13_bracket_x0p6.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m13_bracket_x0p6.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -29896,7 +29896,7 @@
    "returncode": 0
   },
   "m13_bracket_x0p8": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m13_bracket_x0p8.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m13_bracket_x0p8.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -30130,7 +30130,7 @@
    "returncode": 0
   },
   "m13_bracket_x1p25": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m13_bracket_x1p25.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m13_bracket_x1p25.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -30364,7 +30364,7 @@
    "returncode": 0
   },
   "m13_bracket_x1p5": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m13_bracket_x1p5.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m13_bracket_x1p5.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -30598,7 +30598,7 @@
    "returncode": 0
   },
   "m13_bracket_x2": {
-   "doc": "/private/tmp/claude-501/-Users-ministation01--agents-repos-app-development-cad-fork/50808f5a-b830-4e06-ac13-6a31a68bc5b3/scratchpad/f6fix/corpus_work/scripted/m13_bracket_x2.FCStd",
+   "doc": "$WORK/f6fix/corpus_work/scripted/m13_bracket_x2.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -30832,19 +30832,19 @@
    "returncode": 0
   },
   "src/Mod/AddonManager/AddonManagerTest/data/macro_template.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/AddonManager/AddonManagerTest/data/macro_template.FCStd",
-   "incomplete": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"<string>\", line 241, in <module>\n  File \"<string>\", line 183, in run_op\n  File \"<string>\", line 39, in open_clean\n<class 'OSError'>: Invalid project file /Users/ministation01/src/cad-fork/freecad/src/Mod/AddonManager/AddonManagerTest/data/macro_template.FCStd: ios_base::clear: unspecified iostream_category error\n\n",
+   "doc": "$FC_SRC/src/Mod/AddonManager/AddonManagerTest/data/macro_template.FCStd",
+   "incomplete": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"<string>\", line 241, in <module>\n  File \"<string>\", line 183, in run_op\n  File \"<string>\", line 39, in open_clean\n<class 'OSError'>: Invalid project file $FC_SRC/src/Mod/AddonManager/AddonManagerTest/data/macro_template.FCStd: ios_base::clear: unspecified iostream_category error\n\n",
    "ops": {},
    "returncode": 1
   },
   "src/Mod/AddonManager/AddonManagerTest/data/missing_macro_metadata.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/AddonManager/AddonManagerTest/data/missing_macro_metadata.FCStd",
-   "incomplete": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"<string>\", line 241, in <module>\n  File \"<string>\", line 183, in run_op\n  File \"<string>\", line 39, in open_clean\n<class 'OSError'>: Invalid project file /Users/ministation01/src/cad-fork/freecad/src/Mod/AddonManager/AddonManagerTest/data/missing_macro_metadata.FCStd: ios_base::clear: unspecified iostream_category error\n\n",
+   "doc": "$FC_SRC/src/Mod/AddonManager/AddonManagerTest/data/missing_macro_metadata.FCStd",
+   "incomplete": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"<string>\", line 241, in <module>\n  File \"<string>\", line 183, in run_op\n  File \"<string>\", line 39, in open_clean\n<class 'OSError'>: Invalid project file $FC_SRC/src/Mod/AddonManager/AddonManagerTest/data/missing_macro_metadata.FCStd: ios_base::clear: unspecified iostream_category error\n\n",
    "ops": {},
    "returncode": 1
   },
   "src/Mod/BIM/bimtests/fixtures/FC_site_simple-102.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/BIM/bimtests/fixtures/FC_site_simple-102.FCStd",
+   "doc": "$FC_SRC/src/Mod/BIM/bimtests/fixtures/FC_site_simple-102.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -30999,7 +30999,7 @@
    "returncode": 0
   },
   "src/Mod/BIM/bimtests/test_structure_column_flip_v1_0_v1_1.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/BIM/bimtests/test_structure_column_flip_v1_0_v1_1.FCStd",
+   "doc": "$FC_SRC/src/Mod/BIM/bimtests/test_structure_column_flip_v1_0_v1_1.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -31203,7 +31203,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/CAMTests/Drilling_1.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/CAMTests/Drilling_1.FCStd",
+   "doc": "$FC_SRC/src/Mod/CAM/CAMTests/Drilling_1.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 2,
@@ -31450,7 +31450,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/CAMTests/Fixtures/OpHelix_v0-21.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/CAMTests/Fixtures/OpHelix_v0-21.FCStd",
+   "doc": "$FC_SRC/src/Mod/CAM/CAMTests/Fixtures/OpHelix_v0-21.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -31654,7 +31654,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/CAMTests/Fixtures/test_17748_cam_profile.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/CAMTests/Fixtures/test_17748_cam_profile.FCStd",
+   "doc": "$FC_SRC/src/Mod/CAM/CAMTests/Fixtures/test_17748_cam_profile.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -31868,7 +31868,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/CAMTests/Fixtures/test_28534_truncated_pocket.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/CAMTests/Fixtures/test_28534_truncated_pocket.FCStd",
+   "doc": "$FC_SRC/src/Mod/CAM/CAMTests/Fixtures/test_28534_truncated_pocket.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -32072,7 +32072,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/CAMTests/Tools/Shape/test-path-tool-bit-shape-00.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/CAMTests/Tools/Shape/test-path-tool-bit-shape-00.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/CAMTests/Tools/Shape/test-path-tool-bit-shape-00.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -32286,7 +32286,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/CAMTests/boxtest.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/CAMTests/boxtest.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/CAMTests/boxtest.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -32490,7 +32490,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/CAMTests/dressuptest.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/CAMTests/dressuptest.FCStd",
+   "doc": "$FC_SRC/src/Mod/CAM/CAMTests/dressuptest.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -32694,7 +32694,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/CAMTests/test_adaptive.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/CAMTests/test_adaptive.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/CAMTests/test_adaptive.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -32907,7 +32907,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/CAMTests/test_geomop.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/CAMTests/test_geomop.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/CAMTests/test_geomop.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -33165,7 +33165,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/CAMTests/test_holes00.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/CAMTests/test_holes00.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/CAMTests/test_holes00.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -33388,7 +33388,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/CAMTests/test_profile.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/CAMTests/test_profile.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/CAMTests/test_profile.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -33611,7 +33611,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/DemoParts/hole_puzzle.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/DemoParts/hole_puzzle.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/DemoParts/hole_puzzle.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 6,
@@ -33689,7 +33689,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/DemoParts/motor_mount_inch.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/DemoParts/motor_mount_inch.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/DemoParts/motor_mount_inch.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -33916,7 +33916,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/DemoParts/strange_part_with_holes.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/DemoParts/strange_part_with_holes.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/DemoParts/strange_part_with_holes.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -34129,7 +34129,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/ballend.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/ballend.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/ballend.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -34343,7 +34343,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/bullnose.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/bullnose.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/bullnose.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -34557,7 +34557,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/chamfer.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/chamfer.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/chamfer.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -34771,7 +34771,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/dovetail.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/dovetail.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/dovetail.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -34975,7 +34975,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/drill.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/drill.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/drill.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -35189,7 +35189,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/endmill.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/endmill.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/endmill.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -35403,7 +35403,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/probe.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/probe.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/probe.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -35617,7 +35617,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/radius.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/radius.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/radius.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -35831,7 +35831,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/reamer.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/reamer.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/reamer.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -36045,7 +36045,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/slittingsaw.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/slittingsaw.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/slittingsaw.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -36259,7 +36259,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/tap.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/tap.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/tap.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -36473,7 +36473,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/taperedballnose.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/taperedballnose.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/taperedballnose.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -36677,7 +36677,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/thread-mill.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/thread-mill.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/thread-mill.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -36891,7 +36891,7 @@
    "returncode": 0
   },
   "src/Mod/CAM/Tools/Shape/v-bit.fcstd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/CAM/Tools/Shape/v-bit.fcstd",
+   "doc": "$FC_SRC/src/Mod/CAM/Tools/Shape/v-bit.fcstd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -37105,7 +37105,7 @@
    "returncode": 0
   },
   "src/Mod/Fem/femtest/data/calculix/box.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/Fem/femtest/data/calculix/box.FCStd",
+   "doc": "$FC_SRC/src/Mod/Fem/femtest/data/calculix/box.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -37309,7 +37309,7 @@
    "returncode": 0
   },
   "src/Mod/Fem/femtest/data/calculix/box_frequency.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/Fem/femtest/data/calculix/box_frequency.FCStd",
+   "doc": "$FC_SRC/src/Mod/Fem/femtest/data/calculix/box_frequency.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -37513,7 +37513,7 @@
    "returncode": 0
   },
   "src/Mod/Fem/femtest/data/calculix/box_static.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/Fem/femtest/data/calculix/box_static.FCStd",
+   "doc": "$FC_SRC/src/Mod/Fem/femtest/data/calculix/box_static.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -37717,7 +37717,7 @@
    "returncode": 0
   },
   "src/Mod/Fem/femtest/data/calculix/constraint_contact_shell_shell.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/Fem/femtest/data/calculix/constraint_contact_shell_shell.FCStd",
+   "doc": "$FC_SRC/src/Mod/Fem/femtest/data/calculix/constraint_contact_shell_shell.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -37872,7 +37872,7 @@
    "returncode": 0
   },
   "src/Mod/Fem/femtest/data/calculix/constraint_contact_solid_solid.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/Fem/femtest/data/calculix/constraint_contact_solid_solid.FCStd",
+   "doc": "$FC_SRC/src/Mod/Fem/femtest/data/calculix/constraint_contact_solid_solid.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -38085,7 +38085,7 @@
    "returncode": 0
   },
   "src/Mod/Fem/femtest/data/calculix/thermomech_flow1D.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/Fem/femtest/data/calculix/thermomech_flow1D.FCStd",
+   "doc": "$FC_SRC/src/Mod/Fem/femtest/data/calculix/thermomech_flow1D.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -38240,7 +38240,7 @@
    "returncode": 0
   },
   "src/Mod/Fem/femtest/data/open/all_objects_de9b3fb438.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/Fem/femtest/data/open/all_objects_de9b3fb438.FCStd",
+   "doc": "$FC_SRC/src/Mod/Fem/femtest/data/open/all_objects_de9b3fb438.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -38395,7 +38395,7 @@
    "returncode": 0
   },
   "src/Mod/Part/parttests/TestTangentMode3-0.21.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/Part/parttests/TestTangentMode3-0.21.FCStd",
+   "doc": "$FC_SRC/src/Mod/Part/parttests/TestTangentMode3-0.21.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -38608,7 +38608,7 @@
    "returncode": 0
   },
   "src/Mod/PartDesign/PartDesignTests/Fixtures/InternalInvoluteGear_v0-20.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/PartDesign/PartDesignTests/Fixtures/InternalInvoluteGear_v0-20.FCStd",
+   "doc": "$FC_SRC/src/Mod/PartDesign/PartDesignTests/Fixtures/InternalInvoluteGear_v0-20.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -38763,7 +38763,7 @@
    "returncode": 0
   },
   "src/Mod/PartDesign/PartDesignTests/Fixtures/InvoluteGear_v0-20.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/PartDesign/PartDesignTests/Fixtures/InvoluteGear_v0-20.FCStd",
+   "doc": "$FC_SRC/src/Mod/PartDesign/PartDesignTests/Fixtures/InvoluteGear_v0-20.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -38918,7 +38918,7 @@
    "returncode": 0
   },
   "src/Mod/Sketcher/SketcherTests/TestSketchCarbonCopyReverseMapping.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/src/Mod/Sketcher/SketcherTests/TestSketchCarbonCopyReverseMapping.FCStd",
+   "doc": "$FC_SRC/src/Mod/Sketcher/SketcherTests/TestSketchCarbonCopyReverseMapping.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -39073,7 +39073,7 @@
    "returncode": 0
   },
   "tests/src/Mod/PartDesign/App/TestModels/ModelFromV021.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/tests/src/Mod/PartDesign/App/TestModels/ModelFromV021.FCStd",
+   "doc": "$FC_SRC/tests/src/Mod/PartDesign/App/TestModels/ModelFromV021.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -39283,7 +39283,7 @@
    "returncode": 0
   },
   "tests/src/Mod/PartDesign/App/TestModels/TwoLengthsPadCrossObjectRef.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/tests/src/Mod/PartDesign/App/TestModels/TwoLengthsPadCrossObjectRef.FCStd",
+   "doc": "$FC_SRC/tests/src/Mod/PartDesign/App/TestModels/TwoLengthsPadCrossObjectRef.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -39496,7 +39496,7 @@
    "returncode": 0
   },
   "tests/src/Mod/PartDesign/App/TestModels/TwoLengthsPadCyclicExpr.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/tests/src/Mod/PartDesign/App/TestModels/TwoLengthsPadCyclicExpr.FCStd",
+   "doc": "$FC_SRC/tests/src/Mod/PartDesign/App/TestModels/TwoLengthsPadCyclicExpr.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -39719,7 +39719,7 @@
    "returncode": 0
   },
   "tests/src/Mod/PartDesign/App/TestModels/TwoLengthsPadWithExpression.FCStd": {
-   "doc": "/Users/ministation01/src/cad-fork/freecad/tests/src/Mod/PartDesign/App/TestModels/TwoLengthsPadWithExpression.FCStd",
+   "doc": "$FC_SRC/tests/src/Mod/PartDesign/App/TestModels/TwoLengthsPadWithExpression.FCStd",
    "ops": {
     "across_bodies": {
      "attempts": 1,
@@ -39966,8 +39966,8 @@
    "src/Mod/CAM/DemoParts/hole_puzzle.fcstd": "unclean"
   },
   "incomplete": {
-   "src/Mod/AddonManager/AddonManagerTest/data/macro_template.FCStd": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"<string>\", line 241, in <module>\n  File \"<string>\", line 183, in run_op\n  File \"<string>\", line 39, in open_clean\n<class 'OSError'>: Invalid project file /Users/ministation01/src/cad-fork/freecad/src/Mod/AddonManager/AddonManagerTest/data/macro_template.FCStd: ios_base::clear: unspecified iostream_category error\n\n",
-   "src/Mod/AddonManager/AddonManagerTest/data/missing_macro_metadata.FCStd": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"<string>\", line 241, in <module>\n  File \"<string>\", line 183, in run_op\n  File \"<string>\", line 39, in open_clean\n<class 'OSError'>: Invalid project file /Users/ministation01/src/cad-fork/freecad/src/Mod/AddonManager/AddonManagerTest/data/missing_macro_metadata.FCStd: ios_base::clear: unspecified iostream_category error\n\n"
+   "src/Mod/AddonManager/AddonManagerTest/data/macro_template.FCStd": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"<string>\", line 241, in <module>\n  File \"<string>\", line 183, in run_op\n  File \"<string>\", line 39, in open_clean\n<class 'OSError'>: Invalid project file $FC_SRC/src/Mod/AddonManager/AddonManagerTest/data/macro_template.FCStd: ios_base::clear: unspecified iostream_category error\n\n",
+   "src/Mod/AddonManager/AddonManagerTest/data/missing_macro_metadata.FCStd": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"<string>\", line 241, in <module>\n  File \"<string>\", line 183, in run_op\n  File \"<string>\", line 39, in open_clean\n<class 'OSError'>: Invalid project file $FC_SRC/src/Mod/AddonManager/AddonManagerTest/data/missing_macro_metadata.FCStd: ios_base::clear: unspecified iostream_category error\n\n"
   },
   "invariance_passes": 920,
   "invariance_runs": 920,

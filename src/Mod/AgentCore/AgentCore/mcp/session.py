@@ -83,6 +83,26 @@ def _jsonable(x, depth=0):
     return repr(x)[:500]
 
 
+def _is_same_file(path, protected):
+    """True if ``path`` is any of ``protected`` by identity, not by spelling.
+
+    ``os.path.samefile`` compares device and inode, so it catches a case
+    variant on a case-insensitive volume, a symlink and a hardlink; the
+    realpath/casefold comparison covers a target that does not exist yet.
+    """
+    for p in protected:
+        if not p:
+            continue
+        try:
+            if os.path.exists(path) and os.path.exists(p) and os.path.samefile(path, p):
+                return True
+        except OSError:
+            return True  # cannot tell: refuse
+        if os.path.realpath(path) == os.path.realpath(p):
+            return True
+    return False
+
+
 class Session:
     METHODS = ("ping", "open", "info", "state", "describe", "selection", "exec", "begin", "propose",
                "snapshot", "import_file", "export_file", "default_checks", "close", "shutdown")
@@ -102,7 +122,29 @@ class Session:
         self._snapdir = None
 
     # -- turn bookkeeping
+    def _refresh_checkpoint(self):
+        """Persist the just-committed document as the server's crash-recovery checkpoint: write a
+        temp file, then rename over the old one, so a crash never sees a stale or torn checkpoint."""
+        path = os.environ.get("CADFORK_MCP_CHECKPOINT")
+        if not path or self.doc is None:
+            return None
+        tmp = path[:-len(".FCStd")] + ".new.FCStd"  # not path + ".tmp": saveCopy uses that name itself
+        try:
+            self.doc.saveCopy(tmp)
+            os.replace(tmp, path)
+        except Exception as exc:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return f"{type(exc).__name__}: {exc}"
+        return None
+
     def _end_turn(self, decision, **extra):
+        if decision == "accepted":  # every commit path (approver accept, accept seen via _sync) lands here
+            err = self._refresh_checkpoint()
+            if err:
+                extra["checkpoint_error"] = err
         self.last_decision = {"change": self.turn_no, "decision": decision, **extra}
         self.turn = None
         self.turn_state = None
@@ -473,8 +515,7 @@ class Session:
         low = path.lower()
         if not low.endswith(FCSTD_EXT + STEP_EXT + BREP_EXT):
             raise BridgeError("unsupported_format", "export to .step/.stp, .brep or .FCStd")
-        protected = {os.path.realpath(p) for p in (self.source, doc.FileName) if p}
-        if os.path.realpath(path) in protected:
+        if _is_same_file(path, (self.source, doc.FileName, os.environ.get("CADFORK_MCP_CHECKPOINT"))):
             raise BridgeError("refused_target", f"{path} is the document's own source file; export elsewhere")
         if os.path.exists(path) and not overwrite:
             raise BridgeError("file_exists", f"{path} exists; pass overwrite=true to replace it")
