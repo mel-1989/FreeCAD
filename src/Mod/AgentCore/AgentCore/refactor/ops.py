@@ -410,6 +410,47 @@ def _size_props(feat):
     return [p for p in feat.PropertiesList if feat.getTypeIdOfProperty(p) in SIZE_TYPES]
 
 
+def _reach_length(tf, tb):
+    """A Length that carries a Pad or Pocket from its sketch plane across the whole base shape, in either
+    direction, with a safety factor of 2; ``None`` when the geometry cannot be read (the caller then keeps
+    the feature). Scaling the current Length by 10 is not enough: a sketch 20 mm above the part with a 1 mm
+    depth is air at every scaled length yet cuts the moment the depth is raised past the gap."""
+    try:
+        sb = _vchecks._shape(tb)
+        prof = getattr(tf, "Profile", None)
+        sk = prof[0] if isinstance(prof, (tuple, list)) else prof
+        if sb is None or sk is None or sb.isNull():
+            return None
+        bb = sb.BoundBox
+        dist = (sk.getGlobalPlacement().Base - bb.Center).Length
+        return 2.0 * (dist + bb.DiagonalLength) + 1.0
+    except Exception:
+        return None
+
+
+def _probe_equals_base(tmp, tf, tb, prop, value, budget):
+    """Set ``prop`` to ``value`` (both sides when the feature has a SideType, so a Reversed or one-sided
+    extrusion cannot hide), recompute, and report whether the feature still equals its base."""
+    sides = [None]
+    if prop == "Length" and "SideType" in tf.PropertiesList:
+        sides = [str(tf.SideType), "Symmetric"] if str(tf.SideType) != "Symmetric" else [None]
+    keep = str(getattr(tf, "SideType", "")) if "SideType" in tf.PropertiesList else None
+    try:
+        for side in sides:
+            if side is not None:
+                tf.SideType = side
+            setattr(tf, prop, value)
+            tmp.recompute(None, True)
+            sa, sb = _vchecks._shape(tf), _vchecks._shape(tb)
+            if (sa is None or sb is None or (set(tf.State) & {"Invalid", "Error"})
+                    or not shapes_identical(sa, sb, budget)):
+                return False
+        return True
+    finally:
+        if keep is not None:
+            tf.SideType = keep
+
+
 def _removal_invariant(doc, feat, base, budget):
     """R10 and R8 on a throw-away copy of the whole Body (the live document is never written, so the check
     nests safely inside an F3 ``AgentTurn``; probing in place left LinearPattern ``Spacings`` lists that
@@ -447,20 +488,25 @@ def _removal_invariant(doc, feat, base, budget):
         tf.Suppressed = False
         tmp.recompute(None, True)
         # R8: size sweep on the feature itself
+        reach = _reach_length(tf, tb) if tf.TypeId in ("PartDesign::Pad", "PartDesign::Pocket") else 0.0
+        if reach is None:
+            return False                                    # cannot bound the sweep: keep (any doubt keeps)
         for p in _size_props(tf):
             orig = getattr(tf, p)
             if orig.Value == 0:
                 trials = [1.0]
             else:
                 trials = [orig.Value * f for f in PROBE_FACTORS]
+            kind = tf.getTypeIdOfProperty(p)
+            if kind == "App::PropertyAngle":
+                trials.append(360.0)                         # a full turn reaches everything the axis can
+            elif p == "Length" and tf.TypeId in ("PartDesign::Pad", "PartDesign::Pocket"):
+                trials.append(reach)                         # extent that spans the base shape from the sketch plane
             for v in trials:
-                setattr(tf, p, v)
-                tmp.recompute(None, True)
-                sa, sb = _vchecks._shape(tf), _vchecks._shape(tb)
-                if (sa is None or sb is None or (set(tf.State) & {"Invalid", "Error"})
-                        or not shapes_identical(sa, sb, budget)):
+                if not _probe_equals_base(tmp, tf, tb, p, v, budget):
                     return False
             setattr(tf, p, orig)
+            tmp.recompute(None, True)
         return True
     finally:
         FreeCAD.closeDocument(tmp.Name)
