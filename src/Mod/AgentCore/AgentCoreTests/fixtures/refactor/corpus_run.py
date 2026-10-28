@@ -17,6 +17,9 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import portable  # noqa: E402
+
 HOME = os.path.expanduser(os.environ.get("CADFORK_HOME", "~/src/cad-fork"))
 CTL = os.path.expanduser(os.environ.get("CADFORK_CTL", "~/_agents/repos/app development/cad-fork"))
 CMD = os.path.join(HOME, "freecad/build/release/bin/FreeCADCmd")
@@ -98,8 +101,9 @@ def main():
     summary["dropped_variants"] = built["dropped"]
     summary["missing_upstream"] = missing
     os.makedirs(os.path.dirname(ARGS.results), exist_ok=True)
-    with open(ARGS.results, "w") as fh:
-        json.dump({"summary": summary, "documents": results}, fh, indent=1, sort_keys=True)
+    portable.dump_portable({"summary": summary, "documents": results}, ARGS.results,
+                           fc_src=os.path.join(HOME, "freecad"), work_dirs=[out, ARGS.extra_dir],
+                           indent=1, sort_keys=True)
     print(json.dumps(summary, indent=1, sort_keys=True))
 
 
