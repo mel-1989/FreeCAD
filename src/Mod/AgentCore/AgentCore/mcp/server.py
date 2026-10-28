@@ -429,9 +429,11 @@ class Server:
 
     def t_begin_change(self, doc=None, discard_pending=False):
         h = self._handle(doc)
-        if h.checkpoint and discard_pending:
-            # A change is open: the existing checkpoint already holds the pre-change state.
-            res = self._call(h, "begin", {"discard_pending": True})
+        if self._call(h, "info", {}).get("change") is not None:
+            # A change is open or proposed: the document holds unapproved edits, so it must never become
+            # the checkpoint. Without discard_pending the worker refuses (change_pending); with it the
+            # change is rejected and the existing checkpoint already holds the last committed state.
+            res = self._call(h, "begin", {"discard_pending": bool(discard_pending)})
             return {"doc": h.id, **res, "checkpoint": "pre-change snapshot kept for crash recovery"}
         if h.checkpoint_path is None:
             h.checkpoint_path = os.path.join(self._tmp, f"{h.id}-checkpoint.FCStd")

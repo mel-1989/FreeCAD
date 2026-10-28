@@ -318,5 +318,27 @@ class TestCrashRecoveryCheckpoint(unittest.TestCase):
             s.close()
 
 
+    def test_refused_second_begin_does_not_checkpoint_unapproved_edits(self):
+        # A second begin_change without discard_pending is refused; it must not snapshot the open
+        # change's edits as the committed state (found by the run 002 verifier).
+        s = mc.make_server(stub=False)
+        try:
+            doc = mc.call(s, "open_document", path=self.fixture)[0]["doc"]
+            l0 = self._length(s, doc)
+            mc.call(s, "begin_change", doc=doc)
+            mc.call(s, "exec_code", doc=doc, code="doc.getObject('Box').Length = 55")
+            res, err = mc.call(s, "begin_change", doc=doc)
+            self.assertTrue(err, res)
+            self.assertIn("change_pending", str(res))
+            self._kill(s, doc)
+            self.assertEqual(self._length(s, doc), l0)            # not 55
+            mc.call(s, "begin_change", doc=doc, discard_pending=True)
+            mc.call(s, "exec_code", doc=doc, code="doc.getObject('Box').Length = 66")
+            mc.call(s, "begin_change", doc=doc, discard_pending=True)   # rejects 66
+            self._kill(s, doc)
+            self.assertEqual(self._length(s, doc), l0)
+        finally:
+            s.close()
+
 if __name__ == "__main__":
     unittest.main()
