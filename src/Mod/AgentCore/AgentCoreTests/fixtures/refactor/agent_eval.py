@@ -31,6 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import agent_tasks  # noqa: E402
 import llm  # noqa: E402
+import portable  # noqa: E402
 
 CMD = os.path.expanduser("~/src/cad-fork/freecad/build/release/bin/FreeCADCmd")
 METER = llm.Meter()
@@ -349,7 +350,8 @@ def main():
     a = ap.parse_args()
     summary, rows = macro_eval(a) if a.kind == "macro" else refactor_eval(a)
     out = a.out or os.path.join(HERE, "results", f"{a.kind}_agent_eval.json")
-    json.dump({"summary": summary, "rows": rows}, open(out, "w"), indent=1)
+    portable.dump_portable({"summary": summary, "rows": rows}, out, fc_src=CMD.rsplit("/build/", 1)[0],
+                           work_dirs=[a.work, a.corpus], indent=1)
     print(json.dumps(summary, indent=1))
 
 

@@ -137,5 +137,31 @@ class TestPromptsHideTheCheck(unittest.TestCase):
         self.assertNotIn("ExpressionEngine", agent_eval.refactor_prompt("listing", t))
 
 
+class TestPortableResults(unittest.TestCase):
+    """Committed result files carry no machine paths; the writers scrub them."""
+
+    def test_scrub_rewrites_source_and_scratch_roots(self):
+        from AgentCoreTests.fixtures.refactor import portable
+
+        t = (
+            '{"a": "/home/x/src/freecad/data/a.FCStd", "b": "/work/run1/m01.FCStd", '
+            '"c": "/private/tmp/claude-501/-p/sid/scratchpad/q.FCStd"}'
+        )
+        out = portable.scrub_text(t, fc_src="/home/x/src/freecad", work_dirs=["/work/run1"])
+        self.assertIn("$FC_SRC/data/a.FCStd", out)
+        self.assertIn("$WORK/m01.FCStd", out)
+        self.assertIn("$WORK/q.FCStd", out)
+
+    def test_committed_results_have_no_machine_paths(self):
+        import os
+
+        d = os.path.join(os.path.dirname(__file__), "fixtures", "refactor", "results")
+        for n in sorted(os.listdir(d)):
+            with open(os.path.join(d, n), encoding="utf-8") as fh:
+                txt = fh.read()
+            for bad in ("/Users/", "/private/tmp/claude", "/home/", "/var/folders"):
+                self.assertNotIn(bad, txt, f"{n} contains {bad}")
+
+
 if __name__ == "__main__":
     unittest.main()

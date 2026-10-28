@@ -78,7 +78,7 @@ Find candidate parts first with `search_parts` (`{"query": "washer m6"}`).
 
 | error | meaning | next step |
 |---|---|---|
-| `session_lost` | the FreeCADCmd worker for the document died (crash or kill) | call again: the worker respawns from the pre-change checkpoint, and the open change is gone, so begin a new one |
+| `session_lost` | the FreeCADCmd worker for the document died (crash or kill) | call again: the worker respawns from the last committed checkpoint (before the open change, or after the last accepted one), and the open change is gone, so begin a new one |
 | `timeout` | exec_code ran past its timeout and was interrupted; if it could not be interrupted the worker was killed (`session_lost`) | simplify the code or raise `timeout` |
 | `diff_unavailable` | AgentCore.diff (F3) is not installed, so changes cannot be opened | read-only tools and verify still work |
 | `policy_refused` | the code tried to approve a change, control the transaction, or (strict mode) touch files, processes or the network | edit inside the change only |
