@@ -31,6 +31,7 @@
 
 #include <Base/Console.h>
 #include <Base/Exception.h>
+#include <Base/Interpreter.h>
 #include <Base/Reader.h>
 #include <Base/Writer.h>
 #include <Base/Tools.h>
@@ -513,6 +514,174 @@ bool derivesFromName(const App::Document* doc,
 }
 }  // namespace
 
+// Geometric identity gate. A history match alone is not enough: an element can derive from the
+// stored name and still be a different element (a chamfer's new edge generated from the stored
+// edge, an edge shifted or shortened by an inserted fillet or cut). The candidate must be
+// geometrically the very same element as the one the stored name designates in the feature that
+// defines that name (an upstream feature still in the document). The comparison is done in
+// Python on the shape objects so that App needs no dependency on Part. Any failure means "not
+// the same", so the reference stays missing.
+static const char* identityGateSource = R"PY(
+import math
+def _close(a, b, tol):
+    return abs(a - b) <= tol
+def _pt(a, b, tol):
+    return (a - b).Length <= tol
+def _par(a, b):
+    return abs(abs(a.dot(b)) - 1.0) <= 1e-9
+def same(sa, na, sb, nb):
+    try:
+        a = sa.getElement(na)
+        b = sb.getElement(nb)
+        if a.ShapeType != b.ShapeType:
+            return False
+        bb = sa.BoundBox
+        scale = max(1.0, bb.XLength, bb.YLength, bb.ZLength)
+        tol = 1e-6 * scale
+        if a.ShapeType == "Vertex":
+            return _pt(a.Point, b.Point, tol)
+        if a.ShapeType == "Edge":
+            ca, cb = a.Curve, b.Curve
+            if type(ca).__name__ != type(cb).__name__:
+                return False
+            if not _close(a.Length, b.Length, tol):
+                return False
+            if not _pt(a.CenterOfMass, b.CenterOfMass, tol):
+                return False
+            pa = sorted((round(v.X / tol), round(v.Y / tol), round(v.Z / tol)) for v in a.Vertexes)
+            pb = sorted((round(v.X / tol), round(v.Y / tol), round(v.Z / tol)) for v in b.Vertexes)
+            if len(pa) != len(pb):
+                return False
+            for u, w in zip(pa, pb):
+                if max(abs(u[0] - w[0]), abs(u[1] - w[1]), abs(u[2] - w[2])) > 1:
+                    return False
+            kind = type(ca).__name__
+            if kind == "Line":
+                if not _par(ca.Direction, cb.Direction):
+                    return False
+            elif kind in ("Circle", "Ellipse"):
+                if not _par(ca.Axis, cb.Axis) or not _pt(ca.Center, cb.Center, tol):
+                    return False
+                if kind == "Circle" and not _close(ca.Radius, cb.Radius, tol):
+                    return False
+            ma = a.valueAt(a.getParameterByLength(a.Length / 2.0))
+            mb = b.valueAt(b.getParameterByLength(b.Length / 2.0))
+            return _pt(ma, mb, tol)
+        if a.ShapeType == "Face":
+            sfa, sfb = a.Surface, b.Surface
+            if type(sfa).__name__ != type(sfb).__name__:
+                return False
+            if not _close(a.Area, b.Area, tol * scale):
+                return False
+            if not _pt(a.CenterOfMass, b.CenterOfMass, tol):
+                return False
+            kind = type(sfa).__name__
+            if kind == "Plane":
+                if not _par(sfa.Axis, sfb.Axis):
+                    return False
+                if abs((a.CenterOfMass - b.CenterOfMass).dot(sfa.Axis)) > tol:
+                    return False
+            elif kind in ("Cylinder", "Cone", "Sphere", "Torus"):
+                if kind != "Sphere" and not _par(sfa.Axis, sfb.Axis):
+                    return False
+                if kind in ("Cylinder", "Sphere") and not _close(sfa.Radius, sfb.Radius, tol):
+                    return False
+                if kind in ("Sphere", "Torus") and not _pt(sfa.Center, sfb.Center, tol):
+                    return False
+            u0, u1, v0, v1 = a.ParameterRange
+            na_ = a.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+            u0, u1, v0, v1 = b.ParameterRange
+            nb_ = b.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+            return _par(na_, nb_)
+        return False
+    except Exception:
+        return False
+)PY";
+
+/// True if element `ia` of `da` (shape property `pa`) is geometrically the same element as `ib`
+/// of `db` (shape property `pb`).
+static bool sameElementGeometry(const App::Property* pa,
+                                const std::string& ia,
+                                const App::Property* pb,
+                                const std::string& ib)
+{
+    Base::PyGILStateLocker lock;
+    static PyObject* fn = nullptr;
+    if (!fn) {
+        PyObject* dict = PyDict_New();
+        PyDict_SetItemString(dict, "__builtins__", PyEval_GetBuiltins());
+        PyObject* res = PyRun_String(identityGateSource, Py_file_input, dict, dict);
+        if (!res) {
+            PyErr_Clear();
+            Py_DECREF(dict);
+            return false;
+        }
+        Py_DECREF(res);
+        fn = PyDict_GetItemString(dict, "same");  // borrowed; dict is kept alive on purpose
+        Py_XINCREF(fn);
+    }
+    if (!fn) {
+        return false;
+    }
+    PyObject* sa = const_cast<App::Property*>(pa)->getPyObject();
+    PyObject* sb = const_cast<App::Property*>(pb)->getPyObject();
+    bool ok = false;
+    if (sa && sb) {
+        PyObject* r = PyObject_CallFunction(fn, "OsOs", sa, ia.c_str(), sb, ib.c_str());
+        if (r) {
+            ok = PyObject_IsTrue(r) == 1;
+            Py_DECREF(r);
+        }
+        else {
+            PyErr_Clear();
+        }
+    }
+    Py_XDECREF(sa);
+    Py_XDECREF(sb);
+    return ok;
+}
+
+/// The identity gate: every upstream feature that still holds the stored mapped name must have
+/// there an element geometrically identical to the candidate; at least one must exist.
+static bool identityGateAccepts(const GeoFeature& geo,
+                                const Data::MappedName& stored,
+                                const std::string& type,
+                                const std::string& candidate)
+{
+    auto* prop = geo.getPropertyOfGeometry();
+    if (!prop) {
+        return false;
+    }
+    int holders = 0;
+    for (auto* obj : geo.getOutListRecursive()) {
+        auto* up = freecad_cast<GeoFeature*>(obj);
+        if (!up || up == &geo) {
+            continue;
+        }
+        auto* uprop = up->getPropertyOfGeometry();
+        auto* udata = uprop ? uprop->getComplexData() : nullptr;
+        if (!udata) {
+            continue;
+        }
+        Data::IndexedName origin = udata->getIndexedName(stored);
+        if (!origin || type != origin.getType()) {
+            continue;
+        }
+        std::string originName;
+        origin.appendToStringBuffer(originName);
+        if (!sameElementGeometry(prop, candidate, uprop, originName)) {
+            FC_WARN("element reference by history rejected: " << candidate << " in "
+                                                              << geo.getFullName()
+                                                              << " is not geometrically "
+                                                              << originName << " of "
+                                                              << up->getFullName());
+            return false;
+        }
+        ++holders;
+    }
+    return holders > 0;
+}
+
 /// Try to find the element of `geo` that derives from the mapped name stored in `element`
 /// (form `;<mapped name>.<Type><N>`, possibly with a leading '?' on the index). Returns the
 /// indexed name of the single derived element, or an empty vector if there is none or the
@@ -565,7 +734,8 @@ static std::vector<std::string> rescueByHistory(const GeoFeature& geo, const cha
         }
     }
     if (matches.size() == 1
-        && data->countSubElements(type.c_str()) >= static_cast<unsigned long>(Data::IndexedName(matches.begin()->c_str()).getIndex())) {
+        && data->countSubElements(type.c_str()) >= static_cast<unsigned long>(Data::IndexedName(matches.begin()->c_str()).getIndex())
+        && identityGateAccepts(geo, stored, type, *matches.begin())) {
         FC_WARN("recovered element reference by history " << element << " -> " << *matches.begin()
                                                           << " in " << geo.getFullName());
         return {*matches.begin()};

@@ -98,7 +98,17 @@ def _face_sig(shape, name):
     f = shape.getElement(name)
     u0, u1, v0, v1 = f.ParameterRange
     n = f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
-    return (round(n.x, 5), round(n.y, 5), round(n.z, 5), type(f.Surface).__name__)
+    c = f.CenterOfMass
+    return (
+        round(n.x, 5),
+        round(n.y, 5),
+        round(n.z, 5),
+        round(c.x, 5),
+        round(c.y, 5),
+        round(c.z, 5),
+        round(f.Area, 5),
+        type(f.Surface).__name__,
+    )
 
 
 class TestReferenceRescue(unittest.TestCase):
@@ -231,7 +241,9 @@ class TestReferenceRescue(unittest.TestCase):
         support, subs = sk.AttachmentSupport[0]
         self.assertIs(support, fil)
         self.assertFalse(subs[0].startswith("?"))
-        self.assertEqual(_face_sig(fil.Shape, subs[0]), sig)
+        # the hole changes the top face's area and centroid; it is still the planar face at height L facing +Z
+        after = _face_sig(fil.Shape, subs[0])
+        self.assertEqual((after[:3], after[5], after[7]), (sig[:3], L, "Plane"))
         self.assertAlmostEqual(sk.Placement.Base.z, z_before, places=6)
         self.assertTrue(sk.Placement.Rotation.isSame(rot_before, 1e-9))
 
@@ -307,6 +319,98 @@ class TestReferenceRescue(unittest.TestCase):
         for sub, sig in zip(subs, sigs):
             if not sub.startswith("?"):
                 self.assertEqual(_edge_sig(fil.Base[0].Shape, sub), sig)
+
+    # -------------------------------------------------------------- never a silent retarget
+    def _assert_never_retargeted(self, feature, before_sigs):
+        """Every reference is either reported missing or geometrically identical to before."""
+        base, subs = feature.Base[0], feature.Base[1]
+        self.assertEqual(len(subs), len(before_sigs))
+        for sub, expected in zip(subs, before_sigs):
+            if sub.startswith("?"):
+                continue
+            self.assertEqual(
+                _edge_sig(base.Shape, sub), expected, "%s was silently retargeted" % sub
+            )
+
+    def _edge_at(self, shape, x, y, z):
+        for i, e in enumerate(shape.Edges):
+            c = e.CenterOfMass
+            if abs(c.x - x) < 1e-6 and abs(c.y - y) < 1e-6 and abs(c.z - z) < 1e-6:
+                return "Edge%d" % (i + 1)
+        self.fail("no edge at %s" % ((x, y, z),))
+
+    def _inserted_dressup_case(self, ref_type, ins_type, point):
+        pad = self._pad()
+        edge = self._edge_at(pad.Shape, *point)
+        sigs = [_edge_sig(pad.Shape, edge)]
+        down = self._dressup(ref_type, pad, [edge], 1.0)
+        self.doc.recompute()
+        self._valid(down)
+        self._dressup(ins_type, pad, [edge], 3.0, after=pad)
+        self.doc.recompute()
+        self._assert_never_retargeted(down, sigs)
+        # the edge no longer exists in the same form: the reference must be reported
+        self.assertTrue(
+            any(s.startswith("?") for s in down.Base[1]) and "Invalid" in down.State,
+            "reference was not reported missing: %r %r" % (down.Base[1], down.State),
+        )
+
+    def test_inserted_chamfer_on_same_vertical_edge(self):
+        self._inserted_dressup_case(
+            "PartDesign::Fillet", "PartDesign::Chamfer", (W / 2, H / 2, L / 2)
+        )
+
+    def test_inserted_fillet_on_same_vertical_edge(self):
+        self._inserted_dressup_case(
+            "PartDesign::Chamfer", "PartDesign::Fillet", (W / 2, H / 2, L / 2)
+        )
+
+    def test_inserted_chamfer_on_top_edge(self):
+        self._inserted_dressup_case("PartDesign::Fillet", "PartDesign::Chamfer", (0, H / 2, L))
+
+    def test_inserted_fillet_on_top_edge(self):
+        self._inserted_dressup_case("PartDesign::Chamfer", "PartDesign::Fillet", (0, H / 2, L))
+
+    def test_inserted_draft_moving_the_bottom_edge(self):
+        """A Draft of the +X face (neutral plane: the top face) renames the bottom +Y edge, and the top edge, generated from
+        the same sketch edge, becomes the only history match: it is a different edge and must not be taken."""
+        pad = self._pad()
+        edge = self._edge_at(pad.Shape, 0, H / 2, 0)
+        sigs = [_edge_sig(pad.Shape, edge)]
+        fil = self._dressup("PartDesign::Fillet", pad, [edge], 0.5)
+        self.doc.recompute()
+        self._valid(fil)
+        side = [
+            "Face%d" % (i + 1)
+            for i, f in enumerate(pad.Shape.Faces)
+            if abs(f.CenterOfMass.x - W / 2) < 1e-6
+        ][0]
+        top = [
+            "Face%d" % (i + 1)
+            for i, f in enumerate(pad.Shape.Faces)
+            if abs(f.CenterOfMass.z - L) < 1e-6
+        ][0]
+        draft = _add(self.doc, self.body, "PartDesign::Draft", "Draft", pad)
+        draft.Base = (pad, [side])
+        draft.NeutralPlane = (pad, [top])
+        draft.Angle = 5.0
+        self.doc.recompute()
+        self._assert_never_retargeted(fil, sigs)
+
+    def test_pocket_shortening_the_edge(self):
+        pad = self._pad()
+        edge = self._edge_at(pad.Shape, 0, H / 2, L)
+        sigs = [_edge_sig(pad.Shape, edge)]
+        fil = self._dressup("PartDesign::Fillet", pad, [edge], 1.0)
+        self.doc.recompute()
+        sk = _sketch(self.doc, self.body, "CutSk", z=L, after=pad)
+        _rect(sk, -10.0, 0.0, W / 2 + 10.0, H + 10.0)
+        pk = _add(self.doc, self.body, "PartDesign::Pocket", "CutPocket", sk)
+        pk.Profile = sk
+        pk.Length = 3.0
+        self.doc.recompute()
+        self._assert_never_retargeted(fil, sigs)
+        self.assertTrue(any(s.startswith("?") for s in fil.Base[1]))
 
     # -------------------------------------------------------------- persistence
     def test_save_reload_keeps_rescued_references(self):
