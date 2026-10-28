@@ -2,7 +2,9 @@
 """F3: agent turns across documents joined by App::Link XLinks."""
 
 import os
+import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -99,6 +101,42 @@ class TestXLink(unittest.TestCase):
         self.src.undo()
         self.assert_pre()
 
+    def test_accept_gives_every_document_the_same_transaction_id(self):
+        """Independent of F3's own ``shared_transaction`` flag: observe the transaction id FreeCAD
+        itself reports in each document while the turn is replayed, and the application-level
+        active transaction, and require one id, equal to the one accept returned."""
+        from AgentCore.diff import transplant
+        seen = []
+        real = transplant.apply
+
+        def spy(doc, cap, **kw):
+            out = real(doc, cap, **kw)
+            active = App.getActiveTransaction()
+            seen.append((doc.Name, doc.getBookedTransactionID(), active[1] if active else None,
+                         active[0] if active else None))
+            return out
+        t = self._cross_turn(self.asm)
+        transplant.apply = spy
+        try:
+            res = t.accept(self.auth.mint(t))
+        finally:
+            transplant.apply = real
+        self.assertEqual(sorted(n for n, *_ in seen), sorted([self.src.Name, self.asm.Name]))
+        ids = {booked for _, booked, _, _ in seen}
+        self.assertEqual(len(ids), 1, seen)                        # both documents booked into one transaction
+        (tid,) = ids
+        self.assertGreater(tid, 0)
+        self.assertEqual({a for _, _, a, _ in seen}, {tid}, seen)  # the application-level active transaction
+        self.assertEqual({n for _, _, _, n in seen}, {t.undo_name}, seen)
+        self.assertEqual(res["transaction_id"], tid)
+        self.assertTrue(res["shared_transaction"])
+        for d in (self.src, self.asm):                             # and the entry exists in each document
+            self.assertEqual(d.UndoNames, [t.undo_name], d.Name)
+        self.assertIsNone(App.getActiveTransaction())              # nothing left open at application level
+        self.asm.undo()
+        self.src.undo()
+        self.assert_pre()
+
     def test_failed_flatten_rolls_every_document_back(self):
         """Accept is atomic: a flatten failure in the second document undoes
         the first document's flattened entry too and ends the turn rejected."""
@@ -164,6 +202,36 @@ class TestXLink(unittest.TestCase):
         self.assertTrue(res["equal"], res["differences"])
         self.assert_pre()
         self.assertEqual(self.src.SrcCyl.Height.Value, 10)              # the snapshot is the before-state
+
+
+def _gui_binary():
+    """The FreeCAD GUI executable next to the running FreeCADCmd, or None."""
+    cand = os.path.join(App.getHomePath(), "bin", "FreeCAD")
+    return cand if os.path.isfile(cand) else None
+
+
+@unittest.skipUnless(os.environ.get("AGENTCORE_GUI_TESTS") == "1" and _gui_binary(),
+                     "opens the FreeCAD GUI offscreen: set AGENTCORE_GUI_TESTS=1 (mini only, never the laptop)")
+class TestXLinkGuiUndo(unittest.TestCase):
+    def test_one_application_undo_reverts_both_documents(self):
+        """A turn across two documents, accepted, is reverted in both by a single GUI Std_Undo
+        (Gui::Document::checkTransactionID groups entries that share a transaction id)."""
+        probe = os.path.join(FIX, "gui_undo_probe.py")
+        with tempfile.TemporaryDirectory(prefix="f3gui") as d:
+            result = os.path.join(d, "out.json")
+            env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PROBE_OUT=result, PROBE_FIX=FIX,
+                       PROBE_SRC=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            subprocess.run([_gui_binary(), probe], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=180, cwd=d)
+            with open(result) as fh:
+                out = json.load(fh)
+        self.assertNotIn("error", out, out.get("error"))
+        self.assertEqual(out["gui_documents"], [True, True])
+        self.assertTrue(out["shared_transaction"])
+        self.assertEqual(out["undo_counts_after_accept"], [1, 1])
+        self.assertNotEqual(out["changed"], out["before"])
+        self.assertEqual(out["undo_counts_after_undo"], [0, 0], out)    # one Std_Undo emptied both stacks
+        self.assertEqual(out["after_undo"], out["before"], out)         # and both documents are back
 
 
 if __name__ == "__main__":

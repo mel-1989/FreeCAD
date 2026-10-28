@@ -82,6 +82,7 @@ class TestServerWorkers(unittest.TestCase):
 
     def test_kill_pool_worker_mid_verify(self):
         doc = self.open()
+        pool = self.s.pool  # created here: the lazy property raced the server thread's own creation
         res = {}
         t = threading.Thread(target=lambda: res.update(
             zip(("out", "err"), mc.call(self.s, "verify", doc=doc, checks=["validity", {"check": "_selftest_sleep", "seconds": 30}]))))
@@ -89,7 +90,7 @@ class TestServerWorkers(unittest.TestCase):
         t.start()
         victim = None
         while time.time() - t0 < 30 and victim is None:
-            for pid, name in list(self.s.pool._live.items()):
+            for pid, name in list(pool._live.items()):
                 if name == "_selftest_sleep":
                     victim = pid
             time.sleep(0.05)
