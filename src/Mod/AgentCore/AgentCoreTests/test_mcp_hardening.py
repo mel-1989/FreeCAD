@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import time
 import unittest
 from unittest import mock
@@ -224,6 +225,97 @@ class TestThroughSealedWorker(unittest.TestCase):
         finally:
             s.close()
             a.close()
+
+
+class TestCrashRecoveryCheckpoint(unittest.TestCase):
+    """The respawn source is always the last committed state: pre-change while a change is
+    pending, post-accept once a human approved it (a stale checkpoint silently reverted accepted work)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = short_dir("acmcp-ck-")
+        cls.fixture = mc.save_fixtures(["box"], cls.dir)["box"]
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    _length = TestThroughSealedWorker._length
+
+    def _kill(self, s, doc):
+        w = s.docs[doc].worker
+        pid = w.pid
+        os.kill(pid, signal.SIGKILL)
+        deadline = time.time() + 10
+        while w.alive() and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(w.alive())
+        return pid
+
+    def _propose(self, s, doc, length):
+        mc.call(s, "begin_change", doc=doc)
+        self.assertFalse(mc.call(s, "exec_code", doc=doc, code=f"doc.getObject('Box').Length = {length}")[1])
+        prop, err = mc.call(s, "propose_change", doc=doc, summary="x")
+        self.assertFalse(err, prop)
+        return prop
+
+    def _approve(self, s, a, doc, prop):
+        self.assertTrue(a.say(f"approve {prop['turn_id']} {prop['digest']}").startswith("APPROVED"))
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            entry = mc.call(s, "list_documents")[0]["documents"][0]
+            if entry["change"] is None:
+                break
+            time.sleep(0.2)
+        self.assertEqual(entry["last_decision"]["decision"], "accepted", entry)
+        self.assertNotIn("checkpoint_error", entry["last_decision"])
+
+    def test_crash_after_approved_accept_restores_the_accepted_state(self):
+        a = Approver(self.dir)
+        s = mc.make_server(stub=False, approver_socket=a.socket)
+        try:
+            doc = mc.call(s, "open_document", path=self.fixture)[0]["doc"]
+            l0 = self._length(s, doc)
+            self._approve(s, a, doc, self._propose(s, doc, 15))
+            self.assertEqual(self._length(s, doc), 15)
+            pid = self._kill(s, doc)
+            self.assertEqual(self._length(s, doc), 15)           # not l0
+            self.assertNotEqual(s.docs[doc].worker.pid, pid)
+            self.assertNotEqual(l0, 15)
+            self._kill(s, doc)                                    # a second crash must not fall back to the source
+            self.assertEqual(self._length(s, doc), 15)
+        finally:
+            s.close()
+            a.close()
+
+    def test_crash_during_a_pending_change_restores_the_pre_change_state(self):
+        a = Approver(self.dir)
+        s = mc.make_server(stub=False, approver_socket=a.socket)
+        try:
+            doc = mc.call(s, "open_document", path=self.fixture)[0]["doc"]
+            l0 = self._length(s, doc)
+            self._approve(s, a, doc, self._propose(s, doc, 15))
+            self._propose(s, doc, 33)                             # second change stays unapproved
+            self._kill(s, doc)
+            self.assertEqual(self._length(s, doc), 15)            # last committed state, not 33, not l0
+            self.assertNotEqual(l0, 15)
+            entry = mc.call(s, "list_documents")[0]["documents"][0]
+            self.assertIsNone(entry["change"])
+        finally:
+            s.close()
+            a.close()
+
+    def test_crash_during_first_pending_change_restores_the_original(self):
+        s = mc.make_server(stub=False)
+        try:
+            doc = mc.call(s, "open_document", path=self.fixture)[0]["doc"]
+            l0 = self._length(s, doc)
+            mc.call(s, "begin_change", doc=doc)
+            mc.call(s, "exec_code", doc=doc, code="doc.getObject('Box').Length = 41")
+            self._kill(s, doc)
+            self.assertEqual(self._length(s, doc), l0)
+        finally:
+            s.close()
 
 
 if __name__ == "__main__":

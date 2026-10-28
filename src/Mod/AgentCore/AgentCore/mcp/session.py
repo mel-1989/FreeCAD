@@ -102,7 +102,29 @@ class Session:
         self._snapdir = None
 
     # -- turn bookkeeping
+    def _refresh_checkpoint(self):
+        """Persist the just-committed document as the server's crash-recovery checkpoint: write a
+        temp file, then rename over the old one, so a crash never sees a stale or torn checkpoint."""
+        path = os.environ.get("CADFORK_MCP_CHECKPOINT")
+        if not path or self.doc is None:
+            return None
+        tmp = path[:-len(".FCStd")] + ".new.FCStd"  # not path + ".tmp": saveCopy uses that name itself
+        try:
+            self.doc.saveCopy(tmp)
+            os.replace(tmp, path)
+        except Exception as exc:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return f"{type(exc).__name__}: {exc}"
+        return None
+
     def _end_turn(self, decision, **extra):
+        if decision == "accepted":  # every commit path (approver accept, accept seen via _sync) lands here
+            err = self._refresh_checkpoint()
+            if err:
+                extra["checkpoint_error"] = err
         self.last_decision = {"change": self.turn_no, "decision": decision, **extra}
         self.turn = None
         self.turn_state = None
