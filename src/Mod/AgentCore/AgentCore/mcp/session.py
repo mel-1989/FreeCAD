@@ -515,7 +515,7 @@ class Session:
         low = path.lower()
         if not low.endswith(FCSTD_EXT + STEP_EXT + BREP_EXT):
             raise BridgeError("unsupported_format", "export to .step/.stp, .brep or .FCStd")
-        if _is_same_file(path, (self.source, doc.FileName)):
+        if _is_same_file(path, (self.source, doc.FileName, os.environ.get("CADFORK_MCP_CHECKPOINT"))):
             raise BridgeError("refused_target", f"{path} is the document's own source file; export elsewhere")
         if os.path.exists(path) and not overwrite:
             raise BridgeError("file_exists", f"{path} exists; pass overwrite=true to replace it")

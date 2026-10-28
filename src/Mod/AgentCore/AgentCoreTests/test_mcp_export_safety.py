@@ -61,5 +61,26 @@ class TestExportNeverOverwritesSource(unittest.TestCase):
         self.assertEqual(_sha(self.src), self.before)
 
 
+    def test_crash_recovery_checkpoint_is_protected(self):
+        # The MCP server's checkpoint is the respawn source; an export onto it would corrupt recovery.
+        ck = os.path.join(self.d, "h1-checkpoint.FCStd")
+        old = os.environ.get("CADFORK_MCP_CHECKPOINT")
+        os.environ["CADFORK_MCP_CHECKPOINT"] = ck
+        try:
+            with self.assertRaises(BridgeError) as cm:  # absent checkpoint
+                self.s.m_export_file(ck, overwrite=True)
+            self.assertEqual(cm.exception.code, "refused_target")
+            shutil.copy(self.src, ck)
+            ck_sha = _sha(ck)
+            with self.assertRaises(BridgeError) as cm:  # existing checkpoint
+                self.s.m_export_file(ck, overwrite=True)
+            self.assertEqual(cm.exception.code, "refused_target")
+            self.assertEqual(_sha(ck), ck_sha)
+        finally:
+            if old is None:
+                os.environ.pop("CADFORK_MCP_CHECKPOINT", None)
+            else:
+                os.environ["CADFORK_MCP_CHECKPOINT"] = old
+
 if __name__ == "__main__":
     unittest.main()

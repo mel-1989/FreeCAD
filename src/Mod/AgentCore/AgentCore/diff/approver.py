@@ -99,8 +99,8 @@ class Approver:
                     raise _authority.TokenRefused("apply token was revoked: the change set was denied")
                 if cur is not None or (turn_id, digest) not in self._spent:
                     raise _authority.TokenRefused("apply token is no longer the approved one (revoked or superseded)")
-        self._auth.check(tok, turn_id, digest)  # raises TokenRefused; spends the nonce
-        with self._lock:
+            # Held across the spend, so a deny cannot land between the nonce test and the spend.
+            self._auth.check(tok, turn_id, digest)  # raises TokenRefused; spends the nonce
             self._approved.pop((turn_id, digest), None)
             self._spent.add((turn_id, digest))
 
