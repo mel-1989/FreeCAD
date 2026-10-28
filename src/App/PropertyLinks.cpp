@@ -529,15 +529,19 @@ def _pt(a, b, tol):
     return (a - b).Length <= tol
 def _par(a, b):
     return abs(abs(a.dot(b)) - 1.0) <= 1e-9
+# Absolute tolerance in mm. An element unchanged by an inserted feature comes back bit-identical
+# (measured deviation 0 on plates from 40 mm to 40 m); Precision::Confusion is 1e-7. 1e-5 is
+# 100 x Confusion, a margin for platform float noise, and a real change of 0.00002 mm still counts
+# as modified. It must not grow with the part's size: a relative tolerance accepted a 0.008 mm
+# shortening on a 10 m part.
+TOL = 1e-5
 def same(sa, na, sb, nb):
     try:
         a = sa.getElement(na)
         b = sb.getElement(nb)
         if a.ShapeType != b.ShapeType:
             return False
-        bb = sa.BoundBox
-        scale = max(1.0, bb.XLength, bb.YLength, bb.ZLength)
-        tol = 1e-6 * scale
+        tol = TOL
         if a.ShapeType == "Vertex":
             return _pt(a.Point, b.Point, tol)
         if a.ShapeType == "Edge":
@@ -548,13 +552,17 @@ def same(sa, na, sb, nb):
                 return False
             if not _pt(a.CenterOfMass, b.CenterOfMass, tol):
                 return False
-            pa = sorted((round(v.X / tol), round(v.Y / tol), round(v.Z / tol)) for v in a.Vertexes)
-            pb = sorted((round(v.X / tol), round(v.Y / tol), round(v.Z / tol)) for v in b.Vertexes)
-            if len(pa) != len(pb):
+            va, vb = a.Vertexes, b.Vertexes
+            if len(va) != len(vb):
                 return False
-            for u, w in zip(pa, pb):
-                if max(abs(u[0] - w[0]), abs(u[1] - w[1]), abs(u[2] - w[2])) > 1:
+            if len(va) == 2:
+                p0, p1, q0, q1 = va[0].Point, va[1].Point, vb[0].Point, vb[1].Point
+                if not ((_pt(p0, q0, tol) and _pt(p1, q1, tol)) or (_pt(p0, q1, tol) and _pt(p1, q0, tol))):
                     return False
+            else:
+                for u in va:
+                    if not any(_pt(u.Point, w.Point, tol) for w in vb):
+                        return False
             kind = type(ca).__name__
             if kind == "Line":
                 if not _par(ca.Direction, cb.Direction):
@@ -571,9 +579,18 @@ def same(sa, na, sb, nb):
             sfa, sfb = a.Surface, b.Surface
             if type(sfa).__name__ != type(sfb).__name__:
                 return False
-            if not _close(a.Area, b.Area, tol * scale):
+            ba, bb = a.BoundBox, b.BoundBox
+            ext = max(1.0, ba.XLength, ba.YLength, ba.ZLength)
+            if not _close(a.Area, b.Area, tol * ext):
                 return False
             if not _pt(a.CenterOfMass, b.CenterOfMass, tol):
+                return False
+            # outline: same number of edges and same bounding box (reshaped means modified)
+            if len(a.Edges) != len(b.Edges):
+                return False
+            if (abs(ba.XMin - bb.XMin) > tol or abs(ba.XMax - bb.XMax) > tol
+                    or abs(ba.YMin - bb.YMin) > tol or abs(ba.YMax - bb.YMax) > tol
+                    or abs(ba.ZMin - bb.ZMin) > tol or abs(ba.ZMax - bb.ZMax) > tol):
                 return False
             kind = type(sfa).__name__
             if kind == "Plane":
@@ -650,6 +667,16 @@ static bool identityGateAccepts(const GeoFeature& geo,
 {
     auto* prop = geo.getPropertyOfGeometry();
     if (!prop) {
+        return false;
+    }
+    // A stored name that is itself the product of a modify op (";:M", ";:M2", ... in the element
+    // map's op codes: an element trimmed, split or merged by a boolean) designates a fragment
+    // that only ever existed in the shape the consumer referenced. An upstream feature that
+    // happens to hold the same mapped name (a Pad fused onto the same base reproduces it) holds
+    // the unsplit element, so comparing with it would retarget the reference to the whole edge.
+    // We cannot see the fragment any more, so such a reference stays missing.
+    if (stored.toString().find(";:M") != std::string::npos) {
+        FC_WARN("element reference by history rejected: stored name designates a modified element");
         return false;
     }
     int holders = 0;

@@ -412,6 +412,77 @@ class TestReferenceRescue(unittest.TestCase):
         self._assert_never_retargeted(fil, sigs)
         self.assertTrue(any(s.startswith("?") for s in fil.Base[1]))
 
+    def test_fragment_of_split_edge_stays_missing(self):
+        """F2 is a boss that splits the inner top edge of an L-shaped Pad; a Fillet references the
+        8 mm fragment. A full-footprint Pad inserted between Pad and F2 holds the same mapped
+        name on the unsplit 20 mm edge; the reference must not move to that whole edge."""
+        sk = _sketch(self.doc, self.body, "Sketch")
+        pts = [V(-20, -10, 0), V(20, -10, 0), V(20, 0, 0), V(0, 0, 0), V(0, 10, 0), V(-20, 10, 0)]
+        for i in range(len(pts)):
+            sk.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % len(pts)]), False)
+        pad = self.body.newObject("PartDesign::Pad", "Pad")
+        pad.Profile = sk
+        pad.Length = L
+        self.doc.recompute()
+        bs = _sketch(self.doc, self.body, "F2Sketch", z=L)
+        _rect(bs, 8, 0, 8, 8)
+        f2 = self.body.newObject("PartDesign::Pad", "F2")
+        f2.Profile = bs
+        f2.Length = 4.0
+        self.doc.recompute()
+        frag = None
+        for i, e in enumerate(f2.Shape.Edges):
+            c = e.CenterOfMass
+            if abs(c.x - 16) < 1e-6 and abs(c.y) < 1e-6 and abs(c.z - L) < 1e-6:
+                frag = "Edge%d" % (i + 1)
+        self.assertIsNotNone(frag)
+        sigs = [_edge_sig(f2.Shape, frag)]
+        self.assertAlmostEqual(f2.Shape.getElement(frag).Length, 8.0, 6)
+        fil = self._dressup("PartDesign::Fillet", f2, [frag], 0.3)
+        self.doc.recompute()
+        self._valid(fil)
+        ts = _sketch(self.doc, self.body, "TopSketch", z=L, after=pad)
+        _rect(ts, 0, 0, W, H)
+        top = _add(self.doc, self.body, "PartDesign::Pad", "Top", ts)
+        top.Profile = ts
+        top.Length = 5.0
+        self.doc.recompute()
+        self._assert_never_retargeted(fil, sigs)
+        self.assertTrue(any(s.startswith("?") for s in fil.Base[1]), "fragment reference was retargeted: %r" % (fil.Base[1],))
+
+    def _shortened_plate_case(self, scale, d):
+        """A pocket removes the last d mm of the referenced top edge of a plate `scale` times
+        larger than the default; the edge is modified, so the reference must be reported."""
+        Wl, Hl, Ll = W * scale, H * scale, L * scale
+        sk = _sketch(self.doc, self.body, "Sketch")
+        _rect(sk, 0, 0, Wl, Hl)
+        pad = self.body.newObject("PartDesign::Pad", "Pad")
+        pad.Profile = sk
+        pad.Length = Ll
+        self.doc.recompute()
+        edge = self._edge_at(pad.Shape, 0, -Hl / 2, Ll)
+        sigs = [_edge_sig(pad.Shape, edge)]
+        fil = self._dressup("PartDesign::Fillet", pad, [edge], 0.5)
+        self.doc.recompute()
+        self._valid(fil)
+        cs = _sketch(self.doc, self.body, "CutSk", z=Ll, after=pad)
+        _rect(cs, Wl / 2 - d + 5.0, -Hl / 2, 10.0, 20.0)
+        pk = _add(self.doc, self.body, "PartDesign::Pocket", "Cut", cs)
+        pk.Profile = cs
+        pk.Length = 2 * Ll
+        self.doc.recompute()
+        self._assert_never_retargeted(fil, sigs)
+        self.assertTrue(
+            any(s.startswith("?") for s in fil.Base[1]),
+            "edge shortened by %g mm on a %g mm plate was rescued: %r" % (d, Wl, fil.Base[1]),
+        )
+
+    def test_shortening_on_large_part_stays_missing(self):
+        self._shortened_plate_case(25.0, 0.0003)
+
+    def test_shortening_on_very_large_part_stays_missing(self):
+        self._shortened_plate_case(250.0, 0.008)
+
     # -------------------------------------------------------------- persistence
     def test_save_reload_keeps_rescued_references(self):
         pad = self._pad()
