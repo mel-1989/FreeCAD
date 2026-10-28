@@ -90,6 +90,15 @@ class Approver:
 
     def check(self, wire, turn_id, digest):
         tok = _authority.ApplyToken.from_wire(wire)
+        with self._lock:
+            # Only the token currently on record is honoured: a deny (or a
+            # fresh approve) revokes any token a worker already polled.
+            cur = self._approved.get((turn_id, digest))
+            if cur is None or getattr(tok, "nonce", None) != cur.nonce:
+                if (turn_id, digest) in self._denied:
+                    raise _authority.TokenRefused("apply token was revoked: the change set was denied")
+                if cur is not None or (turn_id, digest) not in self._spent:
+                    raise _authority.TokenRefused("apply token is no longer the approved one (revoked or superseded)")
         self._auth.check(tok, turn_id, digest)  # raises TokenRefused; spends the nonce
         with self._lock:
             self._approved.pop((turn_id, digest), None)
