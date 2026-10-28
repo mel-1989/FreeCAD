@@ -66,3 +66,6 @@ from PartDesignTests.TestSuppressed import TestSuppressed
 
 # Topological naming problem
 from PartDesignTests.TestTopologicalNamingProblem import TestTopologicalNamingProblem
+
+# History-based reference rescue (cad-fork G01)
+from PartDesignTests.TestReferenceRescue import TestReferenceRescue

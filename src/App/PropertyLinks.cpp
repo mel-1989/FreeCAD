@@ -446,6 +446,138 @@ static std::vector<std::string> rescueDriftedElement(const GeoFeature& geo, cons
     return names;
 }
 
+// ---------------------------------------------------------------------------------------------
+// History-based reference rescue (cad-fork G01, slice 1).
+//
+// When a feature is inserted between a referenced feature and its consumer, the consumer's stored
+// mapped name (e.g. a Fillet's edge on the Pad) is not found in the new base feature's element
+// map, and there is no previous geometry of that base to search. The element map does however
+// record, for every element, the chain of names it was derived from (Data::ElementMap::
+// getElementHistory, the design behind FreeCAD's own element-map/TNP work). We use that chain:
+// the reference is rescued only if EXACTLY ONE element of the requested type in the current
+// shape has the stored name in its derivation chain. Zero or several candidates leave the
+// reference missing (reported, never retargeted silently).
+// ---------------------------------------------------------------------------------------------
+namespace
+{
+constexpr int HistoryRescueMaxDepth = 32;
+
+bool sameMappedName(const Data::MappedName& a, const Data::MappedName& b)
+{
+    return !a.empty() && !b.empty() && (a == b || a.toString() == b.toString());
+}
+
+/// True if `name` (a mapped name valid in `data`) derives from `stored`, following the history
+/// chain through the source features (found by the object tag) up to a bounded depth.
+bool derivesFromName(const App::Document* doc,
+                     const Data::ComplexGeoData* data,
+                     const Data::MappedName& name,
+                     const Data::MappedName& stored,
+                     int depth,
+                     std::set<std::pair<long, std::string>>& visited)
+{
+    if (!data || depth > HistoryRescueMaxDepth || name.empty()) {
+        return false;
+    }
+    if (!visited.insert({data->Tag, name.toString()}).second) {
+        return false;  // cycle guard
+    }
+    Data::MappedName original;
+    std::vector<Data::MappedName> history;
+    long tag = data->getElementHistory(name, &original, &history);
+    if (sameMappedName(original, stored)) {
+        return true;
+    }
+    for (const auto& h : history) {
+        if (sameMappedName(h, stored)) {
+            return true;
+        }
+    }
+    // The original name lives in the element map of the feature identified by the tag: continue
+    // tracing there (several inserted features in a row).
+    long absTag = tag < 0 ? -tag : tag;
+    if (!doc || absTag == 0 || absTag == (data->Tag < 0 ? -data->Tag : data->Tag)
+        || original.empty() || sameMappedName(original, name)) {
+        return false;
+    }
+    auto* srcObj = doc->getObjectByID(absTag);
+    auto* srcGeo = freecad_cast<App::GeoFeature*>(srcObj);
+    if (!srcGeo) {
+        return false;
+    }
+    auto* srcProp = srcGeo->getPropertyOfGeometry();
+    if (!srcProp || !srcProp->getComplexData()) {
+        return false;
+    }
+    return derivesFromName(doc, srcProp->getComplexData(), original, stored, depth + 1, visited);
+}
+}  // namespace
+
+/// Try to find the element of `geo` that derives from the mapped name stored in `element`
+/// (form `;<mapped name>.<Type><N>`, possibly with a leading '?' on the index). Returns the
+/// indexed name of the single derived element, or an empty vector if there is none or the
+/// answer is ambiguous.
+static std::vector<std::string> rescueByHistory(const GeoFeature& geo, const char* element)
+{
+    std::string s(element);
+    if (s.compare(0, Data::ELEMENT_MAP_PREFIX_SIZE, Data::ELEMENT_MAP_PREFIX) != 0) {
+        return {};
+    }
+    s.erase(0, Data::ELEMENT_MAP_PREFIX_SIZE);
+    auto dot = s.rfind('.');
+    if (dot == std::string::npos || dot == 0) {
+        return {};
+    }
+    std::string idx = s.substr(dot + 1);
+    s.erase(dot);
+    if (!idx.empty() && idx[0] == Data::MISSING_PREFIX[0]) {
+        idx.erase(0, 1);
+    }
+    std::string type;
+    for (char c : idx) {
+        if (!std::isalpha(static_cast<unsigned char>(c))) {
+            break;
+        }
+        type += c;
+    }
+    if (type.empty()) {
+        return {};
+    }
+    auto* prop = geo.getPropertyOfGeometry();
+    const Data::ComplexGeoData* data = prop ? prop->getComplexData() : nullptr;
+    if (!data || !data->hasElementMap()) {
+        return {};
+    }
+    Data::MappedName stored(s.c_str());
+    std::set<std::string> matches;
+    for (const auto& me : data->getElementMap()) {
+        if (!me.index || type != me.index.getType() || !me.name) {
+            continue;
+        }
+        std::string index;
+        me.index.appendToStringBuffer(index);
+        if (matches.count(index)) {
+            continue;
+        }
+        std::set<std::pair<long, std::string>> visited;
+        if (derivesFromName(geo.getDocument(), data, me.name, stored, 0, visited)) {
+            matches.insert(index);
+        }
+    }
+    if (matches.size() == 1
+        && data->countSubElements(type.c_str()) >= static_cast<unsigned long>(Data::IndexedName(matches.begin()->c_str()).getIndex())) {
+        FC_WARN("recovered element reference by history " << element << " -> " << *matches.begin()
+                                                          << " in " << geo.getFullName());
+        return {*matches.begin()};
+    }
+    if (matches.size() > 1) {
+        FC_WARN("element reference " << element << " in " << geo.getFullName() << " is ambiguous ("
+                                      << matches.size()
+                                      << " elements derive from it); left missing");
+    }
+    return {};
+}
+
 bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                                                App::DocumentObject* obj,
                                                std::string& sub,
@@ -512,6 +644,10 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
             }
             if (names.empty() && missing) {
                 names = rescueDriftedElement(*geo, oldElement);
+            }
+            if (names.empty() && missing) {
+                // geometry found nothing: follow the element-map history (single match only)
+                names = rescueByHistory(*geo, element);
             }
             if (names.size()) {
                 missing = false;
