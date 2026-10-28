@@ -83,6 +83,26 @@ def _jsonable(x, depth=0):
     return repr(x)[:500]
 
 
+def _is_same_file(path, protected):
+    """True if ``path`` is any of ``protected`` by identity, not by spelling.
+
+    ``os.path.samefile`` compares device and inode, so it catches a case
+    variant on a case-insensitive volume, a symlink and a hardlink; the
+    realpath/casefold comparison covers a target that does not exist yet.
+    """
+    for p in protected:
+        if not p:
+            continue
+        try:
+            if os.path.exists(path) and os.path.exists(p) and os.path.samefile(path, p):
+                return True
+        except OSError:
+            return True  # cannot tell: refuse
+        if os.path.realpath(path) == os.path.realpath(p):
+            return True
+    return False
+
+
 class Session:
     METHODS = ("ping", "open", "info", "state", "describe", "selection", "exec", "begin", "propose",
                "snapshot", "import_file", "export_file", "default_checks", "close", "shutdown")
@@ -495,8 +515,7 @@ class Session:
         low = path.lower()
         if not low.endswith(FCSTD_EXT + STEP_EXT + BREP_EXT):
             raise BridgeError("unsupported_format", "export to .step/.stp, .brep or .FCStd")
-        protected = {os.path.realpath(p) for p in (self.source, doc.FileName) if p}
-        if os.path.realpath(path) in protected:
+        if _is_same_file(path, (self.source, doc.FileName, os.environ.get("CADFORK_MCP_CHECKPOINT"))):
             raise BridgeError("refused_target", f"{path} is the document's own source file; export elsewhere")
         if os.path.exists(path) and not overwrite:
             raise BridgeError("file_exists", f"{path} exists; pass overwrite=true to replace it")

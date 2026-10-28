@@ -236,7 +236,8 @@ def check_source(source, *, ignore_rules=(), timeout=120):
         cmd = [exe, "--outputjson", path]
         if py:
             cmd[1:1] = ["--pythonpath", py]
-        proc = subprocess.run(cmd, cwd=tmp, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        proc = subprocess.run(cmd, cwd=tmp, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout, stdin=subprocess.DEVNULL)
     try:
         report = json.loads(proc.stdout)
     except ValueError:
