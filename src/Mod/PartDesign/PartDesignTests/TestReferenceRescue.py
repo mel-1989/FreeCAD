@@ -483,6 +483,60 @@ class TestReferenceRescue(unittest.TestCase):
     def test_shortening_on_very_large_part_stays_missing(self):
         self._shortened_plate_case(250.0, 0.008)
 
+    def _drafted_step_case(self, size, angle):
+        """An L-plate `size` mm across with a 20 mm inner step; a Thickness references the top face. A Draft of the
+        step face inserted upstream moves the top face's inner outline edges by a few micrometres: the face is
+        modified, so the reference must be reported (an area tolerance that grew with the part accepted it)."""
+        sk = _sketch(self.doc, self.body, "Sketch")
+        pts = [V(0, 0, 0), V(size, 0, 0), V(size, 20, 0), V(size - 20, 20, 0), V(size - 20, size, 0), V(0, size, 0)]
+        for i in range(6):
+            sk.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 6]), False)
+        pad = self.body.newObject("PartDesign::Pad", "Pad")
+        pad.Profile = sk
+        pad.Length = L
+        self.doc.recompute()
+        faces = pad.Shape.Faces
+        top = [
+            "Face%d" % (i + 1)
+            for i, f in enumerate(faces)
+            if abs(f.CenterOfMass.z - L) < 1e-6 and f.normalAt(*f.ParameterRange[::2]).z > 0.5
+        ][0]
+        bottom = [
+            "Face%d" % (i + 1) for i, f in enumerate(faces) if abs(f.CenterOfMass.z) < 1e-6
+        ][0]
+        step = [
+            "Face%d" % (i + 1)
+            for i, f in enumerate(faces)
+            if abs(f.CenterOfMass.y - 20) < 1e-6 and abs(f.CenterOfMass.z - L / 2) < 1e-6
+        ][0]
+        sig = _face_sig(pad.Shape, top)
+        thick = _add(self.doc, self.body, "PartDesign::Thickness", "Thick")
+        thick.Base = (pad, [top])
+        thick.Value = 1.0
+        thick.Reversed = False
+        self.doc.recompute()
+        self.assertNotIn("Invalid", thick.State)
+        draft = _add(self.doc, self.body, "PartDesign::Draft", "Draft", pad)
+        draft.Base = (pad, [step])
+        draft.NeutralPlane = (pad, [bottom])
+        draft.Angle = angle
+        self.doc.recompute()
+        self.assertNotIn("Invalid", draft.State)
+        base, subs = thick.Base[0], thick.Base[1]
+        for sub in subs:
+            if not sub.startswith("?"):
+                self.assertEqual(_face_sig(base.Shape, sub), sig, "%s was silently retargeted" % sub)
+        self.assertTrue(
+            any(s.startswith("?") for s in subs),
+            "face modified by a %g degree draft on a %g mm plate was rescued: %r" % (angle, size, subs),
+        )
+
+    def test_drafted_face_on_10m_part_stays_missing(self):
+        self._drafted_step_case(10000.0, 0.01)
+
+    def test_drafted_face_on_10m_part_stays_missing_larger_angle(self):
+        self._drafted_step_case(10000.0, 0.02)
+
     # -------------------------------------------------------------- persistence
     def test_save_reload_keeps_rescued_references(self):
         pad = self._pad()

@@ -535,6 +535,51 @@ def _par(a, b):
 # as modified. It must not grow with the part's size: a relative tolerance accepted a 0.008 mm
 # shortening on a 10 m part.
 TOL = 1e-5
+def _edge_same(a, b, tol):
+    ca, cb = a.Curve, b.Curve
+    if type(ca).__name__ != type(cb).__name__:
+        return False
+    if not _close(a.Length, b.Length, tol):
+        return False
+    if not _pt(a.CenterOfMass, b.CenterOfMass, tol):
+        return False
+    va, vb = a.Vertexes, b.Vertexes
+    if len(va) != len(vb):
+        return False
+    if len(va) == 2:
+        p0, p1, q0, q1 = va[0].Point, va[1].Point, vb[0].Point, vb[1].Point
+        if not ((_pt(p0, q0, tol) and _pt(p1, q1, tol)) or (_pt(p0, q1, tol) and _pt(p1, q0, tol))):
+            return False
+    else:
+        for u in va:
+            if not any(_pt(u.Point, w.Point, tol) for w in vb):
+                return False
+    kind = type(ca).__name__
+    if kind == "Line":
+        if not _par(ca.Direction, cb.Direction):
+            return False
+    elif kind in ("Circle", "Ellipse"):
+        if not _par(ca.Axis, cb.Axis) or not _pt(ca.Center, cb.Center, tol):
+            return False
+        if kind == "Circle" and not _close(ca.Radius, cb.Radius, tol):
+            return False
+    ma = a.valueAt(a.getParameterByLength(a.Length / 2.0))
+    mb = b.valueAt(b.getParameterByLength(b.Length / 2.0))
+    return _pt(ma, mb, tol)
+def _outline_same(a, b, tol):
+    # every edge of the candidate face matches a distinct edge of the reference face
+    ea, eb = list(a.Edges), list(b.Edges)
+    if len(ea) != len(eb):
+        return False
+    used = [False] * len(eb)
+    for x in ea:
+        for k, y in enumerate(eb):
+            if not used[k] and x.ShapeType == y.ShapeType and _edge_same(x, y, tol):
+                used[k] = True
+                break
+        else:
+            return False
+    return True
 def same(sa, na, sb, nb):
     try:
         a = sa.getElement(na)
@@ -545,43 +590,16 @@ def same(sa, na, sb, nb):
         if a.ShapeType == "Vertex":
             return _pt(a.Point, b.Point, tol)
         if a.ShapeType == "Edge":
-            ca, cb = a.Curve, b.Curve
-            if type(ca).__name__ != type(cb).__name__:
-                return False
-            if not _close(a.Length, b.Length, tol):
-                return False
-            if not _pt(a.CenterOfMass, b.CenterOfMass, tol):
-                return False
-            va, vb = a.Vertexes, b.Vertexes
-            if len(va) != len(vb):
-                return False
-            if len(va) == 2:
-                p0, p1, q0, q1 = va[0].Point, va[1].Point, vb[0].Point, vb[1].Point
-                if not ((_pt(p0, q0, tol) and _pt(p1, q1, tol)) or (_pt(p0, q1, tol) and _pt(p1, q0, tol))):
-                    return False
-            else:
-                for u in va:
-                    if not any(_pt(u.Point, w.Point, tol) for w in vb):
-                        return False
-            kind = type(ca).__name__
-            if kind == "Line":
-                if not _par(ca.Direction, cb.Direction):
-                    return False
-            elif kind in ("Circle", "Ellipse"):
-                if not _par(ca.Axis, cb.Axis) or not _pt(ca.Center, cb.Center, tol):
-                    return False
-                if kind == "Circle" and not _close(ca.Radius, cb.Radius, tol):
-                    return False
-            ma = a.valueAt(a.getParameterByLength(a.Length / 2.0))
-            mb = b.valueAt(b.getParameterByLength(b.Length / 2.0))
-            return _pt(ma, mb, tol)
+            return _edge_same(a, b, tol)
         if a.ShapeType == "Face":
             sfa, sfb = a.Surface, b.Surface
             if type(sfa).__name__ != type(sfb).__name__:
                 return False
             ba, bb = a.BoundBox, b.BoundBox
-            ext = max(1.0, ba.XLength, ba.YLength, ba.ZLength)
-            if not _close(a.Area, b.Area, tol * ext):
+            # absolute area tolerance (mm^2): an outline matching edge by edge leaves only noise
+            if not _close(a.Area, b.Area, tol):
+                return False
+            if not _outline_same(a, b, tol):
                 return False
             if not _pt(a.CenterOfMass, b.CenterOfMass, tol):
                 return False
