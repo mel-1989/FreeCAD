@@ -3079,3 +3079,130 @@ class DocumentRemoveExpressionOwnerCases(unittest.TestCase):
         self.Doc.recompute()
         self.assertEqual(pad.Length.Value, 8)
 
+class DocumentRemoveExpressionOwnerUndoCases(unittest.TestCase):
+    """Undo, abort and redo of removing an expression owner must restore (and re-drop) exactly
+    one property back-link per dependency, and the restored object must follow its target."""
+
+    def setUp(self):
+        self.Doc = FreeCAD.newDocument("RemoveExprOwnerUndo")
+        self.Doc.UndoMode = 1
+        self.src = self.Doc.addObject("Part::Box", "Src")
+        self.dep = self.Doc.addObject("Part::Box", "O")
+        self.dep.setExpression("Placement.Base.z", "Src.Length")
+        self.Doc.recompute()
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.Doc.Name)
+
+    def _follows(self, name="O"):
+        o = self.Doc.getObject(name)
+        for v in (55, 56, 57):
+            self.src.Length = v
+            self.Doc.recompute()
+            self.assertEqual(o.Placement.Base.z, v)
+
+    def test_undo(self):
+        self.Doc.openTransaction("rm")
+        self.Doc.removeObject("O")
+        self.Doc.commitTransaction()
+        self.assertEqual(len(self.src.InListProp), 0)
+        self.Doc.undo()
+        self.assertEqual(len(self.src.InListProp), 1)
+        self._follows()
+
+    def test_abort(self):
+        self.Doc.openTransaction("rm")
+        self.Doc.removeObject("O")
+        self.Doc.abortTransaction()
+        self.assertEqual(len(self.src.InListProp), 1)
+        self._follows()
+
+    def test_undo_redo(self):
+        self.Doc.openTransaction("rm")
+        self.Doc.removeObject("O")
+        self.Doc.commitTransaction()
+        self.Doc.undo()
+        self.Doc.redo()
+        self.assertEqual(len(self.src.InListProp), 0)
+        self.src.Length = 60
+        self.Doc.recompute()
+        self.Doc.undo()
+        self.assertEqual(len(self.src.InListProp), 1)
+        self._follows()
+
+    def test_partdesign_undo(self):
+        try:
+            import Sketcher  # noqa: F401
+            import PartDesign  # noqa: F401
+            import Part
+        except ImportError:
+            self.skipTest("PartDesign/Sketcher not available")
+
+        def square(sk, a):
+            pts = [(0, 0), (a, 0), (a, a), (0, a)]
+            for i in range(4):
+                p, q = pts[i], pts[(i + 1) % 4]
+                sk.addGeometry(Part.LineSegment(FreeCAD.Vector(*p, 0), FreeCAD.Vector(*q, 0)))
+
+        body = self.Doc.addObject("PartDesign::Body", "Body")
+        sk = body.newObject("Sketcher::SketchObject", "Sketch")
+        square(sk, 10)
+        pad = body.newObject("PartDesign::Pad", "Pad")
+        pad.Profile = sk
+        pad.Length = 5
+        self.Doc.recompute()
+        n = body.newObject("Sketcher::SketchObject", "Notch")
+        n.MapMode = "Deactivated"
+        square(n, 3)
+        n.setExpression("AttachmentOffset.Base.z", "Pad.Length")
+        self.Doc.recompute()
+        before = len(pad.InListProp)
+        self.Doc.openTransaction("t")
+        self.Doc.removeObject("Notch")
+        self.Doc.commitTransaction()
+        self.Doc.undo()
+        self.Doc.recompute()
+        self.assertEqual(len(pad.InListProp), before)
+        n = self.Doc.getObject("Notch")
+        for v in (7, 8, 9):
+            pad.Length = v
+            self.Doc.recompute()
+            self.assertEqual(n.AttachmentOffset.Base.z, v)
+
+
+class DocumentRemoveCrossDocExpressionOwnerCases(unittest.TestCase):
+    """A cross-document expression owner that is removed or whose document is closed must not
+    leave a property back-link on the target in the other document."""
+
+    def setUp(self):
+        self.A = FreeCAD.newDocument("A")
+        self.src = self.A.addObject("Part::Box", "Src")
+        self.A.recompute()
+        self.path = tempfile.mkdtemp()
+        self.A.saveAs(self.path + "/A.FCStd")
+        self.B = FreeCAD.newDocument("B")
+        self.dep = self.B.addObject("Part::Box", "Dep")
+        self.B.saveAs(self.path + "/B.FCStd")
+        self.dep.setExpression("Placement.Base.z", "<<A>>#<<Src>>.Length")
+        self.B.recompute()
+        self.A.recompute()
+        self.assertGreater(len(self.src.InListProp), 0)
+
+    def tearDown(self):
+        for n in ("B", "A"):
+            if n in FreeCAD.listDocuments():
+                FreeCAD.closeDocument(n)
+
+    def test_remove_owner(self):
+        self.B.removeObject("Dep")
+        self.assertEqual(len(self.src.InListProp), 0)
+        self.src.Length = 21
+        self.A.recompute()
+
+    def test_close_owner_document(self):
+        self.B.save()
+        FreeCAD.closeDocument("B")
+        self.assertEqual(len(self.src.InListProp), 0)
+        self.src.Length = 21
+        self.A.recompute()
+

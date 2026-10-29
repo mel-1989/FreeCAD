@@ -7032,15 +7032,24 @@ void PropertyXLinkContainer::breakLink(App::DocumentObject* obj, bool clear)
     removePropBackLinks(owner);
     _XLinks.clear();
     _Deps.clear();
-    _PropDeps.clear();
+    // _PropDeps stays: it records the edges to re-create when the removal is undone
+    // (TransactionDocumentObject::applyNew rebuilds back-links from getOutListProp())
 }
 
-void PropertyXLinkContainer::removePropBackLinks(App::DocumentObject* owner)
+void PropertyXLinkContainer::removePropBackLinks(App::DocumentObject* owner, bool destroying)
 {
     for (auto& [pair, hidden] : _PropDeps) {
         DocumentObject* target = pair.second;
-        if (!hidden && target && target->isAttachedToDocument()
-            && target->getDocument() == owner->getDocument()) {
+        // _Deps drops a target when it is removed, so membership proves the pointer is live.
+        // updateDepsProp adds these edges for cross-document targets too, so no same-document
+        // test here.
+        if (hidden || !target || !_Deps.contains(target)) {
+            continue;
+        }
+        if (destroying && target->getDocument() == owner->getDocument()) {
+            continue;
+        }
+        if (target->isAttachedToDocument()) {
             target->_removeBackLinkProp(getName(), owner, pair.first.c_str());
         }
     }

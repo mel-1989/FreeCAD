@@ -1630,6 +1630,10 @@ public:
                   bool all = false,
                   std::vector<std::string>* subs = nullptr,
                   bool newStyle = true) const override;
+    /// Remove the property-level back-links this container recorded in _PropDeps.
+    /// With destroying, only cross-document targets are touched (same-document ones may
+    /// already be freed when a whole document is torn down).
+    void removePropBackLinks(App::DocumentObject* owner, bool destroying = false);
     void getLinksProp(std::vector<std::pair<std::string, App::DocumentObject*>>& links,
                       bool all = false) const;
 
@@ -1647,7 +1651,6 @@ protected:
     void updateDeps(std::map<DocumentObject*, bool>&& newDeps,
                     std::map<std::pair<std::string, DocumentObject*>, bool>* propDeps = nullptr);
     void clearDeps();
-    void removePropBackLinks(App::DocumentObject* owner);
 
     void _onBreakLink(App::DocumentObject* obj);
 

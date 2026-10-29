@@ -85,6 +85,8 @@ DocumentObject::DocumentObject()
 
 DocumentObject::~DocumentObject()
 {
+    // cross-document expression targets outlive this object; drop our property back-links
+    ExpressionEngine.removePropBackLinks(this, true);
     if (!PythonObject.is(Py::_None())) {
         Base::PyGILStateLocker lock;
         // Remark: The API of Py::Object has been changed to set whether the wrapper owns the passed
