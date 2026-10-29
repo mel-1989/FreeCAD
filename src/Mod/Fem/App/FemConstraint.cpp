@@ -186,7 +186,15 @@ void Constraint::onChanged(const App::Property* prop)
             // getSubShape throws for a sub-element that no longer exists, which puts the
             // constraint in the Error state instead of leaving it silently Up-to-date
             // with a lost reference.
-            sh = Tools::getFeatureSubShape(feat, SubElements[i].c_str(), !execute);
+            try {
+                sh = Tools::getFeatureSubShape(feat, SubElements[i].c_str(), !execute);
+            }
+            catch (const Base::Exception& e) {
+                throw Base::ValueError(
+                    std::string("Reference ") + obj->getNameInDocument() + "." + SubElements[i]
+                    + " no longer resolves: " + e.what()
+                );
+            }
             if (execute && sh.IsNull() && !SubElements[i].empty()) {
                 throw Base::ValueError(
                     std::string("Reference sub-element no longer resolves: ") + obj->getNameInDocument()
