@@ -3206,3 +3206,120 @@ class DocumentRemoveCrossDocExpressionOwnerCases(unittest.TestCase):
         self.src.Length = 21
         self.A.recompute()
 
+
+class DocumentExpressionTargetDestroyedCases(unittest.TestCase):
+    """An expression owner kept for undo (or in another document) must not keep a pointer to a
+    target that has been destroyed meanwhile: undo restored the owner and recompute read freed
+    memory (run 007 crashes y_undo, k_uaf rmO_freeT_undo and x_close, found by verification)."""
+
+    def _churn(self, doc, n=200):
+        # allocate objects so that the address of a freed object is reused
+        objs = [doc.addObject("Part::Box", "Churn%d" % i) for i in range(n)]
+        doc.recompute()
+        return objs
+
+    def _owner_doc(self):
+        doc = FreeCAD.newDocument("TargetDestroyed")
+        doc.UndoMode = 1
+        tgt = doc.addObject("Part::Box", "Tgt")
+        live = doc.addObject("Part::Box", "Live")
+        owner = doc.addObject("Part::Box", "O")
+        owner.setExpression("Placement.Base.x", "Tgt.Length")
+        owner.setExpression("Placement.Base.z", "Live.Length")
+        doc.recompute()
+        return doc, tgt, live, owner
+
+    def _live_follows(self, doc, live, values):
+        owner = doc.getObject("O")
+        # the destroyed target's binding cannot be evaluated; drop it, the other one must be live
+        owner.setExpression("Placement.Base.x", None)
+        for v in values:
+            live.Length = v
+            doc.recompute()
+            self.assertEqual(owner.Placement.Base.z, v)
+
+    def test_remove_owner_then_destroy_target_then_undo(self):
+        doc, tgt, live, owner = self._owner_doc()
+        try:
+            doc.openTransaction("rm")
+            doc.removeObject("O")
+            doc.commitTransaction()
+            doc.removeObject("Tgt")
+            self._churn(doc)
+            doc.undo()
+            owner = doc.getObject("O")
+            self.assertIsNotNone(owner)
+            doc.recompute()
+            # exactly the surviving edge is restored, nothing on a reused address
+            self.assertEqual(len(live.InListProp), 1)
+            for obj in doc.Objects:
+                if obj.Name != "Live":
+                    self.assertFalse(any(e.FromObj is owner for e in obj.InListProp))
+            self._live_follows(doc, live, (31, 32, 33))
+            doc.removeObject("O")
+            doc.recompute()
+        finally:
+            FreeCAD.closeDocument(doc.Name)
+
+    def test_destroy_target_then_undo_redo_cycles(self):
+        doc, tgt, live, owner = self._owner_doc()
+        try:
+            doc.openTransaction("rm")
+            doc.removeObject("O")
+            doc.commitTransaction()
+            doc.removeObject("Tgt")
+            for i in range(3):
+                doc.undo()
+                self.assertEqual(len(live.InListProp), 1)
+                doc.redo()
+                self.assertEqual(len(live.InListProp), 0)
+                self._churn(doc, 50)
+            doc.undo()
+            doc.recompute()
+            self._live_follows(doc, live, (61, 62))
+        finally:
+            FreeCAD.closeDocument(doc.Name)
+
+    def test_cleared_undo_keeps_no_dangling_edge(self):
+        doc, tgt, live, owner = self._owner_doc()
+        try:
+            doc.openTransaction("rmT")
+            doc.removeObject("Tgt")
+            doc.commitTransaction()
+            doc.clearUndos()
+            self._churn(doc)
+            owner.setExpression("Placement.Base.x", None)
+            live.Length = 17
+            doc.recompute()
+            self.assertEqual(owner.Placement.Base.z, 17)
+        finally:
+            FreeCAD.closeDocument(doc.Name)
+
+    def test_close_target_document_then_recompute_dependent(self):
+        path = tempfile.mkdtemp()
+        A = FreeCAD.newDocument("XA")
+        B = FreeCAD.newDocument("XB")
+        try:
+            A.addObject("Part::Box", "Tgt")
+            local = B.addObject("Part::Box", "Local")
+            owner = B.addObject("Part::Box", "O")
+            A.saveAs(path + "/XA.FCStd")
+            B.saveAs(path + "/XB.FCStd")
+            owner.setExpression("Placement.Base.x", "<<XA>>#<<Tgt>>.Length")
+            owner.setExpression("Placement.Base.z", "Local.Length")
+            B.recompute()
+            A.recompute()
+            FreeCAD.closeDocument("XA")
+            self._churn(B)
+            B.recompute()
+            owner.setExpression("Placement.Base.y", "1 mm")
+            B.recompute()
+            owner.setExpression("Placement.Base.x", None)
+            for v in (23, 24):
+                local.Length = v
+                B.recompute()
+                self.assertEqual(owner.Placement.Base.z, v)
+        finally:
+            for n in ("XB", "XA"):
+                if n in FreeCAD.listDocuments():
+                    FreeCAD.closeDocument(n)
