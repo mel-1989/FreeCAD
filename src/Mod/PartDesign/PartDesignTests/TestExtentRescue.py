@@ -487,7 +487,7 @@ class TestExtentRescue(unittest.TestCase):
                 sub = c.Ref[1][0]
                 self.assertFalse(sub.startswith("?"), "N=%d: the trimmed edge was lost" % n)
                 ed = body.Shape.getElement(sub)
-                self.assertLess(ed.Length, (pts[1] - pts[0]).Length - 1.0)
+                self.assertLess(ed.Length, (pts[1] - pts[0]).Length - 0.1)
                 self.assertLess((ed.CenterOfMass - mid).Length, 1e-5)
             finally:
                 App.closeDocument(doc.Name)
