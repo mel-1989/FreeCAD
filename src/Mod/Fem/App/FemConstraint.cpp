@@ -181,6 +181,14 @@ void Constraint::onChanged(const App::Property* prop)
         bool normalFound = false;
         for (std::size_t i = 0; i < Objects.size(); i++) {
             App::DocumentObject* obj = Objects[i];
+            if (!obj || !obj->isDerivedFrom<Part::Feature>()) {
+                if (execute) {
+                    throw Base::TypeError(
+                        std::string("Reference is not a Part feature: ") + (obj ? obj->getNameInDocument() : "(null)")
+                    );
+                }
+                continue;
+            }
             Part::Feature* feat = static_cast<Part::Feature*>(obj);
             // Every reference is resolved, not only the first face: during a recompute
             // getSubShape throws for a sub-element that no longer exists, which puts the
@@ -295,6 +303,9 @@ bool Constraint::getPoints(
     TopoDS_Shape sh;
 
     for (std::size_t i = 0; i < Objects.size(); i++) {
+        if (!Objects[i] || !Objects[i]->isDerivedFrom<Part::Feature>()) {
+            return false;
+        }
         Part::Feature* feat = static_cast<Part::Feature*>(Objects[i]);
         sh = Tools::getFeatureSubShape(feat, SubElements[i].c_str(), true);
         if (sh.IsNull()) {

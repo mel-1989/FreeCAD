@@ -30,6 +30,7 @@ from femtest.app.test_femimport import TestFemImport as FemTest01
 from femtest.app.test_common import TestFemCommon as FemTest02
 from femtest.app.test_object import TestObjectCreate as FemTest03
 from femtest.app.test_object import TestObjectType as FemTest04
+from femtest.app.test_object import TestConstraintLostReference as FemTest04b
 from femtest.app.test_open import TestObjectOpen as FemTest05
 from femtest.app.test_material import TestMaterialUnits as FemTest06
 from femtest.app.test_mesh import TestMeshCommon as FemTest07
