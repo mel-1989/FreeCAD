@@ -724,48 +724,143 @@ def _line_ends(e):
         return v[0].Point, v[1].Point
     except Exception:
         return None
-def extent_rescue(shape, anchor):
+# Per-shape caches (the last few shapes asked about): the straight edges as plain floats, and the
+# faces next to each edge. One pass over the edges per shape however many lost references ask.
+_cache = []
+def _data(shape):
+    for s, d in _cache:
+        if s.isSame(shape):
+            return d
+    d = {"lines": None, "fmap": None}
+    _cache.insert(0, (shape, d))
+    del _cache[4:]
+    return d
+def _lines(shape):
+    d = _data(shape)
+    if d["lines"] is None:
+        out = []
+        for i, e in enumerate(shape.Edges):
+            q = _line_ends(e)
+            if q is not None:
+                out.append((i + 1, e, q[0].x, q[0].y, q[0].z, q[1].x, q[1].y, q[1].z))
+        d["lines"] = out
+    return d["lines"]
+def _faces_of(shape, edge):
+    d = _data(shape)
+    if d["fmap"] is None:
+        m = {}
+        for f in shape.Faces:
+            for e in f.Edges:
+                m.setdefault(e.hashCode(), []).append((e, f))
+        d["fmap"] = m
+    return [f for e, f in d["fmap"].get(edge.hashCode(), []) if e.isSame(edge)]
+def _canon(v):
+    # a direction without its sign
+    for c in (v.x, v.y, v.z):
+        if abs(c) > 1e-9:
+            return v if c > 0 else v * -1.0
+    return v
+def _face_desc(f, p):
+    # the surface a face lies on, with the side the material is on, as a tuple of floats
+    s = f.Surface
+    k = type(s).__name__
+    u, v = s.parameter(p)
+    n = f.normalAt(u, v)
+    if k == "Plane":
+        return (0.0, n.x, n.y, n.z, n.dot(p), 0.0)
+    if k in ("Cylinder", "Sphere"):
+        a = _canon(s.Axis) if k == "Cylinder" else p.__class__(0, 0, 0)
+        c = s.Center
+        c = c - a * c.dot(a) if k == "Cylinder" else c
+        w = p - s.Center
+        if k == "Cylinder":
+            w = w - s.Axis * w.dot(s.Axis)
+        side = 1.0 if n.dot(w) > 0 else -1.0
+        return (1.0 if k == "Cylinder" else 2.0, a.x + c.x + side, a.y + c.y, a.z + c.z, s.Radius, 0.0)
+    return None
+def _adj(shape, edge, mid):
+    out = []
+    for f in _faces_of(shape, edge):
+        d = _face_desc(f, mid)
+        if d is None:
+            return None
+        out.append(d)
+    return out
+def _same_descs(a, b):
+    if a is None or b is None or len(a) != len(b) or not a:
+        return False
+    used = [False] * len(b)
+    for x in a:
+        for k, y in enumerate(b):
+            if not used[k] and all(abs(p - q) <= TOL for p, q in zip(x, y)):
+                used[k] = True
+                break
+        else:
+            return False
+    return True
+# Precision::Confusion: the two end trims of an edge must agree to this
+TRIM_TOL = 1e-7
+def extent_rescue(shape, anchor, old):
     # D6 extent ruling (run 005, TechDraw phase 2, lifted to 3D): a straight edge that an edit
-    # trims equally at both ends is still the same element. The new edge must lie on the anchor's
-    # carrier line inside its extent with the same midpoint, and it must be the ONLY edge of the
-    # shape on that carrier overlapping the anchor's extent: a centre piece of a split edge keeps
-    # the old midpoint but is a split, not the same element. Exactly one answer or none.
+    # trims equally at both ends is still the same element. `anchor` is the edge as it was and
+    # `old` the shape it belonged to. The new edge must
+    #   - lie on the anchor's carrier line inside its extent, both ends trimmed by the same amount;
+    #   - be the ONLY edge of the new shape on that carrier overlapping the extent (the centre piece
+    #     of a split edge keeps the midpoint but is a split);
+    #   - not have been a distinct element before: the old shape had no other edge overlapping the
+    #     extent on that carrier;
+    #   - lie between faces on the same surfaces, with the material on the same sides, as the old
+    #     edge did.
+    # Exactly one answer or none.
     try:
         ends = _line_ends(anchor)
-        if ends is None:
+        if ends is None or old is None:
             return []
         a0, a1 = ends
         length = (a1 - a0).Length
         if length <= 2 * TOL:
             return []
         d = (a1 - a0) * (1.0 / length)
+        ox, oy, oz = a0.x, a0.y, a0.z
+        dx, dy, dz = d.x, d.y, d.z
+
+        def span(c):
+            # (t0, t1) of a straight edge on the anchor's carrier, else None
+            ts = []
+            for px, py, pz in ((c[2], c[3], c[4]), (c[5], c[6], c[7])):
+                wx, wy, wz = px - ox, py - oy, pz - oz
+                t = wx * dx + wy * dy + wz * dz
+                rx, ry, rz = wx - t * dx, wy - t * dy, wz - t * dz
+                if rx * rx + ry * ry + rz * rz > TOL * TOL:
+                    return None
+                ts.append(t)
+            return (min(ts), max(ts))
+
+        for c in _lines(old):
+            if c[1].isSame(anchor):
+                continue
+            sp = span(c)
+            if sp is not None and min(sp[1], length) - max(sp[0], 0.0) > TOL:
+                return []  # the old edge was not alone on its carrier
         found = []
-        n = len(shape.Edges)
-        for i in range(1, n + 1):
-            e = shape.getElement("Edge%d" % i)
-            q = _line_ends(e)
-            if q is None:
+        for c in _lines(shape):
+            sp = span(c)
+            if sp is None or min(sp[1], length) - max(sp[0], 0.0) <= TOL:
                 continue
-            on = True
-            for p in q:
-                w = p - a0
-                if (w - d * w.dot(d)).Length > TOL:
-                    on = False
-                    break
-            if not on:
-                continue
-            t0, t1 = sorted(((q[0] - a0).dot(d), (q[1] - a0).dot(d)))
-            if min(t1, length) - max(t0, 0.0) <= TOL:
-                continue  # collinear but outside the anchor's extent
-            found.append((i, t0, t1))
+            found.append((c, sp))
         if len(found) != 1:
             return []
-        i, t0, t1 = found[0]
+        c, (t0, t1) = found[0]
         if t0 < -TOL or t1 > length + TOL or t1 - t0 <= TOL:
             return []
-        if abs((t0 + t1) / 2.0 - length / 2.0) > TOL:
+        if abs(t0 - (length - t1)) > TRIM_TOL:
             return []
-        return ["Edge%d" % i]
+        mid_old = a0 + d * (length / 2.0)
+        if not _same_descs(_adj(old, anchor, mid_old), _adj(shape, c[1], mid_old)):
+            return []
+        if not shape.Edges[c[0] - 1].isSame(shape.getElement("Edge%d" % c[0])):
+            return []
+        return ["Edge%d" % c[0]]
     except Exception:
         return []
 def same_el(a, b):
@@ -872,7 +967,8 @@ std::string anchorKey(const GeoFeature& geo, const std::string& storedName)
 {
     return std::string(geo.getNameInDocument() ? geo.getNameInDocument() : "") + '\n' + storedName;
 }
-constexpr std::size_t MaxAnchorsPerLink = 256;
+const std::string OwnerSuffix = "\x01owner";
+constexpr std::size_t MaxAnchorsPerLink = 512;  // an anchor and the shape it was taken from
 std::unordered_map<const PropertyLinkBase*, AnchorMap>& anchorStore()
 {
     // leaked on purpose: the properties can outlive the interpreter's finalization
@@ -927,14 +1023,24 @@ static void recordAnchor(const PropertyLinkBase* link,
         }
         m.clear();
     }
-    auto it = m.find(key);
-    if (it != m.end()) {
-        Py_XDECREF(it->second);
-        it->second = el;
+    auto put = [&](const std::string& k, PyObject* o) {
+        auto it = m.find(k);
+        if (it != m.end()) {
+            Py_XDECREF(it->second);
+            it->second = o;
+        }
+        else {
+            m.emplace(k, o);
+        }
+    };
+    put(key, el);
+    // the shape the element belonged to (a handle, not a copy): the extent rescue asks which
+    // faces and which other edges the element had next to it
+    PyObject* owner = const_cast<App::Property*>(static_cast<const App::Property*>(gp))->getPyObject();
+    if (!owner) {
+        PyErr_Clear();
     }
-    else {
-        m.emplace(key, el);
-    }
+    put(key + OwnerSuffix, owner ? owner : Py_NewRef(Py_None));
 }
 
 /// True if the element is provably the one the link designated by `storedName` last time it
@@ -1044,7 +1150,9 @@ static std::vector<std::string> anchoredExtentRescue(const PropertyLinkBase* lin
     PyObject* shape = const_cast<App::Property*>(static_cast<const App::Property*>(gp))->getPyObject();
     PyObject* fn = shape ? gateFunction("extent_rescue") : nullptr;
     if (fn) {
-        PyObject* r = PyObject_CallFunction(fn, "OO", shape, a->second);
+        auto o = it->second.find(anchorKey(anchorGeo, storedName) + OwnerSuffix);
+        PyObject* r = PyObject_CallFunction(fn, "OOO", shape, a->second,
+                                            o != it->second.end() ? o->second : Py_None);
         if (r && PyList_Check(r) && PyList_Size(r) == 1) {
             const char* n = PyUnicode_AsUTF8(PyList_GetItem(r, 0));
             if (n) {
@@ -1331,6 +1439,38 @@ static std::vector<std::string> rescueByHistory(const GeoFeature& geo,
 /// chain of records from the link's current name; the first record whose original target is `obj`
 /// and whose original name resolves in `obj` wins. Nothing is searched by geometry or history, so
 /// the outcome is exactly what the link would have resolved to had it never been rescued.
+// Erases the records a restore used, at the end of the update or as soon as the property has
+// announced its change (the copy an undo keeps is taken then and must still hold them).
+namespace
+{
+struct SpentEraser
+{
+    const PropertyLinkBase* prop;
+    std::vector<std::string> keys;
+    void run()
+    {
+        if (keys.empty()) {
+            return;
+        }
+        auto it = _RescueRecords.find(prop);
+        if (it != _RescueRecords.end()) {
+            auto& recs = it->second;
+            recs.erase(std::remove_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
+                return std::find(keys.begin(), keys.end(), x.key) != keys.end();
+            }), recs.end());
+            if (recs.empty()) {
+                _RescueRecords.erase(it);
+            }
+        }
+        keys.clear();
+    }
+    ~SpentEraser()
+    {
+        run();
+    }
+};
+}  // namespace
+
 // Records spent by a restore during one updateLinkReference pass over the subs of a link: a link
 // can hold the same sub twice (an Assembly joint's Reference with its element repeated), and the
 // second one must find the record the first one used.
@@ -1350,7 +1490,8 @@ static bool restoreByRescueRecord(const PropertyLinkBase* prop,
                                   const std::string& sub,
                                   const PropertyLinkBase::ShadowSub& shadow,
                                   PropertyLinkBase::ShadowSub& resolved,
-                                  std::string& restoredSub)
+                                  std::string& restoredSub,
+                                  std::vector<std::string>& spentKeys)
 {
     auto it = _RescueRecords.find(prop);
     SpentRecords* spent = spentSink && spentSink->prop == prop ? spentSink : nullptr;
@@ -1397,23 +1538,17 @@ static bool restoreByRescueRecord(const PropertyLinkBase* prop,
                 auto isVisited = [&](const RescueRecord& x) {
                     return std::find(visited.begin(), visited.end(), x.key) != visited.end();
                 };
-                if (spent) {
+                if (spent && it != _RescueRecords.end()) {
                     // keep what this restore used for the other subs of the same pass
-                    if (it != _RescueRecords.end()) {
-                        for (const auto& x : it->second) {
-                            if (isVisited(x)) {
-                                spent->recs.push_back(x);
-                            }
+                    for (const auto& x : it->second) {
+                        if (isVisited(x)) {
+                            spent->recs.push_back(x);
                         }
                     }
                 }
-                if (it != _RescueRecords.end()) {
-                    auto& recs = it->second;
-                    recs.erase(std::remove_if(recs.begin(), recs.end(), isVisited), recs.end());
-                    if (recs.empty()) {
-                        _RescueRecords.erase(it);
-                    }
-                }
+                // the records are spent by the caller once the property has announced its change:
+                // the copy an undo keeps must still carry them
+                spentKeys = visited;
                 return true;
             }
         }
@@ -1466,13 +1601,15 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
 
     std::string restoredSub;
     bool restored = false;
+    SpentEraser spentEraser {this, {}};
     if (feature == geo && !reverse && GeoFeature::hasMissingElement(elementName.oldName.c_str())) {
         // This runs before the "nothing changed" shortcut below: a link that already carries the
         // missing mark for this very name would otherwise never get its original back.
         // A name written by an earlier history rescue that is missing here: give the original
         // name back first (by name only), before the missing mark overwrites the sub.
         ShadowSub resolved;
-        if (restoreByRescueRecord(this, feature, obj, sub, shadow, resolved, restoredSub)) {
+        if (restoreByRescueRecord(this, feature, obj, sub, shadow, resolved, restoredSub,
+                                  spentEraser.keys)) {
             elementName.swap(resolved);
             restored = true;
         }
@@ -1583,6 +1720,14 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                 if (names.size()) {
                     FC_WARN("element reference " << element << " in " << geo->getFullName()
                                                  << " recovered by extent: " << names.front());
+                    if (anchorGeo != geo && anchorGeo->getNameInDocument()) {
+                        // the link was retargeted by an insertion: the record gives the original
+                        // back on the target it came from, as for a history rescue
+                        histTarget = anchorGeo->getNameInDocument();
+                        histSub = sub;
+                        histShadow = shadow;
+                        rescuedByHistory = true;
+                    }
                 }
             }
             if (names.size() && !rescuedByHistory && !reverse && obj->getNameInDocument()) {
@@ -1619,6 +1764,7 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
     if (notify) {
         aboutToSetValue();
     }
+    spentEraser.run();
 
     auto updateSub = [&](const std::string& newSub) {
         if (sub != newSub) {

@@ -163,3 +163,115 @@ class TestExtentRescue(unittest.TestCase):
         self._notches("LateNotches", (-12.0, -8.0), (8.0, 12.0))
         self.doc.recompute()
         self._reported()
+
+    # ------------------------------------------------------------ repair round: verifier findings
+    def _rebate(self):
+        sk = _sketch(self.doc, self.body, "RebateSketch", z=L, after=self.pad)
+        _rect(sk, 0, H / 2, W + 10, 4)
+        pk = _add(self.doc, self.body, "PartDesign::Pocket", "Rebate", sk)
+        pk.Profile = sk
+        pk.Length = 2.0
+        return pk
+
+    def test_a_new_edge_between_other_faces_is_not_the_same_element(self):
+        # a rebate removes the top +Y edge; a block behind it brings a centred edge on the same
+        # carrier whose side face looks the other way
+        rb = self._rebate()
+        bs = _sketch(self.doc, self.body, "BlockSketch", z=0.001, after=rb)
+        _rect(bs, 0, H / 2 + 2.5, 10, 5)
+        blk = _add(self.doc, self.body, "PartDesign::Pad", "Block", bs)
+        blk.Profile = bs
+        blk.Length = L - 0.001
+        self.doc.recompute()
+        self._reported()
+
+    def test_an_edge_that_already_existed_before_the_edit_is_not_taken(self):
+        doc = App.newDocument("ExtentCompound")
+        try:
+            a = doc.addObject("Part::Box", "A")
+            a.Length, a.Width, a.Height = 40, 20, 10
+            t = doc.addObject("Part::Box", "Tool")
+            t.Length, t.Width, t.Height = 50, 4, 4
+            t.Placement.Base = V(-5, 100, 100)
+            cut = doc.addObject("Part::Cut", "CutA")
+            cut.Base, cut.Tool = a, t
+            b = doc.addObject("Part::Box", "B")
+            b.Length, b.Width, b.Height = 10, 5, 5
+            b.Placement.Base = V(15, 20.0, 10.0)
+            c = doc.addObject("Part::Compound", "Comp")
+            c.Links = [cut, b]
+            doc.recompute()
+
+            def on(e):
+                return (isinstance(e.Curve, Part.Line) and abs(e.CenterOfMass.y - 20) < 1e-6
+                        and abs(e.CenterOfMass.z - 10) < 1e-6)
+
+            nm = ["Edge%d" % (i + 1) for i, e in enumerate(c.Shape.Edges) if on(e) and abs(e.Length - 40) < 1e-6][0]
+            f = doc.addObject("App::FeaturePython", "Consumer")
+            f.addProperty("App::PropertyLinkSub", "Ref")
+            f.Ref = (c, [nm])
+            doc.recompute()
+            t.Placement.Base = V(-5, 18, 8)  # a rebate removes A's edge; only B's is left on the carrier
+            doc.recompute()
+            sub = f.Ref[1][0] if f.Ref and f.Ref[1] else "?"
+            self.assertTrue(sub.startswith("?"), "the reference silently resolves to %r" % sub)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_an_asymmetric_trim_below_the_old_tolerance_is_reported(self):
+        # shortened at one end by 1.9e-5 mm: the midpoint moves by less than 1e-5
+        sk = _sketch(self.doc, self.body, "SlipSketch", z=L, after=self.pad)
+        _rect(sk, W / 2 + 5 - 1.9e-5, 0, 10, H + 10)
+        pk = _add(self.doc, self.body, "PartDesign::Pocket", "Slip", sk)
+        pk.Profile = sk
+        pk.Length = 2 * L
+        self.doc.recompute()
+        self._reported()
+
+    def _delete(self, feature):
+        self.body.removeObject(feature)
+        self.doc.removeObject(feature.Name)
+
+    def _points_at_pad_top_edge(self):
+        base, subs = self.chamfer.Base
+        self.assertIs(base, self.pad)
+        self.assertFalse(subs[0].startswith("?"), "reference went missing: %r" % (subs,))
+        e = base.Shape.getElement(subs[0])
+        self.assertAlmostEqual(e.Length, W, places=5)
+        self.assertLess((e.CenterOfMass - TOP_Y).Length, 1e-5)
+
+    def test_deleting_the_inserting_feature_gives_the_original_edge_back(self):
+        fil = self._fillet_vertical(3.0)
+        self.doc.recompute()
+        self._points_at_top_edge(W - 6.0)
+        self._delete(fil)
+        self.doc.recompute()
+        self._ok(self.chamfer)
+        self._points_at_pad_top_edge()
+
+    def test_a_rescue_survives_undo_redo_and_an_unrelated_undo_after_the_restore(self):
+        self.doc.UndoMode = 1
+        self.doc.openTransaction("insert")
+        fil = self._fillet_vertical(3.0)
+        self.doc.recompute()
+        self.doc.commitTransaction()
+        self._points_at_top_edge(W - 6.0)
+        self.doc.undo()
+        self.doc.recompute()
+        self._ok(self.chamfer)
+        self._points_at_pad_top_edge()
+        self.doc.redo()
+        self.doc.recompute()
+        self._points_at_top_edge(W - 6.0)
+        self._delete(self.doc.getObject("VFillet"))
+        self.doc.recompute()
+        self._points_at_pad_top_edge()
+        # an unrelated edit in a transaction, then its undo
+        self.doc.openTransaction("unrelated")
+        self.pad.Length = L + 1.0
+        self.doc.recompute()
+        self.doc.commitTransaction()
+        self.doc.undo()
+        self.doc.recompute()
+        self._ok(self.chamfer)
+        self._points_at_pad_top_edge()
