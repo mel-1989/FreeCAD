@@ -991,30 +991,37 @@ static void parseOwnerSegment(const Data::MappedName& name, long& tag, int& pos,
 /// `:n` of a tag is the length of the postfix in front of it, and for a container that is the
 /// chain of the containers and the owner inside it. Only tags in that window are read; the tags
 /// before it are the element's history (an X made from Q has Q's tag there) and never count.
-/// A tag whose object is not a Part::Compound (or is gone) is the owner; so is a container whose
-/// window holds no tag. Returns 0 when the name carries no tag.
+/// A tag whose object exists and is not a Part::Compound is the owner. Returns 0 (owner unknown)
+/// when the name carries no tag, when the walk meets a tag whose object is gone (a container
+/// deleted since the name was stored), or when it ends on a Part::Compound whose window cannot be
+/// read: a child with fewer than five elements of the type is named element by element into the
+/// container, ";:H<child>,E;:H<C1>,E" with no `:n`, and the text in front of that tag is not
+/// guaranteed to end in the child's own tag (the encoder does not force it), so it is not read.
 static long ownerTagOfElement(const App::Document* doc, const Data::MappedName& name)
 {
     static const Base::Type compoundType = Base::Type::fromName("Part::Compound");
     Data::MappedName cur(name);
-    long owner = 0;
     for (int depth = 0; depth < 64; ++depth) {
         long tag = 0;
         int pos = -1;
         int windowStart = 0;
         parseOwnerSegment(cur, tag, pos, windowStart);
         if (pos < 0 || tag == 0) {
-            return owner;
+            return 0;
         }
-        owner = tag;
         const auto* obj = doc ? doc->getObjectByID(tag) : nullptr;
-        if (!obj || compoundType.isBad() || !obj->isDerivedFrom(compoundType)
-            || windowStart < 0 || windowStart >= pos) {
-            return owner;
+        if (!obj || compoundType.isBad()) {
+            return 0;
+        }
+        if (!obj->isDerivedFrom(compoundType)) {
+            return tag;
+        }
+        if (windowStart < 0 || windowStart >= pos) {
+            return 0;
         }
         cur = Data::MappedName(cur, windowStart, pos - windowStart);
     }
-    return owner;
+    return 0;
 }
 
 /// A candidate found by the anchored search must come from the same child of a compound as the
@@ -1028,9 +1035,10 @@ static long ownerTagOfElement(const App::Document* doc, const Data::MappedName& 
 /// candidate that is in a child map of the compound is judged (child maps form for five or more
 /// elements of a type): for a shape with no child maps, or a stored name that carries no tag, or
 /// a shape that is not a Part::Compound, nothing is known about the owner and the old behaviour
-/// stays (fork/main takes the geometric match). A Link or frozen copy that carries the very same
-/// tag as the referenced child is not separated, and neither is a container that has been deleted
-/// since the name was stored.
+/// stays (fork/main takes the geometric match). The same holds when either owner is unknown
+/// (a deleted container, or a compound with no readable window), so a reference is only given up
+/// on when both owners are known non-compound objects and differ. A Link or frozen copy that
+/// carries the very same tag as the referenced child is not separated.
 static void filterByChildTag(const GeoFeature& geo,
                              const char* element,
                              std::vector<std::string>& names)

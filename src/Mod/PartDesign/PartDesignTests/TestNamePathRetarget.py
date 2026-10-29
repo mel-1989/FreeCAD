@@ -509,6 +509,126 @@ class TestNamePathRetarget(unittest.TestCase):
         c, cons = self._derived("cut")
         self._assert_reported(cons)
 
+    # ------------- a child with few elements, a deleted container: the owner is unknown, keep
+    def _small_body(self, n, y):
+        """A PartDesign Body padded from a circle (3 faces, 3 edges, 2 vertices: no child map)."""
+        d = self.doc
+        b = d.addObject("PartDesign::Body", n)
+        sk = b.newObject("Sketcher::SketchObject", n + "S")
+        sk.addGeometry(Part.Circle(V(20, 20 + y, 0), V(0, 0, 1), 5))
+        pad = b.newObject("PartDesign::Pad", n + "P")
+        pad.Profile = sk
+        pad.Length = 10
+        d.recompute()
+        return b
+
+    def _top_circles(self, shape):
+        return [
+            "Edge%d" % (i + 1)
+            for i, e in enumerate(shape.Edges)
+            if isinstance(e.Curve, Part.Circle)
+            and abs(e.Curve.Radius - 5) < 1e-6
+            and abs(e.CenterOfMass.z - 10) < 1e-6
+        ]
+
+    def _assert_small_kept(self, comp, cons, index):
+        sub = cons.Ref[1][0]
+        self.assertFalse(sub.startswith("?"), "reference lost: %s" % sub)
+        ed = comp.Shape.getElement(sub)
+        self.assertAlmostEqual(ed.Curve.Radius, 5.0, places=6)
+        self.assertEqual(_solids_of(comp.Shape, sub), [index])
+
+    def _small_regroup(self, moved):
+        d = self.doc
+        x = self._small_body("SX", 0)
+        y = self._small_body("SY", 300)
+        z = self._small_body("SZ", 600)
+        w = self._small_body("SW", 900)
+        c = d.addObject("Part::Compound", "C")
+        if moved:
+            c1 = d.addObject("Part::Compound", "C1")
+            c2 = d.addObject("Part::Compound", "C2")
+            c1.Links = [x, y]
+            c2.Links = [z, w]
+            c.Links = [c1, c2]
+        else:
+            c.Links = [x, y]
+        d.recompute()
+        names = [n for n in self._top_circles(c.Shape) if 0 in _solids_of(c.Shape, n)]
+        self.assertEqual(len(names), 1)
+        cons = self._consumer(c, names[0])
+        if moved:
+            c1.Links = [y]
+            c2.Links = [z, w, x]
+            d.recompute()
+            self._assert_small_kept(c, cons, 3)
+        else:
+            c1 = d.addObject("Part::Compound", "C1")
+            c1.Links = [x, y]
+            c.Links = [c1]
+            d.recompute()
+            self._assert_small_kept(c, cons, 0)
+
+    def test_small_body_wrapped_into_a_sub_compound_keeps_the_reference(self):
+        self._small_regroup(False)
+
+    def test_small_body_moved_between_sub_compounds_keeps_the_reference(self):
+        self._small_regroup(True)
+
+    def _deleted_container(self, mode):
+        d = self.doc
+        e, t, x = self._plate()
+        e2, t2, y = self._plate()
+        y.Placement.Base = V(0, 300, 0)
+        c1 = d.addObject("Part::Compound", "C1")
+        c1.Links = [x, y]
+        c = d.addObject("Part::Compound", "C")
+        c.Links = [c1]
+        d.recompute()
+        names = [n for n in _carrier_edges(c.Shape) if 0 in _solids_of(c.Shape, n)]
+        self.assertEqual(len(names), 1)
+        cons = self._consumer(c, names[0])
+        if mode == "undo":
+            d.UndoMode = 1
+            d.openTransaction("unwrap")
+        c.Links = [x, y]
+        d.removeObject("C1")
+        if mode == "undo":
+            d.commitTransaction()
+        d.recompute()
+        sub = cons.Ref[1][0]
+        self.assertFalse(sub.startswith("?"), "reference lost: %s" % sub)
+        self.assertEqual(_solids_of(c.Shape, sub), [0])
+        if mode == "undo":
+            d.undo()
+            d.recompute()
+            sub = cons.Ref[1][0]
+            self.assertFalse(sub.startswith("?"), "reference lost on undo: %s" % sub)
+            self.assertEqual(_solids_of(c.Shape, sub), [0])
+        return d, c, cons
+
+    def test_container_deleted_after_unwrapping_keeps_the_reference(self):
+        self._deleted_container("plain")
+
+    def test_container_deleted_after_unwrapping_then_undo(self):
+        self._deleted_container("undo")
+
+    def test_container_deleted_after_unwrapping_save_and_reopen(self):
+        import os
+        import tempfile
+
+        d, c, cons = self._deleted_container("plain")
+        fn = os.path.join(tempfile.mkdtemp(), "k.FCStd")
+        d.saveAs(fn)
+        App.closeDocument(d.Name)
+        d2 = App.openDocument(fn)
+        self.doc = d2
+        d2.recompute()
+        c2 = d2.getObject("C")
+        sub = d2.getObject("Consumer").Ref[1][0]
+        self.assertFalse(sub.startswith("?"), "reference lost on reopen: %s" % sub)
+        self.assertEqual(_solids_of(c2.Shape, sub), [0])
+
 
 class TestNamePathBodyControl(unittest.TestCase):
     """A PartDesign body split by a pocket and rejoined by a pad: an unchanged edge keeps its
