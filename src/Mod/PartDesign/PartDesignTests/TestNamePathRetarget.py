@@ -52,6 +52,32 @@ def _solids_of(shape, name):
     return [i for i, s in enumerate(shape.Solids) if any(edge.isSame(x) for x in s.Edges)]
 
 
+_KIND = {"edge": ("Edge", "Edges"), "face": ("Face", "Faces"), "vertex": ("Vertex", "Vertexes")}
+
+
+def _is_target(shape, kind, i):
+    """The top +Y edge, the top face, or the (40, 20, 10) corner of the plate."""
+    if kind == "edge":
+        e = shape.Edges[i]
+        return _on_carrier(e) and abs(e.Length - W) < 1e-6
+    if kind == "face":
+        f = shape.Faces[i]
+        return abs(f.CenterOfMass.z - L) < 1e-6 and abs(f.Area - W * H) < 1e-6 and abs(f.CenterOfMass.x - W / 2) < 1e-6
+    return (shape.Vertexes[i].Point - V(W, H, L)).Length < 1e-6
+
+
+def _targets_in(shape, kind, solid):
+    """Names of the target elements that lie in solid index `solid` of the compound."""
+    prefix, attr = _KIND[kind]
+    out = []
+    for i in range(len(getattr(shape, attr))):
+        if _is_target(shape, kind, i):
+            el = shape.getElement("%s%d" % (prefix, i + 1))
+            if any(el.isSame(x) for x in getattr(shape.Solids[solid], attr)):
+                out.append("%s%d" % (prefix, i + 1))
+    return out
+
+
 class TestNamePathRetarget(unittest.TestCase):
     def setUp(self):
         self.doc = App.newDocument("NamePathRetarget")
@@ -244,3 +270,195 @@ class TestNamePathRetarget(unittest.TestCase):
         d.recompute()
         self.assertEqual(cons.Ref[1][0], name)
         self.assertEqual(_solids_of(c.Shape, name), [0])
+
+    # ------------------------------------------- the owner is the child, not the position
+    def _plate_x(self):
+        d = self.doc
+        e, t, x = self._plate()
+        far = d.addObject("Part::Box", "FarT")
+        far.Placement.Base = V(-300, 300, 300)
+        q = d.addObject("Part::Cut", "Q")
+        q.Base = x
+        q.Tool = far
+        c = d.addObject("Part::Compound", "C")
+        return d, e, x, q, c
+
+    def _box(self, name, y):
+        z = self.doc.addObject("Part::Box", name)
+        z.Placement.Base = V(0, y, 0)
+        return z
+
+    def _ref_on(self, c, kind, solid):
+        d = self.doc
+        d.recompute()
+        names = _targets_in(c.Shape, kind, solid)
+        self.assertEqual(len(names), 1)
+        return self._consumer(c, names[0])
+
+    def test_dropped_child_every_element_kind(self):
+        for kind in ("edge", "face", "vertex"):
+            with self.subTest(kind=kind):
+                d, e, x, q, c = self._plate_x()
+                c.Links = [q, x]
+                cons = self._ref_on(c, kind, 1)
+                c.Links = [q]
+                d.recompute()
+                self._assert_reported(cons)
+                App.closeDocument(d.Name)
+                self.doc = App.newDocument("NamePathRetarget")
+
+    def test_dropped_referenced_q_with_x_shifting_into_its_index(self):
+        d, e, x, q, c = self._plate_x()
+        c.Links = [q, x]
+        cons = self._ref_on(c, "edge", 0)  # on Q
+        c.Links = [x]  # X's twin takes Q's index
+        d.recompute()
+        self._assert_reported(cons)
+
+    def test_children_reversed_twin_at_the_old_index_is_not_taken(self):
+        d, e, x, q, c = self._plate_x()
+        c.Links = [x, q]
+        cons = self._ref_on(c, "edge", 0)  # on X
+        c.Links = [q]  # Q's twin is at index 0 now
+        d.recompute()
+        self._assert_reported(cons)
+
+    def test_children_reversed_mirror_twin_is_not_taken(self):
+        d, e, x, q, c = self._plate_x()
+        m = d.addObject("Part::Mirroring", "M")
+        m.Source = x
+        m.Normal = V(1, 0, 0)
+        m.Base = V(W / 2, 0, 0)
+        c.Links = [x, m]
+        cons = self._ref_on(c, "edge", 0)
+        c.Links = [m]
+        d.recompute()
+        self._assert_reported(cons)
+
+    def test_sibling_prepended_twin_at_the_old_index_is_not_taken(self):
+        d, e, x, q, c = self._plate_x()
+        c.Links = [q, x]
+        cons = self._ref_on(c, "edge", 1)  # on X, index 1
+        c.Links = [self._box("Z", -200), q]  # Q's twin is at index 1 now
+        d.recompute()
+        self._assert_reported(cons)
+
+    def test_non_solid_sibling_twin_is_not_taken(self):
+        for kind in ("edge", "vertex"):
+            with self.subTest(kind=kind):
+                d, e, x, q, c = self._plate_x()
+                pl = d.addObject("Part::Plane", "SR")
+                pl.Length, pl.Width = W, H
+                s = d.addObject("Part::Extrusion", "S")
+                s.Base = pl
+                s.Dir = V(0, 0, L)
+                s.Solid = False
+                s.LengthFwd = L
+                c.Links = [x, s]
+                d.recompute()
+                names = _targets_in(c.Shape, kind, 0)
+                self.assertEqual(len(names), 1)
+                cons = self._consumer(c, names[0])
+                c.Links = [s]
+                d.recompute()
+                self._assert_reported(cons)
+                App.closeDocument(d.Name)
+                self.doc = App.newDocument("NamePathRetarget")
+
+    def _rebased(self, links_after):
+        """C = [X]; the reference is on X; X.Base is swapped to an identical extrusion (the name
+        chain breaks, the geometry does not) while C's children change."""
+        d = self.doc
+        e, t, x = self._plate()
+        c = d.addObject("Part::Compound", "C")
+        w = self._box("W", 200)
+        c.Links = [w, x] if links_after == "removed" else [x]
+        cons = self._ref_on(c, "edge", 1 if links_after == "removed" else 0)
+        pl = d.addObject("Part::Plane", "R2")
+        pl.Length, pl.Width = W, H
+        e2 = d.addObject("Part::Extrusion", "E2")
+        e2.Base = pl
+        e2.Dir = V(0, 0, L)
+        e2.Solid = True
+        e2.LengthFwd = L
+        x.Base = e2
+        c.Links = {"prepended": [self._box("Z", -200), x], "removed": [x], "same": [x]}[links_after]
+        d.recompute()
+        return c, cons
+
+    def test_same_child_rescue_survives_a_prepended_sibling(self):
+        c, cons = self._rebased("prepended")
+        sub = cons.Ref[1][0]
+        self.assertFalse(sub.startswith("?"))
+        self.assertEqual(_solids_of(c.Shape, sub), [1])
+
+    def test_same_child_rescue_survives_a_removed_sibling(self):
+        c, cons = self._rebased("removed")
+        sub = cons.Ref[1][0]
+        self.assertFalse(sub.startswith("?"))
+        self.assertEqual(_solids_of(c.Shape, sub), [0])
+
+    def test_same_child_rescue_without_sibling_change(self):
+        c, cons = self._rebased("same")
+        self.assertFalse(cons.Ref[1][0].startswith("?"))
+
+
+class TestNamePathBodyControl(unittest.TestCase):
+    """A PartDesign body split by a pocket and rejoined by a pad: an unchanged edge keeps its
+    reference (the child maps of a body carry the tags of later features of one chain; only a
+    Part::Compound's children are separate objects)."""
+
+    def test_body_split_and_rejoined_keeps_unchanged_edge(self):
+        import Sketcher
+
+        doc = App.newDocument("NamePathBody")
+        try:
+            body = doc.addObject("PartDesign::Body", "Body")
+
+            def sketch(name, pts, z=0.0):
+                sk = body.newObject("Sketcher::SketchObject", name)
+                sk.AttachmentSupport = (body.Origin.OriginFeatures[3], [""])
+                sk.MapMode = "FlatFace"
+                sk.AttachmentOffset = App.Placement(V(0, 0, z), App.Rotation())
+                n = len(pts)
+                for i in range(n):
+                    sk.addGeometry(
+                        Part.LineSegment(V(pts[i][0], pts[i][1], 0), V(pts[(i + 1) % n][0], pts[(i + 1) % n][1], 0))
+                    )
+                for i in range(n):
+                    sk.addConstraint(Sketcher.Constraint("Coincident", i, 2, (i + 1) % n, 1))
+                return sk
+
+            doc.recompute()
+            pad = body.newObject("PartDesign::Pad", "Pad")
+            pad.Profile = sketch("S1", [(0, 0), (60, 0), (60, 20), (0, 20)])
+            pad.Length = 10
+            doc.recompute()
+
+            def find(shape, mid, length):
+                for i, ed in enumerate(shape.Edges):
+                    if abs(ed.Length - length) < 1e-6 and (ed.CenterOfMass - V(*mid)).Length < 1e-6:
+                        return "Edge%d" % (i + 1)
+
+            cons = doc.addObject("App::FeaturePython", "Consumer")
+            cons.addProperty("App::PropertyLinkSub", "R1")
+            cons.R1 = (body, [find(body.Shape, (60, 20, 5), 10)])
+            doc.recompute()
+            pocket = body.newObject("PartDesign::Pocket", "Pocket")
+            pocket.Profile = sketch("S2", [(25, -5), (35, -5), (35, 25), (25, 25)], z=10)
+            pocket.Type = 1
+            pocket.Length = 20
+            doc.recompute()
+            self.assertEqual(len(body.Shape.Solids), 2)
+            pad2 = body.newObject("PartDesign::Pad", "Pad2")
+            pad2.Profile = sketch("S3", [(25, 0), (35, 0), (35, 20), (25, 20)], z=0)
+            pad2.Length = 5
+            doc.recompute()
+            self.assertEqual(len(body.Shape.Solids), 1)
+            sub = cons.R1[1][0]
+            self.assertFalse(sub.startswith("?"))
+            ed = body.Shape.getElement(sub)
+            self.assertAlmostEqual(ed.Length, 10.0, places=6)
+            self.assertLess((ed.CenterOfMass - V(60, 20, 5)).Length, 1e-6)
+        finally:
+            App.closeDocument(doc.Name)

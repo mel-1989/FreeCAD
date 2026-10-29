@@ -69,4 +69,4 @@ from PartDesignTests.TestTopologicalNamingProblem import TestTopologicalNamingPr
 
 # History-based reference rescue (cad-fork G01)
 from PartDesignTests.TestReferenceRescue import TestReferenceRescue
-from PartDesignTests.TestNamePathRetarget import TestNamePathRetarget
+from PartDesignTests.TestNamePathRetarget import TestNamePathRetarget, TestNamePathBodyControl

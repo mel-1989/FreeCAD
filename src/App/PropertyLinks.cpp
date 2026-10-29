@@ -686,20 +686,6 @@ def same(sa, na, sb, nb):
         return same_el(sa.getElement(na), sb.getElement(nb))
     except Exception:
         return False
-def owners(shape, el):
-    # indices of the solids of a compound that contain `el` (the owning sub-solids); None when the
-    # shape is not a compound or the element sits in no solid: then nothing is known about the owner
-    try:
-        if shape.ShapeType != "Compound":
-            return None
-        attr = el.ShapeType + "s"
-        found = [i for i, s in enumerate(shape.Solids) if any(el.isSame(x) for x in getattr(s, attr))]
-        return found or None
-    except Exception:
-        return None
-def owner_ok(a, b):
-    # an element of another solid is another element, however well it matches in geometry (D6)
-    return not a or not b or bool(set(a) & set(b))
 def search(shape, anchor, check, tol=1e-7):
     # the sub-shapes of `shape` that share vertices with `anchor` (the search FreeCAD's element
     # cache runs from the previous shape of an element), here run from the anchor itself
@@ -840,27 +826,6 @@ std::unordered_map<const PropertyLinkBase*, AnchorMap>& anchorStore()
 }
 }  // namespace
 
-/// A new reference to the list of the indices of the solids of the compound shape `p` that
-/// contain `el`, or to None when that is not known (see `owners` in the identity gate).
-static PyObject* ownersOf(const App::Property* p, PyObject* el)
-{
-    PyObject* res = nullptr;
-    PyObject* fn = gateFunction("owners");
-    PyObject* so = fn ? const_cast<App::Property*>(p)->getPyObject() : nullptr;
-    if (so) {
-        res = PyObject_CallFunction(fn, "OO", so, el);
-        if (!res) {
-            PyErr_Clear();
-        }
-        Py_DECREF(so);
-    }
-    if (!res) {
-        Py_INCREF(Py_None);
-        res = Py_None;
-    }
-    return res;
-}
-
 static void dropAnchors(const PropertyLinkBase* link)
 {
     // The GIL guards the store: recompute can run on the async worker while the main thread
@@ -899,16 +864,6 @@ static void recordAnchor(const PropertyLinkBase* link,
     if (!el) {
         return;
     }
-    // the anchor is the pair (element, indices of the solids of the shape that contain it)
-    PyObject* own = ownersOf(gp, el);
-    PyObject* pair = PyTuple_Pack(2, el, own);
-    Py_DECREF(el);
-    Py_DECREF(own);
-    if (!pair) {
-        PyErr_Clear();
-        return;
-    }
-    el = pair;
     const std::string key = anchorKey(geo, storedName);
     auto& m = anchorStore()[link];
     if (m.size() >= MaxAnchorsPerLink && !m.count(key)) {
@@ -952,7 +907,7 @@ static bool anchorAccepts(const PropertyLinkBase* link,
     PyObject* cand = fn ? elementObject(gp, candidate) : nullptr;
     bool ok = false;
     if (cand) {
-        PyObject* r = PyObject_CallFunction(fn, "OO", PyTuple_GetItem(a->second, 0), cand);
+        PyObject* r = PyObject_CallFunction(fn, "OO", a->second, cand);
         if (r) {
             ok = PyObject_IsTrue(r) == 1;
             Py_DECREF(r);
@@ -990,9 +945,8 @@ static std::vector<std::string> anchoredSearch(const PropertyLinkBase* link,
     PyObject* shape = const_cast<App::Property*>(static_cast<const App::Property*>(gp))->getPyObject();
     PyObject* fn = shape ? gateFunction(mode == 2 ? "drift" : "search") : nullptr;
     if (fn) {
-        PyObject* el = PyTuple_GetItem(a->second, 0);
-        PyObject* r = mode == 2 ? PyObject_CallFunction(fn, "OO", shape, el)
-                                : PyObject_CallFunction(fn, "OOO", shape, el,
+        PyObject* r = mode == 2 ? PyObject_CallFunction(fn, "OO", shape, a->second)
+                                : PyObject_CallFunction(fn, "OOO", shape, a->second,
                                                         mode == 0 ? Py_True : Py_False);
         if (r && PyList_Check(r)) {
             for (Py_ssize_t i = 0; i < PyList_Size(r); ++i) {
@@ -1019,57 +973,72 @@ static bool hasAnchor(const PropertyLinkBase* link, const GeoFeature& geo, const
     return it != store.end() && it->second.count(anchorKey(geo, storedName));
 }
 
-/// A candidate found by the anchored search must sit in the solid the link's element sat in when
-/// it last resolved. A compound that drops a child, or a coincident copy of the same solid (a
-/// Link, a Mirror, a frozen copy) that joins or moves onto the carrier while the referenced
-/// edge is cut away, offers an edge with the very same vertices, curve and midpoint in another
-/// solid; geometry cannot tell it from the original, ownership can. D6: another solid's element
-/// is a different element, so it is reported rather than taken.
-static void filterByAnchorOwner(const PropertyLinkBase* link,
-                                const GeoFeature& geo,
-                                const std::string& stored,
-                                std::vector<std::string>& names)
+static bool parseStoredElement(const char* element, std::string& mapped, std::string& type);
+
+/// A candidate found by the anchored search must come from the same child of a compound as the
+/// element the link designated. A compound that drops a child, or a coincident copy of the same
+/// solid (a Mirror, a Link, a frozen copy, a sibling child) that joins or moves onto the carrier
+/// while the referenced edge is cut away, offers an element with the very same vertices, curve
+/// and midpoint under another child; geometry cannot tell it from the original, ownership can.
+/// D6: an element of another solid is a different element, so it is reported rather than taken.
+/// The owner is the child object's tag. For the stored name it is the tag the name ends with (the
+/// compound's element map ends the name of every child element with the child's tag); for the
+/// candidate it is the tag of the child map whose index range holds it. Only a candidate that is
+/// in a child map of the compound is judged: for a shape with no child maps, or a stored name
+/// that carries no tag, or a shape that is not a Part::Compound, nothing is known about the owner
+/// and the old behaviour stays (fork/main takes the geometric match). A Link or
+/// frozen copy that carries the very same tag as the referenced child is not separated.
+static void filterByChildTag(const GeoFeature& geo,
+                             const char* element,
+                             std::vector<std::string>& names)
 {
-    if (names.empty()) {
+    // Only a Part::Compound: its child maps are its Links. The child maps of other shapes (a
+    // PartDesign body split by a pocket and rejoined by a pad) carry the tags of later features
+    // of one chain, which are the same element under a new tag.
+    static const Base::Type compoundType = Base::Type::fromName("Part::Compound");
+    if (compoundType.isBad() || !geo.isDerivedFrom(compoundType)) {
         return;
     }
-    Base::PyGILStateLocker lock;  // guards the store
-    auto& store = anchorStore();
-    auto it = store.find(link);
-    auto* gp = geo.getPropertyOfGeometry();
-    if (it == store.end() || !gp) {
+    std::string mapped;
+    std::string type;
+    auto* prop = geo.getPropertyOfGeometry();
+    const Data::ComplexGeoData* data = prop ? prop->getComplexData() : nullptr;
+    if (names.empty() || !data || !parseStoredElement(element, mapped, type)) {
         return;
     }
-    auto a = it->second.find(anchorKey(geo, stored));
-    PyObject* fn = gateFunction("owner_ok");
-    if (a == it->second.end() || !fn) {
+    long stored = 0;
+    if (Data::MappedName(mapped.c_str())
+            .findTagInElementName(&stored, nullptr, nullptr, nullptr, false, false)
+        < 0) {
         return;
     }
-    PyObject* before = PyTuple_GetItem(a->second, 1);
+    stored = std::labs(stored);
+    if (stored == 0) {
+        return;
+    }
+    const auto children = data->getMappedChildElements();
+    if (children.empty()) {
+        return;
+    }
     std::vector<std::string> keep;
     for (const auto& n : names) {
-        bool ok = false;
-        PyObject* cand = elementObject(gp, n);
-        if (cand) {
-            PyObject* after = ownersOf(gp, cand);
-            PyObject* r = PyObject_CallFunction(fn, "OO", before, after);
-            if (r) {
-                ok = PyObject_IsTrue(r) == 1;
-                Py_DECREF(r);
+        Data::IndexedName idx(n.c_str());
+        bool other = false;
+        for (const auto& c : children) {
+            const int first = c.indexedName.getIndex() + c.offset;
+            if (std::strcmp(c.indexedName.getType(), idx.getType()) == 0
+                && idx.getIndex() >= first && idx.getIndex() < first + c.count) {
+                other = std::labs(c.tag) != stored;
+                break;
             }
-            else {
-                PyErr_Clear();
-            }
-            Py_DECREF(after);
-            Py_DECREF(cand);
         }
-        if (ok) {
+        if (!other) {
             keep.push_back(n);
         }
     }
     if (keep.size() != names.size()) {
-        FC_WARN("element reference " << stored << " in " << geo.getFullName()
-                                      << ": geometric match is an element of another solid;"
+        FC_WARN("element reference " << element << " in " << geo.getFullName()
+                                      << ": geometric match is an element of another child;"
                                          " left missing");
     }
     names = keep;
@@ -1485,7 +1454,7 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                     names = anchoredSearch(this, *geo, element, 2);
                 }
                 disambiguateByAnchor(this, *geo, element, names);
-                filterByAnchorOwner(this, *geo, element, names);
+                filterByChildTag(*geo, element, names);
             }
             else {
                 names = geo->searchElementCache(oldElement, Data::SearchOption::CheckGeometry);
