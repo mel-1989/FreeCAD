@@ -87,9 +87,14 @@ struct RescueRecord
     std::string target;
     std::string sub;
     PropertyLinkBase::ShadowSub shadow;
+    // the rewrite was a geometric relink or an attachment engine's normalisation on the same
+    // target, not a history rescue: the record only gives the old name back by name, and the
+    // identity gate for later geometric matches (recordedGeometryRescueAccepted) does not apply
+    bool geometric = false;
 };
 constexpr int RescueRecordMaxChain = 32;
 }  // namespace
+static void dropAnchors(const PropertyLinkBase* link);
 static std::unordered_map<const PropertyLinkBase*, std::vector<RescueRecord>> _RescueRecords;
 
 static const std::string& rescueNameOf(const std::string& sub, const PropertyLinkBase::ShadowSub& shadow)
@@ -145,6 +150,7 @@ PropertyLinkBase::~PropertyLinkBase()
     _PrevLinkTarget.erase(this);
     _CopyNamesOwner.erase(this);
     _RescueRecords.erase(this);
+    dropAnchors(this);
     unregisterLabelReferences();
     unregisterElementReference();
 }
@@ -656,8 +662,38 @@ def _outline_same(a, b, tol):
     return True
 def same(sa, na, sb, nb):
     try:
-        a = sa.getElement(na)
-        b = sb.getElement(nb)
+        return same_el(sa.getElement(na), sb.getElement(nb))
+    except Exception:
+        return False
+def search(shape, anchor, check, tol=1e-7):
+    # the sub-shapes of `shape` that share vertices with `anchor` (the search FreeCAD's element
+    # cache runs from the previous shape of an element), here run from the anchor itself
+    try:
+        return [n for n, _ in shape.findSubShapesWithSharedVertex(
+            anchor, needName=True, checkGeometry=check, tol=tol, atol=1e-10)]
+    except Exception:
+        return []
+def drift(shape, anchor):
+    # the nearest match of an element that moved a little, with the tolerance cap of
+    # Part::Feature::searchDriftedElement (1e-3 of the element's extent)
+    try:
+        cap = 1e-3 * anchor.BoundBox.DiagonalLength
+        tol = 1e-7
+        if cap < tol:
+            return []
+        while tol <= cap:
+            names = search(shape, anchor, False, tol)
+            if len(names) == 1:
+                return names
+            if len(names) > 1:
+                names = search(shape, anchor, True, tol)
+                return names if len(names) == 1 else []
+            tol *= 2.0
+        return []
+    except Exception:
+        return []
+def same_el(a, b):
+    try:
         if a.ShapeType != b.ShapeType:
             return False
         tol = TOL
@@ -707,6 +743,231 @@ def same(sa, na, sb, nb):
         return False
 )PY";
 
+static PyObject* gateFunction(const char* name)
+{
+    static PyObject* dict = nullptr;
+    if (!dict) {
+        dict = PyDict_New();
+        PyDict_SetItemString(dict, "__builtins__", PyEval_GetBuiltins());
+        PyObject* res = PyRun_String(identityGateSource, Py_file_input, dict, dict);
+        if (!res) {
+            PyErr_Clear();
+            return nullptr;
+        }
+        Py_DECREF(res);
+    }
+    return PyDict_GetItemString(dict, name);  // borrowed; dict is kept alive on purpose
+}
+
+/// A new reference to the shape of sub-element `name` of the shape property `p`, or null.
+static PyObject* elementObject(const App::Property* p, const std::string& name)
+{
+    PyObject* so = const_cast<App::Property*>(p)->getPyObject();
+    if (!so) {
+        PyErr_Clear();
+        return nullptr;
+    }
+    PyObject* el = PyObject_CallMethod(so, "getElement", "s", name.c_str());
+    Py_DECREF(so);
+    if (!el) {
+        PyErr_Clear();
+    }
+    return el;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Element anchors (cad-fork G01, slice 2). Whenever a link resolves one of its names, the shape
+// of the element it resolved to is kept with the link, keyed by the stored mapped name. When
+// the name is later missing (an undo or redo restored the link's names but not the shapes they
+// belong to, an insertion renamed everything) the shapes that upstream's search by plain index
+// or by element-map history proposes are compared with the anchor of the stored name: only an
+// element geometrically identical to what the link designated last time it resolved is taken.
+// A candidate without such proof is not taken (the reference stays missing, as it does in
+// FreeCAD without the fallback); a name with no anchor (never resolved in this session) is left
+// to the other gates. The shapes are OCC handles, so an anchor costs a reference, not a copy.
+// ---------------------------------------------------------------------------------------------
+namespace
+{
+// key: the stored element name qualified by the object it belongs to
+using AnchorMap = std::unordered_map<std::string, PyObject*>;
+std::string anchorKey(const GeoFeature& geo, const std::string& storedName)
+{
+    return std::string(geo.getNameInDocument() ? geo.getNameInDocument() : "") + '\n' + storedName;
+}
+constexpr std::size_t MaxAnchorsPerLink = 256;
+std::unordered_map<const PropertyLinkBase*, AnchorMap>& anchorStore()
+{
+    // leaked on purpose: the properties can outlive the interpreter's finalization
+    static auto* store = new std::unordered_map<const PropertyLinkBase*, AnchorMap>();
+    return *store;
+}
+}  // namespace
+
+static void dropAnchors(const PropertyLinkBase* link)
+{
+    auto& store = anchorStore();
+    auto it = store.find(link);
+    if (it == store.end()) {
+        return;
+    }
+    if (Py_IsInitialized()) {
+        Base::PyGILStateLocker lock;
+        for (auto& kv : it->second) {
+            Py_XDECREF(kv.second);
+        }
+    }
+    store.erase(it);
+}
+
+static void recordAnchor(const PropertyLinkBase* link,
+                         const GeoFeature& geo,
+                         const std::string& storedName,
+                         const char* plainElement)
+{
+    if (storedName.empty() || !plainElement || !plainElement[0]) {
+        return;
+    }
+    auto* gp = geo.getPropertyOfGeometry();
+    if (!gp || !gp->getComplexData()) {
+        return;
+    }
+    Base::PyGILStateLocker lock;
+    PyObject* el = elementObject(gp, plainElement);
+    if (!el) {
+        return;
+    }
+    const std::string key = anchorKey(geo, storedName);
+    auto& m = anchorStore()[link];
+    if (m.size() >= MaxAnchorsPerLink && !m.count(key)) {
+        for (auto& kv : m) {
+            Py_XDECREF(kv.second);
+        }
+        m.clear();
+    }
+    auto it = m.find(key);
+    if (it != m.end()) {
+        Py_XDECREF(it->second);
+        it->second = el;
+    }
+    else {
+        m.emplace(key, el);
+    }
+}
+
+/// True if the element is provably the one the link designated by `storedName` last time it
+/// resolved it, or if nothing is known about that name.
+static bool anchorAccepts(const PropertyLinkBase* link,
+                          const GeoFeature& geo,
+                          const std::string& storedName,
+                          const std::string& candidate)
+{
+    auto& store = anchorStore();
+    auto it = store.find(link);
+    if (it == store.end()) {
+        return true;
+    }
+    auto a = it->second.find(anchorKey(geo, storedName));
+    if (a == it->second.end()) {
+        return true;
+    }
+    auto* gp = geo.getPropertyOfGeometry();
+    if (!gp) {
+        return false;
+    }
+    Base::PyGILStateLocker lock;
+    PyObject* fn = gateFunction("same_el");
+    PyObject* cand = fn ? elementObject(gp, candidate) : nullptr;
+    bool ok = false;
+    if (cand) {
+        PyObject* r = PyObject_CallFunction(fn, "OO", a->second, cand);
+        if (r) {
+            ok = PyObject_IsTrue(r) == 1;
+            Py_DECREF(r);
+        }
+        else {
+            PyErr_Clear();
+        }
+        Py_DECREF(cand);
+    }
+    return ok;
+}
+
+/// The search upstream runs from the element cache (the previous shape found at the plain index
+/// of the stored name) run instead from the anchor of the stored name: the element the link
+/// designated the last time it resolved. The cache can hold the shape of another configuration of
+/// the feature (an undo or redo restores names and shapes separately); the anchor cannot.
+/// `mode` 0 is the search with geometry check, 1 the one without, 2 the drift search.
+static std::vector<std::string> anchoredSearch(const PropertyLinkBase* link,
+                                               const GeoFeature& geo,
+                                               const std::string& storedName,
+                                               int mode)
+{
+    std::vector<std::string> names;
+    auto& store = anchorStore();
+    auto it = store.find(link);
+    if (it == store.end()) {
+        return names;
+    }
+    auto a = it->second.find(anchorKey(geo, storedName));
+    auto* gp = geo.getPropertyOfGeometry();
+    if (a == it->second.end() || !gp) {
+        return names;
+    }
+    Base::PyGILStateLocker lock;
+    PyObject* shape = const_cast<App::Property*>(static_cast<const App::Property*>(gp))->getPyObject();
+    PyObject* fn = shape ? gateFunction(mode == 2 ? "drift" : "search") : nullptr;
+    if (fn) {
+        PyObject* r = mode == 2 ? PyObject_CallFunction(fn, "OO", shape, a->second)
+                                : PyObject_CallFunction(fn, "OOO", shape, a->second,
+                                                        mode == 0 ? Py_True : Py_False);
+        if (r && PyList_Check(r)) {
+            for (Py_ssize_t i = 0; i < PyList_Size(r); ++i) {
+                const char* n = PyUnicode_AsUTF8(PyList_GetItem(r, i));
+                if (n) {
+                    names.emplace_back(n);
+                }
+            }
+        }
+        if (!r) {
+            PyErr_Clear();
+        }
+        Py_XDECREF(r);
+    }
+    Py_XDECREF(shape);
+    return names;
+}
+
+static bool hasAnchor(const PropertyLinkBase* link, const GeoFeature& geo, const std::string& storedName)
+{
+    auto& store = anchorStore();
+    auto it = store.find(link);
+    return it != store.end() && it->second.count(anchorKey(geo, storedName));
+}
+
+/// Several elements match the anchor's search: only one that is geometrically identical to the
+/// anchor may be taken, and only if it is the only one; otherwise none (never pick one silently).
+static void disambiguateByAnchor(const PropertyLinkBase* link,
+                                 const GeoFeature& geo,
+                                 const std::string& stored,
+                                 std::vector<std::string>& names)
+{
+    if (names.size() < 2) {
+        return;
+    }
+    std::vector<std::string> keep;
+    for (const auto& n : names) {
+        if (anchorAccepts(link, geo, stored, n)) {
+            keep.push_back(n);
+        }
+    }
+    FC_WARN("element reference " << stored << " in " << geo.getFullName() << " is ambiguous ("
+                                  << names.size() << " geometric candidates, " << keep.size()
+                                  << " identical to what it designated before)"
+                                  << (keep.size() == 1 ? ""
+                                                       : "; left missing"));
+    names = keep.size() == 1 ? keep : std::vector<std::string>();
+}
+
 /// True if element `ia` of `da` (shape property `pa`) is geometrically the same element as `ib`
 /// of `db` (shape property `pb`).
 static bool sameElementGeometry(const App::Property* pa,
@@ -715,20 +976,7 @@ static bool sameElementGeometry(const App::Property* pa,
                                 const std::string& ib)
 {
     Base::PyGILStateLocker lock;
-    static PyObject* fn = nullptr;
-    if (!fn) {
-        PyObject* dict = PyDict_New();
-        PyDict_SetItemString(dict, "__builtins__", PyEval_GetBuiltins());
-        PyObject* res = PyRun_String(identityGateSource, Py_file_input, dict, dict);
-        if (!res) {
-            PyErr_Clear();
-            Py_DECREF(dict);
-            return false;
-        }
-        Py_DECREF(res);
-        fn = PyDict_GetItemString(dict, "same");  // borrowed; dict is kept alive on purpose
-        Py_XINCREF(fn);
-    }
+    PyObject* fn = gateFunction("same");
     if (!fn) {
         return false;
     }
@@ -773,9 +1021,20 @@ static bool identityGateAccepts(const GeoFeature& geo,
         return false;
     }
     int holders = 0;
-    for (auto* obj : geo.getOutListRecursive()) {
+    // the previous target is found by pointer among the document's objects (it can be gone, and
+    // the dependency graph can be cyclic, which getOutListRecursive() reports by throwing)
+    std::vector<App::DocumentObject*> holdersToCheck;
+    if (geo.getDocument()) {
+        for (auto* o : geo.getDocument()->getObjects()) {
+            if (o == prevTarget && o->getNameInDocument()) {
+                holdersToCheck.push_back(o);
+                break;
+            }
+        }
+    }
+    for (auto* obj : holdersToCheck) {
         auto* up = freecad_cast<GeoFeature*>(obj);
-        if (!up || up == &geo || up != prevTarget) {
+        if (!up || up == &geo) {
             continue;
         }
         auto* uprop = up->getPropertyOfGeometry();
@@ -885,8 +1144,8 @@ static bool recordedGeometryRescueAccepted(const PropertyLinkBase* prop,
     auto r = std::find_if(it->second.begin(), it->second.end(), [&](const RescueRecord& x) {
         return x.key == key;
     });
-    if (r == it->second.end()) {
-        return true;  // this sub was never rescued
+    if (r == it->second.end() || r->geometric) {
+        return true;  // this sub was never rescued by history
     }
     App::DocumentObject* origin = geo.getDocument()->getObject(r->target.c_str());
     const std::string& original = r->shadow.newName.size() ? r->shadow.newName : r->sub;
@@ -1056,6 +1315,13 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
             restored = true;
         }
     }
+    if (elementName.newName.size() && !GeoFeature::hasMissingElement(elementName.oldName.c_str())) {
+        // the element the link designates now: what a later fallback search is checked against
+        recordAnchor(this,
+                     *geo,
+                     Data::findElementName(elementName.newName.c_str()),
+                     Data::findElementName(elementName.oldName.c_str()));
+    }
     if (!reverse) {
         if (elementName.newName.empty()) {
             shadow.oldName.swap(elementName.oldName);
@@ -1068,6 +1334,7 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
 
     bool missing = GeoFeature::hasMissingElement(elementName.oldName.c_str());
     bool rescuedByHistory = false;
+    bool histGeometric = false;
     std::string histTarget;
     std::string histSub;
     ShadowSub histShadow;
@@ -1077,13 +1344,26 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
         // to version change, i.e. 'reverse', try search by geometry first
         const char* oldElement = Data::findElementName(shadow.oldName.c_str());
         if (!Data::hasMissingElement(oldElement)) {
-            auto names = geo->searchElementCache(oldElement, Data::SearchOption::CheckGeometry);
-            if (names.empty()) {
-                // try floating point tolerance
-                names = geo->searchElementCache(oldElement, Data::SearchOptions());
+            std::vector<std::string> names;
+            if (hasAnchor(this, *geo, element)) {
+                names = anchoredSearch(this, *geo, element, 0);
+                if (names.empty()) {
+                    names = anchoredSearch(this, *geo, element, 1);
+                }
+                if (names.empty() && missing) {
+                    names = anchoredSearch(this, *geo, element, 2);
+                }
+                disambiguateByAnchor(this, *geo, element, names);
             }
-            if (names.empty() && missing) {
-                names = rescueDriftedElement(*geo, oldElement);
+            else {
+                names = geo->searchElementCache(oldElement, Data::SearchOption::CheckGeometry);
+                if (names.empty()) {
+                    // try floating point tolerance
+                    names = geo->searchElementCache(oldElement, Data::SearchOptions());
+                }
+                if (names.empty() && missing) {
+                    names = rescueDriftedElement(*geo, oldElement);
+                }
             }
             auto prev = _PrevLinkTarget.find(this);
             if (prev != _PrevLinkTarget.end() && names.size()
@@ -1113,6 +1393,15 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                         rescuedByHistory = histTarget.size();
                     }
                 }
+            }
+            if (names.size() && !rescuedByHistory && !reverse && obj->getNameInDocument()) {
+                // a geometric relink: remember the name it replaces, so that the original comes
+                // back by name when the new one is gone again (an insertion undone or deleted)
+                histTarget = obj->getNameInDocument();
+                histSub = sub;
+                histShadow = shadow;
+                rescuedByHistory = true;
+                histGeometric = true;
             }
             if (names.size()) {
                 missing = false;
@@ -1197,7 +1486,7 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
             recs.erase(std::remove_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
                 return x.key == shadow.newName;
             }), recs.end());
-            recs.push_back({shadow.newName, histTarget, histSub, histShadow});
+            recs.push_back({shadow.newName, histTarget, histSub, histShadow, histGeometric});
         }
     }
 
@@ -2620,6 +2909,76 @@ void PropertyLinkBase::_getLinksTo(std::vector<App::ObjectIdentifier>& identifie
 
 #define IGNORE_SHADOW false
 
+/// History-rescue records (cad-fork G01): extra attributes of the <Sub> or <Link> element, ignored
+/// by readers that do not know them. Chain from the sub's current name, nearest record first.
+/// Writes the closing quote, the attributes and "/>" and returns true when there is a chain;
+/// otherwise writes nothing and returns false.
+static bool writeRescueAttributes(Base::Writer& writer,
+                                  const PropertyLinkBase* prop,
+                                  const std::string& sub,
+                                  const PropertyLinkBase::ShadowSub& shadow,
+                                  const std::function<std::string(const std::string&)>& enc)
+{
+    auto rit = _RescueRecords.find(prop);
+    if (rit == _RescueRecords.end()) {
+        return false;
+    }
+    std::string key = rescueNameOf(sub, shadow);
+    int n = 0;
+    std::ostringstream attrs;
+    for (int hop = 0; hop < RescueRecordMaxChain; ++hop) {
+        auto r = std::find_if(rit->second.begin(), rit->second.end(), [&](const RescueRecord& x) {
+            return x.key == key;
+        });
+        if (r == rit->second.end()) {
+            break;
+        }
+        attrs << " HistKey" << n << "=\"" << enc(r->key) << "\" HistTarget" << n << "=\""
+              << enc(r->target) << "\" HistSub" << n << "=\"" << enc(r->sub)
+              << "\" HistNew" << n << "=\"" << enc(r->shadow.newName) << "\" HistOld" << n
+              << "=\"" << enc(r->shadow.oldName) << "\"" << (r->geometric ? " HistGeo" + std::to_string(n) + "=\"1\"" : std::string());
+        ++n;
+        key = rescueNameOf(r->sub, r->shadow);
+    }
+    if (!n) {
+        return false;
+    }
+    writer.Stream() << "\" HistRescue=\"" << n << "\"" << attrs.str() << "/>" << endl;
+    return true;
+}
+
+/// Read the attributes written by writeRescueAttributes() of the current element into `out`.
+static void readRescueAttributes(Base::XMLReader& reader, std::vector<RescueRecord>& out)
+{
+    if (!reader.hasAttribute("HistRescue") || reader.doNameMapping()) {
+        return;
+    }
+    try {
+        long n = reader.getAttribute<long>("HistRescue");
+        for (long k = 0; k < n && k < RescueRecordMaxChain; ++k) {
+            auto at = [&](const char* base) {
+                std::string nm = base + std::to_string(k);
+                return reader.hasAttribute(nm.c_str())
+                    ? std::string(reader.getAttribute<const char*>(nm.c_str()))
+                    : std::string();
+            };
+            RescueRecord rec;
+            rec.key = at("HistKey");
+            rec.target = at("HistTarget");
+            rec.sub = at("HistSub");
+            rec.shadow.newName = at("HistNew");
+            rec.shadow.oldName = at("HistOld");
+            rec.geometric = at("HistGeo") == "1";
+            if (rec.key.size() && rec.target.size()) {
+                out.push_back(std::move(rec));
+            }
+        }
+    }
+    catch (...) {
+        // a malformed record is no record; the link itself is read as usual
+    }
+}
+
 void PropertyLinkSub::Save(Base::Writer& writer) const
 {
     assert(_cSubList.size() == _ShadowSubList.size());
@@ -2665,34 +3024,11 @@ void PropertyLinkSub::Save(Base::Writer& writer) const
                 }
             }
         }
-        if (!exporting) {
-            // history-rescue records (cad-fork G01): extra attributes, ignored by readers that
-            // do not know them. Chain from this sub's current name, nearest record first.
-            auto rit = _RescueRecords.find(this);
-            if (rit != _RescueRecords.end()) {
-                std::string key = rescueNameOf(_cSubList[i], shadow);
-                int n = 0;
-                std::ostringstream attrs;
-                for (int hop = 0; hop < RescueRecordMaxChain; ++hop) {
-                    auto r = std::find_if(rit->second.begin(), rit->second.end(), [&](const RescueRecord& x) {
-                        return x.key == key;
-                    });
-                    if (r == rit->second.end()) {
-                        break;
-                    }
-                    attrs << " HistKey" << n << "=\"" << encodeAttribute(r->key) << "\" HistTarget" << n
-                          << "=\"" << encodeAttribute(r->target) << "\" HistSub" << n << "=\""
-                          << encodeAttribute(r->sub) << "\" HistNew" << n << "=\""
-                          << encodeAttribute(r->shadow.newName) << "\" HistOld" << n << "=\""
-                          << encodeAttribute(r->shadow.oldName) << "\"";
-                    ++n;
-                    key = rescueNameOf(r->sub, r->shadow);
-                }
-                if (n) {
-                    writer.Stream() << "\" HistRescue=\"" << n << "\"" << attrs.str() << "/>" << endl;
-                    continue;
-                }
-            }
+        if (!exporting
+            && writeRescueAttributes(writer, this, _cSubList[i], shadow, [](const std::string& v) {
+                   return Base::Persistence::encodeAttribute(v);
+               })) {
+            continue;
         }
         writer.Stream() << "\"/>" << endl;
     }
@@ -2746,31 +3082,7 @@ void PropertyLinkSub::Restore(Base::XMLReader& reader)
         if (reader.hasAttribute(ATTR_MAPPED)) {
             mapped.push_back(i);
         }
-        if (reader.hasAttribute("HistRescue") && !reader.doNameMapping()) {
-            try {
-                long n = reader.getAttribute<long>("HistRescue");
-                for (long k = 0; k < n && k < RescueRecordMaxChain; ++k) {
-                    auto at = [&](const char* base) {
-                        std::string nm = base + std::to_string(k);
-                        return reader.hasAttribute(nm.c_str())
-                            ? std::string(reader.getAttribute<const char*>(nm.c_str()))
-                            : std::string();
-                    };
-                    RescueRecord rec;
-                    rec.key = at("HistKey");
-                    rec.target = at("HistTarget");
-                    rec.sub = at("HistSub");
-                    rec.shadow.newName = at("HistNew");
-                    rec.shadow.oldName = at("HistOld");
-                    if (rec.key.size() && rec.target.size()) {
-                        histRecords.push_back(std::move(rec));
-                    }
-                }
-            }
-            catch (...) {
-                // a malformed record is no record; the link itself is read as usual
-            }
-        }
+        readRescueAttributes(reader, histRecords);
     }
     setFlag(LinkRestoreLabel, restoreLabel);
 
@@ -3137,6 +3449,7 @@ void PropertyLinkSubList::setValue(DocumentObject* lValue, const char* SubName)
         _lSubList.clear();
     }
     updateElementReference(nullptr);
+    pruneRescueRecords(this, _lSubList, _ShadowSubList);
     checkLabelReferences(_lSubList);
     hasSetValue();
 }
@@ -3190,6 +3503,7 @@ void PropertyLinkSubList::setValues(const std::vector<DocumentObject*>& lValue,
         }
     }
     updateElementReference(nullptr);
+    pruneRescueRecords(this, _lSubList, _ShadowSubList);
     checkLabelReferences(_lSubList);
     hasSetValue();
 }
@@ -3242,6 +3556,20 @@ void PropertyLinkSubList::setValues(std::vector<DocumentObject*>&& lValue,
     }
 
     aboutToSetValue();
+    // The attachment engine rewrites the sub names of a support to the element it resolved
+    // (property status User3 marks that write, see AttachExtension::positionBySupport). The old
+    // names designated the same elements, so they are kept as rescue records: when the new names
+    // are gone again (the insertion that caused them is undone or deleted) the old ones come back
+    // by name, exactly as for a PropertyLinkSub (cad-fork G01, slice 2).
+    const bool normalized = testStatus(User3) && ShadowSubList.size() != lSubNames.size();
+    std::vector<DocumentObject*> oldObjs;
+    std::vector<std::string> oldSubs;
+    std::vector<ShadowSub> oldShadows;
+    if (normalized && _ShadowSubList.size() == _lSubList.size()) {
+        oldObjs = _lValueList;
+        oldSubs = _lSubList;
+        oldShadows = _ShadowSubList;
+    }
     _lValueList = std::move(lValue);
     _lSubList = std::move(lSubNames);
     if (ShadowSubList.size() == _lSubList.size()) {
@@ -3251,6 +3579,22 @@ void PropertyLinkSubList::setValues(std::vector<DocumentObject*>&& lValue,
     else {
         updateElementReference(nullptr);
     }
+    for (std::size_t i = 0; i < oldObjs.size() && i < _lSubList.size(); ++i) {
+        if (oldObjs[i] != _lValueList[i] || !oldObjs[i] || !oldObjs[i]->getNameInDocument()
+            || oldShadows[i].newName.empty() || oldSubs[i] == _lSubList[i]) {
+            continue;
+        }
+        const std::string newKey = rescueNameOf(_lSubList[i], _ShadowSubList[i]);
+        if (newKey.empty() || newKey == rescueNameOf(oldSubs[i], oldShadows[i])) {
+            continue;
+        }
+        auto& recs = _RescueRecords[this];
+        recs.erase(std::remove_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
+            return x.key == newKey;
+        }), recs.end());
+        recs.push_back({newKey, oldObjs[i]->getNameInDocument(), oldSubs[i], oldShadows[i], true});
+    }
+    pruneRescueRecords(this, _lSubList, _ShadowSubList);
     checkLabelReferences(_lSubList);
     hasSetValue();
 }
@@ -3298,6 +3642,7 @@ void PropertyLinkSubList::setValue(DocumentObject* lValue, const std::vector<std
         this->_lValueList.insert(this->_lValueList.begin(), size, lValue);
     }
     updateElementReference(nullptr);
+    pruneRescueRecords(this, _lSubList, _ShadowSubList);
     checkLabelReferences(_lSubList);
     hasSetValue();
 }
@@ -3366,6 +3711,7 @@ void PropertyLinkSubList::addValue(App::DocumentObject* obj,
     _lValueList = valueList;
     _lSubList = subList;
     updateElementReference(nullptr);
+    pruneRescueRecords(this, _lSubList, _ShadowSubList);
     checkLabelReferences(_lSubList);
     hasSetValue();
 }
@@ -3721,6 +4067,12 @@ void PropertyLinkSubList::Save(Base::Writer& writer) const
                 }
             }
         }
+        if (!exporting
+            && writeRescueAttributes(writer, this, _lSubList[i], shadow, [](const std::string& v) {
+                   return Base::Persistence::encodeAttribute(v);
+               })) {
+            continue;
+        }
         writer.Stream() << "\"/>" << endl;
     }
 
@@ -3744,6 +4096,7 @@ void PropertyLinkSubList::Restore(Base::XMLReader& reader)
     DocumentObject* father = freecad_cast<DocumentObject*>(getContainer());
     App::Document* document = father ? father->getDocument() : nullptr;
     std::vector<int> mapped;
+    std::vector<RescueRecord> histRecords;
     bool restoreLabel = false;
     for (int i = 0; i < count; i++) {
         reader.readElement("Link");
@@ -3773,6 +4126,7 @@ void PropertyLinkSubList::Restore(Base::XMLReader& reader)
             if (reader.hasAttribute(ATTR_MAPPED)) {
                 mapped.push_back(i);
             }
+            readRescueAttributes(reader, histRecords);
         }
         else if (reader.isVerbose()) {
             Base::Console().warning("Lost link to '{}' while loading, maybe "
@@ -3787,6 +4141,12 @@ void PropertyLinkSubList::Restore(Base::XMLReader& reader)
     // assignment
     setValues(values, SubNames, std::move(shadows));
     _mapped.swap(mapped);
+    if (histRecords.empty()) {
+        _RescueRecords.erase(this);
+    }
+    else {
+        _RescueRecords[this] = std::move(histRecords);
+    }
 }
 
 bool PropertyLinkSubList::upgrade(Base::XMLReader& reader, const char* typeName)
@@ -3986,6 +4346,11 @@ Property* PropertyLinkSubList::Copy() const
     p->_lValueList = _lValueList;
     p->_lSubList = _lSubList;
     p->_ShadowSubList = _ShadowSubList;
+    // the rescue records belong to the value, as for PropertyLinkSub
+    auto rit = _RescueRecords.find(this);
+    if (rit != _RescueRecords.end()) {
+        _RescueRecords[p] = rit->second;
+    }
     return p;
 }
 
@@ -3995,7 +4360,20 @@ void PropertyLinkSubList::Paste(const Property& from)
         throw Base::TypeError("Incompatible property to paste to");
     }
     auto& link = static_cast<const PropertyLinkSubList&>(from);
+    std::vector<RescueRecord> records;
+    auto rit = _RescueRecords.find(&link);
+    if (rit != _RescueRecords.end()) {
+        records = rit->second;
+    }
     setValues(link._lValueList, link._lSubList, std::vector<ShadowSub>(link._ShadowSubList));
+    // set after the value: setValues prunes records that the new value cannot reach
+    if (records.empty()) {
+        _RescueRecords.erase(this);
+    }
+    else {
+        _RescueRecords[this] = std::move(records);
+        pruneRescueRecords(this, _lSubList, _ShadowSubList);
+    }
 }
 
 unsigned int PropertyLinkSubList::getMemSize() const

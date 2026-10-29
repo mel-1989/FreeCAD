@@ -23,6 +23,7 @@ valid and that the reference points at the geometrically same element as before 
 
 import os
 import tempfile
+import zipfile
 import unittest
 
 import FreeCAD as App
@@ -1165,3 +1166,166 @@ class TestReferenceRescue(unittest.TestCase):
 
             step(delete)
         self._d5_restored(pad, b0, before)
+
+    # -------------------------------------------------------------- slice 2: anchors and supports
+    def _draft_with_fillet_on_edge(self, k):
+        self.doc.UndoMode = 1
+        pad = self._pad()
+        sh = pad.Shape
+        side = [
+            "Face%d" % (i + 1)
+            for i, f in enumerate(sh.Faces)
+            if isinstance(f.Surface, Part.Plane) and abs(f.normalAt(0, 0).z) < 1e-6
+        ][0]
+        bottom = ["Face%d" % (i + 1) for i, f in enumerate(sh.Faces) if abs(f.CenterOfMass.z) < 1e-6][0]
+        draft = _add(self.doc, self.body, "PartDesign::Draft", "Draft")
+        draft.Base = (pad, [side])
+        draft.NeutralPlane = (pad, [bottom])
+        draft.Angle = 3.0
+        self.doc.recompute()
+        cons = _add(self.doc, self.body, "PartDesign::Fillet", "Cons")
+        cons.Base = (draft, ["Edge%d" % (k + 1)])
+        cons.Radius = 0.3
+        self.doc.recompute()
+        self._valid(cons)
+        return pad, draft, cons
+
+    def _boss_group(self, pad):
+        bs = _sketch(self.doc, self.body, "BS", z=L, after=pad)
+        _rect(bs, -12.0, 0.0, 4.0, 4.0)
+        bp = _add(self.doc, self.body, "PartDesign::Pad", "BP", bs)
+        bp.Profile = bs
+        bp.Length = 3.0
+        return bs, bp
+
+    def test_redo_after_insert_and_move_does_not_take_the_mirror_twin(self):
+        """Fails on 4646cdee17 and on fork/main: a Fillet on an edge of a Draft, a boss inserted in
+        front of the Draft (committed, not recomputed), moved behind the Fillet with a recompute
+        inside the transaction, the move undone and redone. FreeCAD's geometric search ran from
+        the element cache of the Draft, which held the shape of the other configuration, and
+        carried the reference over to the edge at the mirrored position (x = -20 instead of 20),
+        silently. The search now runs from the edge the link designated when it last resolved."""
+        pad, draft, cons = self._draft_with_fillet_on_edge(4)
+        sig = _edge_sig(draft.Shape, cons.Base[1][0])
+        self.doc.openTransaction("insert")
+        bs, bp = self._boss_group(pad)
+        self.doc.commitTransaction()
+        self.doc.openTransaction("move")
+        after = cons
+        for obj in (bs, bp):
+            self.body.removeObject(obj)
+            self.body.insertObject(obj, after, True)
+            after = obj
+        self.doc.recompute()
+        self.doc.commitTransaction()
+        self._refs_same(cons, [sig])
+        self.doc.undo()
+        self.doc.recompute()
+        self.doc.redo()
+        self.doc.recompute()
+        base, subs = cons.Base
+        for sub in subs:
+            if sub.startswith("?"):
+                continue
+            self.assertEqual(
+                _edge_sig(base.Shape, sub),
+                sig,
+                "%s on %s is not the edge the Fillet referenced" % (sub, base.Name),
+            )
+
+    def _attached_pad(self):
+        """A pad with a sketch attached to one side face; returns (pad, sketch, face names)."""
+        pad = self._pad()
+
+        def side(x, y):
+            for i, f in enumerate(pad.Shape.Faces):
+                c = f.CenterOfMass
+                if abs(c.x - x) < 1e-6 and abs(c.y - y) < 1e-6 and abs(c.z - L / 2) < 1e-6:
+                    return "Face%d" % (i + 1)
+            raise AssertionError("no side face")
+
+        fa, fb = side(0, -H / 2), side(-W / 2, 0)
+        cs = _add(self.doc, self.body, "Sketcher::SketchObject", "AttachedSketch")
+        cs.AttachmentSupport = (pad, [fa])
+        cs.MapMode = "FlatFace"
+        self.doc.recompute()
+        self.assertEqual(list(cs.AttachmentSupport[0][1]), [fa])
+        return pad, cs, fa, fb
+
+    # property status bit 31 is User3, which AttachExtension sets around the write that the
+    # attachment engine makes when it normalises the support's sub names
+    def _engine_rewrites_support(self, pad, cs, face):
+        cs.setPropertyStatus("AttachmentSupport", 31)
+        try:
+            engine = Part.AttachEngine("Attacher::AttachEnginePlane")
+            engine.References = [(pad, face)]
+            engine.Mode = "FlatFace"
+            engine.writeParametersToFeature(cs)
+        finally:
+            cs.setPropertyStatus("AttachmentSupport", -31)
+        self.doc.recompute()
+        self.assertEqual(list(cs.AttachmentSupport[0][1]), [face])
+
+    def _cut_the_left_face(self, pad):
+        """Replace the rectangle's left edge by two slanted ones: the face made from it is gone."""
+        sk = pad.Profile[0]
+        sk.delGeometry(3)
+        a = sk.addGeometry(Part.LineSegment(V(-W / 2, H / 2, 0), V(-W / 2 - 5, 0, 0)), False)
+        b = sk.addGeometry(Part.LineSegment(V(-W / 2 - 5, 0, 0), V(-W / 2, -H / 2, 0)), False)
+        sk.addConstraint(Sketcher.Constraint("Coincident", 2, 2, a, 1))
+        sk.addConstraint(Sketcher.Constraint("Coincident", a, 2, b, 1))
+        sk.addConstraint(Sketcher.Constraint("Coincident", b, 2, 0, 1))
+        self.doc.recompute()
+
+    def _support_is(self, cs, pad, face_sig):
+        obj, subs = cs.AttachmentSupport[0]
+        self.assertIs(obj, pad)
+        self.assertFalse(subs[0].startswith("?"), "the support went missing: %r" % (subs,))
+        self.assertEqual(_face_sig(pad.Shape, subs[0]), face_sig)
+        self.assertNotIn("Invalid", cs.State)
+
+    def test_support_rewritten_by_the_attacher_is_given_back_when_its_face_is_gone(self):
+        """PropertyLinkSubList carries rescue records like PropertyLinkSub: the attachment engine
+        rewrote the support from face A to face B; when B is gone, A comes back by name. On
+        fork/main the sketch goes Invalid with the support '?Face4'."""
+        pad, cs, fa, fb = self._attached_pad()
+        sig_a = _face_sig(pad.Shape, fa)
+        self._engine_rewrites_support(pad, cs, fb)
+        self._cut_the_left_face(pad)
+        self._support_is(cs, pad, sig_a)
+
+    def test_support_rescue_record_is_written_to_the_file_and_survives_reload(self):
+        pad, cs, fa, fb = self._attached_pad()
+        sig_a = _face_sig(pad.Shape, fa)
+        self._engine_rewrites_support(pad, cs, fb)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "support.FCStd")
+            self.doc.saveAs(path)
+            with zipfile.ZipFile(path) as z:
+                xml = z.read("Document.xml").decode()
+            self.assertRegex(xml, r"<Link obj=\"Pad\"[^>]*HistRescue=\"1\"[^>]*HistSub0=\"%s\"" % fa)
+            name = self.doc.Name
+            App.closeDocument(name)
+            self.doc = App.openDocument(path)
+        self.body = self.doc.getObject("Body")
+        pad = self.doc.getObject("Pad")
+        cs = self.doc.getObject("AttachedSketch")
+        self.assertEqual(list(cs.AttachmentSupport[0][1]), [fb])
+        self._cut_the_left_face(pad)
+        self._support_is(cs, pad, sig_a)
+
+    def test_support_rescue_record_follows_an_undo_and_redo_of_the_rewrite(self):
+        self.doc.UndoMode = 1
+        pad, cs, fa, fb = self._attached_pad()
+        sig_a = _face_sig(pad.Shape, fa)
+        self.doc.openTransaction("rewrite")
+        self._engine_rewrites_support(pad, cs, fb)
+        self.doc.commitTransaction()
+        self.doc.undo()
+        self.doc.recompute()
+        self.assertEqual(list(cs.AttachmentSupport[0][1]), [fa])
+        self.doc.redo()
+        self.doc.recompute()
+        self.assertEqual(list(cs.AttachmentSupport[0][1]), [fb])
+        self._cut_the_left_face(pad)
+        self._support_is(cs, pad, sig_a)
