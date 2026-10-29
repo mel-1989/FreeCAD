@@ -759,6 +759,21 @@ def _faces_of(shape, edge):
                 m.setdefault(e.hashCode(), []).append((e, f, i + 1))
         d["fmap"] = m
     return [(f, i) for e, f, i in d["fmap"].get(edge.hashCode(), []) if e.isSame(edge)]
+def _solid_info(shape, edge):
+    # (number of solids of `shape`, index of the one that holds `edge`, -1 if none)
+    d = _data(shape)
+    if d.get("solids") is None:
+        m = {}
+        sols = shape.Solids
+        for k, so in enumerate(sols):
+            for e in so.Edges:
+                m.setdefault(e.hashCode(), []).append((e, k))
+        d["solids"] = (len(sols), m)
+    n, m = d["solids"]
+    for e, k in m.get(edge.hashCode(), []):
+        if e.isSame(edge):
+            return (n, k)
+    return (n, -1)
 def edge_faces(owner, edge):
     # the names of the faces next to a straight edge, else []
     try:
@@ -874,6 +889,9 @@ def extent_rescue(shape, anchor, old):
             return []
         mid_old = a0 + d * (length / 2.0)
         if not _same_descs(_adj(old, anchor, mid_old), _adj(shape, c[1], mid_old)):
+            return []
+        # the same solid: a copy of the source solid (a link, a mirror) carries the same lineage
+        if _solid_info(old, anchor) != _solid_info(shape, c[1]):
             return []
         # lineage is checked by the caller against the element maps: hand it the faces' names
         cand = ["Face%d" % i for f, i in _faces_of(shape, c[1])]
@@ -1008,6 +1026,17 @@ lineageStore()
 }
 }  // namespace
 
+static std::string canonicalName(const std::string& n, bool indexIsHex);
+
+/// A name enters a lineage in both readings of its index: the strings of one name differ in radix
+/// depending on where they were rendered (the element map writes `#25:10` where the history hands
+/// back `#25:16` for the same name), and nothing on the string says which.
+static void addLineageName(std::set<std::pair<long, std::string>>& out, long tag, const std::string& n)
+{
+    out.insert({tag, canonicalName(n, false)});
+    out.insert({tag, canonicalName(n, true)});
+}
+
 static void dropAnchors(const PropertyLinkBase* link)
 {
     // The GIL guards the store: recompute can run on the async worker while the main thread
@@ -1056,10 +1085,10 @@ void collectLineage(const App::Document* doc,
     long tag = data->getElementHistory(name, &original, &history);
     long absTag = tag < 0 ? -tag : tag;
     if (!original.empty()) {
-        out.insert({absTag, original.toString()});
+        addLineageName(out, absTag, original.toString());
     }
     for (const auto& h : history) {
-        out.insert({absTag, h.toString()});
+        addLineageName(out, absTag, h.toString());
     }
     if (!doc || absTag == 0 || absTag == (data->Tag < 0 ? -data->Tag : data->Tag) || original.empty()
         || sameMappedName(original, name)) {
@@ -1073,6 +1102,45 @@ void collectLineage(const App::Document* doc,
 }
 }  // namespace
 
+/// A mapped name as a string, with every `#<hex id>[:<index>]` token in one rendering. A name
+/// printed from the element map writes the index in hex (StringID::toString leaves std::hex set),
+/// the names the history hands back write it in decimal: `#25:10` and `#25:16` are the same name.
+/// `indexIsHex` is the radix the index is read in.
+static std::string canonicalName(const std::string& n, bool indexIsHex)
+{
+    std::string out;
+    std::size_t i = 0;
+    while (i < n.size()) {
+        if (n[i] != '#' || (i > 0 && n[i - 1] != ';' && n[i - 1] != ':')) {
+            out += n[i++];
+            continue;
+        }
+        std::size_t j = i + 1;
+        while (j < n.size() && std::isxdigit(static_cast<unsigned char>(n[j]))) {
+            ++j;
+        }
+        if (j == i + 1) {
+            out += n[i++];
+            continue;
+        }
+        unsigned long long id = std::stoull(n.substr(i + 1, j - i - 1), nullptr, 16);
+        out += '#' + std::to_string(id);
+        if (j < n.size() && n[j] == ':') {
+            std::size_t k = j + 1;
+            while (k < n.size() && (indexIsHex ? std::isxdigit(static_cast<unsigned char>(n[k]))
+                                              : std::isdigit(static_cast<unsigned char>(n[k])))) {
+                ++k;
+            }
+            if (k > j + 1) {
+                out += ':' + std::to_string(std::stoull(n.substr(j + 1, k - j - 1), nullptr, indexIsHex ? 16 : 10));
+                j = k;
+            }
+        }
+        i = j;
+    }
+    return out;
+}
+
 static std::vector<Lineage> faceLineages(const GeoFeature& geo, const std::vector<std::string>& faces)
 {
     std::vector<Lineage> res;
@@ -1083,7 +1151,7 @@ static std::vector<Lineage> faceLineages(const GeoFeature& geo, const std::vecto
         if (data && data->hasElementMap()) {
             for (const auto& nm : data->getElementMappedNames(Data::IndexedName(f.c_str()))) {
                 std::set<std::pair<long, std::string>> visited;
-                l.insert({data->Tag < 0 ? -data->Tag : data->Tag, nm.first.toString()});
+                addLineageName(l, data->Tag < 0 ? -data->Tag : data->Tag, nm.first.toString());
                 collectLineage(geo.getDocument(), data, nm.first, l, 0, visited);
             }
         }

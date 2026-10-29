@@ -382,3 +382,112 @@ class TestExtentRescue(unittest.TestCase):
 
     def test_an_edge_of_a_solid_that_joins_in_the_same_recompute_is_not_taken(self):
         self._compound_with_moving_box(join=True)
+
+    # ------------------------------------------------------------ repair round 3
+    def _compound_with_copy(self, src, join):
+        """X = Cut(E, T) and a copy Y of a symmetrically end-trimmed E in a compound; one recompute
+        removes X's top +Y edge with a rebate while Y arrives on its carrier (or joins the compound)."""
+        doc = App.newDocument("ExtentCopy")
+        try:
+            pl = doc.addObject("Part::Plane", "Rect")
+            pl.Length, pl.Width = 40, 20
+            e = doc.addObject("Part::Extrusion", "E")
+            e.Base, e.Dir, e.Solid, e.LengthFwd = pl, V(0, 0, 10), True, 10
+            t = doc.addObject("Part::Box", "Tool")
+            t.Length, t.Width, t.Height = 50, 4, 4
+            t.Placement.Base = V(-5, 300, 300)
+            x = doc.addObject("Part::Cut", "X")
+            x.Base, x.Tool = e, t
+            t2 = doc.addObject("Part::Box", "EndTools")
+            t2.Length, t2.Width, t2.Height = 50, 30, 30
+            t2.Placement.Base = V(-45, -5, -5)
+            t3 = doc.addObject("Part::Box", "EndTools2")
+            t3.Length, t3.Width, t3.Height = 50, 30, 30
+            t3.Placement.Base = V(35, -5, -5)
+            tf = doc.addObject("Part::MultiFuse", "Ends")
+            tf.Shapes = [t2, t3]
+            base = doc.addObject("Part::Cut", "Etrim")
+            base.Base, base.Tool = e, tf
+            if src == "link":
+                y = doc.addObject("App::Link", "Y")
+                y.LinkedObject = base
+                y.LinkPlacement.Base = V(0, 100, 0)
+            elif src == "mirror1":
+                y = doc.addObject("Part::Mirroring", "Y")
+                y.Source, y.Normal, y.Base = base, V(1, 0, 0), V(100, 0, 0)
+            else:
+                m1 = doc.addObject("Part::Mirroring", "M1")
+                m1.Source, m1.Normal, m1.Base = base, V(0, 1, 0), V(0, 0, 0)
+                y = doc.addObject("Part::Mirroring", "Y")
+                y.Source, y.Normal, y.Base = m1, V(0, 1, 0), V(0, 50, 0)
+            c = doc.addObject("Part::Compound", "Comp")
+            c.Links = [x] if join else [x, y]
+            doc.recompute()
+
+            def on(ed):
+                return (isinstance(ed.Curve, Part.Line) and abs(ed.CenterOfMass.y - 20) < 1e-6
+                        and abs(ed.CenterOfMass.z - 10) < 1e-6)
+
+            nm = ["Edge%d" % (i + 1) for i, ed in enumerate(c.Shape.Edges) if on(ed) and abs(ed.Length - 40) < 1e-6][0]
+            f = doc.addObject("App::FeaturePython", "Consumer")
+            f.addProperty("App::PropertyLinkSub", "Ref")
+            f.Ref = (c, [nm])
+            doc.recompute()
+            t.Placement.Base = V(-5, 16, 6)
+            if src == "link":
+                y.LinkPlacement.Base = V(0, 0, 0)
+            elif src == "mirror1":
+                y.Base = V(20, 0, 0)
+            else:
+                y.Base = V(0, 0, 0)
+            if join:
+                c.Links = [x, y]
+            doc.recompute()
+            sub = f.Ref[1][0] if f.Ref and f.Ref[1] else "?"
+            self.assertTrue(sub.startswith("?"), "%s: the reference silently resolves to %r" % (src, sub))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_a_copy_of_the_same_solid_is_not_the_same_element(self):
+        for src in ("link", "mirror1", "mirror2"):
+            for join in (False, True):
+                self._compound_with_copy(src, join)
+
+    def test_a_trim_is_rescued_whatever_the_size_of_the_hashed_name_index(self):
+        # the element map writes the index of a hashed name in hex, the history in decimal: from
+        # 16 faces on, the same name read differently and the lineage of the rescue was refused
+        for n in (4, 12, 16, 20):
+            doc = App.newDocument("ExtentNGon%d" % n)
+            try:
+                body = doc.addObject("PartDesign::Body", "Body")
+                sk = _sketch(doc, body, "Sketch")
+                radius = 10.0 / math.sin(math.pi / n)
+                pts = [V(radius * math.cos(2 * math.pi * k / n - math.pi / 2 - math.pi / n),
+                         radius * math.sin(2 * math.pi * k / n - math.pi / 2 - math.pi / n), 0) for k in range(n)]
+                for k in range(n):
+                    sk.addGeometry(Part.LineSegment(pts[k], pts[(k + 1) % n]), False)
+                pad = body.newObject("PartDesign::Pad", "Pad")
+                pad.Profile = sk
+                pad.Length = 10
+                doc.recompute()
+                mid = (pts[0] + pts[1]) * 0.5 + V(0, 0, 10)
+                nm = [("Edge%d" % (i + 1)) for i, e in enumerate(pad.Shape.Edges)
+                      if isinstance(e.Curve, Part.Line) and (e.CenterOfMass - mid).Length < 1e-6][0]
+                c = doc.addObject("App::FeaturePython", "C")
+                c.addProperty("App::PropertyLinkSub", "Ref")
+                c.Ref = (body, [nm])
+                doc.recompute()
+                vs = [("Edge%d" % (i + 1)) for i, e in enumerate(pad.Shape.Edges)
+                      if isinstance(e.Curve, Part.Line) and abs(e.Curve.Direction.z) > 0.999
+                      and min((V(e.CenterOfMass.x, e.CenterOfMass.y, 0) - p).Length for p in (pts[0], pts[1])) < 1e-6]
+                fil = body.newObject("PartDesign::Fillet", "F")
+                fil.Base = (pad, vs)
+                fil.Radius = 2
+                doc.recompute()
+                sub = c.Ref[1][0]
+                self.assertFalse(sub.startswith("?"), "N=%d: the trimmed edge was lost" % n)
+                ed = body.Shape.getElement(sub)
+                self.assertLess(ed.Length, (pts[1] - pts[0]).Length - 1.0)
+                self.assertLess((ed.CenterOfMass - mid).Length, 1e-5)
+            finally:
+                App.closeDocument(doc.Name)
