@@ -27,6 +27,9 @@
 
 #include <Mod/TechDraw/TechDrawGlobal.h>
 
+#include <utility>
+#include <vector>
+
 #include <DrawViewDimension.h>
 
 namespace Part
@@ -83,7 +86,8 @@ private:
 
     bool isPlausibleEdit2d(const ReferenceEntry& ref, const Part::TopoShape& saved) const;
     static bool isSimilarEdge(const TopoDS_Shape& candidate, const TopoDS_Shape& saved,
-                              bool* overlapOnly = nullptr);
+                              bool* overlapOnly = nullptr,
+                              std::pair<double, double>* extent = nullptr);
 
     bool isMatchingGeometry(const ReferenceEntry& ref, const Part::TopoShape& savedGeometry) const;
 

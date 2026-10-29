@@ -97,6 +97,28 @@ using namespace TechDraw;
 using namespace Measure;
 using DU = DrawUtil;
 
+//! true if every piece (interval along the saved line) is chained to the matched edge's interval through
+//! touching ends.  A piece with a gap to it is a remaining part of a split edge: the matched edge is one of
+//! several pieces, not the saved edge trimmed.  Chamfer or fillet ends that continue the edge are touching.
+static bool allPiecesTouch(std::pair<double, double> matched, std::vector<std::pair<double, double>> pieces)
+{
+    constexpr double touchTol {1.0e-4};
+    bool grew {true};
+    while (grew && !pieces.empty()) {
+        grew = false;
+        for (auto it = pieces.begin(); it != pieces.end(); ++it) {
+            if (it->first <= matched.second + touchTol && it->second >= matched.first - touchTol) {
+                matched.first = std::min(matched.first, it->first);
+                matched.second = std::max(matched.second, it->second);
+                pieces.erase(it);
+                grew = true;
+                break;
+            }
+        }
+    }
+    return pieces.empty();
+}
+
 //! true if references point to valid geometry and the valid geometry matches the
 //! corresponding saved geometry.  this method does not correct anything, it just
 //! verifies if the references point to the same geometry as when the reference
@@ -474,6 +496,8 @@ bool DimensionAutoCorrect::findSimilarEdge3d(ReferenceEntry& refToFix,
 
     int found {0};
     int overlapping {0};
+    std::pair<double, double> foundExtent {0.0, 0.0};
+    std::vector<std::pair<double, double>> pieces;
     ReferenceEntry candidate;
     for (auto* obj : objects) {
         auto shape3d = Part::Feature::getShape(obj, Part::ShapeOption::ResolveLink | Part::ShapeOption::Transform);
@@ -484,13 +508,16 @@ bool DimensionAutoCorrect::findSimilarEdge3d(ReferenceEntry& refToFix,
         size_t iEdge {1};
         for (auto& edge : edgesAll) {
             bool overlapOnly {false};
-            if (isSimilarEdge(edge.getShape(), refGeom.getShape(), &overlapOnly)) {
+            std::pair<double, double> extent {0.0, 0.0};
+            if (isSimilarEdge(edge.getShape(), refGeom.getShape(), &overlapOnly, &extent)) {
                 found++;
+                foundExtent = extent;
                 candidate = ReferenceEntry(obj, std::string("Edge") + std::to_string(iEdge),
                                            getDimension()->getDocument());
             }
             else if (overlapOnly) {
                 overlapping++;
+                pieces.push_back(extent);
             }
             iEdge++;
         }
@@ -500,6 +527,10 @@ bool DimensionAutoCorrect::findSimilarEdge3d(ReferenceEntry& refToFix,
         // the carrier do not veto a unique same-midpoint edge (chamfer ends that continue a trimmed edge);
         // with no same-midpoint edge, several overlapping pieces mean the edge was split.
         m_similarAmbiguous = found > 1 || (found == 0 && overlapping > 1);
+        return false;
+    }
+    if (!allPiecesTouch(foundExtent, pieces)) {
+        m_similarAmbiguous = true;  // the centre or an end piece of a split edge
         return false;
     }
     refToFix = candidate;
@@ -616,20 +647,29 @@ ReferenceEntry DimensionAutoCorrect::searchViewForSimilarEdge(DrawViewPart* obj,
     int found {0};
     int overlapping {0};
     int iFound {-1};
+    std::pair<double, double> foundExtent {0.0, 0.0};
+    std::vector<std::pair<double, double>> pieces;
     for (auto& edge : gEdgeAll) {
         Part::TopoShape temp = ReferenceEntry::asCanonicalTopoShape(edge->asTopoShape(), *obj);
         bool overlapOnly {false};
-        if (isSimilarEdge(temp.getShape(), refEdge.getShape(), &overlapOnly)) {
+        std::pair<double, double> extent {0.0, 0.0};
+        if (isSimilarEdge(temp.getShape(), refEdge.getShape(), &overlapOnly, &extent)) {
             found++;
             iFound = iEdge;
+            foundExtent = extent;
         }
         else if (overlapOnly) {
             overlapping++;
+            pieces.push_back(extent);
         }
         iEdge++;
     }
     if (found != 1) {
         m_similarAmbiguous = found > 1 || (found == 0 && overlapping > 1);
+        return {};
+    }
+    if (!allPiecesTouch(foundExtent, pieces)) {
+        m_similarAmbiguous = true;  // the centre or an end piece of a split edge
         return {};
     }
     return {obj, std::string("Edge") + std::to_string(iFound), getDimension()->getDocument()};
@@ -670,7 +710,7 @@ bool DimensionAutoCorrect::isPlausibleEdit2d(const ReferenceEntry& ref, const Pa
 //! or same circle: centre, axis, radius) and overlaps saved along it.  Only lines and circles/arcs
 //! are recognised; everything else is never "similar".  Direction of the edges does not matter.
 bool DimensionAutoCorrect::isSimilarEdge(const TopoDS_Shape& candidate, const TopoDS_Shape& saved,
-                                         bool* overlapOnly)
+                                         bool* overlapOnly, std::pair<double, double>* extent)
 {
     constexpr double carrierTol {1.0e-4};
     constexpr double parallelTol {1.0e-9};
@@ -708,6 +748,9 @@ bool DimensionAutoCorrect::isSimilarEdge(const TopoDS_Shape& candidate, const To
         double hi = std::min(std::max(s0, s1), std::max(c0, c1));
         if (hi - lo <= carrierTol) {
             return false;
+        }
+        if (extent) {
+            *extent = {std::min(c0, c1), std::max(c0, c1)};  // along the saved line
         }
         // Same midpoint as well: an unchanged or symmetrically trimmed edge is the same element, an edge
         // trimmed at one end, or a fragment merged back into a longer edge, is a different one (orchestrator

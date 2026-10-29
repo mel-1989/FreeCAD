@@ -370,6 +370,15 @@ class DimensionRescueTest(unittest.TestCase):
         self.assertFalse(_broken(dim), dim.State)
         self.assertAlmostEqual(dim.getRawValue(), 30 - 4, places=3)
 
+    def testCentrePieceOfSplitEdgeIsReported(self):
+        """Two notches split the top edge into 5/20/5 mm pieces; the centre piece keeps the old midpoint but is
+        a piece of a split edge, not a symmetric trim, so both dimensions report instead of taking the 20 mm."""
+        d3, d2 = self.dim3d(), self.dim2d()
+        self.insertNotch(x0=-15.0, x1=-10.0)
+        self.insertNotch(x0=10.0, x1=15.0)
+        for dim in (d3, d2):
+            self.assertTrue(_broken(dim), "%s still %s with value %s" % (dim.Name, dim.State, dim.getRawValue()))
+
     def testInsertThenDeleteFilletReturns(self):
         """A rescued 2D reference follows the edge back when the fillet is deleted again."""
         dim = self.dim2d()
