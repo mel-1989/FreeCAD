@@ -864,6 +864,41 @@ static bool retargetedGeometryRescueAccepted(const GeoFeature& geo,
     return ok;
 }
 
+/// A link that carries a history-rescue record has been rewritten once to a name that is not the
+/// one it stored. When that name is missing again (an undo or redo restored the target's shape
+/// but not the link, a feature moved back) and nothing is pending, upstream's search by the plain
+/// index would take whatever element the old cache has at that index. The match is kept only when
+/// it is provably the element the record says the link started from; otherwise the reference
+/// stays missing, as it does without G01.
+static bool recordedGeometryRescueAccepted(const PropertyLinkBase* prop,
+                                           const GeoFeature& geo,
+                                           const std::string& sub,
+                                           const PropertyLinkBase::ShadowSub& shadow,
+                                           const char* element,
+                                           const std::vector<std::string>& names)
+{
+    auto it = _RescueRecords.find(prop);
+    if (it == _RescueRecords.end()) {
+        return true;
+    }
+    const std::string key = rescueNameOf(sub, shadow);
+    auto r = std::find_if(it->second.begin(), it->second.end(), [&](const RescueRecord& x) {
+        return x.key == key;
+    });
+    if (r == it->second.end()) {
+        return true;  // this sub was never rescued
+    }
+    App::DocumentObject* origin = geo.getDocument()->getObject(r->target.c_str());
+    const std::string& original = r->shadow.newName.size() ? r->shadow.newName : r->sub;
+    if (!origin || !retargetedGeometryRescueAccepted(geo, origin, original.c_str(), names)) {
+        FC_WARN("element reference " << element << " in " << geo.getFullName()
+                                      << ": geometric match of a rescued link is not provably the"
+                                         " element it started from; left missing");
+        return false;
+    }
+    return true;
+}
+
 static std::vector<std::string> rescueByHistory(const GeoFeature& geo,
                                                 const App::DocumentObject* prevTarget,
                                                 const char* element)
@@ -1055,6 +1090,10 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                 && !retargetedGeometryRescueAccepted(*geo, prev->second, element, names)) {
                 names.clear();
             }
+            else if (prev == _PrevLinkTarget.end() && names.size()
+                     && !recordedGeometryRescueAccepted(this, *geo, sub, shadow, element, names)) {
+                names.clear();
+            }
             if (names.empty() && missing) {
                 // geometry found nothing: follow the element-map history (single match only),
                 // but only for a link retargeted by an insertion, compared with its old target
@@ -1138,10 +1177,18 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                 if (old != recs.end()) {
                     RescueRecord moved = *old;
                     moved.key = shadow.newName;
+                    // the link is back on the very name this record would give back: the record
+                    // is spent, and the record keyed on that name (the next hop) must stay
+                    const bool spent = rescueNameOf(moved.sub, moved.shadow) == moved.key;
                     recs.erase(std::remove_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
-                        return x.key == prevKey || x.key == moved.key;
+                        return x.key == prevKey || (!spent && x.key == moved.key);
                     }), recs.end());
-                    recs.push_back(std::move(moved));
+                    if (!spent) {
+                        recs.push_back(std::move(moved));
+                    }
+                    if (recs.empty()) {
+                        _RescueRecords.erase(rit);
+                    }
                 }
             }
         }

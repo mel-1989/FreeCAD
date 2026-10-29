@@ -1036,3 +1036,132 @@ class TestReferenceRescue(unittest.TestCase):
                 expected,
                 "%s on %s is a different element than the one the fillet referenced" % (sub, base.Name),
             )
+
+    # -------------------------------------------------------------- round 8 repairs (G01, repair round 2)
+    def _boss_at(self, cx, after, z=L, name="BO"):
+        bs = _sketch(self.doc, self.body, name + "Sk", z=z, after=after)
+        _rect(bs, cx, 0.0, 4.0, 4.0)
+        boss = _add(self.doc, self.body, "PartDesign::Pad", name, bs)
+        boss.Profile = bs
+        boss.Length = 3.0
+        return boss
+
+    def test_redo_does_not_take_an_unrelated_element_at_the_same_index(self):
+        """Fails on 35b073aff5: a draft on a pentagon prism, a second draft inserted in front of
+        it (the consumer's face is rescued and carries a record), a boss inserted in front of that
+        and both moved behind the consumer, then undo and redo with a recompute in between. The
+        undo's recompute re-tracks the face outside any transaction; redo restores the draft's
+        shape but not the link, the name is missing, and upstream's search by the plain index of
+        the old shape was accepted without the gate that only runs for a pending retarget: the
+        consumer stayed Up-to-date on a face of a different area."""
+        self.doc.UndoMode = 1
+        pts = [(-20, -10), (20, -10), (26, 6), (0, 14), (-24, 4)]
+        sk = _sketch(self.doc, self.body, "Sketch")
+        for i, a in enumerate(pts):
+            b = pts[(i + 1) % len(pts)]
+            sk.addGeometry(Part.LineSegment(V(a[0], a[1], 0), V(b[0], b[1], 0)), False)
+        for i in range(len(pts)):
+            sk.addConstraint(Sketcher.Constraint("Coincident", i, 2, (i + 1) % len(pts), 1))
+        pad = self.body.newObject("PartDesign::Pad", "Pad")
+        pad.Profile = sk
+        pad.Length = L
+        self.doc.recompute()
+        sh = pad.Shape
+
+        def flat_normal(f):
+            u0, u1, v0, v1 = f.ParameterRange
+            return f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+
+        sides = [
+            "Face%d" % (i + 1)
+            for i, f in enumerate(sh.Faces)
+            if isinstance(f.Surface, Part.Plane) and abs(flat_normal(f).z) < 1e-6
+        ]
+        bottom = [
+            "Face%d" % (i + 1)
+            for i, f in enumerate(sh.Faces)
+            if isinstance(f.Surface, Part.Plane) and abs(f.CenterOfMass.z) < 1e-6
+        ][0]
+        cons = _add(self.doc, self.body, "PartDesign::Draft", "Cons")
+        cons.Base = (pad, [sides[4]])
+        cons.NeutralPlane = (pad, [bottom])
+        cons.Angle = 2.0
+        self.doc.recompute()
+        self._valid(cons)
+        sig = _face_sig(pad.Shape, cons.Base[1][0])
+
+        def ok_or_missing(tag):
+            base, subs = cons.Base
+            if subs[0].startswith("?"):
+                return
+            self.assertEqual(
+                _face_sig(base.Shape, subs[0]), sig, "%s: %s is another face" % (tag, subs[0])
+            )
+
+        self.doc.openTransaction("insert")
+        d1 = _add(self.doc, self.body, "PartDesign::Draft", "ID1", pad)
+        d1.Base = (pad, [sides[1]])
+        d1.NeutralPlane = (pad, [bottom])
+        d1.Angle = 3.0
+        self.doc.recompute()
+        self.doc.commitTransaction()
+        self.assertIs(cons.Base[0], d1)
+        self.assertFalse(cons.Base[1][0].startswith("?"), "the insert did not rescue the face")
+        self.doc.openTransaction("insert boss")
+        bo = self._boss_at(-12.0, pad)
+        self.doc.commitTransaction()
+        ok_or_missing("insert")
+        self.doc.openTransaction("move")
+        for obj in (bo.Profile[0], bo):
+            self.body.removeObject(obj)
+        after = cons
+        for obj in (bo.Profile[0], bo):
+            self.body.insertObject(obj, after, True)
+            after = obj
+        self.doc.recompute()
+        self.doc.commitTransaction()
+        ok_or_missing("move")
+        self.doc.undo()
+        self.doc.recompute()
+        ok_or_missing("undo")
+        self.doc.redo()
+        self.doc.recompute()
+        ok_or_missing("redo")
+
+    def test_relink_by_geometry_after_a_double_insert_keeps_the_original_reachable(self):
+        """Fails on 35b073aff5: a draft and a boss inserted in front of a fillet (both rescue its
+        first edge, a chain of two records), the fillet moved behind the draft and then behind
+        the boss, the draft deleted, the boss deleted. The delete re-tracks the rescued name
+        onto the very name the newest record would give back; the move of that record onto its
+        own original name erased the older record of the chain and left a record that pointed at
+        itself, so the first edge was not given back (the other edge, never rescued, was)."""
+        self.doc.UndoMode = 1
+        pad, b0, before = self._d5_dressed_pad()
+
+        def step(f):
+            self.doc.openTransaction("step")
+            f()
+            self.doc.recompute()
+            self.doc.commitTransaction()
+
+        step(lambda: self._d5_insert(pad, "draft"))
+        ins = self.doc.getObject("INS")
+        self._d5_rescued(b0, ins)
+        step(lambda: self._boss_at(-10.0, ins))
+        bo = self.doc.getObject("BO")
+        self.assertIs(b0.Base[0], bo)
+        for target in (ins, bo):
+
+            def move(target=target):
+                self.body.removeObject(b0)
+                self.body.insertObject(b0, target, True)
+
+            step(move)
+        for obj in (ins, bo):
+
+            def delete(obj=obj):
+                self.body.removeObject(obj)
+                self.doc.removeObject(obj.Name)
+
+            step(delete)
+        self._d5_restored(pad, b0, before)
