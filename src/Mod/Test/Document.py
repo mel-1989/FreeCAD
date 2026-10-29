@@ -3028,3 +3028,54 @@ class MultiDocumentUndo(unittest.TestCase):
         # closing doc
         FreeCAD.closeDocument("Doc1")
         FreeCAD.closeDocument("Doc2")
+
+class DocumentRemoveExpressionOwnerCases(unittest.TestCase):
+    """Removing an object whose expression reads another object's property must drop the
+    property-level back-link (InListProp) of the target, or the next recompute of the
+    target walks a freed object (run 007 crash group, 17 sweep seeds)."""
+
+    def setUp(self):
+        self.Doc = FreeCAD.newDocument("RemoveExprOwner")
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.Doc.Name)
+
+    def test_remove_owner_clears_inlistprop(self):
+        src = self.Doc.addObject("Part::Box", "Src")
+        dep = self.Doc.addObject("Part::Box", "Dep")
+        dep.setExpression("Placement.Base.z", "Src.Length")
+        self.Doc.recompute()
+        self.assertEqual(len(src.InListProp), 1)
+        self.Doc.removeObject("Dep")
+        self.assertEqual(len(src.InList), 0)
+        self.assertEqual(len(src.InListProp), 0)
+        src.Length = 15
+        self.Doc.recompute()
+        self.assertEqual(src.Length.Value, 15)
+
+    def test_partdesign_sketch_offset_expression(self):
+        try:
+            import Sketcher  # noqa: F401
+            import PartDesign  # noqa: F401
+            import Part
+        except ImportError:
+            self.skipTest("PartDesign/Sketcher not available")
+        body = self.Doc.addObject("PartDesign::Body", "Body")
+        sk = body.newObject("Sketcher::SketchObject", "Sketch")
+        sk.addGeometry(Part.LineSegment(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(10, 0, 0)))
+        sk.addGeometry(Part.LineSegment(FreeCAD.Vector(10, 0, 0), FreeCAD.Vector(10, 10, 0)))
+        sk.addGeometry(Part.LineSegment(FreeCAD.Vector(10, 10, 0), FreeCAD.Vector(0, 10, 0)))
+        sk.addGeometry(Part.LineSegment(FreeCAD.Vector(0, 10, 0), FreeCAD.Vector(0, 0, 0)))
+        pad = body.newObject("PartDesign::Pad", "Pad")
+        pad.Profile = sk
+        pad.Length = 5
+        self.Doc.recompute()
+        notch = body.newObject("Sketcher::SketchObject", "NotchSketch")
+        notch.setExpression("AttachmentOffset.Base.z", "Pad.Length")
+        self.Doc.recompute()
+        self.Doc.removeObject("NotchSketch")
+        self.assertEqual(len([o for o in pad.InList if o.Name == "NotchSketch"]), 0)
+        pad.Length = 8
+        self.Doc.recompute()
+        self.assertEqual(pad.Length.Value, 8)
+

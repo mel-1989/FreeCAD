@@ -1647,6 +1647,7 @@ protected:
     void updateDeps(std::map<DocumentObject*, bool>&& newDeps,
                     std::map<std::pair<std::string, DocumentObject*>, bool>* propDeps = nullptr);
     void clearDeps();
+    void removePropBackLinks(App::DocumentObject* owner);
 
     void _onBreakLink(App::DocumentObject* obj);
 
