@@ -4,6 +4,8 @@
 # Model: a 40 x 20 x 10 pad in a PartDesign body, a top-view DrawViewPart at scale 1 and dimensions on the top +Y edge
 # (3D reference and 2D-only reference).  Edits insert or remove features upstream of the pad's edges.
 
+import os
+import tempfile
 import FreeCAD
 import Part
 import Sketcher
@@ -263,6 +265,26 @@ class DimensionRescueTest(unittest.TestCase):
         notch.Suppressed = True
         self.doc.recompute()
         self.assertTrue(_broken(dim), "dimension still %s with value %s" % (dim.State, dim.getRawValue()))
+
+    def testUnmarkedStaleSavedGeometryIsIgnored(self):
+        """A file whose SavedGeometry the fork did not write (no trusted marker) behaves like stock on reopen,
+        even if the saved shape is stale; the saved geometry is then refreshed and marked."""
+        dim = self.dim2d()
+        self.assertTrue(dim.SavedGeometryTrusted)
+        dim.SavedGeometry = [Part.makeLine(V(-20, -10, 0), V(-20, 10, 0))]  # a stale, different edge
+        dim.SavedGeometryTrusted = False
+        path = os.path.join(tempfile.mkdtemp(prefix="tdrescue"), "stale.FCStd")
+        self.doc.saveAs(path)
+        FreeCAD.closeDocument(self.doc.Name)
+        self.doc = FreeCAD.openDocument(path)
+        dim = self.doc.getObject("Dim2d")
+        for o in self.doc.Objects:
+            o.touch()
+        self.doc.recompute()
+        self.assertFalse(_broken(dim), dim.State)
+        self.assertAlmostEqual(dim.getRawValue(), W, places=3)
+        self.assertTrue(dim.SavedGeometryTrusted)
+        self.assertAlmostEqual(dim.SavedGeometry[0].Length, W, places=3)
 
     def testInsertThenDeleteFilletReturns(self):
         """A rescued 2D reference follows the edge back when the fillet is deleted again."""

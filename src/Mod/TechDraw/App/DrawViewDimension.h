@@ -97,6 +97,9 @@ public:
     App::PropertyAngle ExtensionAngle;
 
     Part::PropertyTopoShapeList SavedGeometry;
+    //! hidden: true once SavedGeometry has been written by this fork from validated geometry.  Documents saved by
+    //! stock FreeCAD lack it, and their SavedGeometry may be stale, so autocorrect does not use it until it is refreshed.
+    App::PropertyBool SavedGeometryTrusted;
     App::PropertyVectorList BoxCorners;
     App::PropertyBool UseActualArea;
 

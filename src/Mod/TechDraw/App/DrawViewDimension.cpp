@@ -215,6 +215,11 @@ DrawViewDimension::DrawViewDimension()
                       (App::PropertyType)(App::Prop_None),
                       "Reference Geometry");
     SavedGeometry.setOrderRelevant(true);
+    ADD_PROPERTY_TYPE(SavedGeometryTrusted,
+                      (false),
+                      "References",
+                      (App::PropertyType)(App::Prop_Hidden),
+                      "True if SavedGeometry was written by this fork from validated geometry");
 
     ADD_PROPERTY_TYPE(
         BoxCorners,
@@ -321,7 +326,9 @@ void DrawViewDimension::onChanged(const App::Property* prop)
 
     // Undo, redo and restore put References2D/3D and SavedGeometry back together.  Re-saving geometry now would
     // record whatever the (not yet recomputed) view shows for the restored index, and corrupt the saved shape.
-    bool restoringFromTransaction = getDocument() && getDocument()->isPerformingTransaction();
+    // Saved geometry that is not trusted (stock file, or not yet written) is refreshed at the end of execute instead.
+    bool restoringFromTransaction = (getDocument() && getDocument()->isPerformingTransaction())
+        || !SavedGeometryTrusted.getValue();
 
     if (prop == &References2D) {
         if (!restoringFromTransaction) {
@@ -629,6 +636,11 @@ App::DocumentObjectExecReturn* DrawViewDimension::execute()
         m_hasGeometry = true;
     }
 
+    if (!SavedGeometryTrusted.getValue()) {
+        // the references just validated against the current geometry; write the saved geometry and mark it
+        updateSavedGeometry();
+    }
+
     overrideKeepUpdated(false);
     return DrawView::execute();
 }
@@ -676,6 +688,11 @@ bool DrawViewDimension::autocorrectReferences()
     // TODO: check for saved geometry here.  If we don't have saved geometry, we can't
     // successfully auto correct in phase 1.  This check is currently in
     // referencesHaveValidGeometry.
+    if (!SavedGeometryTrusted.getValue()) {
+        // SavedGeometry was not written by this fork (a stock file, or a new dimension): it may be stale, so
+        // behave like the unmodified code and refresh it at the end of a successful execute.
+        return true;
+    }
     std::vector<bool> referenceState;
     bool refsAreValid = m_corrector->referencesHaveValidGeometry(referenceState);
     if (!refsAreValid) {
@@ -1867,6 +1884,7 @@ void DrawViewDimension::updateSavedGeometry()
 
     if (!newGeometry.empty()) {
         SavedGeometry.setValues(newGeometry);
+        SavedGeometryTrusted.setValue(true);
         saveFeatureBox();
     }
 }
