@@ -939,6 +939,13 @@ public:
                   std::vector<std::string>&& SubList = {},
                   std::vector<ShadowSub>&& ShadowSubList = {});
 
+    /** Retarget to \a lValue with \a SubList, the very same elements as the current sub list in
+     * the same order (the caller has matched them geometrically). The names are resolved against
+     * the new target like setValue() without shadows does, and the history-rescue records of the
+     * link follow the elements to their new names.
+     */
+    void setValueSameElements(App::DocumentObject* lValue, std::vector<std::string>&& SubList);
+
     /** This method returns the linked DocumentObject
      */
     App::DocumentObject* getValue() const;

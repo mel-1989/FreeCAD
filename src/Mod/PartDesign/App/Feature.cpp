@@ -271,7 +271,8 @@ bool Feature::relinkToMatchingSubelements(
         newSubs.push_back(names.front());
     }
 
-    link.setValue(newBase, std::move(newSubs));
+    // the matches are the same elements by geometry: keep any history-rescue records with them
+    link.setValueSameElements(newBase, std::move(newSubs));
     return true;
 }
 
