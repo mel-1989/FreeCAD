@@ -613,6 +613,119 @@ bool derivesFromName(const App::Document* doc,
     }
     return derivesFromName(doc, srcProp->getComplexData(), original, stored, depth + 1, visited);
 }
+
+/// The operation codes of one step of a mapped name: the characters the name's last tag postfix
+/// (";:H<tag>:<length>,<type>") says were added by one model operation, e.g. ";:M;FLT" for an
+/// element a fillet modified, empty for an element that was only re-tagged. The lengths come from
+/// MappedName::findTagInElementName, nothing is parsed here. `hasStep` tells a name that has a tag
+/// postfix at all; `tag` is the id (sign dropped) of the object whose element map holds the name
+/// the step started from.
+std::string stepOpCodes(const Data::MappedName& name, bool& hasStep, long& tag, char* type = nullptr)
+{
+    int len = 0;
+    long t = 0;
+    char tp = 0;
+    int pos = name.findTagInElementName(&t, &len, nullptr, &tp, true);
+    if (type) {
+        *type = tp;
+    }
+    hasStep = pos >= 0 && len >= 0 && len <= pos;
+    tag = t < 0 ? -t : t;
+    if (!hasStep) {
+        return {};
+    }
+    return name.toString().substr(static_cast<size_t>(len), static_cast<size_t>(pos - len));
+}
+
+/// One step on the way from a candidate element back to the name a link stored: `result` was
+/// derived from `source` by `ops`. `result` is a name in the element map of the object with id
+/// `resultOwner` (0: the object the link resolves to), `source` one in that of `sourceOwner`.
+struct ChainStep
+{
+    std::string ops;
+    char type = 0;  // the element type of the step: 'E', 'F' or 'V'
+    Data::MappedName result;
+    long resultOwner = 0;
+    Data::MappedName source;
+    long sourceOwner = 0;
+};
+
+/// Same walk as derivesFromName, but records every step on the way from `name` back to one of
+/// `aliases` (the stored name and the names it was re-tagged from), the step that produced `name`
+/// first. Returns false if `name` derives from none of them. `steps` is only valid when true.
+bool traceChainSteps(const App::Document* doc,
+                     const Data::ComplexGeoData* data,
+                     long owner,
+                     const Data::MappedName& name,
+                     const std::vector<Data::MappedName>& aliases,
+                     int depth,
+                     std::set<std::pair<long, std::string>>& visited,
+                     std::vector<ChainStep>& steps)
+{
+    if (!data || depth > HistoryRescueMaxDepth || name.empty()) {
+        return false;
+    }
+    if (!visited.insert({data->Tag, name.toString()}).second) {
+        return false;
+    }
+    Data::MappedName original;
+    std::vector<Data::MappedName> history;
+    long tag = data->getElementHistory(name, &original, &history);
+    // the names of the chain, newest first: the name, the intermediate names, the original
+    std::vector<Data::MappedName> chain;
+    chain.push_back(name.startsWith(Data::ELEMENT_MAP_PREFIX)
+                        ? Data::MappedName::fromRawData(name, static_cast<int>(Data::ELEMENT_MAP_PREFIX_SIZE))
+                        : name);
+    chain.insert(chain.end(), history.begin(), history.end());
+    chain.push_back(original);
+    auto record = [&](size_t upTo, std::vector<ChainStep>& out) {
+        long resultOwner = owner;
+        for (size_t i = 0; i < upTo; ++i) {
+            bool hasStep = false;
+            long srcTag = 0;
+            ChainStep st;
+            st.ops = stepOpCodes(chain[i], hasStep, srcTag, &st.type);
+            if (!hasStep) {
+                return false;
+            }
+            st.result = chain[i];
+            st.resultOwner = resultOwner;
+            st.source = chain[i + 1];
+            st.sourceOwner = srcTag;
+            out.push_back(st);
+            resultOwner = srcTag;
+        }
+        return true;
+    };
+    for (size_t k = 1; k < chain.size(); ++k) {
+        for (const auto& a : aliases) {
+            if (sameMappedName(chain[k], a)) {
+                return record(k, steps);
+            }
+        }
+    }
+    long absTag = tag < 0 ? -tag : tag;
+    if (!doc || absTag == 0 || absTag == (data->Tag < 0 ? -data->Tag : data->Tag)
+        || original.empty() || sameMappedName(original, name)) {
+        return false;
+    }
+    auto* srcGeo = freecad_cast<App::GeoFeature*>(doc->getObjectByID(absTag));
+    auto* srcProp = srcGeo ? srcGeo->getPropertyOfGeometry() : nullptr;
+    if (!srcProp || !srcProp->getComplexData()) {
+        return false;
+    }
+    std::vector<ChainStep> deeper;
+    if (!traceChainSteps(doc, srcProp->getComplexData(), absTag, original, aliases, depth + 1, visited, deeper)) {
+        return false;
+    }
+    std::vector<ChainStep> mine;
+    if (!record(chain.size() - 1, mine)) {
+        return false;
+    }
+    steps = mine;
+    steps.insert(steps.end(), deeper.begin(), deeper.end());
+    return true;
+}
 }  // namespace
 
 // Geometric identity gate. A history match alone is not enough: an element can derive from the
@@ -686,6 +799,12 @@ def same(sa, na, sb, nb):
         return same_el(sa.getElement(na), sb.getElement(nb))
     except Exception:
         return False
+def trim(sa, na, sb, nb):
+    # arguments as for same(): the candidate first, the original second
+    try:
+        return trim_same(sb.getElement(nb), sa.getElement(na))
+    except Exception:
+        return False
 def search(shape, anchor, check, tol=1e-7):
     # the sub-shapes of `shape` that share vertices with `anchor` (the search FreeCAD's element
     # cache runs from the previous shape of an element), here run from the anchor itself
@@ -713,6 +832,43 @@ def drift(shape, anchor):
         return []
     except Exception:
         return []
+# End trim of a straight edge by an inserted fillet or chamfer (D6 extent ruling, runs 005 and 008):
+# `a` is the edge the stored name designates in the feature that defines it, `b` the candidate the
+# element-map history found. Same carrier, candidate's extent inside the original's, midpoints
+# agree within TOL and the two end trims agree within TRIM_EQ. Anything else is another element.
+TRIM_EQ = 1e-7
+def trim_same(a, b):
+    try:
+        if a.ShapeType != "Edge" or b.ShapeType != "Edge":
+            return False
+        if type(a.Curve).__name__ != "Line" or type(b.Curve).__name__ != "Line":
+            return False
+        va, vb = a.Vertexes, b.Vertexes
+        if len(va) != 2 or len(vb) != 2:
+            return False
+        if not _par(a.Curve.Direction, b.Curve.Direction):
+            return False
+        o = va[0].Point
+        e = va[1].Point - o
+        length = e.Length
+        if length <= TOL:
+            return False
+        u = e * (1.0 / length)
+        ts = []
+        for v in vb:
+            w = v.Point - o
+            t = w.dot(u)
+            if (w - u * t).Length > TOL:
+                return False
+            ts.append(t)
+        lo, hi = min(ts), max(ts)
+        if lo < -TOL or hi > length + TOL:
+            return False
+        if abs((lo + hi) / 2.0 - length / 2.0) > TOL:
+            return False
+        return abs(lo - (length - hi)) <= TRIM_EQ
+    except Exception:
+        return False
 def same_el(a, b):
     try:
         if a.ShapeType != b.ShapeType:
@@ -1002,10 +1158,11 @@ static void disambiguateByAnchor(const PropertyLinkBase* link,
 static bool sameElementGeometry(const App::Property* pa,
                                 const std::string& ia,
                                 const App::Property* pb,
-                                const std::string& ib)
+                                const std::string& ib,
+                                const char* gate = "same")
 {
     Base::PyGILStateLocker lock;
-    PyObject* fn = gateFunction("same");
+    PyObject* fn = gateFunction(gate);
     if (!fn) {
         return false;
     }
@@ -1187,6 +1344,261 @@ static bool recordedGeometryRescueAccepted(const PropertyLinkBase* prop,
     return true;
 }
 
+/// The names a stored mapped name is known by: itself and, as long as each step back only
+/// re-tags it (no operation codes), the names it was re-tagged from, through the element maps of
+/// the objects that hold them. The stored name of a link to a body, or to a feature behind a
+/// feature that passed the element on unchanged, is such a re-tagged name.
+static void storedAliasesFrom(const App::Document* doc,
+                              const Data::ComplexGeoData* data,
+                              const Data::MappedName& name,
+                              int depth,
+                              std::vector<Data::MappedName>& aliases)
+{
+    if (!data || depth > HistoryRescueMaxDepth || name.empty()) {
+        return;
+    }
+    Data::MappedName original;
+    std::vector<Data::MappedName> history;
+    long tag = data->getElementHistory(name, &original, &history);
+    std::vector<Data::MappedName> chain {name};
+    chain.insert(chain.end(), history.begin(), history.end());
+    chain.push_back(original);
+    for (size_t i = 0; i + 1 < chain.size(); ++i) {
+        bool hasStep = false;
+        long t = 0;
+        if (!hasStep && (!stepOpCodes(chain[i], hasStep, t).empty() || !hasStep)) {
+            return;
+        }
+        if (chain[i + 1].empty() || sameMappedName(chain[i + 1], chain[i])) {
+            return;
+        }
+        aliases.push_back(chain[i + 1]);
+    }
+    long absTag = tag < 0 ? -tag : tag;
+    if (!doc || absTag == 0 || absTag == (data->Tag < 0 ? -data->Tag : data->Tag)) {
+        return;
+    }
+    auto* srcGeo = freecad_cast<App::GeoFeature*>(doc->getObjectByID(absTag));
+    auto* srcProp = srcGeo ? srcGeo->getPropertyOfGeometry() : nullptr;
+    if (srcProp && srcProp->getComplexData()) {
+        storedAliasesFrom(doc, srcProp->getComplexData(), original, depth + 1, aliases);
+    }
+}
+
+static std::vector<Data::MappedName> storedAliases(const App::Document* doc,
+                                                   const Data::ComplexGeoData* data,
+                                                   const Data::MappedName& stored)
+{
+    std::vector<Data::MappedName> aliases {stored};
+    storedAliasesFrom(doc, data, stored, 0, aliases);
+    return aliases;
+}
+
+/// The indexed names of every element of `type` in the whole shape (every solid, every compound
+/// child: the element map is the shape's) whose derivation chain contains one of `aliases`.
+static std::set<std::string> historyMatches(const GeoFeature& geo,
+                                            const Data::ComplexGeoData* data,
+                                            const std::vector<Data::MappedName>& aliases,
+                                            const std::string& type)
+{
+    std::set<std::string> matches;
+    for (const auto& me : data->getElementMap()) {
+        if (!me.index || type != me.index.getType() || !me.name) {
+            continue;
+        }
+        std::string index;
+        me.index.appendToStringBuffer(index);
+        if (matches.count(index)) {
+            continue;
+        }
+        for (const auto& a : aliases) {
+            std::set<std::pair<long, std::string>> visited;
+            if (derivesFromName(geo.getDocument(), data, me.name, a, 0, visited)) {
+                matches.insert(index);
+                break;
+            }
+        }
+    }
+    return matches;
+}
+
+/// Of the elements that derive from `aliases`, those that are the same element's descendants:
+/// every step of the chain keeps the element type (an edge derived from an edge, not one a face
+/// was generated from) and none is a Generated step. An edge on a face generated from the stored
+/// edge derives from it too, but it is another element, and not a candidate for its identity.
+/// Elements that are descendants by splitting or copying still count, which makes a reference
+/// to a split or copied edge ambiguous and so reported.
+static std::set<std::string> sameLineage(const GeoFeature& geo,
+                                         const Data::ComplexGeoData* data,
+                                         const std::vector<Data::MappedName>& aliases,
+                                         const std::set<std::string>& matches)
+{
+    std::set<std::string> kept;
+    if (aliases.size() != 1) {
+        return kept;
+    }
+    for (const auto& me : data->getElementMap()) {
+        if (!me.index || !me.name) {
+            continue;
+        }
+        std::string index;
+        me.index.appendToStringBuffer(index);
+        if (!matches.count(index) || kept.count(index)) {
+            continue;
+        }
+        std::set<std::pair<long, std::string>> visited;
+        std::vector<ChainStep> steps;
+        if (!traceChainSteps(geo.getDocument(), data, 0, me.name, aliases, 0, visited, steps)) {
+            continue;
+        }
+        bool lineage = true;
+        for (const auto& st : steps) {
+            if (st.type != 'E' || st.ops.find(Data::POSTFIX_GEN) != std::string::npos) {
+                lineage = false;
+                break;
+            }
+        }
+        if (lineage) {
+            kept.insert(index);
+        }
+    }
+    return kept;
+}
+
+/// Slice 8. A straight edge that an inserted fillet or chamfer trims keeps its identity (D6
+/// extent ruling), but it no longer matches the edge it was, so the exact identity gate refuses
+/// it. History decides instead: the derivation chain from the candidate back to the stored name
+/// must hold exactly one Modified step by a fillet or chamfer, and every other step must leave
+/// the element exactly as it was (no Generated step ever qualifies). Each step is checked
+/// against the geometry of the two features it connects, which are still in the document: the
+/// fillet or chamfer step by the "trim" gate (same carrier, extent inside, midpoints and end
+/// trims agree), every other step by the exact identity gate. `candidate` is the one element of
+/// the type that derives from the stored name.
+static bool trimmedByFilletOrChamfer(const GeoFeature& geo,
+                                     const std::vector<Data::MappedName>& aliases,
+                                     const std::string& candidate)
+{
+    // the op codes of a fillet and chamfer step (Part::OpCodes::Fillet and Chamfer); App cannot
+    // see Part's header
+    static const std::string modifiedFillet = std::string(Data::POSTFIX_MOD) + ";FLT";
+    static const std::string modifiedChamfer = std::string(Data::POSTFIX_MOD) + ";CHF";
+    auto* doc = geo.getDocument();
+    auto* prop = geo.getPropertyOfGeometry();
+    const Data::ComplexGeoData* data = prop ? prop->getComplexData() : nullptr;
+    if (!doc || !data || !data->hasElementMap()) {
+        return false;
+    }
+    auto ownerProperty = [&](long owner) -> const App::PropertyComplexGeoData* {
+        if (owner == 0) {
+            return prop;
+        }
+        auto* g = freecad_cast<App::GeoFeature*>(doc->getObjectByID(owner));
+        return g ? g->getPropertyOfGeometry() : nullptr;
+    };
+    int names = 0;
+    for (const auto& me : data->getElementMap()) {
+        if (!me.index || !me.name) {
+            continue;
+        }
+        std::string index;
+        me.index.appendToStringBuffer(index);
+        if (index != candidate) {
+            continue;
+        }
+        std::vector<ChainStep> steps;
+        bool derives = false;
+        for (const auto& a : aliases) {
+            std::set<std::pair<long, std::string>> visited;
+            std::vector<Data::MappedName> one {a};
+            steps.clear();
+            if (traceChainSteps(doc, data, 0, me.name, one, 0, visited, steps)) {
+                derives = true;
+                break;
+            }
+        }
+        if (!derives) {
+            continue;  // this name of the element does not derive from the stored one
+        }
+        int trims = 0;
+        for (const auto& st : steps) {
+            const bool trim = st.ops == modifiedFillet || st.ops == modifiedChamfer;
+            if (st.ops.find(Data::POSTFIX_GEN) != std::string::npos) {
+                FC_WARN("fillet/chamfer trim rejected: " << candidate << " in " << geo.getFullName()
+                                                         << " is generated (" << st.ops << ")");
+                return false;
+            }
+            auto* rp = ownerProperty(st.resultOwner);
+            auto* sp = ownerProperty(st.sourceOwner);
+            auto* rd = rp ? rp->getComplexData() : nullptr;
+            auto* sd = sp ? sp->getComplexData() : nullptr;
+            if (!rd || !sd) {
+                return false;
+            }
+            Data::IndexedName ri = rd->getIndexedName(st.result);
+            Data::IndexedName si = sd->getIndexedName(st.source);
+            if (!ri || !si || std::string(ri.getType()) != "Edge" || std::string(si.getType()) != "Edge") {
+                return false;
+            }
+            std::string rn;
+            std::string sn;
+            ri.appendToStringBuffer(rn);
+            si.appendToStringBuffer(sn);
+            if (!sameElementGeometry(rp, rn, sp, sn, trim ? "trim" : "same")) {
+                FC_WARN("fillet/chamfer trim rejected: step '" << st.ops << "' to " << rn
+                                                               << " is not " << (trim ? "an equal trim of "
+                                                                                      : "unchanged from ")
+                                                               << sn);
+                return false;
+            }
+            trims += trim ? 1 : 0;
+        }
+        if (trims != 1) {
+            return false;
+        }
+        ++names;
+    }
+    return names > 0;
+}
+
+/// Slice 8, for a link whose target did not change but whose element names did (a fillet or
+/// chamfer inserted upstream of the target): the trimmed straight edge is found by history, and
+/// every step of its chain is checked against the features it connects.
+static std::vector<std::string> rescueTrimmedEdge(const GeoFeature& geo, const char* element)
+{
+    std::string s;
+    std::string type;
+    if (!parseStoredElement(element, s, type) || type != "Edge") {
+        return {};
+    }
+    auto* prop = geo.getPropertyOfGeometry();
+    const Data::ComplexGeoData* data = prop ? prop->getComplexData() : nullptr;
+    if (!data || !data->hasElementMap()) {
+        return {};
+    }
+    // the stored name first, then the names it was re-tagged from: the first one that anything
+    // derives from decides, and then only a single element of the same lineage may (never widen
+    // to an older name once a younger one has matches, or to a name the whole sketch shares)
+    std::vector<Data::MappedName> aliases;
+    std::set<std::string> matches;
+    for (const auto& a : storedAliases(geo.getDocument(), data, Data::MappedName(s.c_str()))) {
+        matches = historyMatches(geo, data, {a}, type);
+        if (!matches.empty()) {
+            aliases = {a};
+            break;
+        }
+    }
+    matches = sameLineage(geo, data, aliases, matches);
+    if (matches.size() != 1
+        || data->countSubElements(type.c_str())
+            < static_cast<unsigned long>(Data::IndexedName(matches.begin()->c_str()).getIndex())
+        || !trimmedByFilletOrChamfer(geo, aliases, *matches.begin())) {
+        return {};
+    }
+    FC_WARN("recovered trimmed edge reference by history " << element << " -> " << *matches.begin()
+                                                           << " in " << geo.getFullName());
+    return {*matches.begin()};
+}
+
 static std::vector<std::string> rescueByHistory(const GeoFeature& geo,
                                                 const App::DocumentObject* prevTarget,
                                                 const char* element)
@@ -1202,27 +1614,18 @@ static std::vector<std::string> rescueByHistory(const GeoFeature& geo,
         return {};
     }
     Data::MappedName stored(s.c_str());
-    std::set<std::string> matches;
-    for (const auto& me : data->getElementMap()) {
-        if (!me.index || type != me.index.getType() || !me.name) {
-            continue;
-        }
-        std::string index;
-        me.index.appendToStringBuffer(index);
-        if (matches.count(index)) {
-            continue;
-        }
-        std::set<std::pair<long, std::string>> visited;
-        if (derivesFromName(geo.getDocument(), data, me.name, stored, 0, visited)) {
-            matches.insert(index);
-        }
-    }
+    std::set<std::string> matches = historyMatches(geo, data, {stored}, type);
     if (matches.size() == 1
         && data->countSubElements(type.c_str()) >= static_cast<unsigned long>(Data::IndexedName(matches.begin()->c_str()).getIndex())
         && identityGateAccepts(geo, prevTarget, stored, type, *matches.begin())) {
         FC_WARN("recovered element reference by history " << element << " -> " << *matches.begin()
                                                           << " in " << geo.getFullName());
         return {*matches.begin()};
+    }
+    // a straight edge trimmed by an inserted fillet or chamfer (slice 8)
+    auto trimmed = rescueTrimmedEdge(geo, element);
+    if (trimmed.size()) {
+        return trimmed;
     }
     if (matches.size() > 1) {
         FC_WARN("element reference " << element << " in " << geo.getFullName() << " is ambiguous ("
@@ -1471,6 +1874,10 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
             if (names.empty() && missing) {
                 // geometry found nothing: follow the element-map history (single match only),
                 // but only for a link retargeted by an insertion, compared with its old target
+                if (prev == _PrevLinkTarget.end() && !reverse) {
+                    // not retargeted: a straight edge trimmed by an inserted fillet or chamfer
+                    names = rescueTrimmedEdge(*geo, element);
+                }
                 if (prev != _PrevLinkTarget.end()) {
                     names = rescueByHistory(*geo, prev->second, element);
                     if (names.size()) {
