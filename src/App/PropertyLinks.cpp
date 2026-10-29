@@ -69,6 +69,10 @@ static std::unordered_map<App::DocumentObject*, std::unordered_set<PropertyLinkB
 // rerouted in front of it). History rescue only runs for a link that was retargeted and only
 // compares with that previous target; it is dropped after the first element update that follows.
 static std::unordered_map<const PropertyLinkBase*, const App::DocumentObject*> _PrevLinkTarget;
+// The object whose element map the names of a copied value (a transaction's saved value) belong
+// to: the pending previous target of the link when it had one, else its target. Paste() puts it
+// back, so an undo does not turn names of another feature into names of the pasted target.
+static std::unordered_map<const PropertyLinkBase*, const App::DocumentObject*> _CopyNamesOwner;
 // clang-format on
 
 namespace
@@ -139,6 +143,7 @@ PropertyLinkBase::PropertyLinkBase() = default;
 PropertyLinkBase::~PropertyLinkBase()
 {
     _PrevLinkTarget.erase(this);
+    _CopyNamesOwner.erase(this);
     _RescueRecords.erase(this);
     unregisterLabelReferences();
     unregisterElementReference();
@@ -2002,9 +2007,11 @@ void PropertyLinkSub::setValue(App::DocumentObject* lValue,
         }
     }
 
-    if (_pcLinkSub && lValue && _pcLinkSub != lValue) {
-        // keep the oldest pending target: rerouted twice before any update, the shape the
-        // consumer referenced belongs to the first one
+    if (_pcLinkSub && lValue && _pcLinkSub != lValue && shadows.size() == subs.size()) {
+        // The names are kept (a reroute, an undo): they still designate elements of the old
+        // target. Keep the oldest pending target: rerouted twice before any update, the shape
+        // the consumer referenced belongs to the first one. Without shadows the names are
+        // resolved against the new target at once (an explicit relink) and nothing is pending.
         _PrevLinkTarget.emplace(this, _pcLinkSub);
     }
     else {
@@ -2024,6 +2031,59 @@ void PropertyLinkSub::setValue(App::DocumentObject* lValue,
     pruneRescueRecords(this, _cSubList, _ShadowSubList);
     checkLabelReferences(_cSubList);
     hasSetValue();
+}
+
+void PropertyLinkSub::setValueSameElements(App::DocumentObject* lValue,
+                                           std::vector<std::string>&& subs)
+{
+    // the rescue records keyed on the current names, nearest first per sub
+    std::vector<std::string> oldKeys;
+    std::vector<RescueRecord> records;
+    auto rit = _RescueRecords.find(this);
+    if (rit != _RescueRecords.end() && subs.size() == _cSubList.size()) {
+        records = rit->second;
+        for (std::size_t i = 0; i < _cSubList.size(); ++i) {
+            oldKeys.push_back(rescueNameOf(_cSubList[i],
+                                           i < _ShadowSubList.size() ? _ShadowSubList[i]
+                                                                     : ShadowSub()));
+        }
+    }
+    setValue(lValue, std::move(subs));
+    if (records.empty() || !lValue || !lValue->getNameInDocument()) {
+        return;
+    }
+    for (std::size_t i = 0; i < oldKeys.size() && i < _cSubList.size(); ++i) {
+        const std::string newKey = rescueNameOf(_cSubList[i],
+                                                i < _ShadowSubList.size() ? _ShadowSubList[i]
+                                                                          : ShadowSub());
+        std::string key = oldKeys[i];
+        for (int hop = 0; hop < RescueRecordMaxChain && !key.empty(); ++hop) {
+            auto r = std::find_if(records.begin(), records.end(), [&](const RescueRecord& x) {
+                return x.key == key;
+            });
+            if (r == records.end()) {
+                break;
+            }
+            std::string next = rescueNameOf(r->sub, r->shadow);
+            if (r->target == lValue->getNameInDocument()) {
+                // the link is back on the target this record would give back: the record is
+                // spent, the next one in the chain now belongs to the new name
+                r->key.clear();
+                key = next;
+                continue;
+            }
+            r->key = newKey;
+            break;
+        }
+    }
+    records.erase(std::remove_if(records.begin(), records.end(), [](const RescueRecord& x) {
+        return x.key.empty();
+    }), records.end());
+    if (records.empty()) {
+        return;
+    }
+    _RescueRecords[this] = std::move(records);
+    pruneRescueRecords(this, _cSubList, _ShadowSubList);
 }
 
 App::DocumentObject* PropertyLinkSub::getValue() const
@@ -2792,6 +2852,8 @@ Property* PropertyLinkSub::Copy() const
     if (rit != _RescueRecords.end()) {
         _RescueRecords[p] = rit->second;
     }
+    auto pending = _PrevLinkTarget.find(this);
+    _CopyNamesOwner[p] = pending != _PrevLinkTarget.end() ? pending->second : _pcLinkSub;
     return p;
 }
 
@@ -2807,6 +2869,16 @@ void PropertyLinkSub::Paste(const Property& from)
         records = rit->second;
     }
     setValue(link._pcLinkSub, link._cSubList, std::vector<ShadowSub>(link._ShadowSubList));
+    auto owner = _CopyNamesOwner.find(&link);
+    if (owner != _CopyNamesOwner.end() && link._pcLinkSub) {
+        if (owner->second && owner->second != _pcLinkSub) {
+            // the pasted names still designate elements of another feature: keep it pending
+            _PrevLinkTarget[this] = owner->second;
+        }
+        else {
+            _PrevLinkTarget.erase(this);
+        }
+    }
     // set after the value: setValue prunes records that the new value cannot reach
     if (records.empty()) {
         _RescueRecords.erase(this);

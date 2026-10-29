@@ -944,3 +944,95 @@ class TestReferenceRescue(unittest.TestCase):
             self.assertIs(b0.Base[0], self.doc.getObject("INS"))
             self.assertEqual(len(b0.Base[1]), 2)
             self.assertFalse(b0.Base[1][0].startswith("?"), "the rescued edge went missing")
+
+    def test_relink_by_geometry_keeps_the_rescue_records(self):
+        """Fails before the setValueSameElements repair: a hole and a linear pattern inserted in
+        front of a dress-up (both rescue its edges), the pair moved away and back in front of it, then
+        behind the dress-up, that move undone without a recompute, then the pair deleted. Each removal relinks the dress-up to the same edge of the
+        previous feature by geometry, under a new mapped name; the rescue records were keyed on
+        the old name and the original edges did not come back."""
+        self.doc.UndoMode = 1
+        pad, b0, before = self._d5_dressed_pad()
+        self.doc.openTransaction("insert")
+        hs = _sketch(self.doc, self.body, "HS", z=L, after=pad)
+        _circle(hs, -10.0, 0.0, 2.0)
+        hp = _add(self.doc, self.body, "PartDesign::Pocket", "HP", hs)
+        hp.Profile = hs
+        hp.Length = 2 * L
+        lp = _add(self.doc, self.body, "PartDesign::LinearPattern", "LP", hp)
+        lp.Originals = [hp]
+        lp.Direction = (hs, ["H_Axis"])
+        lp.Length = 8.0
+        lp.Occurrences = 2
+        self.doc.commitTransaction()
+        self.doc.recompute()
+        self.assertIs(b0.Base[0], lp)
+        self.assertFalse(b0.Base[1][0].startswith("?"), "the insert did not rescue Edge1")
+        for target in (pad, b0):
+            self.doc.openTransaction("move")
+            for obj in (hs, hp, lp):
+                self.body.removeObject(obj)
+            after = target
+            for obj in (hs, hp, lp):
+                self.body.insertObject(obj, after, True)
+                after = obj
+            self.doc.commitTransaction()
+            self.doc.recompute()
+        self.doc.undo()
+        self.doc.openTransaction("delete")
+        for obj in (lp, hp, hs):
+            self.body.removeObject(obj)
+            self.doc.removeObject(obj.Name)
+        self.doc.commitTransaction()
+        self.doc.recompute()
+        self._d5_restored(pad, b0, before)
+
+    def test_undo_on_the_same_target_does_not_retarget_to_a_stale_index(self):
+        """Fails before the repair of Paste: the dress-up's names belong to the Pad while it is
+        linked to a hole inserted in front of it (no recompute yet). Moving the hole behind and
+        away from the Pad and undoing leaves the link on the hole with those Pad names; the
+        hole's element cache is filled by plain index from its previous shape and the geometric
+        search carried the top edge over to an unrelated one of the same length."""
+        self.doc.UndoMode = 1
+        pad = self._pad()
+        sh = pad.Shape
+        top = [
+            "Edge%d" % (i + 1)
+            for i, e in enumerate(sh.Edges)
+            if abs(e.CenterOfMass.z - L) < 1e-6 and abs(e.Length - W) < 1e-6
+        ]
+        edges = top[:1] + _line_edges(sh, V(0, 0, 1), (W / 2,), (H / 2,))
+        cons = self._dressup("PartDesign::Fillet", pad, edges, 0.5)
+        self.doc.recompute()
+        self._valid(cons)
+        sigs = [_edge_sig(pad.Shape, e) for e in cons.Base[1]]
+        self.doc.openTransaction("insert")
+        hs = _sketch(self.doc, self.body, "HS", z=L, after=pad)
+        _circle(hs, 0.0, -3.0, 2.0)
+        hp = _add(self.doc, self.body, "PartDesign::Pocket", "HP", hs)
+        hp.Profile = hs
+        hp.Length = 2 * L
+        self.doc.commitTransaction()
+        for target in (pad, cons):
+            self.doc.openTransaction("move")
+            for obj in (hs, hp):
+                self.body.removeObject(obj)
+            after = target
+            for obj in (hs, hp):
+                self.body.insertObject(obj, after, True)
+                after = obj
+            self.doc.commitTransaction()
+            self.doc.recompute()
+            if target is pad:
+                self.doc.undo()
+                self.doc.recompute()
+        self.doc.recompute()
+        base, subs = cons.Base
+        for sub, expected in zip(subs, sigs):
+            if sub.startswith("?"):
+                continue
+            self.assertEqual(
+                _edge_sig(base.Shape, sub),
+                expected,
+                "%s on %s is a different element than the one the fillet referenced" % (sub, base.Name),
+            )
