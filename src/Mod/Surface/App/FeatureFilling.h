@@ -61,6 +61,10 @@ public:
     // link layer lost.
     App::PropertyStringList BoundaryFaceSig;
     App::PropertyStringList UnboundFaceSig;
+    // Hidden copy of the face strings as of the last successful compute, to tell the entries the
+    // user edited since from stale ones.
+    App::PropertyStringList BoundaryFaceSynced;
+    App::PropertyStringList UnboundFaceSynced;
     App::PropertyLinkSubList FreeFaces;     // Free constraint faces
     App::PropertyIntegerList FreeOrder;     // Order of constraint on free faces
     App::PropertyLinkSubList Points;        // Constraint Points (on Surface)
@@ -94,13 +98,15 @@ private:
         App::PropertyStringList& faces,
         App::PropertyLinkSubList& links,
         App::PropertyStringList& sigs,
+        App::PropertyStringList& synced,
         std::vector<std::function<void()>>& commits
     );
     bool seedMirror(
         const App::PropertyLinkSubList& edges,
         App::PropertyStringList& faces,
         App::PropertyLinkSubList& links,
-        App::PropertyStringList& sigs
+        App::PropertyStringList& sigs,
+        App::PropertyStringList& synced
     );
     void addConstraints(
         BRepFill_Filling& builder,

@@ -304,8 +304,9 @@ class TestFillingRescue(unittest.TestCase):
     def test_changed_normal_is_not_accepted(self):
         # the support face is recorded as facing down; neither face at the edge does
         sig = list(self.fill.BoundaryFaceSig)
-        t, x, y, z, n = sig[self.idx].split()
-        sig[self.idx] = " ".join((t, x, y, str(-float(z)), n))
+        fields = sig[self.idx].split()
+        fields[3] = str(-float(fields[3]))
+        sig[self.idx] = " ".join(fields)
         self.fill.BoundaryFaceSig = sig
         self._lose_face()
         self.assertIn("Invalid", self.fill.State)
@@ -319,7 +320,9 @@ class TestFillingRescue(unittest.TestCase):
 
     def test_trimmed_outline_is_not_accepted(self):
         sig = list(self.fill.BoundaryFaceSig)
-        sig[self.idx] = sig[self.idx].rsplit(" ", 1)[0] + " 5"  # recorded with a five-edge outline
+        fields = sig[self.idx].split()
+        fields[4] = "5"  # recorded with a five-edge outline
+        sig[self.idx] = " ".join(fields)
         self.fill.BoundaryFaceSig = sig
         self._lose_face()
         self.assertIn("Invalid", self.fill.State)
@@ -393,11 +396,37 @@ class TestFillingSeam(unittest.TestCase):
     def tearDown(self):
         FreeCAD.closeDocument(self.doc.Name)
 
-    def test_coplanar_neighbour_makes_a_lost_face_an_error(self):
+    def _lose_face(self):
         subs = [[""] if i != self.idx else ["?" + self.tl] for i in range(len(self.edges))]
         self.fill.BoundaryFaceLinks = [(self.fuse, s) for s in subs]
         self.fill.touch()
         self.doc.recompute()
+
+    def test_coplanar_neighbour_is_told_apart_by_the_recorded_outline(self):
+        # the string's face has exactly the outline recorded with the signature, the neighbour
+        # across the seam does not: the string's face is the same face
+        self._lose_face()
+        self.assertNotIn("Invalid", self.fill.State, self.fill.getStatusString())
+        self.assertEqual(self.fill.BoundaryFaces[self.idx], self.tl)
+        self.assertEqual(self.fill.BoundaryFaceLinks[0][1][self.idx], self.tl)
+
+    def test_coplanar_neighbour_makes_a_lost_face_an_error_without_an_outline(self):
+        # a signature from before outlines were recorded cannot tell the two faces apart
+        sig = list(self.fill.BoundaryFaceSig)
+        sig[self.idx] = " ".join(sig[self.idx].split()[:5])
+        self.fill.BoundaryFaceSig = sig
+        self._lose_face()
+        self.assertIn("Invalid", self.fill.State)
+        self.assertEqual(self.fill.BoundaryFaces[self.idx], self.tl)
+
+    def test_neighbours_outline_is_not_accepted(self):
+        # the recorded outline is the neighbour's: the string's face is not the face recorded
+        sig = list(self.fill.BoundaryFaceSig)
+        fields = sig[self.idx].split()
+        fields[6] = str(float(fields[6]) + 20.0)  # centre of the outline, 20 mm along the seam's normal
+        sig[self.idx] = " ".join(fields)
+        self.fill.BoundaryFaceSig = sig
+        self._lose_face()
         self.assertIn("Invalid", self.fill.State)
         self.assertEqual(self.fill.BoundaryFaces[self.idx], self.tl)
 
@@ -473,3 +502,84 @@ class TestSectionsSewingReferences(unittest.TestCase):
         sew.ShapeList = [(self.b1, ["Face1", "Face99"])]
         self.doc.recompute()
         self.assertIn("Invalid", sew.State)
+
+
+@unittest.skipIf(Sketcher is None, "Sketcher or PartDesign not available")
+class TestFillingUndoAndEdits(unittest.TestCase):
+    """The face strings, the hidden mirror and the signatures stay coherent across undo and redo,
+    and a typed string re-seeds only its own entry."""
+
+    def setUp(self):
+        self.doc = FreeCAD.newDocument("FillUndo")
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.doc.Name)
+
+    def _assert_top(self, fill, body):
+        self.assertNotIn("Invalid", fill.State, fill.getStatusString())
+        self.assertEqual(fill.BoundaryFaces[0], _plane_face(body.Shape, (0, 0, 1), (5, 5, L)))
+        self.assertEqual(fill.BoundaryFaceLinks[0][1][0], fill.BoundaryFaces[0])
+
+    def test_undo_of_a_noop_transaction_after_an_untransacted_delete(self):
+        # The delete outside a transaction runs in an automatic one; the link layer's own update of
+        # the mirror is in none. Undo puts the strings back but not the mirror.
+        body, pad = _padded_body(self.doc)
+        fill = _top_filling(self.doc, body, L)
+        self.doc.openTransaction("insert")
+        hole = _hole(self.doc, body, L, pad)
+        self.doc.recompute()
+        self.doc.commitTransaction()
+        self._assert_top(fill, body)
+        sketch = hole.Profile[0]
+        body.removeObject(hole)
+        self.doc.removeObject(hole.Name)
+        body.removeObject(sketch)
+        self.doc.removeObject(sketch.Name)
+        self.doc.recompute()
+        self._assert_top(fill, body)
+        self.doc.openTransaction("no-op")
+        pad.Length = pad.Length.Value
+        self.doc.recompute()
+        self.doc.commitTransaction()
+        self.doc.undo()
+        self.doc.recompute()
+        self._assert_top(fill, body)
+        self.doc.redo()
+        self.doc.recompute()
+        self._assert_top(fill, body)
+
+    def test_typed_entry_is_seeded_and_the_others_follow_the_model(self):
+        # An unrelated error keeps the strings from being rewritten while the link layer moves the
+        # mirror on with a renumbering edit. A string typed on another entry afterwards touches the
+        # whole list: only that entry is the user's, the stale first one follows the mirror.
+        body, pad = _padded_body(self.doc)
+        fill = _top_filling(self.doc, body, L)
+        fill.BoundaryOrder = [1, 0, 0, 1]
+        fill.FreeFaces = [(body, ["Face99"])]
+        fill.FreeOrder = [0]
+        _hole(self.doc, body, L, pad)
+        self.doc.recompute()
+        self.assertIn("Invalid", fill.State)
+        fill.FreeFaces = []
+        fill.FreeOrder = []
+        faces = list(fill.BoundaryFaces)
+        faces[3] = _plane_face(body.Shape, (1, 0, 0), (W / 2, 0, L / 2))
+        fill.BoundaryFaces = faces
+        self.doc.recompute()
+        self._assert_top(fill, body)
+        self.assertEqual(fill.BoundaryFaces[3], faces[3])
+        self.assertEqual(fill.BoundaryFaceLinks[0][1][3], faces[3])
+
+    def test_a_bad_typed_entry_is_still_an_error(self):
+        body, pad = _padded_body(self.doc)
+        fill = _top_filling(self.doc, body, L)
+        faces = list(fill.BoundaryFaces)
+        faces[3] = _plane_face(body.Shape, (-1, 0, 0), (-W / 2, 0, L / 2))  # not adjacent to edge 4
+        fill.BoundaryFaces = faces
+        self.doc.recompute()
+        self.assertIn("Invalid", fill.State)
+        faces[3] = _plane_face(body.Shape, (1, 0, 0), (W / 2, 0, L / 2))
+        fill.BoundaryFaces = faces
+        self.doc.recompute()
+        self.assertNotIn("Invalid", fill.State, fill.getStatusString())
+        self.assertEqual(fill.BoundaryFaceLinks[0][1][3], faces[3])

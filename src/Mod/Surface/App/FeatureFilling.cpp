@@ -22,6 +22,8 @@
  *                                                                         *
  ***************************************************************************/
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <sstream>
@@ -29,7 +31,9 @@
 
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepFill_Filling.hxx>
+#include <BRepGProp.hxx>
 #include <BRepGProp_Face.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
@@ -80,6 +84,10 @@ Filling::Filling()
                       "Surface type and normal of each boundary face at its edge, as last resolved");
     ADD_PROPERTY_TYPE(UnboundFaceSig,(""), "Filling", App::Prop_Hidden,
                       "Surface type and normal of each unbound face at its edge, as last resolved");
+    ADD_PROPERTY_TYPE(BoundaryFaceSynced,(""), "Filling", App::Prop_Hidden,
+                      "BoundaryFaces as of the last successful compute: an entry that differs is a user edit");
+    ADD_PROPERTY_TYPE(UnboundFaceSynced,(""), "Filling", App::Prop_Hidden,
+                      "UnboundFaces as of the last successful compute: an entry that differs is a user edit");
     ADD_PROPERTY_TYPE(FreeFaces,(nullptr,""), "Filling", App::Prop_None, "Free constraint on a face");
     ADD_PROPERTY_TYPE(FreeOrder,(0), "Filling", App::Prop_None, "Order of constraint on free faces");
 
@@ -304,6 +312,12 @@ struct FaceSig
     int type {-1};
     gp_Vec normal;
     int outerEdges {0};  // number of edges of the outer wire: a trimmed outline changes it
+    // Planar faces only: the outline's length and the centre of the outline projected onto the
+    // plane (so a face moved along its normal, as by a pad length, keeps it). Two different faces
+    // at a seam cannot share both.
+    bool hasOutline {false};
+    double perimeter {0.0};
+    gp_Vec centre;
 };
 
 // Surface type and oriented normal of a face at the midpoint of one of its edges.
@@ -336,6 +350,17 @@ bool faceSignature(const TopoDS_Shape& face, const TopoDS_Shape& edge, FaceSig& 
         TopExp::MapShapes(outer, TopAbs_EDGE, wireEdges);
     }
     out.outerEdges = wireEdges.Extent();
+    out.hasOutline = false;
+    if (static_cast<GeomAbs_SurfaceType>(out.type) == GeomAbs_Plane && !outer.IsNull()) {
+        GProp_GProps props;
+        BRepGProp::LinearProperties(outer, props);
+        if (props.Mass() > 1e-9) {
+            gp_Vec c(props.CentreOfMass().XYZ());
+            out.centre = c - n * c.Dot(n);
+            out.perimeter = props.Mass();
+            out.hasOutline = true;
+        }
+    }
     return true;
 }
 
@@ -345,6 +370,10 @@ std::string encodeSig(const FaceSig& s)
     os.precision(17);
     os << s.type << ' ' << s.normal.X() << ' ' << s.normal.Y() << ' ' << s.normal.Z() << ' '
        << s.outerEdges;
+    if (s.hasOutline) {
+        os << ' ' << s.perimeter << ' ' << s.centre.X() << ' ' << s.centre.Y() << ' '
+           << s.centre.Z();
+    }
     return os.str();
 }
 
@@ -358,7 +387,22 @@ bool decodeSig(const std::string& str, FaceSig& s)
         return false;
     }
     s.normal = gp_Vec(x, y, z);
+    double cx = 0;
+    double cy = 0;
+    double cz = 0;
+    s.hasOutline = static_cast<bool>(is >> s.perimeter >> cx >> cy >> cz);
+    s.centre = gp_Vec(cx, cy, cz);
     return true;
+}
+
+// Same outline: both recorded, the same length and the same place in the plane.
+bool sameOutline(const FaceSig& a, const FaceSig& b)
+{
+    if (!a.hasOutline || !b.hasOutline) {
+        return false;
+    }
+    const double tol = 1e-6 * std::max(1.0, a.perimeter);
+    return std::abs(a.perimeter - b.perimeter) <= tol && (a.centre - b.centre).Magnitude() <= tol;
 }
 
 const TopoDS_Shape subShape(const App::DocumentObject* obj, const std::string& sub)
@@ -387,8 +431,8 @@ bool faceCarriesEdge(const App::DocumentObject* obj, const std::string& edgeSub,
 // the Filling was built on: it resolves, it carries the boundary edge, its surface type and oriented
 // normal (within 0.5 degrees) are the stored ones, its outer outline still has the stored number of
 // edges (a trimmed or split outline is a different element, DECISIONS.md D6), and no other face
-// adjacent to the edge has that type and normal (two coplanar faces at a seam are ambiguous). Other
-// faces are never searched. Returns false when any of this fails.
+// adjacent to the edge has that type and normal (two coplanar faces at a seam are ambiguous unless
+// the string's face alone has the recorded outline, see below). Other faces are never searched. Returns false when any of this fails.
 bool acceptStringFace(
     const App::DocumentObject* obj,
     const std::string& edgeSub,
@@ -417,8 +461,13 @@ bool acceptStringFace(
         || have.outerEdges != want.outerEdges || have.normal.Dot(want.normal) <= 0.99996) {
         return false;
     }
+    // Two faces of one type and normal at the edge are told apart only by an outline recorded
+    // with the signature: the string's face must have exactly the recorded outline (length and
+    // place in the plane) and no other face at the edge may have it.
+    const bool outlineKnown = want.hasOutline && have.hasOutline && sameOutline(have, want);
     bool carries = false;
     int matching = 0;
+    int sameOutlines = 0;
     TopTools_IndexedMapOfShape seen;
     for (const TopoDS_Shape& cand : ancestors.FindFromKey(edge)) {
         if (seen.Contains(cand)) {
@@ -432,9 +481,12 @@ bool acceptStringFace(
         if (faceSignature(cand, edge, got) && got.type == want.type
             && got.normal.Dot(want.normal) > 0.99996) {
             ++matching;
+            if (sameOutline(got, want)) {
+                ++sameOutlines;
+            }
         }
     }
-    return carries && matching == 1;
+    return carries && (matching == 1 || (outlineKnown && sameOutlines == 1));
 }
 
 // Signatures for the current names; an entry that cannot be computed keeps its old value.
@@ -480,6 +532,7 @@ std::vector<std::string> Filling::followedFaces(
     App::PropertyStringList& faces,
     App::PropertyLinkSubList& links,
     App::PropertyStringList& sigs,
+    App::PropertyStringList& synced,
     std::vector<std::function<void()>>& commits
 )
 {
@@ -490,42 +543,61 @@ std::vector<std::string> Filling::followedFaces(
         return names;
     }
     std::vector<std::string> oldSigs = sigs.getValues();
+    const std::vector<std::string> oldSynced = synced.getValues();
 
-    bool rebuild = faces.isTouched() || links.getValues() != objs;
-    if (!rebuild) {
+    // Which strings the user changed. A touched list is a user edit as a whole, unless the strings
+    // as of the last successful compute are known and the mirror still belongs to these edges: then
+    // only the entries that differ from them are edits. The others may be stale (the link layer,
+    // outside any transaction, moved the mirror on, and an undo, a reopened Touched file or an edit
+    // of a neighbouring entry brings the strings back as touched), so the mirror decides them.
+    std::vector<bool> edited(names.size(), faces.isTouched());
+    const bool mirrorFits = links.getValues() == objs && links.getSubValues().size() == names.size();
+    if (!mirrorFits) {
+        std::fill(edited.begin(), edited.end(), true);
+    }
+    else if (faces.isTouched() && oldSynced.size() == names.size()) {
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            edited[i] = names[i] != oldSynced[i];
+        }
+    }
+    const bool anyEdit = std::find(edited.begin(), edited.end(), true) != edited.end();
+
+    bool rebuild = anyEdit || !mirrorFits;
+    if (mirrorFits) {
         std::vector<std::string> followed = links.getSubValues();
-        if (followed.size() != names.size()) {
+        for (std::size_t i = 0; i < followed.size(); ++i) {
+            if (edited[i]) {
+                // The user's own choice of face: it is re-seeded into the mirror and the signature
+                // if it carries the edge, and reported by addConstraints if it does not.
+                followed[i] = names[i];
+                continue;
+            }
+            if (followed[i].empty()) {
+                continue;
+            }
+            if (followed[i][0] != '?' && faceCarriesEdge(objs[i], edgeSubs[i], followed[i])) {
+                continue;
+            }
+            // The link layer lost the mapped name, or followed it to a face that does not carry
+            // the boundary edge. Neither the string nor the mirror is rewritten from it; the
+            // string's own face is used only when it is provably the same element.
+            TopoDS_Shape edge = subShape(objs[i], edgeSubs[i]);
+            if (edge.IsNull()) {
+                return names;  // the edge itself is gone: addConstraints reports it
+            }
+            if (oldSigs.size() != names.size()
+                || !acceptStringFace(objs[i], edgeSubs[i], names[i], oldSigs[i])) {
+                throw Standard_Failure("Support face reference is lost");
+            }
+            followed[i] = names[i];
             rebuild = true;
         }
-        else {
-            for (std::size_t i = 0; i < followed.size(); ++i) {
-                if (followed[i].empty()) {
-                    continue;
-                }
-                if (followed[i][0] != '?' && faceCarriesEdge(objs[i], edgeSubs[i], followed[i])) {
-                    continue;
-                }
-                // The link layer lost the mapped name, or followed it to a face that does not carry
-                // the boundary edge. Neither the string nor the mirror is rewritten from it; the
-                // string's own face is used only when it is provably the same element.
-                TopoDS_Shape edge = subShape(objs[i], edgeSubs[i]);
-                if (edge.IsNull()) {
-                    return names;  // the edge itself is gone: addConstraints reports it
-                }
-                if (oldSigs.size() != names.size()
-                    || !acceptStringFace(objs[i], edgeSubs[i], names[i], oldSigs[i])) {
-                    throw Standard_Failure("Support face reference is lost");
-                }
-                followed[i] = names[i];
-                rebuild = true;
-            }
-            if (followed != names) {
-                // Written only when the whole feature computes: an error caused by something
-                // else (a lost edge) must not make the string follow a face the model may give
-                // back, because the string is what fork/main and the fallback above resolve.
-                commits.push_back([&faces, followed]() { faces.setValues(followed); });
-                names = followed;
-            }
+        if (followed != names) {
+            // Written only when the whole feature computes: an error caused by something else (a
+            // lost edge) must not make the string follow a face the model may give back, because
+            // the string is what fork/main and the fallback above resolve.
+            commits.push_back([&faces, followed]() { faces.setValues(followed); });
+            names = followed;
         }
     }
     if (rebuild) {
@@ -534,6 +606,9 @@ std::vector<std::string> Filling::followedFaces(
     std::vector<std::string> newSigs = currentSigs(objs, edgeSubs, names, oldSigs);
     if (newSigs != oldSigs) {
         commits.push_back([&sigs, newSigs]() { sigs.setValues(newSigs); });
+    }
+    if (names != oldSynced) {
+        commits.push_back([&synced, names]() { synced.setValues(names); });
     }
     return names;
 }
@@ -544,7 +619,8 @@ bool Filling::seedMirror(
     const App::PropertyLinkSubList& edges,
     App::PropertyStringList& faces,
     App::PropertyLinkSubList& links,
-    App::PropertyStringList& sigs
+    App::PropertyStringList& sigs,
+    App::PropertyStringList& synced
 )
 {
     const std::vector<std::string>& names = faces.getValues();
@@ -557,6 +633,7 @@ bool Filling::seedMirror(
     const bool haveMirror = links.getValues() == objs && links.getSubValues().size() == names.size();
     if (!haveMirror) {
         links.setValues(objs, names);
+        synced.setValues(names);
     }
     // An existing mirror and its signatures are kept as saved, even when the mirror holds a lost
     // face ("?FaceN"): the string may be stale then, and a signature taken from it would record
@@ -584,8 +661,8 @@ void Filling::onDocumentRestored()
 {
     Part::Spline::onDocumentRestored();
     bool wasTouched = isTouched();
-    seedMirror(BoundaryEdges, BoundaryFaces, BoundaryFaceLinks, BoundaryFaceSig);
-    seedMirror(UnboundEdges, UnboundFaces, UnboundFaceLinks, UnboundFaceSig);
+    seedMirror(BoundaryEdges, BoundaryFaces, BoundaryFaceLinks, BoundaryFaceSig, BoundaryFaceSynced);
+    seedMirror(UnboundEdges, UnboundFaces, UnboundFaceLinks, UnboundFaceSig, UnboundFaceSynced);
     if (!wasTouched) {
         purgeTouched();
     }
@@ -633,7 +710,7 @@ App::DocumentObjectExecReturn* Filling::execute()
         addConstraints(
             builder,
             BoundaryEdges,
-            followedFaces(BoundaryEdges, BoundaryFaces, BoundaryFaceLinks, BoundaryFaceSig, commits),
+            followedFaces(BoundaryEdges, BoundaryFaces, BoundaryFaceLinks, BoundaryFaceSig, BoundaryFaceSynced, commits),
             BoundaryOrder,
             Standard_True
         );
@@ -643,7 +720,7 @@ App::DocumentObjectExecReturn* Filling::execute()
             addConstraints(
                 builder,
                 UnboundEdges,
-                followedFaces(UnboundEdges, UnboundFaces, UnboundFaceLinks, UnboundFaceSig, commits),
+                followedFaces(UnboundEdges, UnboundFaces, UnboundFaceLinks, UnboundFaceSig, UnboundFaceSynced, commits),
                 UnboundOrder,
                 Standard_False
             );
