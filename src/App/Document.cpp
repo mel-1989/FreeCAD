@@ -547,12 +547,16 @@ void Document::_checkTransaction(DocumentObject* pcDelObj, const Property* What,
     }
     // When the object is going to be deleted we have to check if it has already been added
     // to the undo transactions
-    std::list<Transaction*>::iterator it;
-    for (it = mUndoTransactions.begin(); it != mUndoTransactions.end(); ++it) {
-        if ((*it)->hasObject(pcDelObj)) {
-            _openTransaction("Delete");
-            break;
-        }
+    // The redo stack holds raw pointers too (a redone removal re-deletes the object), so an
+    // object parked there must not be destroyed out of transaction either; opening the
+    // transaction clears the redo stack.
+    auto referenced = [pcDelObj](const std::list<Transaction*>& transactions) {
+        return std::any_of(transactions.begin(), transactions.end(), [pcDelObj](Transaction* t) {
+            return t->hasObject(pcDelObj);
+        });
+    };
+    if (referenced(mUndoTransactions) || referenced(mRedoTransactions)) {
+        _openTransaction("Delete");
     }
 }
 
