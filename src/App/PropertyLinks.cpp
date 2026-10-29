@@ -743,17 +743,30 @@ def _lines(shape):
             q = _line_ends(e)
             if q is not None:
                 out.append((i + 1, e, q[0].x, q[0].y, q[0].z, q[1].x, q[1].y, q[1].z))
+        edges = shape.Edges
+        if edges and not (edges[-1].isSame(shape.getElement("Edge%d" % len(edges)))
+                          and edges[0].isSame(shape.getElement("Edge1"))):
+            out = []  # the edge list is not in element-name order: refuse everything
         d["lines"] = out
     return d["lines"]
 def _faces_of(shape, edge):
+    # [(face, index)] of the faces of `shape` that have `edge`
     d = _data(shape)
     if d["fmap"] is None:
         m = {}
-        for f in shape.Faces:
+        for i, f in enumerate(shape.Faces):
             for e in f.Edges:
-                m.setdefault(e.hashCode(), []).append((e, f))
+                m.setdefault(e.hashCode(), []).append((e, f, i + 1))
         d["fmap"] = m
-    return [f for e, f in d["fmap"].get(edge.hashCode(), []) if e.isSame(edge)]
+    return [(f, i) for e, f, i in d["fmap"].get(edge.hashCode(), []) if e.isSame(edge)]
+def edge_faces(owner, edge):
+    # the names of the faces next to a straight edge, else []
+    try:
+        if _line_ends(edge) is None:
+            return []
+        return ["Face%d" % i for f, i in _faces_of(owner, edge)]
+    except Exception:
+        return []
 def _canon(v):
     # a direction without its sign
     for c in (v.x, v.y, v.z):
@@ -761,26 +774,30 @@ def _canon(v):
             return v if c > 0 else v * -1.0
     return v
 def _face_desc(f, p):
-    # the surface a face lies on, with the side the material is on, as a tuple of floats
+    # the surface a face lies on and the side the material is on, every component in its own slot:
+    # (kind, axis or normal x3, centre x3 or offset, radius, side)
     s = f.Surface
     k = type(s).__name__
     u, v = s.parameter(p)
     n = f.normalAt(u, v)
     if k == "Plane":
-        return (0.0, n.x, n.y, n.z, n.dot(p), 0.0)
-    if k in ("Cylinder", "Sphere"):
-        a = _canon(s.Axis) if k == "Cylinder" else p.__class__(0, 0, 0)
+        return (0.0, n.x, n.y, n.z, n.dot(p), 0.0, 0.0, 0.0, 0.0)
+    if k == "Cylinder":
+        a = _canon(s.Axis)
         c = s.Center
-        c = c - a * c.dot(a) if k == "Cylinder" else c
+        c = c - a * c.dot(a)
         w = p - s.Center
-        if k == "Cylinder":
-            w = w - s.Axis * w.dot(s.Axis)
+        w = w - s.Axis * w.dot(s.Axis)
         side = 1.0 if n.dot(w) > 0 else -1.0
-        return (1.0 if k == "Cylinder" else 2.0, a.x + c.x + side, a.y + c.y, a.z + c.z, s.Radius, 0.0)
+        return (1.0, a.x, a.y, a.z, c.x, c.y, c.z, s.Radius, side)
+    if k == "Sphere":
+        c = s.Center
+        side = 1.0 if n.dot(p - c) > 0 else -1.0
+        return (2.0, 0.0, 0.0, 0.0, c.x, c.y, c.z, s.Radius, side)
     return None
 def _adj(shape, edge, mid):
     out = []
-    for f in _faces_of(shape, edge):
+    for f, i in _faces_of(shape, edge):
         d = _face_desc(f, mid)
         if d is None:
             return None
@@ -858,9 +875,11 @@ def extent_rescue(shape, anchor, old):
         mid_old = a0 + d * (length / 2.0)
         if not _same_descs(_adj(old, anchor, mid_old), _adj(shape, c[1], mid_old)):
             return []
-        if not shape.Edges[c[0] - 1].isSame(shape.getElement("Edge%d" % c[0])):
+        # lineage is checked by the caller against the element maps: hand it the faces' names
+        cand = ["Face%d" % i for f, i in _faces_of(shape, c[1])]
+        if not cand:
             return []
-        return ["Edge%d" % c[0]]
+        return ["Edge%d" % c[0], cand]
     except Exception:
         return []
 def same_el(a, b):
@@ -977,6 +996,18 @@ std::unordered_map<const PropertyLinkBase*, AnchorMap>& anchorStore()
 }
 }  // namespace
 
+using Lineage = std::set<std::pair<long, std::string>>;
+namespace
+{
+std::unordered_map<const PropertyLinkBase*, std::unordered_map<std::string, std::vector<Lineage>>>&
+lineageStore()
+{
+    static auto* store = new std::unordered_map<const PropertyLinkBase*,
+                                                 std::unordered_map<std::string, std::vector<Lineage>>>();
+    return *store;
+}
+}  // namespace
+
 static void dropAnchors(const PropertyLinkBase* link)
 {
     // The GIL guards the store: recompute can run on the async worker while the main thread
@@ -996,6 +1027,69 @@ static void dropAnchors(const PropertyLinkBase* link)
         }
     }
     store.erase(it);
+    lineageStore().erase(link);
+}
+
+// The lineage of the faces next to a straight-edge anchor, taken when the anchor is: the face
+// names of the source features each face derives from. An edit upstream rebuilds the names of the
+// features downstream of it, so the old lineage cannot be read afterwards.
+namespace
+{
+bool isFaceName(const std::string& n)
+{
+    return n.size() > 2 && n.compare(n.size() - 2, 2, ",F") == 0;
+}
+
+void collectLineage(const App::Document* doc,
+                    const Data::ComplexGeoData* data,
+                    const Data::MappedName& name,
+                    Lineage& out,
+                    int depth,
+                    std::set<std::pair<long, std::string>>& visited)
+{
+    if (!data || depth > HistoryRescueMaxDepth || name.empty()
+        || !visited.insert({data->Tag, name.toString()}).second) {
+        return;
+    }
+    Data::MappedName original;
+    std::vector<Data::MappedName> history;
+    long tag = data->getElementHistory(name, &original, &history);
+    long absTag = tag < 0 ? -tag : tag;
+    if (!original.empty()) {
+        out.insert({absTag, original.toString()});
+    }
+    for (const auto& h : history) {
+        out.insert({absTag, h.toString()});
+    }
+    if (!doc || absTag == 0 || absTag == (data->Tag < 0 ? -data->Tag : data->Tag) || original.empty()
+        || sameMappedName(original, name)) {
+        return;
+    }
+    auto* srcGeo = freecad_cast<App::GeoFeature*>(doc->getObjectByID(absTag));
+    auto* srcProp = srcGeo ? srcGeo->getPropertyOfGeometry() : nullptr;
+    if (srcProp && srcProp->getComplexData()) {
+        collectLineage(doc, srcProp->getComplexData(), original, out, depth + 1, visited);
+    }
+}
+}  // namespace
+
+static std::vector<Lineage> faceLineages(const GeoFeature& geo, const std::vector<std::string>& faces)
+{
+    std::vector<Lineage> res;
+    auto* prop = geo.getPropertyOfGeometry();
+    const Data::ComplexGeoData* data = prop ? prop->getComplexData() : nullptr;
+    for (const auto& f : faces) {
+        Lineage l;
+        if (data && data->hasElementMap()) {
+            for (const auto& nm : data->getElementMappedNames(Data::IndexedName(f.c_str()))) {
+                std::set<std::pair<long, std::string>> visited;
+                l.insert({data->Tag < 0 ? -data->Tag : data->Tag, nm.first.toString()});
+                collectLineage(geo.getDocument(), data, nm.first, l, 0, visited);
+            }
+        }
+        res.push_back(std::move(l));
+    }
+    return res;
 }
 
 static void recordAnchor(const PropertyLinkBase* link,
@@ -1011,8 +1105,15 @@ static void recordAnchor(const PropertyLinkBase* link,
         return;
     }
     Base::PyGILStateLocker lock;
-    PyObject* el = elementObject(gp, plainElement);
+    PyObject* owner = const_cast<App::Property*>(static_cast<const App::Property*>(gp))->getPyObject();
+    if (!owner) {
+        PyErr_Clear();
+        return;
+    }
+    PyObject* el = PyObject_CallMethod(owner, "getElement", "s", plainElement);
     if (!el) {
+        PyErr_Clear();
+        Py_DECREF(owner);
         return;
     }
     const std::string key = anchorKey(geo, storedName);
@@ -1022,6 +1123,7 @@ static void recordAnchor(const PropertyLinkBase* link,
             Py_XDECREF(kv.second);
         }
         m.clear();
+        lineageStore().erase(link);
     }
     auto put = [&](const std::string& k, PyObject* o) {
         auto it = m.find(k);
@@ -1034,13 +1136,37 @@ static void recordAnchor(const PropertyLinkBase* link,
         }
     };
     put(key, el);
-    // the shape the element belonged to (a handle, not a copy): the extent rescue asks which
-    // faces and which other edges the element had next to it
-    PyObject* owner = const_cast<App::Property*>(static_cast<const App::Property*>(gp))->getPyObject();
-    if (!owner) {
-        PyErr_Clear();
+    // The shape a straight-edge candidate belonged to (a handle, not a copy): the extent rescue asks
+    // which faces and which other edges the edge had next to it. Only edges need it.
+    if (std::strncmp(plainElement, "Edge", 4) == 0) {
+        std::vector<std::string> faces;
+        if (PyObject* fn = gateFunction("edge_faces")) {
+            if (PyObject* r = PyObject_CallFunction(fn, "OO", owner, el)) {
+                for (Py_ssize_t k = 0; PyList_Check(r) && k < PyList_Size(r); ++k) {
+                    if (const char* t = PyUnicode_AsUTF8(PyList_GetItem(r, k))) {
+                        faces.emplace_back(t);
+                    }
+                }
+                Py_DECREF(r);
+            }
+            PyErr_Clear();
+        }
+        if (faces.empty()) {
+            // not a straight edge with faces: nothing the extent rescue could take
+            auto lit = lineageStore().find(link);
+            if (lit != lineageStore().end()) {
+                lit->second.erase(key);
+            }
+            Py_DECREF(owner);
+        }
+        else {
+            lineageStore()[link][key] = faceLineages(geo, faces);
+            put(key + OwnerSuffix, owner);
+        }
     }
-    put(key + OwnerSuffix, owner ? owner : Py_NewRef(Py_None));
+    else {
+        Py_DECREF(owner);
+    }
 }
 
 /// True if the element is provably the one the link designated by `storedName` last time it
@@ -1126,6 +1252,48 @@ static std::vector<std::string> anchoredSearch(const PropertyLinkBase* link,
     return names;
 }
 
+/// The faces next to the candidate edge must descend, by element-map lineage, from the faces that
+/// were next to the old edge (one to one): a face counts as the same ancestor when both lineages
+/// contain the same face name of one source feature (the Pad's face an inserted fillet or a rebuilt
+/// pocket still derives from). A surface that merely looks the same, on a face of another solid or
+/// a face built anew, shares no ancestor. No element map, no names, or no shared ancestor means no
+/// rescue.
+static bool extentLineageHolds(const GeoFeature& geo,
+                               const std::vector<std::string>& candFaces,
+                               const std::vector<Lineage>& oldLineages)
+{
+    const std::size_t n = candFaces.size();
+    if (n == 0 || n > 4 || oldLineages.size() != n) {
+        return false;
+    }
+    auto cand = faceLineages(geo, candFaces);
+    std::vector<std::vector<bool>> from(n, std::vector<bool>(n, false));
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < n; ++j) {
+            for (const auto& x : cand[i]) {
+                if (isFaceName(x.second) && oldLineages[j].count(x)) {
+                    from[i][j] = true;
+                    break;
+                }
+            }
+        }
+    }
+    std::vector<std::size_t> perm(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        perm[i] = i;
+    }
+    do {
+        bool ok = true;
+        for (std::size_t i = 0; i < n && ok; ++i) {
+            ok = from[i][perm[i]];
+        }
+        if (ok) {
+            return true;
+        }
+    } while (std::next_permutation(perm.begin(), perm.end()));
+    return false;
+}
+
 /// Extent rescue (D6 extent ruling): the anchor of `storedName` (kept under `anchorGeo`, the
 /// feature that held the name when the link last resolved it: `geo` itself, or the target the link
 /// was retargeted away from) was a straight edge and the new shape of `geo` has exactly one edge on its carrier overlapping its extent, inside it with the same
@@ -1153,10 +1321,27 @@ static std::vector<std::string> anchoredExtentRescue(const PropertyLinkBase* lin
         auto o = it->second.find(anchorKey(anchorGeo, storedName) + OwnerSuffix);
         PyObject* r = PyObject_CallFunction(fn, "OOO", shape, a->second,
                                             o != it->second.end() ? o->second : Py_None);
-        if (r && PyList_Check(r) && PyList_Size(r) == 1) {
+        if (r && PyList_Check(r) && PyList_Size(r) == 2) {
             const char* n = PyUnicode_AsUTF8(PyList_GetItem(r, 0));
-            if (n) {
-                names.emplace_back(n);
+            std::vector<std::string> candFaces;
+            PyObject* fl = PyList_GetItem(r, 1);
+            bool good = n && PyList_Check(fl);
+            for (Py_ssize_t k = 0; good && k < PyList_Size(fl); ++k) {
+                const char* t = PyUnicode_AsUTF8(PyList_GetItem(fl, k));
+                good = t != nullptr;
+                if (good) {
+                    candFaces.emplace_back(t);
+                }
+            }
+            if (!good) {
+                PyErr_Clear();
+            }
+            auto lin = lineageStore().find(link);
+            if (good && lin != lineageStore().end()) {
+                auto l = lin->second.find(anchorKey(anchorGeo, storedName));
+                if (l != lin->second.end() && extentLineageHolds(geo, candFaces, l->second)) {
+                    names.emplace_back(n);
+                }
             }
         }
         if (!r) {

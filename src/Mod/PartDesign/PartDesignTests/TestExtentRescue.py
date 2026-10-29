@@ -21,6 +21,7 @@ the reference must be reported, never retargeted. The link layer's rescue accept
 if it is the one edge of the shape on that carrier overlapping the old extent.
 """
 
+import math
 import unittest
 
 import FreeCAD as App
@@ -275,3 +276,109 @@ class TestExtentRescue(unittest.TestCase):
         self.doc.recompute()
         self._ok(self.chamfer)
         self._points_at_pad_top_edge()
+
+    # ------------------------------------------------------------ repair round 2
+    def _round_corner(self, convex):
+        """A body whose vertical edge through the origin lies between the plane x=0 and an R1 round;
+        a pocket removes the corner and a pad rebuilds it with the round on the other side (convex)
+        or the same side (concave). Returns the document, the consumer and the body."""
+        doc = App.newDocument("ExtentRound")
+        body = doc.addObject("PartDesign::Body", "Body")
+        r = 1.0
+
+        def arc(c, a0, a1):
+            return Part.ArcOfCircle(Part.Circle(c, V(0, 0, 1), r), a0, a1)
+
+        def seg(a, b):
+            return Part.LineSegment(V(*a, 0), V(*b, 0))
+
+        sk = _sketch(doc, body, "Sketch")
+        for g in [seg((-10, -10), (0, -10)), seg((0, -10), (0, 0)), arc(V(r, 0, 0), math.pi / 2, math.pi),
+                  seg((r, r), (r, 10)), seg((r, 10), (-10, 10)), seg((-10, 10), (-10, -10))]:
+            sk.addGeometry(g, False)
+        pad = body.newObject("PartDesign::Pad", "Pad")
+        pad.Profile = sk
+        pad.Length = L
+        doc.recompute()
+        nm = None
+        for i, e in enumerate(body.Shape.Edges):
+            if isinstance(e.Curve, Part.Line) and abs(e.CenterOfMass.x) < 1e-6 and abs(e.CenterOfMass.y) < 1e-6:
+                nm = "Edge%d" % (i + 1)
+        f = doc.addObject("App::FeaturePython", "Consumer")
+        f.addProperty("App::PropertyLinkSub", "Ref")
+        f.Ref = (body, [nm])
+        doc.recompute()
+        ps = _sketch(doc, body, "PocketSk", z=L, after=pad)
+        for g in [seg((-3, -3), (3, -3)), seg((3, -3), (3, 3)), seg((3, 3), (-3, 3)), seg((-3, 3), (-3, -3))]:
+            ps.addGeometry(g, False)
+        pk = _add(doc, body, "PartDesign::Pocket", "Pocket", ps)
+        pk.Profile = ps
+        pk.Length = L + 5
+        ns = _sketch(doc, body, "NewSk", z=1.0, after=pk)
+        if convex:
+            geo = [seg((-3, -3), (0, -3)), seg((0, -3), (0, 0)), arc(V(-r, 0, 0), 0, math.pi / 2),
+                   seg((-r, r), (-3, r)), seg((-3, r), (-3, -3))]
+        else:
+            geo = [seg((-3, -3), (0, -3)), seg((0, -3), (0, 0)), arc(V(r, 0, 0), math.pi / 2, math.pi),
+                   seg((r, r), (r, 3)), seg((r, 3), (-3, 3)), seg((-3, 3), (-3, -3))]
+        for g in geo:
+            ns.addGeometry(g, False)
+        npad = _add(doc, body, "PartDesign::Pad", "NewPad", ns)
+        npad.Profile = ns
+        npad.Length = L - 2.0
+        body.Tip = npad
+        doc.recompute()
+        return doc, f
+
+    def test_a_round_on_the_other_side_of_the_edge_is_not_the_same_element(self):
+        # a concave R1 round centred (1,0) and a convex R1 round centred (-1,0) once encoded alike
+        doc, f = self._round_corner(convex=True)
+        try:
+            sub = f.Ref[1][0] if f.Ref and f.Ref[1] else "?"
+            self.assertTrue(sub.startswith("?"), "the reference silently resolves to %r" % sub)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def _compound_with_moving_box(self, join):
+        doc = App.newDocument("ExtentCompound2")
+        try:
+            a = doc.addObject("Part::Box", "A")
+            a.Length, a.Width, a.Height = 40, 20, 10
+            t = doc.addObject("Part::Box", "Tool")
+            t.Length, t.Width, t.Height = 50, 4, 4
+            t.Placement.Base = V(-5, 100, 100)
+            cut = doc.addObject("Part::Cut", "CutA")
+            cut.Base, cut.Tool = a, t
+            b = doc.addObject("Part::Box", "B")
+            b.Length, b.Width, b.Height = 10, 5, 5
+            b.Placement.Base = V(15, 100, 0)
+            c = doc.addObject("Part::Compound", "Comp")
+            c.Links = [cut] if join else [cut, b]
+            doc.recompute()
+
+            def on(e):
+                return (isinstance(e.Curve, Part.Line) and abs(e.CenterOfMass.y - 20) < 1e-6
+                        and abs(e.CenterOfMass.z - 10) < 1e-6)
+
+            nm = ["Edge%d" % (i + 1) for i, e in enumerate(c.Shape.Edges) if on(e) and abs(e.Length - 40) < 1e-6][0]
+            f = doc.addObject("App::FeaturePython", "Consumer")
+            f.addProperty("App::PropertyLinkSub", "Ref")
+            f.Ref = (c, [nm])
+            doc.recompute()
+            # one recompute: a rebate removes A's edge and box B arrives with its top +Y edge on the
+            # carrier, centred, between faces on the same planes with the material on the same sides
+            t.Placement.Base = V(-5, 16, 6)
+            b.Placement.Base = V(15, 15, 5)
+            if join:
+                c.Links = [cut, b]
+            doc.recompute()
+            sub = f.Ref[1][0] if f.Ref and f.Ref[1] else "?"
+            self.assertTrue(sub.startswith("?"), "the reference silently resolves to %r" % sub)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_an_edge_of_another_solid_that_moves_onto_the_carrier_is_not_taken(self):
+        self._compound_with_moving_box(join=False)
+
+    def test_an_edge_of_a_solid_that_joins_in_the_same_recompute_is_not_taken(self):
+        self._compound_with_moving_box(join=True)
