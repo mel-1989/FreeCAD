@@ -65,12 +65,17 @@ TYPESYSTEM_SOURCE_ABSTRACT(App::PropertyLinkBase, App::Property)
 // clang-format off
 static std::unordered_map<std::string, std::set<PropertyLinkBase*>> _LabelMap;
 static std::unordered_map<App::DocumentObject*, std::unordered_set<PropertyLinkBase*>> _ElementRefMap;
+// The object a PropertyLinkSub pointed at before its last retarget (a feature inserted or
+// rerouted in front of it). History rescue only runs for a link that was retargeted and only
+// compares with that previous target; it is dropped after the first element update that follows.
+static std::unordered_map<const PropertyLinkBase*, const App::DocumentObject*> _PrevLinkTarget;
 // clang-format on
 
 PropertyLinkBase::PropertyLinkBase() = default;
 
 PropertyLinkBase::~PropertyLinkBase()
 {
+    _PrevLinkTarget.erase(this);
     unregisterLabelReferences();
     unregisterElementReference();
 }
@@ -679,6 +684,7 @@ static bool sameElementGeometry(const App::Property* pa,
 /// The identity gate: every upstream feature that still holds the stored mapped name must have
 /// there an element geometrically identical to the candidate; at least one must exist.
 static bool identityGateAccepts(const GeoFeature& geo,
+                                const App::DocumentObject* prevTarget,
                                 const Data::MappedName& stored,
                                 const std::string& type,
                                 const std::string& candidate)
@@ -700,7 +706,7 @@ static bool identityGateAccepts(const GeoFeature& geo,
     int holders = 0;
     for (auto* obj : geo.getOutListRecursive()) {
         auto* up = freecad_cast<GeoFeature*>(obj);
-        if (!up || up == &geo) {
+        if (!up || up == &geo || up != prevTarget) {
             continue;
         }
         auto* uprop = up->getPropertyOfGeometry();
@@ -731,7 +737,9 @@ static bool identityGateAccepts(const GeoFeature& geo,
 /// (form `;<mapped name>.<Type><N>`, possibly with a leading '?' on the index). Returns the
 /// indexed name of the single derived element, or an empty vector if there is none or the
 /// answer is ambiguous.
-static std::vector<std::string> rescueByHistory(const GeoFeature& geo, const char* element)
+static std::vector<std::string> rescueByHistory(const GeoFeature& geo,
+                                                const App::DocumentObject* prevTarget,
+                                                const char* element)
 {
     std::string s(element);
     if (s.compare(0, Data::ELEMENT_MAP_PREFIX_SIZE, Data::ELEMENT_MAP_PREFIX) != 0) {
@@ -780,7 +788,7 @@ static std::vector<std::string> rescueByHistory(const GeoFeature& geo, const cha
     }
     if (matches.size() == 1
         && data->countSubElements(type.c_str()) >= static_cast<unsigned long>(Data::IndexedName(matches.begin()->c_str()).getIndex())
-        && identityGateAccepts(geo, stored, type, *matches.begin())) {
+        && identityGateAccepts(geo, prevTarget, stored, type, *matches.begin())) {
         FC_WARN("recovered element reference by history " << element << " -> " << *matches.begin()
                                                           << " in " << geo.getFullName());
         return {*matches.begin()};
@@ -861,8 +869,12 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                 names = rescueDriftedElement(*geo, oldElement);
             }
             if (names.empty() && missing) {
-                // geometry found nothing: follow the element-map history (single match only)
-                names = rescueByHistory(*geo, element);
+                // geometry found nothing: follow the element-map history (single match only),
+                // but only for a link retargeted by an insertion, compared with its old target
+                auto prev = _PrevLinkTarget.find(this);
+                if (prev != _PrevLinkTarget.end()) {
+                    names = rescueByHistory(*geo, prev->second, element);
+                }
             }
             if (names.size()) {
                 missing = false;
@@ -1765,6 +1777,14 @@ void PropertyLinkSub::setValue(App::DocumentObject* lValue,
         }
     }
 
+    if (_pcLinkSub && lValue && _pcLinkSub != lValue) {
+        // keep the oldest pending target: rerouted twice before any update, the shape the
+        // consumer referenced belongs to the first one
+        _PrevLinkTarget.emplace(this, _pcLinkSub);
+    }
+    else {
+        _PrevLinkTarget.erase(this);
+    }
     _pcLinkSub = lValue;
     _cSubList = std::move(subs);
     if (shadows.size() == _cSubList.size()) {
@@ -1942,6 +1962,18 @@ static bool updateLinkReference(App::PropertyLinkBase* prop,
     if (!link || !link->isAttachedToDocument()) {
         return false;
     }
+    // the retarget is consumed by the first element update coming from the new target
+    struct PrevTargetGuard
+    {
+        const PropertyLinkBase* prop;
+        bool consume;
+        ~PrevTargetGuard()
+        {
+            if (consume) {
+                _PrevLinkTarget.erase(prop);
+            }
+        }
+    } prevGuard {prop, feature == link};
     auto owner = freecad_cast<DocumentObject*>(prop->getContainer());
     if (owner && owner->isRestoring()) {
         return false;

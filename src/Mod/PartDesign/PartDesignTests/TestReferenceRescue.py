@@ -397,6 +397,69 @@ class TestReferenceRescue(unittest.TestCase):
         self.doc.recompute()
         self._assert_never_retargeted(fil, sigs)
 
+    def _draft_before_same_face_draft(self, kind):
+        """B0 drafts the +X face (4 degrees) and a consumer references one of its elements; a Draft of the same
+        face (2 degrees) is inserted after the Pad. The inserted Draft produces the same mapped names on different
+        geometry, so a rescue compared with it would move the consumer silently. B0's own link target is
+        unchanged, so its missing name must stay missing."""
+
+        def face_x(sh):
+            for i, f in enumerate(sh.Faces):
+                u0, u1, v0, v1 = f.ParameterRange
+                if (f.normalAt((u0 + u1) / 2, (v0 + v1) / 2) - V(1, 0, 0)).Length < 1e-6:
+                    return "Face%d" % (i + 1)
+
+        def face_bottom(sh):
+            for i, f in enumerate(sh.Faces):
+                if abs(f.CenterOfMass.z) < 1e-6:
+                    return "Face%d" % (i + 1)
+
+        def draft(name, angle, after=None):
+            d = _add(self.doc, self.body, "PartDesign::Draft", name, after)
+            d.Base = (pad, [face_x(pad.Shape)])
+            d.NeutralPlane = (pad, [face_bottom(pad.Shape)])
+            d.Angle = angle
+            return d
+
+        pad = self._pad()
+        b0 = draft("B0", 4.0)
+        self.doc.recompute()
+        sh = b0.Shape
+        if kind == "edge":
+            ref = None
+            for i, e in enumerate(sh.Edges):
+                c = e.CenterOfMass
+                if abs(c.z - L) < 1e-6 and c.x > 1.0 and abs(c.y) < 1e-6:
+                    ref = "Edge%d" % (i + 1)
+            b1 = self._dressup("PartDesign::Fillet", b0, [ref], 1.0)
+            sig = _edge_sig
+        else:
+            ref = None
+            for i, f in enumerate(sh.Faces):
+                c = f.CenterOfMass
+                if c.x > 1.0 and abs(c.y) < 1e-6 and abs(c.z - L / 2) < 1e-6:
+                    ref = "Face%d" % (i + 1)
+            b1 = _add(self.doc, self.body, "PartDesign::Thickness", "B1")
+            b1.Base = (b0, [ref])
+            b1.Value = 1.0
+            sig = _face_sig
+        self.doc.recompute()
+        self._valid(b1)
+        before = sig(sh, ref)
+        draft("INS", 2.0, after=pad)
+        self.doc.recompute()
+        base, subs = b1.Base
+        self.assertTrue(
+            subs[0].startswith("?") or sig(base.Shape, subs[0]) == before,
+            "%s was silently retargeted: %r" % (kind, subs),
+        )
+
+    def test_draft_before_same_face_draft_edge_stays_missing(self):
+        self._draft_before_same_face_draft("edge")
+
+    def test_draft_before_same_face_draft_face_stays_missing(self):
+        self._draft_before_same_face_draft("face")
+
     def test_pocket_shortening_the_edge(self):
         pad = self._pad()
         edge = self._edge_at(pad.Shape, 0, H / 2, L)
