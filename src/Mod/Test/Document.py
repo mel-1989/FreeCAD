@@ -3323,3 +3323,46 @@ class DocumentExpressionTargetDestroyedCases(unittest.TestCase):
             for n in ("XB", "XA"):
                 if n in FreeCAD.listDocuments():
                     FreeCAD.closeDocument(n)
+
+
+class DocumentFreedObjectReferencedCases(unittest.TestCase):
+    """Run 009 ASAN findings from the random two-document fuzz: objects freed while a transaction
+    or an expression owner still pointed at them (heap-use-after-free under AddressSanitizer)."""
+
+    def tearDown(self):
+        for n in list(FreeCAD.listDocuments()):
+            FreeCAD.closeDocument(n)
+
+    def test_remove_object_held_by_redo_stack(self):
+        # the second copy takes the free name X001, so undo restores the removed X001 under
+        # another name; removing it out of transaction must not leave the redo stack pointing at it
+        doc = FreeCAD.newDocument("RedoHeld")
+        doc.UndoMode = 1
+        base = doc.addObject("Part::Box", "X4")
+        doc.copyObject(base, True)
+        doc.openTransaction("rm")
+        doc.removeObject("X001")
+        doc.commitTransaction()
+        doc.copyObject(base, True)
+        doc.undo()
+        self.assertEqual(doc.RedoCount, 1)
+        restored = [o.Name for o in doc.Objects if o.Name != "X4" and o.Name != "X001"]
+        self.assertEqual(len(restored), 1)
+        doc.removeObject(restored[0])
+        self.assertEqual(doc.RedoCount, 0)
+        doc.redo()
+
+    def test_failed_cross_document_expression_leaves_no_dependency(self):
+        # setExpression on an unsaved document raises ("Linked document not saved"); the retry in
+        # ~AtomicPropertyChange used to record a dependency that nothing tracked
+        a = FreeCAD.newDocument("XdocA")
+        b = FreeCAD.newDocument("XdocB")
+        b.addObject("Part::Box", "X1")
+        b.addObject("Part::Box", "X4")
+        a.addObject("Part::Box", "X2")
+        with self.assertRaises(Exception):
+            b.getObject("X1").setExpression("Placement.Base.x", "<<XdocA>>#<<X2>>.Width")
+        a.removeObject("X2")
+        b.getObject("X1").setExpression("Placement.Base.z", "X4.Length")
+        b.recompute()
+        b.removeObject("X1")

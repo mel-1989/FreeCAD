@@ -7388,6 +7388,30 @@ void PropertyXLinkContainer::updateDeps(std::map<DocumentObject*, bool>&& newDep
     // We want dependencies in terms of the to- and fromProperty if true.
     // Otherwise we only want the dependencies in terms of HEAD.
     bool fineGrainedProps = propDeps != nullptr;
+
+    // PropertyXLink::setValue() can throw (e.g. "Linked document not saved"). Create the XLinks
+    // of the new cross-document dependencies before any state is touched, so that a throw leaves
+    // _Deps, _PropDeps and the back-links as they were. Half an update, retried by
+    // ~AtomicPropertyChange, recorded dependencies that no DocInfo link tracked; they dangled
+    // once the target was freed (run 009, ASAN).
+    std::map<std::string, std::unique_ptr<PropertyXLink>> createdXLinks;
+    if (auto* owner0 = freecad_cast<App::DocumentObject*>(getContainer());
+        owner0 && owner0->isAttachedToDocument()) {
+        for (auto& v : newDeps) {
+            auto obj = v.first;
+            if (!obj || obj == owner0 || !obj->isAttachedToDocument()
+                || obj->getDocument() == owner0->getDocument() || _Deps.contains(obj)) {
+                continue;
+            }
+            auto found = _XLinks.find(obj->getFullName());
+            if (found == _XLinks.end() || !found->second) {
+                std::unique_ptr<PropertyXLink> created(createXLink());
+                created->setValue(obj);
+                createdXLinks[obj->getFullName()] = std::move(created);
+            }
+        }
+    }
+
     if (fineGrainedProps) {
         updateDepsProp(*propDeps);
     }
@@ -7420,12 +7444,16 @@ void PropertyXLinkContainer::updateDeps(std::map<DocumentObject*, bool>&& newDep
                 continue;
             }
             if (owner->getDocument() != obj->getDocument()) {
-                auto& xlink = _XLinks[obj->getFullName()];
-                if (!xlink) {
-                    xlink.reset(createXLink());
-                    xlink->setValue(obj);
+                auto found = _XLinks.find(obj->getFullName());
+                if (found == _XLinks.end() || !found->second) {
+                    auto created = createdXLinks.find(obj->getFullName());
+                    if (created == createdXLinks.end()) {
+                        created = createdXLinks.emplace(obj->getFullName(), createXLink()).first;
+                        created->second->setValue(obj);
+                    }
+                    found = _XLinks.insert_or_assign(created->first, std::move(created->second)).first;
                 }
-                xlink->setScope(v.second ? LinkScope::Hidden : LinkScope::Global);
+                found->second->setScope(v.second ? LinkScope::Hidden : LinkScope::Global);
             }
             else if (!v.second) {
                 obj->_addBackLink(owner);
