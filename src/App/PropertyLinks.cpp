@@ -7038,15 +7038,29 @@ void PropertyXLinkContainer::breakLink(App::DocumentObject* obj, bool clear)
 
 void PropertyXLinkContainer::removePropBackLinks(App::DocumentObject* owner, bool destroying)
 {
+    // While a whole document is torn down, same-document targets may already be freed (and
+    // _Deps still holds their pointers), so only cross-document targets are touched, and only
+    // those that are still objects of another open document.
+    std::set<DocumentObject*> liveXTargets;
+    if (destroying && !_PropDeps.empty()) {
+        for (auto* doc : GetApplication().getDocuments()) {
+            if (doc == owner->getDocument()) {
+                continue;
+            }
+            for (auto* o : doc->getObjects()) {
+                liveXTargets.insert(o);
+            }
+        }
+    }
     for (auto& [pair, hidden] : _PropDeps) {
         DocumentObject* target = pair.second;
-        // _Deps drops a target when it is removed, so membership proves the pointer is live.
-        // updateDepsProp adds these edges for cross-document targets too, so no same-document
-        // test here.
-        if (hidden || !target || !_Deps.contains(target)) {
+        // _Deps drops a target when it is removed, so membership proves the pointer is live
+        // outside document teardown. updateDepsProp adds these edges for cross-document
+        // targets too, so there is no same-document test otherwise.
+        if (hidden || !target) {
             continue;
         }
-        if (destroying && target->getDocument() == owner->getDocument()) {
+        if (destroying ? !liveXTargets.contains(target) : !_Deps.contains(target)) {
             continue;
         }
         if (target->isAttachedToDocument()) {
