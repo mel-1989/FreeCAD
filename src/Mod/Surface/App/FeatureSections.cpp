@@ -74,6 +74,11 @@ App::DocumentObjectExecReturn* Sections::execute()
                     }
                     curveSeq.Append(hCurve);
                 }
+                else {
+                    return new App::DocumentObjectExecReturn(
+                        "Section reference is not an edge (the reference may be lost)"
+                    );
+                }
             }
         }
     }

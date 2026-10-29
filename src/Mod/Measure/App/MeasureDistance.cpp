@@ -201,8 +201,11 @@ bool MeasureDistance::getShape(App::PropertyLinkSub* prop, TopoDS_Shape& rShape)
     }
     auto distanceInfo = std::dynamic_pointer_cast<Part::MeasureDistanceInfo>(info);
 
+    if (!distanceInfo) {
+        return false;
+    }
     rShape = distanceInfo->getShape();
-    return true;
+    return !rShape.IsNull();
 }
 
 bool MeasureDistance::distanceCircleCircle(const TopoDS_Shape& shape1, const TopoDS_Shape& shape2)

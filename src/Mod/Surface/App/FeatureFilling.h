@@ -50,6 +50,11 @@ public:
                                              // without a corresponding face)
     App::PropertyStringList UnboundFaces;   // Unbound constraint faces (C0, G1 and G2 are possible)
     App::PropertyIntegerList UnboundOrder;  // Order of constraint on curve faces
+    // Hidden mirrors of BoundaryFaces and UnboundFaces as links (one entry per edge, the sub-name is
+    // the face), so that the generic link layer carries the face names across model edits; the
+    // string lists are rewritten from them. Files without these properties open as before.
+    App::PropertyLinkSubList BoundaryFaceLinks;
+    App::PropertyLinkSubList UnboundFaceLinks;
     App::PropertyLinkSubList FreeFaces;     // Free constraint faces
     App::PropertyIntegerList FreeOrder;     // Order of constraint on free faces
     App::PropertyLinkSubList Points;        // Constraint Points (on Surface)
@@ -77,10 +82,15 @@ public:
     }
 
 private:
+    std::vector<std::string> followedFaces(
+        const App::PropertyLinkSubList& edges,
+        App::PropertyStringList& faces,
+        App::PropertyLinkSubList& links
+    );
     void addConstraints(
         BRepFill_Filling& builder,
         const App::PropertyLinkSubList& edges,
-        const App::PropertyStringList& faces,
+        const std::vector<std::string>& faces,
         const App::PropertyIntegerList& orders,
         Standard_Boolean bnd
     );

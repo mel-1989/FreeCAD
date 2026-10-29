@@ -27,6 +27,8 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepFill_Filling.hxx>
 #include <BRep_Tool.hxx>
+#include <TopExp.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <gp_Pnt.hxx>
@@ -56,6 +58,10 @@ Filling::Filling()
     ADD_PROPERTY_TYPE(UnboundOrder,(-1), "Filling", App::Prop_None,
                       "Order of constraint on curve faces (C0, G1 and G2 are possible)");
 
+    ADD_PROPERTY_TYPE(BoundaryFaceLinks,(nullptr,""), "Filling", App::Prop_Hidden,
+                      "Boundary faces as links (kept in sync with BoundaryFaces)");
+    ADD_PROPERTY_TYPE(UnboundFaceLinks,(nullptr,""), "Filling", App::Prop_Hidden,
+                      "Unbound constraint faces as links (kept in sync with UnboundFaces)");
     ADD_PROPERTY_TYPE(FreeFaces,(nullptr,""), "Filling", App::Prop_None, "Free constraint on a face");
     ADD_PROPERTY_TYPE(FreeOrder,(0), "Filling", App::Prop_None, "Order of constraint on free faces");
 
@@ -77,6 +83,8 @@ Filling::Filling()
 
     BoundaryEdges.setScope(App::LinkScope::Global);
     UnboundEdges.setScope(App::LinkScope::Global);
+    BoundaryFaceLinks.setScope(App::LinkScope::Global);
+    UnboundFaceLinks.setScope(App::LinkScope::Global);
     FreeFaces.setScope(App::LinkScope::Global);
     Points.setScope(App::LinkScope::Global);
     InitialFace.setScope(App::LinkScope::Global);
@@ -109,14 +117,14 @@ short Filling::mustExecute() const
 void Filling::addConstraints(
     BRepFill_Filling& builder,
     const App::PropertyLinkSubList& edges,
-    const App::PropertyStringList& faces,
+    const std::vector<std::string>& faces,
     const App::PropertyIntegerList& orders,
     Standard_Boolean bnd
 )
 {
     auto edge_obj = edges.getValues();
     auto edge_sub = edges.getSubValues();
-    auto face_sub = faces.getValues();
+    auto face_sub = faces;
     auto contvals = orders.getValues();
 
     // if the number of continuities doesn't match then fall back to C0
@@ -174,6 +182,17 @@ void Filling::addConstraints(
                     else {
                         TopoDS_Shape face = shape.getSubShape(subFace.c_str());
                         if (!face.IsNull() && face.ShapeType() == TopAbs_FACE) {
+                            // The face is named by a bare string that the link layer does not
+                            // follow when the model changes, so it can be stale. A face that does
+                            // not carry the boundary edge cannot be the intended support face.
+                            TopTools_IndexedMapOfShape faceEdges;
+                            TopExp::MapShapes(face, TopAbs_EDGE, faceEdges);
+                            if (!faceEdges.Contains(edge)) {
+                                throw Standard_Failure(
+                                    "Support face does not contain its boundary edge "
+                                    "(the face reference is out of date)"
+                                );
+                            }
                             if (!bnd) {
                                 // not a boundary edge: safe to add it directly
                                 builder.Add(TopoDS::Edge(edge), TopoDS::Face(face), cont, bnd);
@@ -259,6 +278,49 @@ void Filling::addConstraints(BRepFill_Filling& builder, const App::PropertyLinkS
     }
 }
 
+// The face names of BoundaryFaces and UnboundFaces are bare strings, which the link layer does not
+// follow when the model changes. The hidden link property mirrors them with the edges' objects; the
+// link layer rescues those, and the strings are rewritten from them. The links are rebuilt from the
+// strings whenever the user (or a stock file) supplies the strings.
+std::vector<std::string> Filling::followedFaces(
+    const App::PropertyLinkSubList& edges,
+    App::PropertyStringList& faces,
+    App::PropertyLinkSubList& links
+)
+{
+    std::vector<std::string> names = faces.getValues();
+    auto objs = edges.getValues();
+    if (names.size() != objs.size()) {
+        return names;
+    }
+    if (objs.empty()) {
+        return names;
+    }
+
+    bool rebuild = faces.isTouched() || links.getValues() != objs;
+    if (!rebuild) {
+        std::vector<std::string> followed = links.getSubValues();
+        if (followed.size() != names.size()) {
+            rebuild = true;
+        }
+        else {
+            for (const auto& n : followed) {
+                if (!n.empty() && n[0] == '?') {
+                    throw Standard_Failure("Support face reference is lost");
+                }
+            }
+            if (followed != names) {
+                faces.setValues(followed);
+                names = followed;
+            }
+        }
+    }
+    if (rebuild) {
+        links.setValues(objs, names);
+    }
+    return names;
+}
+
 App::DocumentObjectExecReturn* Filling::execute()
 {
     // Assign Variables
@@ -297,11 +359,23 @@ App::DocumentObjectExecReturn* Filling::execute()
 
         // Add the constraints of border curves/faces (bound)
         int numBoundaries = BoundaryEdges.getSize();
-        addConstraints(builder, BoundaryEdges, BoundaryFaces, BoundaryOrder, Standard_True);
+        addConstraints(
+            builder,
+            BoundaryEdges,
+            followedFaces(BoundaryEdges, BoundaryFaces, BoundaryFaceLinks),
+            BoundaryOrder,
+            Standard_True
+        );
 
         // Add additional edge constraints if available (unbound)
         if (UnboundEdges.getSize() > 0) {
-            addConstraints(builder, UnboundEdges, UnboundFaces, UnboundOrder, Standard_False);
+            addConstraints(
+                builder,
+                UnboundEdges,
+                followedFaces(UnboundEdges, UnboundFaces, UnboundFaceLinks),
+                UnboundOrder,
+                Standard_False
+            );
         }
 
         // Add additional constraint on free faces
