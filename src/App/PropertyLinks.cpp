@@ -1475,6 +1475,7 @@ static std::set<std::string> sameLineage(const GeoFeature& geo,
 /// trims agree), every other step by the exact identity gate. `candidate` is the one element of
 /// the type that derives from the stored name.
 static bool trimmedByFilletOrChamfer(const GeoFeature& geo,
+                                     const Data::MappedName& storedName,
                                      const std::vector<Data::MappedName>& aliases,
                                      const std::string& candidate)
 {
@@ -1555,6 +1556,78 @@ static bool trimmedByFilletOrChamfer(const GeoFeature& geo,
         if (trims != 1) {
             return false;
         }
+        // The candidate must descend through the referenced object's own lineage, not through a
+        // sibling (a Link, Mirror or compound child that now sits where the original was). The
+        // owners the stored name's own chain passes through, from the object the link resolves to
+        // down to the object that holds the matched alias, must be the owners of the candidate's
+        // chain once the inserted fillet or chamfer (the owner of the trim step's result) is
+        // taken out. A step through any other object disqualifies the candidate.
+        auto owners = [](const std::vector<ChainStep>& chain, bool skipTrim) {
+            std::vector<long> path;
+            for (const auto& st : chain) {
+                const bool trim = st.ops == modifiedFillet || st.ops == modifiedChamfer;
+                if (!(skipTrim && trim && st.resultOwner != 0)) {
+                    path.push_back(st.resultOwner);
+                }
+                if (&st == &chain.back()) {
+                    path.push_back(st.sourceOwner);
+                }
+            }
+            return path;
+        };
+        std::vector<ChainStep> storedSteps;
+        {
+            std::set<std::pair<long, std::string>> visited;
+            std::vector<Data::MappedName> one {steps.back().source};
+            const Data::MappedName& stored = storedName;
+            // the alias the candidate's chain ends at is the last step's source
+            if (!sameMappedName(stored, steps.back().source)
+                && !traceChainSteps(doc, data, 0, stored, one, 0, visited, storedSteps)) {
+                return false;
+            }
+        }
+        bool lineageOk = false;
+        if (storedSteps.empty()) {
+            // the stored name is the alias itself: the chain may only pass through the object the
+            // link resolves to and the inserted feature, nothing else
+            lineageOk = true;
+            for (const auto& st : steps) {
+                const bool trim = st.ops == modifiedFillet || st.ops == modifiedChamfer;
+                if (st.resultOwner != 0 && !trim) {
+                    lineageOk = false;
+                }
+            }
+        }
+        else {
+            // every owner on the stored name's path must be on the candidate's, in the same order;
+            // the candidate's path may hold more (the inserted feature and the features that
+            // consume it up to the referenced object), each of which must be a dependency of the
+            // referenced object. A path through a sibling lacks an owner of the stored path.
+            const std::vector<long> want = owners(storedSteps, false);
+            const std::vector<long> got = owners(steps, true);
+            auto deps = geo.getOutListRecursive();
+            std::set<long> inChain;
+            for (auto* o : deps) {
+                inChain.insert(o->getID());
+            }
+            size_t k = 0;
+            lineageOk = !want.empty() && want.front() == got.front();
+            for (size_t i = 0; lineageOk && i < got.size(); ++i) {
+                if (k < want.size() && got[i] == want[k]) {
+                    ++k;
+                }
+                else if (got[i] != 0 && !inChain.count(got[i])) {
+                    lineageOk = false;
+                }
+            }
+            lineageOk = lineageOk && k == want.size() && got.back() == want.back();
+        }
+        if (!lineageOk) {
+            FC_WARN("fillet/chamfer trim rejected: " << candidate << " in " << geo.getFullName()
+                                                     << " does not descend through the referenced"
+                                                        " object's own lineage");
+            return false;
+        }
         ++names;
     }
     return names > 0;
@@ -1591,7 +1664,7 @@ static std::vector<std::string> rescueTrimmedEdge(const GeoFeature& geo, const c
     if (matches.size() != 1
         || data->countSubElements(type.c_str())
             < static_cast<unsigned long>(Data::IndexedName(matches.begin()->c_str()).getIndex())
-        || !trimmedByFilletOrChamfer(geo, aliases, *matches.begin())) {
+        || !trimmedByFilletOrChamfer(geo, Data::MappedName(s.c_str()), aliases, *matches.begin())) {
         return {};
     }
     FC_WARN("recovered trimmed edge reference by history " << element << " -> " << *matches.begin()

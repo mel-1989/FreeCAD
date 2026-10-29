@@ -391,6 +391,84 @@ class TestTrimmedEdgeRescue(unittest.TestCase):
             self.assertEqual(list(down2.Base[1]), subs)
             self.assertAlmostEqual(down2.Shape.Volume, volume, 5)
 
+    def _fillet_copy_case(self, src, mode, op):
+        """A compound holds X = Cut(E, Tool) and Y, a copy of F = fillet or chamfer of E's vertical edges.
+        The reference is on X's top +Y edge. In one recompute the Tool removes X's edge and Y moves onto
+        E's position, so the copy's own trimmed edge lies where the original was. It is another solid's
+        edge: the reference must be reported, never retargeted."""
+        V = App.Vector
+        doc = App.newDocument("TrimCopy")
+        try:
+            pl = doc.addObject("Part::Plane", "Rect")
+            pl.Length, pl.Width = 40, 20
+            e = doc.addObject("Part::Extrusion", "E")
+            e.Base, e.Dir, e.Solid, e.LengthFwd = pl, V(0, 0, 10), True, 10
+            t = doc.addObject("Part::Box", "Tool")
+            t.Length, t.Width, t.Height = 50, 4, 4
+            t.Placement.Base = V(-5, 300, 300)
+            x = doc.addObject("Part::Cut", "X")
+            x.Base, x.Tool = e, t
+            doc.recompute()
+            vert = [i + 1 for i, ed in enumerate(e.Shape.Edges)
+                    if isinstance(ed.Curve, Part.Line) and abs(ed.Curve.Direction.z) > 0.999]
+            fl = doc.addObject("Part::Fillet" if op == "fillet" else "Part::Chamfer", "F")
+            fl.Base = e
+            fl.Edges = [(i, 3.0, 3.0) for i in vert]
+            if src == "link":
+                y = doc.addObject("App::Link", "Y")
+                y.LinkedObject = fl
+                y.LinkPlacement.Base = V(0, 100, 0)
+            elif src == "mirror1":
+                y = doc.addObject("Part::Mirroring", "Y")
+                y.Source, y.Normal, y.Base = fl, V(1, 0, 0), V(100, 0, 0)
+            elif src == "mirror2":
+                m1 = doc.addObject("Part::Mirroring", "M1")
+                m1.Source, m1.Normal, m1.Base = fl, V(0, 1, 0), V(0, 0, 0)
+                y = doc.addObject("Part::Mirroring", "Y")
+                y.Source, y.Normal, y.Base = m1, V(0, 1, 0), V(0, 50, 0)
+            else:
+                y = fl
+                fl.Placement.Base = V(0, 100, 0)
+            c = doc.addObject("Part::Compound", "Comp")
+            c.Links = [x, y] if mode == "move" else [x]
+            doc.recompute()
+
+            def on(ed):
+                return (isinstance(ed.Curve, Part.Line) and abs(ed.CenterOfMass.y - 20) < 1e-6
+                        and abs(ed.CenterOfMass.z - 10) < 1e-6)
+
+            nm = ["Edge%d" % (i + 1) for i, ed in enumerate(c.Shape.Edges)
+                  if on(ed) and abs(ed.Length - 40) < 1e-6][0]
+            f = doc.addObject("App::FeaturePython", "Consumer")
+            f.addProperty("App::PropertyLinkSub", "Ref")
+            f.Ref = (c, [nm])
+            doc.recompute()
+            t.Placement.Base = V(-5, 16, 6)
+            if src == "link":
+                y.LinkPlacement.Base = V(0, 0, 0)
+            elif src == "mirror1":
+                y.Base = V(20, 0, 0)
+            elif src == "mirror2":
+                y.Base = V(0, 0, 0)
+            else:
+                fl.Placement.Base = V(0, 0, 0)
+            if mode == "add":
+                c.Links = [x, y]
+            doc.recompute()
+            sub = f.Ref[1][0] if f.Ref and f.Ref[1] else None
+            self.assertTrue(sub is None or sub.startswith("?"),
+                            "retargeted to %s (%s %s %s)" % (sub, src, mode, op))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_trimmed_copy_of_a_fillet_or_chamfer_is_never_taken(self):
+        for src in ("link", "mirror1", "mirror2", "direct"):
+            for mode in ("move", "add"):
+                for op in ("fillet", "chamfer"):
+                    with self.subTest(src=src, mode=mode, op=op):
+                        self._fillet_copy_case(src, mode, op)
+
+
 
 def _trimmed_sig(before):
     """The signature the reference had after the fillet: the same line shortened by R at both ends."""
