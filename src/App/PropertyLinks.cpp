@@ -796,12 +796,14 @@ static PyObject* elementObject(const App::Property* p, const std::string& name)
 // Element anchors (cad-fork G01, slice 2). Whenever a link resolves one of its names, the shape
 // of the element it resolved to is kept with the link, keyed by the stored mapped name. When
 // the name is later missing (an undo or redo restored the link's names but not the shapes they
-// belong to, an insertion renamed everything) the shapes that upstream's search by plain index
-// or by element-map history proposes are compared with the anchor of the stored name: only an
-// element geometrically identical to what the link designated last time it resolved is taken.
-// A candidate without such proof is not taken (the reference stays missing, as it does in
-// FreeCAD without the fallback); a name with no anchor (never resolved in this session) is left
-// to the other gates. The shapes are OCC handles, so // are OCC handles, so an anchor costs a reference, not a copy.
+// belong to, an insertion renamed everything) the search runs from the anchor of the stored name
+// instead of from the previous shape of the element (exact vertices, then vertices only, then a
+// bounded drift). When that search returns several candidates only one geometrically identical
+// to the anchor is taken, and only if it is the only one, else none. A single candidate is
+// accepted without an identity check (the vertex-only and drift searches can return one that is
+// not identical); the other gates (retarget and recorded-geometry checks) still apply to it. A
+// name with no anchor (never resolved in this session) is left to the other gates. The shapes
+// are OCC handles, so an anchor costs a reference, not a copy.
 // ---------------------------------------------------------------------------------------------
 namespace
 {
