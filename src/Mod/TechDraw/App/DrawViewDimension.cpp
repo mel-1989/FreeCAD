@@ -58,6 +58,7 @@
 
 #include <App/Application.h>
 #include <App/Document.h>
+#include <App/ElementNamingUtils.h>
 #include <Base/Console.h>
 #include <Base/Converter.h>
 #include <Base/Parameter.h>
@@ -478,8 +479,77 @@ short DrawViewDimension::mustExecute() const
     return DrawView::mustExecute();
 }
 
+//! true if the dimension is in a state where we may judge its references: it is allowed to update, its view
+//! has geometry, and the references are not being edited.  Used by the broken-reference checks below.
+static bool canJudgeReferences(DrawViewDimension* dim)
+{
+    if (!dim->keepUpdated() || !Preferences::autoCorrectDimRefs() || !Preferences::useExactMatchOnDims()) {
+        return false;
+    }
+    DrawViewPart* dvp = dim->getViewPart();
+    return dvp && dvp->hasGeometry();
+}
+
+//! true if this dimension is built on 2d-only references and one of them names an edge or
+//! vertex index that does not exist in a view that has geometry.  Only meaningful when
+//! the dimension would otherwise be skipped by okToProceed.
+static bool hasOutOfRangeReference2d(DrawViewDimension* dim)
+{
+    if (!canJudgeReferences(dim) || !dim->References3D.getValues().empty()) {
+        return false;
+    }
+    const std::vector<std::string>& subs = dim->References2D.getSubValues();
+    if (subs.empty() || dim->References2D.getValues().empty()) {
+        return false;
+    }
+    for (const auto& sub : subs) {
+        if (sub.empty()) {
+            return false;  // the dimension is still being built
+        }
+    }
+    return !dim->checkReferences2D();
+}
+
+//! true if a 3d reference names an element that the link layer could not resolve any more (the
+//! sub-name carries the missing-element marker "?").  okToProceed skips such a dimension silently,
+//! so it would keep showing the value of geometry that is gone.
+static bool hasMissingReference3d(DrawViewDimension* dim)
+{
+    if (!canJudgeReferences(dim)) {
+        return false;
+    }
+    for (const auto& sub : dim->References3D.getSubValues()) {
+        if (Data::hasMissingElement(sub.c_str())) {
+            return true;
+        }
+    }
+    return false;
+}
+
 App::DocumentObjectExecReturn* DrawViewDimension::execute()
 {
+    if (hasMissingReference3d(this)) {
+        // fork change (brief G01, TechDraw slice): a missing 3d element used to make okToProceed skip the
+        // dimension silently.  Try the autocorrect rescue first (it rewrites the references when a unique
+        // replacement exists); if the element is still missing the dimension reports the break.
+        autocorrectReferences();
+        if (hasMissingReference3d(this)) {
+            return new App::DocumentObjectExecReturn(
+                std::string("Dimension reference is broken: the 3D edge or vertex it was created on no longer exists and no unique replacement was found. Use Repair Dimension to re-select the geometry."));
+        }
+    }
+
+    if (hasOutOfRangeReference2d(this)) {
+        // a 2d-only reference names an edge or vertex index the view no longer has.  Look for the saved
+        // geometry elsewhere in the view; if it is not there the dimension reports the break instead of
+        // keeping a stale value.
+        autocorrectReferences();
+        if (hasOutOfRangeReference2d(this)) {
+            return new App::DocumentObjectExecReturn(
+                std::string("Dimension reference is broken: an edge or vertex of the view no longer exists. Use Repair Dimension to re-select the geometry."));
+        }
+    }
+
     if (!okToProceed()) {
         // if we set an error here, it will be triggered many times during
         // document load.
@@ -491,8 +561,14 @@ App::DocumentObjectExecReturn* DrawViewDimension::execute()
         m_referencesCorrect = autocorrectReferences();
     }
     if (!m_referencesCorrect) {
-        // this test needs Phase 2 of auto correct to be useful
         Base::Console().log("The references for {} have changed and autocorrect could not match the geometry\n", Label.getValue());
+        if (Preferences::useExactMatchOnDims()) {
+            // fork change (brief G01, TechDraw slice): do not keep showing the value of geometry that
+            // is gone or has been replaced by something different.  Report the break; the value is
+            // not changed.  Without the matcher every reference would look broken, so it needs the matcher.
+            return new App::DocumentObjectExecReturn(
+                std::string("Dimension references no longer match the geometry they were created on and could not be repaired automatically. Use Repair Dimension to re-select the geometry."));
+        }
     }
 
     resetLinear();
@@ -603,7 +679,19 @@ bool DrawViewDimension::autocorrectReferences()
             return false;
 
         }
-        if (repairedRefs.front().is3d()) {
+        // rewrite the references only if autocorrect actually moved one; refs that were kept because the
+        // geometry under them was edited stay as they are, but the saved geometry follows the edit so a
+        // later index shift is judged against the current shape.
+        ReferenceVector currentRefs = getEffectiveReferences();
+        bool changed = currentRefs.size() != repairedRefs.size();
+        for (size_t i = 0; !changed && i < currentRefs.size(); i++) {
+            changed = currentRefs.at(i).getObject() != repairedRefs.at(i).getObject()
+                || currentRefs.at(i).getSubName() != repairedRefs.at(i).getSubName();
+        }
+        if (!changed) {
+            updateSavedGeometry();
+        }
+        else if (repairedRefs.front().is3d()) {
             setReferences3d(repairedRefs);
         }
         else {
@@ -1748,6 +1836,12 @@ void DrawViewDimension::updateSavedGeometry()
         if (entry.getSubName().empty()) {
             // view only reference has no subelement. 3d references will be next.
             continue;
+        }
+        if (entry.is3d() && Data::hasMissingElement(entry.getSubName(true).c_str())) {
+            // The link layer marked this element missing ("?").  What the stale name resolves to now is
+            // not what the user dimensioned, so keep the geometry saved while the reference was good:
+            // autocorrect needs it to look for a replacement.
+            return;
         }
         if (entry.hasGeometry()) {
             newGeometry.emplace_back(entry.asCanonicalTopoShape());
