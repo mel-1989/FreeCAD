@@ -403,6 +403,113 @@ class TestNamePathRetarget(unittest.TestCase):
         self.assertFalse(cons.Ref[1][0].startswith("?"))
 
 
+    # ------------------------------------------- the same child, another nesting level
+    def _twin(self, x, kind):
+        """A twin of X 500 mm away in y (a mirror, or a cut that changes nothing near the carrier).
+        Coincident twins make stock FreeCAD itself report, so they would not be a control."""
+        d = self.doc
+        if kind == "mirror":
+            t = d.addObject("Part::Mirroring", "T")
+            t.Source = x
+            t.Normal = V(1, 0, 0)
+            t.Base = V(W / 2, 0, 0)
+        else:
+            tt = d.addObject("Part::Box", "TT")
+            tt.Placement.Base = V(-300, 300, 300)
+            t = d.addObject("Part::Cut", "T")
+            t.Base = x
+            t.Tool = tt
+        t.Placement.Base = V(0, 500, 0)
+        return t
+
+    def _nest(self, x, levels):
+        """X wrapped in `levels` sub-compounds, innermost first."""
+        node = x
+        for i in range(levels):
+            c = self.doc.addObject("Part::Compound", "Wrap%d" % i)
+            c.Links = [node]
+            node = c
+        return node
+
+    def _regroup(self, levels_before, levels_after, twin):
+        """C = [wrap^before(X), T?] with a reference on X's top edge; then C = [wrap^after(X), T?]
+        with nothing else changed. The owner of the element is X throughout, so the reference must
+        resolve exactly as it does without the owner check."""
+        d = self.doc
+        e, t, x = self._plate()
+        tw = self._twin(x, twin) if twin else None
+        c = d.addObject("Part::Compound", "C")
+        links = [self._nest(x, levels_before)] + ([tw] if tw else [])
+        c.Links = links
+        d.recompute()
+        names = [n for n in _carrier_edges(c.Shape) if 0 in _solids_of(c.Shape, n)]
+        self.assertGreaterEqual(len(names), 1)
+        cons = self._consumer(c, names[0])
+        after = self._nest(x, levels_after)
+        c.Links = [after] + ([tw] if tw else [])
+        d.recompute()
+        sub = cons.Ref[1][0]
+        self.assertFalse(sub.startswith("?"), "reference lost on regrouping: %s" % sub)
+        self.assertAlmostEqual(c.Shape.getElement(sub).Length, W, places=6)
+        self.assertEqual(_solids_of(c.Shape, sub), [0])
+        return c, cons
+
+    def test_unwrapped_from_a_sub_compound_keeps_the_reference(self):
+        self._regroup(1, 0, None)
+
+    def test_wrapped_into_a_sub_compound_keeps_the_reference(self):
+        self._regroup(0, 1, None)
+
+    def test_unwrapped_with_a_cut_twin_keeps_the_reference(self):
+        self._regroup(1, 0, "cut")
+
+    def test_wrapped_with_a_cut_twin_keeps_the_reference(self):
+        self._regroup(0, 1, "cut")
+
+    def test_unwrapped_with_a_mirror_twin_keeps_the_reference(self):
+        self._regroup(1, 0, "mirror")
+
+    def test_wrapped_with_a_mirror_twin_keeps_the_reference(self):
+        self._regroup(0, 1, "mirror")
+
+    def test_unwrapped_from_two_sub_compounds_keeps_the_reference(self):
+        self._regroup(2, 0, None)
+
+    def test_unwrapped_from_two_sub_compounds_with_a_mirror_twin(self):
+        self._regroup(2, 0, "mirror")
+
+    # ------------------------------ history is not ownership: X made from Q, twin Q is not X
+    def _derived(self, how):
+        d = self.doc
+        e, t, q = self._plate()  # the Cut named X by the fixture plays Q here
+        if how == "refine":
+            x = d.addObject("Part::Refine", "XR")
+            x.Source = q
+        else:
+            tt = d.addObject("Part::Box", "Tool2")
+            tt.Placement.Base = V(-300, 300, 300)
+            x = d.addObject("Part::Cut", "XC")
+            x.Base = q
+            x.Tool = tt
+        c = d.addObject("Part::Compound", "C")
+        c.Links = [x, q]
+        d.recompute()
+        names = [n for n in _carrier_edges(c.Shape) if 0 in _solids_of(c.Shape, n)]
+        self.assertEqual(len(names), 1)
+        cons = self._consumer(c, names[0])
+        c.Links = [q]  # X leaves; Q has the same edge and its tag is in X's history
+        d.recompute()
+        return c, cons
+
+    def test_dropped_refine_of_q_does_not_retarget_to_q(self):
+        c, cons = self._derived("refine")
+        self._assert_reported(cons)
+
+    def test_dropped_cut_of_q_does_not_retarget_to_q(self):
+        c, cons = self._derived("cut")
+        self._assert_reported(cons)
+
+
 class TestNamePathBodyControl(unittest.TestCase):
     """A PartDesign body split by a pocket and rejoined by a pad: an unchanged edge keeps its
     reference (the child maps of a body carry the tags of later features of one chain; only a

@@ -975,19 +975,62 @@ static bool hasAnchor(const PropertyLinkBase* link, const GeoFeature& geo, const
 
 static bool parseStoredElement(const char* element, std::string& mapped, std::string& type);
 
+static void parseOwnerSegment(const Data::MappedName& name, long& tag, int& pos, int& windowStart)
+{
+    // pos: where the trailing ";:H<tag>" starts; windowStart: where the postfix that preceded it
+    // (the op codes the tag segment encodes, `:n` in ";:H<tag>:n,E") begins.
+    tag = 0;
+    pos = name.findTagInElementName(&tag, &windowStart, nullptr, nullptr, true, false);
+    tag = std::labs(tag);
+}
+
+/// The object that owns an element: the tag the element's name ends with, looked through any
+/// number of Part::Compound containers. A compound child map encodes each of its child's elements
+/// with the child's tag, after the postfix of the grandchild map that was expanded into it, so
+/// the name of an element of X inside C1 inside C2 ends ";:H<X>,E;:H<C1>:8,E;:H<C2>:12,E": the
+/// `:n` of a tag is the length of the postfix in front of it, and for a container that is the
+/// chain of the containers and the owner inside it. Only tags in that window are read; the tags
+/// before it are the element's history (an X made from Q has Q's tag there) and never count.
+/// A tag whose object is not a Part::Compound (or is gone) is the owner; so is a container whose
+/// window holds no tag. Returns 0 when the name carries no tag.
+static long ownerTagOfElement(const App::Document* doc, const Data::MappedName& name)
+{
+    static const Base::Type compoundType = Base::Type::fromName("Part::Compound");
+    Data::MappedName cur(name);
+    long owner = 0;
+    for (int depth = 0; depth < 64; ++depth) {
+        long tag = 0;
+        int pos = -1;
+        int windowStart = 0;
+        parseOwnerSegment(cur, tag, pos, windowStart);
+        if (pos < 0 || tag == 0) {
+            return owner;
+        }
+        owner = tag;
+        const auto* obj = doc ? doc->getObjectByID(tag) : nullptr;
+        if (!obj || compoundType.isBad() || !obj->isDerivedFrom(compoundType)
+            || windowStart < 0 || windowStart >= pos) {
+            return owner;
+        }
+        cur = Data::MappedName(cur, windowStart, pos - windowStart);
+    }
+    return owner;
+}
+
 /// A candidate found by the anchored search must come from the same child of a compound as the
 /// element the link designated. A compound that drops a child, or a coincident copy of the same
 /// solid (a Mirror, a Link, a frozen copy, a sibling child) that joins or moves onto the carrier
 /// while the referenced edge is cut away, offers an element with the very same vertices, curve
 /// and midpoint under another child; geometry cannot tell it from the original, ownership can.
 /// D6: an element of another solid is a different element, so it is reported rather than taken.
-/// The owner is the child object's tag. For the stored name it is the tag the name ends with (the
-/// compound's element map ends the name of every child element with the child's tag); for the
-/// candidate it is the tag of the child map whose index range holds it. Only a candidate that is
-/// in a child map of the compound is judged: for a shape with no child maps, or a stored name
-/// that carries no tag, or a shape that is not a Part::Compound, nothing is known about the owner
-/// and the old behaviour stays (fork/main takes the geometric match). A Link or
-/// frozen copy that carries the very same tag as the referenced child is not separated.
+/// The owner (ownerTagOfElement) is read from the mapped name on both sides, the stored name and
+/// the candidate's, so wrapping X into a sub-compound or unwrapping it keeps the owner. Only a
+/// candidate that is in a child map of the compound is judged (child maps form for five or more
+/// elements of a type): for a shape with no child maps, or a stored name that carries no tag, or
+/// a shape that is not a Part::Compound, nothing is known about the owner and the old behaviour
+/// stays (fork/main takes the geometric match). A Link or frozen copy that carries the very same
+/// tag as the referenced child is not separated, and neither is a container that has been deleted
+/// since the name was stored.
 static void filterByChildTag(const GeoFeature& geo,
                              const char* element,
                              std::vector<std::string>& names)
@@ -1006,13 +1049,8 @@ static void filterByChildTag(const GeoFeature& geo,
     if (names.empty() || !data || !parseStoredElement(element, mapped, type)) {
         return;
     }
-    long stored = 0;
-    if (Data::MappedName(mapped.c_str())
-            .findTagInElementName(&stored, nullptr, nullptr, nullptr, false, false)
-        < 0) {
-        return;
-    }
-    stored = std::labs(stored);
+    const App::Document* doc = geo.getDocument();
+    const long stored = ownerTagOfElement(doc, Data::MappedName(mapped.c_str()));
     if (stored == 0) {
         return;
     }
@@ -1028,7 +1066,8 @@ static void filterByChildTag(const GeoFeature& geo,
             const int first = c.indexedName.getIndex() + c.offset;
             if (std::strcmp(c.indexedName.getType(), idx.getType()) == 0
                 && idx.getIndex() >= first && idx.getIndex() < first + c.count) {
-                other = std::labs(c.tag) != stored;
+                const long cand = ownerTagOfElement(doc, data->getMappedName(idx));
+                other = cand != 0 && cand != stored;
                 break;
             }
         }
