@@ -547,16 +547,19 @@ void Document::_checkTransaction(DocumentObject* pcDelObj, const Property* What,
     }
     // When the object is going to be deleted we have to check if it has already been added
     // to the undo transactions
-    // The redo stack holds raw pointers too (a redone removal re-deletes the object), so an
-    // object parked there must not be destroyed out of transaction either; opening the
-    // transaction clears the redo stack.
     auto referenced = [pcDelObj](const std::list<Transaction*>& transactions) {
         return std::any_of(transactions.begin(), transactions.end(), [pcDelObj](Transaction* t) {
             return t->hasObject(pcDelObj);
         });
     };
-    if (referenced(mUndoTransactions) || referenced(mRedoTransactions)) {
+    if (referenced(mUndoTransactions)) {
         _openTransaction("Delete");
+    }
+    else if (referenced(mRedoTransactions)) {
+        // The redo stack holds raw pointers too (a redone removal re-deletes the object). A
+        // change made outside any transaction invalidates redo anyway, so drop the redo stack
+        // instead of opening an undo step nobody commits.
+        _clearRedos();
     }
 }
 
