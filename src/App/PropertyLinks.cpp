@@ -366,6 +366,23 @@ void PropertyLinkBase::updateElementReferences(DocumentObject* feature, bool rev
     std::vector<PropertyLinkBase*> props;
     props.reserve(it->second.size());
     props.insert(props.end(), it->second.begin(), it->second.end());
+    // The set is ordered by pointer address, which varies from run to run; the order in which the
+    // links update changes what a rescue sees, so fix it: owner object id, then property name
+    // (no two links share both).
+    auto sortKey = [](PropertyLinkBase* p) {
+        long id = -1;
+        std::string name;
+        if (auto* c = p->getContainer()) {
+            if (auto* o = freecad_cast<App::DocumentObject*>(c)) {
+                id = static_cast<long>(o->getID());
+            }
+            name = p->getName() ? p->getName() : "";
+        }
+        return std::make_pair(id, name);
+    };
+    std::stable_sort(props.begin(), props.end(), [&](PropertyLinkBase* a, PropertyLinkBase* b) {
+        return sortKey(a) < sortKey(b);
+    });
     for (auto prop : props) {
         if (prop->getContainer()) {
             try {
@@ -784,7 +801,7 @@ static PyObject* elementObject(const App::Property* p, const std::string& name)
 // element geometrically identical to what the link designated last time it resolved is taken.
 // A candidate without such proof is not taken (the reference stays missing, as it does in
 // FreeCAD without the fallback); a name with no anchor (never resolved in this session) is left
-// to the other gates. The shapes are OCC handles, so an anchor costs a reference, not a copy.
+// to the other gates. The shapes are OCC handles, so // are OCC handles, so an anchor costs a reference, not a copy.
 // ---------------------------------------------------------------------------------------------
 namespace
 {
