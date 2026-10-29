@@ -1232,6 +1232,66 @@ static std::vector<std::string> rescueByHistory(const GeoFeature& geo,
     return {};
 }
 
+namespace
+{
+// Records a restore has used up during one pass over the subs of a link. They are erased when the
+// pass is over, not at once: the property announces its change (and a transaction keeps its copy
+// of the value) before the pass finishes, so the copy an undo restores still carries them, and a
+// link that holds the same sub twice (an Assembly joint reference with its element repeated)
+// finds the record for its second copy too.
+struct SpentSink
+{
+    const PropertyLinkBase* prop;
+    std::vector<std::string> keys;
+};
+thread_local SpentSink* spentSink = nullptr;
+
+struct SpentScope
+{
+    SpentSink sink;
+    SpentSink* saved;
+    const std::vector<std::string>& subs;
+    const std::vector<PropertyLinkBase::ShadowSub>& shadows;
+    SpentScope(const PropertyLinkBase* prop,
+               const std::vector<std::string>& s,
+               const std::vector<PropertyLinkBase::ShadowSub>& sh)
+        : sink {prop, {}}
+        , saved(spentSink)
+        , subs(s)
+        , shadows(sh)
+    {
+        spentSink = &sink;
+    }
+    SpentScope(const SpentScope&) = delete;
+    SpentScope& operator=(const SpentScope&) = delete;
+    ~SpentScope()
+    {
+        spentSink = saved;
+        auto it = _RescueRecords.find(sink.prop);
+        if (sink.keys.empty() || it == _RescueRecords.end()) {
+            return;
+        }
+        // a key some sub still carries (its restore did not happen) keeps its record
+        auto carried = [&](const std::string& key) {
+            for (std::size_t i = 0; i < subs.size(); ++i) {
+                if (i < shadows.size() ? rescueNameOf(subs[i], shadows[i]) == key : subs[i] == key) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        auto& recs = it->second;
+        recs.erase(std::remove_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
+            return std::find(sink.keys.begin(), sink.keys.end(), x.key) != sink.keys.end()
+                && !carried(x.key);
+        }), recs.end());
+        if (recs.empty()) {
+            _RescueRecords.erase(it);
+        }
+    }
+};
+}  // namespace
+
 /// Restore, by name only, the sub-element a history rescue rewrote (see RescueRecord). Walks the
 /// chain of records from the link's current name; the first record whose original target is `obj`
 /// and whose original name resolves in `obj` wins. Nothing is searched by geometry or history, so
@@ -1275,6 +1335,11 @@ static bool restoreByRescueRecord(const PropertyLinkBase* prop,
                 restoredSub = r->sub;
                 FC_WARN("restored element reference " << key << " -> " << r->shadow.newName
                                                       << " in " << obj->getFullName());
+                if (spentSink && spentSink->prop == prop) {
+                    // spent when the pass is over (SpentScope)
+                    spentSink->keys.insert(spentSink->keys.end(), visited.begin(), visited.end());
+                    return true;
+                }
                 recs.erase(std::remove_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
                     return std::find(visited.begin(), visited.end(), x.key) != visited.end();
                 }), recs.end());
@@ -2643,6 +2708,7 @@ static bool updateLinkReference(App::PropertyLinkBase* prop,
     }
     int i = 0;
     bool touched = false;
+    SpentScope spent(prop, subs, shadows);
     for (auto& sub : subs) {
         if (prop->_updateElementReference(feature,
                                           link,
@@ -4017,6 +4083,7 @@ void PropertyLinkSubList::updateElementReference(DocumentObject* feature, bool r
     }
     int i = 0;
     bool touched = false;
+    SpentScope spent(this, _lSubList, _ShadowSubList);
     for (auto& sub : _lSubList) {
         auto obj = _lValueList[i];
         if (_updateElementReference(feature,
