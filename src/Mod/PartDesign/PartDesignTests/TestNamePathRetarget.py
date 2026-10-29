@@ -460,6 +460,71 @@ class TestNamePathRetarget(unittest.TestCase):
     def test_wrapped_into_a_sub_compound_keeps_the_reference(self):
         self._regroup(0, 1, None)
 
+    # App::Part and App::LinkGroup only group children, so wrapping X in one is not a new owner
+    def _box_edge_in(self, shape, solid):
+        """The edge of a 10 mm box at (5, 10, 10) (its top +Y edge), in solid index `solid`."""
+        for i, e in enumerate(shape.Edges):
+            m = e.CenterOfMass
+            if abs(m.x - 5) < 1e-6 and abs(m.z - 10) < 1e-6 and abs(m.y % 100 - 10) < 1e-6:
+                if any(e.isSame(x) for x in shape.Solids[solid].Edges):
+                    return "Edge%d" % (i + 1)
+        self.fail("no top edge in solid %d" % solid)
+
+    def _group(self, kind, x):
+        d = self.doc
+        if kind == "part":
+            w = d.addObject("App::Part", "W")
+            w.addObject(x)
+        else:
+            w = d.addObject("App::LinkGroup", "W")
+            w.ElementList = [x]
+        return w
+
+    def _grouped(self, kind, unwrap):
+        """C = [W[X], Y] (unwrap) or [X, Y] with a reference on X's top edge, then the other."""
+        d = self.doc
+        x = d.addObject("Part::Box", "X")
+        y = self._box("Y", 100)
+        w = self._group(kind, x)
+        c = d.addObject("Part::Compound", "C")
+        c.Links = [w, y] if unwrap else [x, y]
+        d.recompute()
+        cons = self._consumer(c, self._box_edge_in(c.Shape, 0))
+        c.Links = [x, y] if unwrap else [w, y]
+        d.recompute()
+        sub = cons.Ref[1][0]
+        self.assertFalse(sub.startswith("?"), "reference lost on regrouping: %s" % sub)
+        self.assertEqual(sub, self._box_edge_in(c.Shape, 0))
+
+    def test_unwrapped_from_an_app_part_keeps_the_reference(self):
+        self._grouped("part", True)
+
+    def test_wrapped_into_an_app_part_keeps_the_reference(self):
+        self._grouped("part", False)
+
+    def test_unwrapped_from_a_link_group_keeps_the_reference(self):
+        self._grouped("linkgroup", True)
+
+    def test_wrapped_into_a_link_group_keeps_the_reference(self):
+        self._grouped("linkgroup", False)
+
+    def test_dropped_child_twin_in_an_app_part_is_not_taken(self):
+        """C = [P[Q], X] with Q a coincident copy of X in an App::Part sibling; the reference is
+        on X's edge and X is then dropped: the only match is Q's edge, in the other container."""
+        d = self.doc
+        x = d.addObject("Part::Box", "X")
+        q = d.addObject("Part::Box", "Q")
+        p = d.addObject("App::Part", "P")
+        p.addObject(q)
+        c = d.addObject("Part::Compound", "C")
+        c.Links = [p, x]
+        d.recompute()
+        cons = self._consumer(c, self._box_edge_in(c.Shape, 1))
+        c.Links = [p]
+        d.recompute()
+        self.assertEqual(len(c.Shape.Solids), 1)
+        self._assert_reported(cons)
+
     def test_unwrapped_with_a_cut_twin_keeps_the_reference(self):
         self._regroup(1, 0, "cut")
 

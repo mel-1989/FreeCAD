@@ -50,6 +50,8 @@
 #include "ElementNamingUtils.h"
 #include "GeoFeature.h"
 #include "ComplexGeoData.h"
+#include "GeoFeatureGroupExtension.h"
+#include "Link.h"
 
 
 FC_LOG_LEVEL_INIT("PropertyLinks", true, true)
@@ -984,22 +986,45 @@ static void parseOwnerSegment(const Data::MappedName& name, long& tag, int& pos,
     tag = std::labs(tag);
 }
 
-/// The object that owns an element: the tag the element's name ends with, looked through any
-/// number of Part::Compound containers. A compound child map encodes each of its child's elements
-/// with the child's tag, after the postfix of the grandchild map that was expanded into it, so
-/// the name of an element of X inside C1 inside C2 ends ";:H<X>,E;:H<C1>:8,E;:H<C2>:12,E": the
-/// `:n` of a tag is the length of the postfix in front of it, and for a container that is the
-/// chain of the containers and the owner inside it. Only tags in that window are read; the tags
-/// before it are the element's history (an X made from Q has Q's tag there) and never count.
-/// A tag whose object exists and is not a Part::Compound is the owner. Returns 0 (owner unknown)
-/// when the name carries no tag, when the walk meets a tag whose object is gone (a container
-/// deleted since the name was stored), or when it ends on a Part::Compound whose window cannot be
-/// read: a child with fewer than five elements of the type is named element by element into the
-/// container, ";:H<child>,E;:H<C1>,E" with no `:n`, and the text in front of that tag is not
-/// guaranteed to end in the child's own tag (the encoder does not force it), so it is not read.
-static long ownerTagOfElement(const App::Document* doc, const Data::MappedName& name)
+/// Whether an object only groups children and has no geometry of its own, so that the name of an
+/// element of a child carries the container's tag after a `:n` window that holds the child's
+/// chain: a Part::Compound, an App::LinkGroup, or an App::Part and any other holder of the
+/// GeoFeatureGroupExtension. A PartDesign body (Part::BodyBase) is the exception: it has the
+/// extension but shapes of its own, its window holds the tag of its tip feature, which changes
+/// with every feature added, so it is an owner and never looked through. A plain App::Link is not
+/// listed because it passes the names of its target through unchanged. A wrapper that computes a
+/// shape (CompoundFilter, a Python compound, Refine) is a new object with a shape of its own and
+/// stays opaque: D6 treats an element it produces as another element.
+static bool isTransparentContainer(const App::DocumentObject* obj)
 {
     static const Base::Type compoundType = Base::Type::fromName("Part::Compound");
+    static const Base::Type bodyType = Base::Type::fromName("Part::BodyBase");
+    if (!compoundType.isBad() && obj->isDerivedFrom(compoundType)) {
+        return true;
+    }
+    if (obj->isDerivedFrom<App::LinkGroup>()) {
+        return true;
+    }
+    return obj->hasExtension(App::GeoFeatureGroupExtension::getExtensionClassTypeId())
+        && (bodyType.isBad() || !obj->isDerivedFrom(bodyType));
+}
+
+/// The object that owns an element: the tag the element's name ends with, looked through any
+/// number of transparent containers (isTransparentContainer). A container's map encodes each
+/// element of a child with the child's tag, after the postfix of the grandchild map that was
+/// expanded into it, so the name of an element of X inside C1 inside C2 ends
+/// ";:H<X>,E;:H<C1>:8,E;:H<C2>:12,E": the `:n` of a tag is the length of the postfix in front of
+/// it, and for a container that is the chain of the containers and the owner inside it. Only tags
+/// in that window are read; the tags before it are the element's history (an X made from Q has
+/// Q's tag there) and never count. A tag whose object exists and is not a transparent container
+/// is the owner. Returns 0 (owner unknown) when the name carries no tag, when the walk meets a
+/// tag whose object is gone (a container deleted since the name was stored), or when it ends on a
+/// container whose window cannot be read: a child with fewer than five elements of the type is
+/// named element by element into the container, ";:H<child>,E;:H<C1>,E" with no `:n`, and the
+/// text in front of that tag is not guaranteed to end in the child's own tag (the encoder does
+/// not force it), so it is not read.
+static long ownerTagOfElement(const App::Document* doc, const Data::MappedName& name)
+{
     Data::MappedName cur(name);
     for (int depth = 0; depth < 64; ++depth) {
         long tag = 0;
@@ -1010,10 +1035,10 @@ static long ownerTagOfElement(const App::Document* doc, const Data::MappedName& 
             return 0;
         }
         const auto* obj = doc ? doc->getObjectByID(tag) : nullptr;
-        if (!obj || compoundType.isBad()) {
+        if (!obj) {
             return 0;
         }
-        if (!obj->isDerivedFrom(compoundType)) {
+        if (!isTransparentContainer(obj)) {
             return tag;
         }
         if (windowStart < 0 || windowStart >= pos) {
@@ -1031,12 +1056,13 @@ static long ownerTagOfElement(const App::Document* doc, const Data::MappedName& 
 /// and midpoint under another child; geometry cannot tell it from the original, ownership can.
 /// D6: an element of another solid is a different element, so it is reported rather than taken.
 /// The owner (ownerTagOfElement) is read from the mapped name on both sides, the stored name and
-/// the candidate's, so wrapping X into a sub-compound or unwrapping it keeps the owner. Only a
+/// the candidate's, so wrapping X into a sub-compound, App::Part or LinkGroup, or unwrapping it,
+/// keeps the owner. Only a
 /// candidate that is in a child map of the compound is judged (child maps form for five or more
 /// elements of a type): for a shape with no child maps, or a stored name that carries no tag, or
 /// a shape that is not a Part::Compound, nothing is known about the owner and the old behaviour
 /// stays (fork/main takes the geometric match). The same holds when either owner is unknown
-/// (a deleted container, or a compound with no readable window), so a reference is only given up
+/// (a deleted container, or a container with no readable window), so a reference is only given up
 /// on when both owners are known non-compound objects and differ. A Link or frozen copy that
 /// carries the very same tag as the referenced child is not separated.
 static void filterByChildTag(const GeoFeature& geo,
