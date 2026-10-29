@@ -7036,6 +7036,11 @@ void PropertyXLinkContainer::breakLink(App::DocumentObject* obj, bool clear)
     // (TransactionDocumentObject::applyNew rebuilds back-links from getOutListProp())
 }
 
+namespace App
+{
+bool isLiveDocumentObject(const DocumentObject* obj);
+}
+
 void PropertyXLinkContainer::removePropBackLinks(App::DocumentObject* owner)
 {
     if (_PropDeps.empty()) {
@@ -7043,18 +7048,10 @@ void PropertyXLinkContainer::removePropBackLinks(App::DocumentObject* owner)
     }
     // _PropDeps keeps pointers to targets that may have been removed or freed since (it is
     // retained on removal so an undo can re-create the edges, and a document teardown frees
-    // objects one by one), so a target is only touched while it is still an object of an open
-    // document. During teardown the document's own array is already empty, which leaves
-    // exactly the cross-document targets.
-    std::set<DocumentObject*> live;
-    for (auto* doc : GetApplication().getDocuments()) {
-        for (auto* o : doc->getObjects()) {
-            live.insert(o);
-        }
-    }
+    // objects one by one), so a target is only touched while it is still a live object.
     for (auto& [pair, hidden] : _PropDeps) {
         DocumentObject* target = pair.second;
-        if (!hidden && target && live.contains(target) && target->isAttachedToDocument()) {
+        if (!hidden && target && isLiveDocumentObject(target) && target->isAttachedToDocument()) {
             target->_removeBackLinkProp(getName(), owner, pair.first.c_str());
         }
     }
