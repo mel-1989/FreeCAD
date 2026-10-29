@@ -66,17 +66,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <GeomAbs_CurveType.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Shape.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Lin.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
 
 #include <App/Document.h>
 #include <App/ElementNamingUtils.h>
@@ -91,7 +94,9 @@
 #include "DimensionGeometry.h"
 #include "DimensionAutoCorrect.h"
 #include "DrawUtil.h"
+#include "DrawViewPart.h"
 #include "Preferences.h"
+#include "ShapeExtractor.h"
 
 using namespace TechDraw;
 using namespace Measure;
@@ -117,6 +122,83 @@ static bool allPiecesTouch(std::pair<double, double> matched, std::vector<std::p
         }
     }
     return pieces.empty();
+}
+
+//! The source objects of a 2d view that have a straight edge lying on the carrier line and covering the
+//! given parameter (distance along the line).  The edges of each source are projected into the view's
+//! canonical frame (centred on the view's centroid, unscaled, unrotated, Y inverted) the same way the view's
+//! own projection does it, so the result says which source object a 2d view edge came from.  Used to tell the
+//! remaining pieces of one split edge from collinear edges of other objects that merely lie on the same line.
+static std::set<int> sourcesCoveringLine(const DrawViewPart* dvp, const gp_Lin& carrier, double param)
+{
+    constexpr double carrierTol {1.0e-4};
+    std::set<int> owners;
+    gp_Ax2 cs = dvp->getProjectionCS();
+    gp_Vec xDir(cs.XDirection());
+    gp_Vec yDir(cs.YDirection());
+    Base::Vector3d c = dvp->getOriginalCentroid();
+    gp_Vec centroid(c.x, c.y, c.z);
+    auto toCanonical = [&](const gp_Pnt& p) {
+        gp_Vec v = gp_Vec(gp_Pnt(0.0, 0.0, 0.0), p) - centroid;
+        return gp_Pnt(v.Dot(xDir), -v.Dot(yDir), 0.0);
+    };
+    auto along = [&carrier](const gp_Pnt& p) {
+        return gp_Vec(carrier.Location(), p).Dot(gp_Vec(carrier.Direction()));
+    };
+
+    int iSource {0};
+    for (auto* source : dvp->getAllSources()) {
+        int thisSource = iSource++;
+        TopoDS_Shape shape = ShapeExtractor::getShapes({source}, true);
+        if (shape.IsNull()) {
+            continue;
+        }
+        for (TopExp_Explorer ex(shape, TopAbs_EDGE); ex.More(); ex.Next()) {
+            BRepAdaptor_Curve curve(TopoDS::Edge(ex.Current()));
+            if (curve.GetType() != GeomAbs_Line) {
+                continue;
+            }
+            gp_Pnt a = toCanonical(curve.Value(curve.FirstParameter()));
+            gp_Pnt b = toCanonical(curve.Value(curve.LastParameter()));
+            if (carrier.Distance(a) > carrierTol || carrier.Distance(b) > carrierTol) {
+                continue;
+            }
+            double lo = std::min(along(a), along(b));
+            double hi = std::max(along(a), along(b));
+            if (param >= lo - carrierTol && param <= hi + carrierTol) {
+                owners.insert(thisSource);
+                break;
+            }
+        }
+    }
+    return owners;
+}
+
+//! Of the pieces that overlap the saved line, keep those that could be remaining parts of the matched edge:
+//! the ones that come from a source object that also draws the matched edge (or whose source is unknown).  A
+//! collinear edge of some other object that happens to fill a gap is not a part of the saved edge.
+static std::vector<std::pair<double, double>>
+piecesOfSameSource(const DrawViewPart* dvp, const gp_Lin& carrier, const std::pair<double, double>& matched,
+                   const std::vector<std::pair<double, double>>& pieces)
+{
+    if (!dvp || pieces.empty()) {
+        return pieces;
+    }
+    std::set<int> matchedOwners = sourcesCoveringLine(dvp, carrier, (matched.first + matched.second) / 2.0);
+    if (matchedOwners.empty()) {
+        return pieces;  // cannot attribute the matched edge: keep the stricter, all-pieces test
+    }
+    std::vector<std::pair<double, double>> related;
+    for (const auto& piece : pieces) {
+        std::set<int> owners = sourcesCoveringLine(dvp, carrier, (piece.first + piece.second) / 2.0);
+        bool shared = owners.empty()
+            || std::any_of(owners.begin(), owners.end(),
+                           [&matchedOwners](int o) { return matchedOwners.count(o) > 0; });
+        if (shared) {
+            related.push_back(piece);
+        }
+    }
+    return related;
 }
 
 //! true if references point to valid geometry and the valid geometry matches the
@@ -667,6 +749,12 @@ ReferenceEntry DimensionAutoCorrect::searchViewForSimilarEdge(DrawViewPart* obj,
     if (found != 1) {
         m_similarAmbiguous = found > 1 || (found == 0 && overlapping > 1);
         return {};
+    }
+    if (!pieces.empty()) {
+        BRepAdaptor_Curve savedCurve(TopoDS::Edge(refEdge.getShape()));
+        if (savedCurve.GetType() == GeomAbs_Line) {
+            pieces = piecesOfSameSource(obj, savedCurve.Line(), foundExtent, pieces);
+        }
     }
     if (!allPiecesTouch(foundExtent, pieces)) {
         m_similarAmbiguous = true;  // the centre or an end piece of a split edge
