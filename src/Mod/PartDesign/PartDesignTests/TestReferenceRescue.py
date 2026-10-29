@@ -622,3 +622,138 @@ class TestReferenceRescue(unittest.TestCase):
             self._valid(fil2)
             self.assertIs(fil2.Base[0], self.doc.getObject("HolePocket"))
             self._refs_same(fil2, sigs)
+
+    # -------------------------------------------------------------- D5: give the original back
+    # A rescue rewrites the reference to the inserted feature's element. When the inserted
+    # feature goes away again (deleted, or moved behind the consumer), the original name must
+    # resolve again exactly as it would have without the rescue.
+    def _d5_dressed_pad(self):
+        pad = self._pad()
+        b0 = self._dressup("PartDesign::Fillet", pad, ["Edge1", "Edge7"], 0.3)
+        self.doc.recompute()
+        self._valid(b0)
+        return pad, b0, (b0.Shape.Volume, list(b0.Base[1]))
+
+    def _d5_insert(self, pad, kind, after=None):
+        after = after or pad
+        if kind == "chamfer":
+            ins = self._dressup("PartDesign::Chamfer", pad, ["Edge2"], 0.5, after=after)
+        else:
+            sh = pad.Shape
+            side = [
+                "Face%d" % (i + 1)
+                for i, f in enumerate(sh.Faces)
+                if abs(f.CenterOfMass.x - W / 2) < 1e-6
+            ][0]
+            bottom = [
+                "Face%d" % (i + 1) for i, f in enumerate(sh.Faces) if abs(f.CenterOfMass.z) < 1e-6
+            ][0]
+            ins = _add(self.doc, self.body, "PartDesign::Draft", "INS", after)
+            ins.Base = (pad, [side])
+            ins.NeutralPlane = (pad, [bottom])
+            ins.Angle = 2.0
+        self.doc.recompute()
+        return ins
+
+    def _d5_delete(self, obj):
+        self.body.removeObject(obj)
+        self.doc.removeObject(obj.Name)
+        self.doc.recompute()
+
+    def _d5_restored(self, pad, b0, before):
+        volume, subs = before
+        self._valid(b0)
+        self.assertIs(b0.Base[0], pad)
+        self.assertEqual(list(b0.Base[1]), subs)
+        self.assertAlmostEqual(b0.Shape.Volume, volume, places=5)
+
+    def _d5_rescued(self, b0, ins):
+        # the insert must really have exercised the rescue: Edge1 follows into the new feature
+        self.assertIs(b0.Base[0], ins)
+        self.assertFalse(b0.Base[1][0].startswith("?"), "the insert did not rescue Edge1")
+
+    def _d5_insert_delete(self, kind):
+        pad, b0, before = self._d5_dressed_pad()
+        ins = self._d5_insert(pad, kind)
+        self._d5_rescued(b0, ins)
+        self._d5_delete(ins)
+        self._d5_restored(pad, b0, before)
+
+    def test_insert_then_delete_draft_restores_references(self):
+        self._d5_insert_delete("draft")
+
+    def test_insert_then_delete_chamfer_restores_references(self):
+        self._d5_insert_delete("chamfer")
+
+    def test_insert_then_move_after_consumer_restores_references(self):
+        pad, b0, before = self._d5_dressed_pad()
+        ins = self._d5_insert(pad, "draft")
+        self._d5_rescued(b0, ins)
+        self.body.removeObject(ins)
+        self.body.insertObject(ins, b0, True)
+        self.doc.recompute()
+        self._d5_restored(pad, b0, before)
+
+    def test_insert_save_reload_delete_restores_references(self):
+        pad, b0, before = self._d5_dressed_pad()
+        ins = self._d5_insert(pad, "draft")
+        self._d5_rescued(b0, ins)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "d5.FCStd")
+            self.doc.saveAs(path)
+            App.closeDocument(self.doc.Name)
+            self.doc = App.openDocument(path)
+            self.body = self.doc.getObject("Body")
+            self.doc.recompute()
+            pad = self.doc.getObject("Pad")
+            b0 = self.doc.getObject("Fillet")
+            ins = self.doc.getObject("INS")
+            self._d5_rescued(b0, ins)
+            self._d5_delete(ins)
+            self._d5_restored(pad, b0, before)
+
+    def test_double_insert_then_delete_both_restores_references(self):
+        for order in ("newest_first", "oldest_first"):
+            with self.subTest(order=order):
+                App.closeDocument(self.doc.Name)
+                self.setUp()
+                pad, b0, before = self._d5_dressed_pad()
+                ins1 = self._d5_insert(pad, "draft")
+                self._d5_rescued(b0, ins1)
+                ins2 = self._dressup("PartDesign::Chamfer", ins1, ["Edge5"], 0.5, after=ins1)
+                self.doc.recompute()
+                self.assertIs(b0.Base[0], ins2)
+                first, second = (ins2, ins1) if order == "newest_first" else (ins1, ins2)
+                self._d5_delete(first)
+                self._d5_delete(second)
+                self._d5_restored(pad, b0, before)
+
+    def test_insert_then_edit_pad_then_delete_stays_missing(self):
+        """The original edge no longer exists in the Pad: restoring by name finds nothing, and the
+        reference is reported missing instead of landing on another edge."""
+        pad, b0, before = self._d5_dressed_pad()
+        ins = self._d5_insert(pad, "draft")
+        self._d5_rescued(b0, ins)
+        csk = _sketch(self.doc, self.body, "CircleSketch", after=self.doc.getObject("Sketch"))
+        _circle(csk, 0, 0, 10.0)
+        pad.Profile = csk
+        self.doc.recompute()
+        self._d5_delete(ins)
+        self.assertIs(b0.Base[0], pad)
+        self.assertTrue(
+            all(s.startswith("?") for s in b0.Base[1]),
+            "a reference resolved after the Pad lost its edges: %r" % (b0.Base[1],),
+        )
+        self.assertIn("Invalid", b0.State)
+
+    def test_manual_retarget_after_rescue_is_kept(self):
+        pad, b0, before = self._d5_dressed_pad()
+        ins = self._d5_insert(pad, "draft")
+        self._d5_rescued(b0, ins)
+        # the user picks another edge of the inserted feature, by hand
+        b0.Base = (ins, ["Edge2", "Edge3"])
+        self.doc.recompute()
+        chosen = [_edge_sig(ins.Shape, sub) for sub in b0.Base[1]]
+        self.assertNotEqual(chosen, [_edge_sig(pad.Shape, s) for s in before[1]])
+        self._d5_delete(ins)
+        self.assertNotEqual(list(b0.Base[1]), before[1])

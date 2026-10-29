@@ -71,11 +71,75 @@ static std::unordered_map<App::DocumentObject*, std::unordered_set<PropertyLinkB
 static std::unordered_map<const PropertyLinkBase*, const App::DocumentObject*> _PrevLinkTarget;
 // clang-format on
 
+namespace
+{
+// The state of one PropertyLinkSub sub-element before a history rescue rewrote it: the target it
+// then pointed at (by object name), the sub string and the shadow. `key` is the mapped name the
+// rescue produced (shadow.newName afterwards). When the link returns to that target and the
+// rescued name is missing there, the original is restored by name only (cad-fork G01, D5).
+struct RescueRecord
+{
+    std::string key;
+    std::string target;
+    std::string sub;
+    PropertyLinkBase::ShadowSub shadow;
+};
+constexpr int RescueRecordMaxChain = 32;
+}  // namespace
+static std::unordered_map<const PropertyLinkBase*, std::vector<RescueRecord>> _RescueRecords;
+
+static const std::string& rescueNameOf(const std::string& sub, const PropertyLinkBase::ShadowSub& shadow)
+{
+    return shadow.newName.size() ? shadow.newName : sub;
+}
+
+/// Keep only the records reachable (through the chain of original names) from the current subs.
+static void pruneRescueRecords(const PropertyLinkBase* prop,
+                               const std::vector<std::string>& subs,
+                               const std::vector<PropertyLinkBase::ShadowSub>& shadows)
+{
+    auto it = _RescueRecords.find(prop);
+    if (it == _RescueRecords.end()) {
+        return;
+    }
+    std::vector<RescueRecord> keep;
+    for (std::size_t i = 0; i < subs.size(); ++i) {
+        std::vector<std::string> keys {subs[i]};
+        if (i < shadows.size() && shadows[i].newName.size()) {
+            keys.push_back(shadows[i].newName);
+        }
+        for (auto key : keys) {
+            for (int hop = 0; hop < RescueRecordMaxChain; ++hop) {
+                auto r = std::find_if(it->second.begin(), it->second.end(), [&](const RescueRecord& x) {
+                    return x.key == key;
+                });
+                if (r == it->second.end()) {
+                    break;
+                }
+                bool dup = std::any_of(keep.begin(), keep.end(), [&](const RescueRecord& x) {
+                    return x.key == r->key;
+                });
+                if (!dup) {
+                    keep.push_back(*r);
+                }
+                key = rescueNameOf(r->sub, r->shadow);
+            }
+        }
+    }
+    if (keep.empty()) {
+        _RescueRecords.erase(it);
+    }
+    else {
+        it->second = std::move(keep);
+    }
+}
+
 PropertyLinkBase::PropertyLinkBase() = default;
 
 PropertyLinkBase::~PropertyLinkBase()
 {
     _PrevLinkTarget.erase(this);
+    _RescueRecords.erase(this);
     unregisterLabelReferences();
     unregisterElementReference();
 }
@@ -801,6 +865,63 @@ static std::vector<std::string> rescueByHistory(const GeoFeature& geo,
     return {};
 }
 
+/// Restore, by name only, the sub-element a history rescue rewrote (see RescueRecord). Walks the
+/// chain of records from the link's current name; the first record whose original target is `obj`
+/// and whose original name resolves in `obj` wins. Nothing is searched by geometry or history, so
+/// the outcome is exactly what the link would have resolved to had it never been rescued.
+static bool restoreByRescueRecord(const PropertyLinkBase* prop,
+                                  DocumentObject* feature,
+                                  App::DocumentObject* obj,
+                                  const std::string& sub,
+                                  const PropertyLinkBase::ShadowSub& shadow,
+                                  PropertyLinkBase::ShadowSub& resolved,
+                                  std::string& restoredSub)
+{
+    auto it = _RescueRecords.find(prop);
+    if (it == _RescueRecords.end() || !obj->getNameInDocument()) {
+        return false;
+    }
+    auto& recs = it->second;
+    std::string key = rescueNameOf(sub, shadow);
+    std::vector<std::string> visited;
+    for (int hop = 0; hop < RescueRecordMaxChain; ++hop) {
+        auto r = std::find_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
+            return x.key == key;
+        });
+        if (r == recs.end()) {
+            return false;
+        }
+        visited.push_back(r->key);
+        if (r->target == obj->getNameInDocument()) {
+            const std::string& subname = r->shadow.newName.size() ? r->shadow.newName
+                : r->shadow.oldName.size()                        ? r->shadow.oldName
+                                                                  : r->sub;
+            PropertyLinkBase::ShadowSub tmp;
+            auto ret = GeoFeature::resolveElement(obj,
+                                                  subname.c_str(),
+                                                  tmp,
+                                                  true,
+                                                  GeoFeature::ElementNameType::Export,
+                                                  feature);
+            if (ret && tmp.newName.size() && !GeoFeature::hasMissingElement(tmp.oldName.c_str())) {
+                resolved.swap(tmp);
+                restoredSub = r->sub;
+                FC_WARN("restored element reference " << key << " -> " << r->shadow.newName
+                                                      << " in " << obj->getFullName());
+                recs.erase(std::remove_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
+                    return std::find(visited.begin(), visited.end(), x.key) != visited.end();
+                }), recs.end());
+                if (recs.empty()) {
+                    _RescueRecords.erase(it);
+                }
+                return true;
+            }
+        }
+        key = rescueNameOf(r->sub, r->shadow);
+    }
+    return false;
+}
+
 bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                                                App::DocumentObject* obj,
                                                std::string& sub,
@@ -854,7 +975,23 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
     }
 
     bool missing = GeoFeature::hasMissingElement(elementName.oldName.c_str());
-    if (feature == geo && (missing || reverse)) {
+    std::string restoredSub;
+    bool restored = false;
+    if (feature == geo && missing && !reverse) {
+        // A name written by an earlier history rescue that is missing here: give the original
+        // name back first (by name only), before the missing mark overwrites the sub.
+        ShadowSub resolved;
+        if (restoreByRescueRecord(this, feature, obj, sub, shadow, resolved, restoredSub)) {
+            elementName.swap(resolved);
+            missing = false;
+            restored = true;
+        }
+    }
+    bool rescuedByHistory = false;
+    std::string histTarget;
+    std::string histSub;
+    ShadowSub histShadow;
+    if (feature == geo && !restored && (missing || reverse)) {
         // If the referenced element is missing, or we are generating element
         // map for the first time, or we are re-generating the element map due
         // to version change, i.e. 'reverse', try search by geometry first
@@ -874,6 +1011,19 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                 auto prev = _PrevLinkTarget.find(this);
                 if (prev != _PrevLinkTarget.end()) {
                     names = rescueByHistory(*geo, prev->second, element);
+                    if (names.size()) {
+                        // remember the state to give back if the link returns to its old target;
+                        // the target is found by pointer in the document, never dereferenced
+                        for (auto* o : geo->getDocument()->getObjects()) {
+                            if (o == prev->second && o->getNameInDocument()) {
+                                histTarget = o->getNameInDocument();
+                                break;
+                            }
+                        }
+                        histSub = sub;
+                        histShadow = shadow;
+                        rescuedByHistory = histTarget.size();
+                    }
                 }
             }
             if (names.size()) {
@@ -909,6 +1059,10 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
         }
     };
 
+    if (restored) {
+        updateSub(restoredSub);
+    }
+
     if (missing) {
         FC_WARN(propertyName(this)
                 << " missing element reference " << ret->getFullName() << " "
@@ -921,6 +1075,13 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
         shadow.swap(elementName);
         if (shadow.newName.size() && Data::hasMappedElementName(sub.c_str())) {
             updateSub(shadow.newName);
+        }
+        if (rescuedByHistory && shadow.newName.size() && shadow.newName != histShadow.newName) {
+            auto& recs = _RescueRecords[this];
+            recs.erase(std::remove_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
+                return x.key == shadow.newName;
+            }), recs.end());
+            recs.push_back({shadow.newName, histTarget, histSub, histShadow});
         }
     }
 
@@ -1794,6 +1955,9 @@ void PropertyLinkSub::setValue(App::DocumentObject* lValue,
     else {
         updateElementReference(nullptr);
     }
+    // an explicit retarget to other subs drops the rescue records; a reroute that keeps the
+    // shadows (DressUp::onBaseFeatureRerouted) keeps them
+    pruneRescueRecords(this, _cSubList, _ShadowSubList);
     checkLabelReferences(_cSubList);
     hasSetValue();
 }
@@ -2330,6 +2494,35 @@ void PropertyLinkSub::Save(Base::Writer& writer) const
                 }
             }
         }
+        if (!exporting) {
+            // history-rescue records (cad-fork G01): extra attributes, ignored by readers that
+            // do not know them. Chain from this sub's current name, nearest record first.
+            auto rit = _RescueRecords.find(this);
+            if (rit != _RescueRecords.end()) {
+                std::string key = rescueNameOf(_cSubList[i], shadow);
+                int n = 0;
+                std::ostringstream attrs;
+                for (int hop = 0; hop < RescueRecordMaxChain; ++hop) {
+                    auto r = std::find_if(rit->second.begin(), rit->second.end(), [&](const RescueRecord& x) {
+                        return x.key == key;
+                    });
+                    if (r == rit->second.end()) {
+                        break;
+                    }
+                    attrs << " HistKey" << n << "=\"" << encodeAttribute(r->key) << "\" HistTarget" << n
+                          << "=\"" << encodeAttribute(r->target) << "\" HistSub" << n << "=\""
+                          << encodeAttribute(r->sub) << "\" HistNew" << n << "=\""
+                          << encodeAttribute(r->shadow.newName) << "\" HistOld" << n << "=\""
+                          << encodeAttribute(r->shadow.oldName) << "\"";
+                    ++n;
+                    key = rescueNameOf(r->sub, r->shadow);
+                }
+                if (n) {
+                    writer.Stream() << "\" HistRescue=\"" << n << "\"" << attrs.str() << "/>" << endl;
+                    continue;
+                }
+            }
+        }
         writer.Stream() << "\"/>" << endl;
     }
     writer.decInd();
@@ -2362,6 +2555,7 @@ void PropertyLinkSub::Restore(Base::XMLReader& reader)
     std::vector<int> mapped;
     std::vector<std::string> values(count);
     std::vector<ShadowSub> shadows(count);
+    std::vector<RescueRecord> histRecords;
     bool restoreLabel = false;
     // Sub may store '.' separated object names, so be aware of the possible mapping when import
     for (int i = 0; i < count; i++) {
@@ -2381,6 +2575,26 @@ void PropertyLinkSub::Restore(Base::XMLReader& reader)
         if (reader.hasAttribute(ATTR_MAPPED)) {
             mapped.push_back(i);
         }
+        if (reader.hasAttribute("HistRescue") && !reader.doNameMapping()) {
+            long n = reader.getAttribute<long>("HistRescue");
+            for (long k = 0; k < n && k < RescueRecordMaxChain; ++k) {
+                auto at = [&](const char* base) {
+                    std::string nm = base + std::to_string(k);
+                    return reader.hasAttribute(nm.c_str())
+                        ? std::string(reader.getAttribute<const char*>(nm.c_str()))
+                        : std::string();
+                };
+                RescueRecord rec;
+                rec.key = at("HistKey");
+                rec.target = at("HistTarget");
+                rec.sub = at("HistSub");
+                rec.shadow.newName = at("HistNew");
+                rec.shadow.oldName = at("HistOld");
+                if (rec.key.size() && rec.target.size()) {
+                    histRecords.push_back(std::move(rec));
+                }
+            }
+        }
     }
     setFlag(LinkRestoreLabel, restoreLabel);
 
@@ -2391,6 +2605,12 @@ void PropertyLinkSub::Restore(Base::XMLReader& reader)
     if (pcObject || name.empty()) {
         setValue(pcObject, std::move(values), std::move(shadows));
         _mapped = std::move(mapped);
+        if (histRecords.empty()) {
+            _RescueRecords.erase(this);
+        }
+        else {
+            _RescueRecords[this] = std::move(histRecords);
+        }
     }
     else {
         setValue(nullptr);
