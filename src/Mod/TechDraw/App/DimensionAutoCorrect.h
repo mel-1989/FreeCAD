@@ -82,7 +82,8 @@ private:
     ReferenceEntry searchViewForSimilarEdge(DrawViewPart* obj, const Part::TopoShape& refEdge) const;
 
     bool isPlausibleEdit2d(const ReferenceEntry& ref, const Part::TopoShape& saved) const;
-    static bool isSimilarEdge(const TopoDS_Shape& candidate, const TopoDS_Shape& saved);
+    static bool isSimilarEdge(const TopoDS_Shape& candidate, const TopoDS_Shape& saved,
+                              bool* overlapOnly = nullptr);
 
     bool isMatchingGeometry(const ReferenceEntry& ref, const Part::TopoShape& savedGeometry) const;
 

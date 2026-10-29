@@ -59,7 +59,7 @@
 //
 // phase 2 as implemented in this fork (brief G01, TechDraw slice): searchForMostSimilarGeometry is deliberately
 // conservative.  For an edge it accepts a candidate only if it has the same curve type, lies on the same carrier as the
-// saved edge (the same infinite line, or the same circle: centre, axis and radius) and overlaps the saved edge, and only
+// saved edge (the same infinite line, or the same circle: centre, axis and radius) and overlaps the saved edge with the same midpoint (unchanged or symmetrically trimmed), and only
 // if exactly one candidate qualifies.  Several candidates, or none, mean the reference is broken and the dimension reports
 // it.  Vertices are only ever matched exactly.
 
@@ -461,6 +461,7 @@ bool DimensionAutoCorrect::findSimilarEdge3d(ReferenceEntry& refToFix,
     }
 
     int found {0};
+    int overlapping {0};
     ReferenceEntry candidate;
     for (auto* obj : objects) {
         auto shape3d = Part::Feature::getShape(obj, Part::ShapeOption::ResolveLink | Part::ShapeOption::Transform);
@@ -470,17 +471,21 @@ bool DimensionAutoCorrect::findSimilarEdge3d(ReferenceEntry& refToFix,
         auto edgesAll = getDimension()->getEdges(shape3d);
         size_t iEdge {1};
         for (auto& edge : edgesAll) {
-            if (isSimilarEdge(edge.getShape(), refGeom.getShape())) {
+            bool overlapOnly {false};
+            if (isSimilarEdge(edge.getShape(), refGeom.getShape(), &overlapOnly)) {
                 found++;
                 candidate = ReferenceEntry(obj, std::string("Edge") + std::to_string(iEdge),
                                            getDimension()->getDocument());
             }
+            else if (overlapOnly) {
+                overlapping++;
+            }
             iEdge++;
         }
     }
-    if (found != 1) {
+    if (found != 1 || overlapping != 0) {
         // none, or several: guessing would risk a silent retarget
-        m_similarAmbiguous = found > 1;
+        m_similarAmbiguous = found + overlapping > 1;
         return false;
     }
     refToFix = candidate;
@@ -595,17 +600,22 @@ ReferenceEntry DimensionAutoCorrect::searchViewForSimilarEdge(DrawViewPart* obj,
     auto gEdgeAll = getDimension()->getViewPart()->getEdgeGeometry();
     int iEdge {0};
     int found {0};
+    int overlapping {0};
     int iFound {-1};
     for (auto& edge : gEdgeAll) {
         Part::TopoShape temp = ReferenceEntry::asCanonicalTopoShape(edge->asTopoShape(), *obj);
-        if (isSimilarEdge(temp.getShape(), refEdge.getShape())) {
+        bool overlapOnly {false};
+        if (isSimilarEdge(temp.getShape(), refEdge.getShape(), &overlapOnly)) {
             found++;
             iFound = iEdge;
         }
+        else if (overlapOnly) {
+            overlapping++;
+        }
         iEdge++;
     }
-    if (found != 1) {
-        m_similarAmbiguous = found > 1;
+    if (found != 1 || overlapping != 0) {
+        m_similarAmbiguous = found + overlapping > 1;
         return {};
     }
     return {obj, std::string("Edge") + std::to_string(iFound), getDimension()->getDocument()};
@@ -645,10 +655,12 @@ bool DimensionAutoCorrect::isPlausibleEdit2d(const ReferenceEntry& ref, const Pa
 //! true if candidate has the same curve type as saved, lies on the same carrier (same infinite line,
 //! or same circle: centre, axis, radius) and overlaps saved along it.  Only lines and circles/arcs
 //! are recognised; everything else is never "similar".  Direction of the edges does not matter.
-bool DimensionAutoCorrect::isSimilarEdge(const TopoDS_Shape& candidate, const TopoDS_Shape& saved)
+bool DimensionAutoCorrect::isSimilarEdge(const TopoDS_Shape& candidate, const TopoDS_Shape& saved,
+                                         bool* overlapOnly)
 {
     constexpr double carrierTol {1.0e-4};
     constexpr double parallelTol {1.0e-9};
+    constexpr double midpointTol {1.0e-5};
     if (candidate.IsNull() || saved.IsNull() || candidate.ShapeType() != TopAbs_EDGE
         || saved.ShapeType() != TopAbs_EDGE) {
         return false;
@@ -680,7 +692,19 @@ bool DimensionAutoCorrect::isSimilarEdge(const TopoDS_Shape& candidate, const To
         double c1 = param(candCurve.Value(candCurve.LastParameter()));
         double lo = std::max(std::min(s0, s1), std::min(c0, c1));
         double hi = std::min(std::max(s0, s1), std::max(c0, c1));
-        return hi - lo > carrierTol;
+        if (hi - lo <= carrierTol) {
+            return false;
+        }
+        // Same midpoint as well: an unchanged or symmetrically trimmed edge is the same element, an edge
+        // trimmed at one end, or a fragment merged back into a longer edge, is a different one (orchestrator
+        // ruling D6; the PartDesign controls N04 and N06 define those as lost, not remapped).
+        if (std::fabs((s0 + s1) / 2.0 - (c0 + c1) / 2.0) <= midpointTol) {
+            return true;
+        }
+        if (overlapOnly) {
+            *overlapOnly = true;  // on the carrier and overlapping, but not the same element
+        }
+        return false;
     }
 
     if (savedCurve.GetType() == GeomAbs_Circle) {

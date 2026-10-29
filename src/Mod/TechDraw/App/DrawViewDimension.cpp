@@ -319,8 +319,14 @@ void DrawViewDimension::onChanged(const App::Property* prop)
         return;
     }
 
+    // Undo, redo and restore put References2D/3D and SavedGeometry back together.  Re-saving geometry now would
+    // record whatever the (not yet recomputed) view shows for the restored index, and corrupt the saved shape.
+    bool restoringFromTransaction = getDocument() && getDocument()->isPerformingTransaction();
+
     if (prop == &References2D) {
-        updateSavedGeometry();
+        if (!restoringFromTransaction) {
+            updateSavedGeometry();
+        }
     }
     else if (prop == &References3D) {
         // remove the old measurement object
@@ -332,7 +338,9 @@ void DrawViewDimension::onChanged(const App::Property* prop)
         else if (MeasureType.isValue("True")) {  // empty 3dRefs, but True
             MeasureType.touch();                 // run MeasureType logic for this case
         }
-        updateSavedGeometry();
+        if (!restoringFromTransaction) {
+            updateSavedGeometry();
+        }
     }
     else if (prop == &Type) {
         FormatSpec.setValue(getDefaultFormatSpec().c_str());

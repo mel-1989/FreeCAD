@@ -109,6 +109,25 @@ class DimensionRescueTest(unittest.TestCase):
         self.assertAlmostEqual(dim.getRawValue(), W, places=3)
         return dim
 
+    def insertDressUp(self, kind):
+        """Fillet or chamfer (3 mm) of the four vertical edges right after the pad, inside a transaction."""
+        edges = [
+            _line_edge(self.pad.Shape, (0, 0, 1), (sx * W / 2, sy * H / 2, L / 2))
+            for sx in (-1, 1)
+            for sy in (-1, 1)
+        ]
+        self.doc.openTransaction("insert " + kind)
+        feat = self.doc.addObject("PartDesign::" + kind, kind)
+        self.body.insertObject(feat, self.pad, True)
+        feat.Base = (self.pad, edges)
+        if kind == "Fillet":
+            feat.Radius = 3.0
+        else:
+            feat.Size = 3.0
+        self.doc.recompute()
+        self.doc.commitTransaction()
+        return feat
+
     def insertFillet(self):
         """Fillet the four vertical edges (r = 3) right after the pad: the referenced top edge shortens from 40 to 34."""
         edges = [
@@ -123,14 +142,14 @@ class DimensionRescueTest(unittest.TestCase):
         self.doc.recompute()
         return fillet
 
-    def insertNotch(self):
-        """A through pocket across the middle of the top +Y edge: the edge splits into two pieces."""
+    def insertNotch(self, x0=-3.0, x1=3.0):
+        """A through pocket across the top +Y edge (by default the middle: the edge splits into two pieces)."""
         sk = self.doc.addObject("Sketcher::SketchObject", "NotchSketch")
         self.body.insertObject(sk, self.pad, True)
         sk.AttachmentSupport = (self.body.Origin.OriginFeatures[3], [""])
         sk.MapMode = "FlatFace"
         sk.AttachmentOffset = FreeCAD.Placement(V(0, 0, L), FreeCAD.Rotation())
-        x0, x1, y0, y1 = -3.0, 3.0, H / 2 - 4, H / 2 + 1
+        y0, y1 = H / 2 - 4, H / 2 + 1
         pts = [V(x0, y0, 0), V(x1, y0, 0), V(x1, y1, 0), V(x0, y1, 0)]
         for i in range(4):
             sk.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 4]), False)
@@ -195,6 +214,53 @@ class DimensionRescueTest(unittest.TestCase):
         self.assertFalse(_broken(dim))
         self.assertAlmostEqual(dim.getRawValue(), 2.0, places=3)
         self.hole.Suppressed = True
+        self.doc.recompute()
+        self.assertTrue(_broken(dim), "dimension still %s with value %s" % (dim.State, dim.getRawValue()))
+
+    def _undoCase(self, kind):
+        self.doc.UndoMode = 1
+        dim = self.dim2d()
+        self.insertDressUp(kind)
+        self.assertFalse(_broken(dim))
+        self.assertAlmostEqual(dim.getRawValue(), W - 6.0, places=3)
+        self.doc.undo()
+        self.doc.recompute()
+        self.assertFalse(_broken(dim), dim.State)
+        self.assertAlmostEqual(dim.getRawValue(), W, places=3)
+        self.doc.recompute()
+        self.assertFalse(_broken(dim), dim.State)
+        self.assertAlmostEqual(dim.getRawValue(), W, places=3)
+        self.doc.redo()
+        self.doc.recompute()
+        self.assertFalse(_broken(dim), dim.State)
+        self.assertAlmostEqual(dim.getRawValue(), W - 6.0, places=3)
+
+    def testUndoInsertedFillet2d(self):
+        """Undo restores References2D together with SavedGeometry; the dimension is the base's 40 and Up-to-date."""
+        self._undoCase("Fillet")
+
+    def testUndoInsertedChamfer2d(self):
+        self._undoCase("Chamfer")
+
+    def testShortenedAtOneEndIsReported3d(self):
+        """The top edge loses its +X end: a different extent and midpoint, so it is a different element."""
+        dim = self.dim3d()
+        self.insertNotch(x0=16.0, x1=21.0)
+        self.assertTrue(_broken(dim), "dimension still %s with value %s" % (dim.State, dim.getRawValue()))
+
+    def testFragmentMergedBackIsReported3d(self):
+        """A dimension on one fragment of a split edge; the split goes away and the whole edge is not that fragment."""
+        notch = self.insertNotch()
+        edge = _line_edge(self.body.Shape, (1, 0, 0), (-11.5, H / 2, L))
+        dim = self.doc.addObject("TechDraw::DrawViewDimension", "DimFrag")
+        self.page.addView(dim)
+        dim.Type = "Distance"
+        dim.References2D = [(self.view, "")]
+        dim.References3D = [(self.body, edge)]
+        self.doc.recompute()
+        self.assertFalse(_broken(dim))
+        self.assertAlmostEqual(dim.getRawValue(), 17.0, places=3)
+        notch.Suppressed = True
         self.doc.recompute()
         self.assertTrue(_broken(dim), "dimension still %s with value %s" % (dim.State, dim.getRawValue()))
 
