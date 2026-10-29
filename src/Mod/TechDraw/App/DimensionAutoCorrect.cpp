@@ -56,11 +56,30 @@
 //                replace(ref, newRef)
 //            else:
 //                //we can't fix this
+//
+// phase 2 as implemented in this fork (brief G01, TechDraw slice): searchForMostSimilarGeometry is deliberately
+// conservative.  For an edge it accepts a candidate only if it has the same curve type, lies on the same carrier as the
+// saved edge (the same infinite line, or the same circle: centre, axis and radius) and overlaps the saved edge, and only
+// if exactly one candidate qualifies.  Several candidates, or none, mean the reference is broken and the dimension reports
+// it.  Vertices are only ever matched exactly.
 
 
+#include <algorithm>
+#include <cmath>
+
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <GeomAbs_CurveType.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Edge.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Lin.hxx>
+#include <gp_Pnt.hxx>
 
 #include <App/Document.h>
+#include <App/ElementNamingUtils.h>
 #include <Base/Console.h>
 #include <Base/Tools.h>
 
@@ -98,7 +117,12 @@ bool DimensionAutoCorrect::referencesHaveValidGeometry(std::vector<bool>& refere
     bool result {true};
     size_t iRef {0};
     for (auto& entry : refsAll) {
-        if (entry.hasGeometry()) {
+        if (entry.is3d() && Data::hasMissingElement(entry.getSubName(true).c_str())) {
+            // the link layer marked the element missing; the name no longer designates anything
+            result = false;
+            referenceState.emplace_back(false);
+        }
+        else if (entry.hasGeometry()) {
             // entry points to something, is it the correct geom?
             if (isMatchingGeometry(entry, savedGeometry.at(iRef))) {
                 referenceState.emplace_back(true);
@@ -172,10 +196,34 @@ bool DimensionAutoCorrect::autocorrectReferences(std::vector<bool>& referenceSta
             continue;
         }
 
-        // we did not find an exact match, so check for a similar match
+        // a 3d reference whose element still resolves was kept by the link layer (which tracks the
+        // element through the model history), and the geometry under it was edited.  Trust it.  A
+        // reference whose element is marked missing ("?") has nothing to trust and goes on to phase 2.
+        bool missing3d = fixedRef.is3d() && Data::hasMissingElement(fixedRef.getSubName(true).c_str());
+        if (fixedRef.is3d() && !missing3d && fixedRef.hasGeometry()) {
+            referenceState.at(iRef) = true;
+            repairedRefs.push_back(fixedRef);
+            iRef++;
+            continue;
+        }
+
+        // we did not find an exact match, so check for a similar match (phase 2)
+        m_similarAmbiguous = false;
         success = fix1GeomSimilar(fixedRef, savedGeometry.at(iRef).getShape());
         if (success) {
             // we did find a similar match
+            referenceState.at(iRef) = true;
+            repairedRefs.push_back(fixedRef);
+            iRef++;
+            continue;
+        }
+
+        // no unique similar match.  A 2d reference that still points at an element of the same kind
+        // (a line parallel to the saved line, a circle for a circle) is taken as the same element after
+        // a parametric edit, unless phase 2 found several candidates: that means the saved edge was
+        // split or duplicated and any guess could be wrong.
+        if (!fixedRef.is3d() && !m_similarAmbiguous && fixedRef.hasGeometry()
+            && isPlausibleEdit2d(fixedRef, savedGeometry.at(iRef))) {
             referenceState.at(iRef) = true;
             repairedRefs.push_back(fixedRef);
             iRef++;
@@ -359,15 +407,13 @@ bool DimensionAutoCorrect::findExactEdge3d(ReferenceEntry& refToFix, const Part:
     return false;
 }
 
-//! search the view for a vertex that is within a tolerance of the saved reference geometry
-//! and return a reference pointing to the matching vertex
+//! search the view for a vertex that is within a tolerance of the saved reference geometry.
+//! Vertices are only matched exactly (phase 1), so there is no similar match.
 bool DimensionAutoCorrect::findSimilarVertex2d(ReferenceEntry& refToFix,
                                                const Part::TopoShape& refGeom) const
 {
-    // Base::Console().message("DAC::findSimilarVertex2d()\n");
     (void)refToFix;
     (void)refGeom;
-    // Base::Console().message("DAC::findSimilarVertex2d is not implemented yet\n");
     return false;
 }
 
@@ -376,37 +422,69 @@ bool DimensionAutoCorrect::findSimilarVertex2d(ReferenceEntry& refToFix,
 bool DimensionAutoCorrect::findSimilarEdge2d(ReferenceEntry& refToFix,
                                              const Part::TopoShape& refGeom) const
 {
-    // Base::Console().message("DAC::findSimilarEdge2d()\n");
-    (void)refToFix;
-    (void)refGeom;
-    // Base::Console().message("DAC::findSimilarEdge2d is not implemented yet\n");
+    auto refDvp = dynamic_cast<TechDraw::DrawViewPart*>(refToFix.getObject());
+    if (!refDvp) {
+        return false;
+    }
+    ReferenceEntry fixedRef = searchViewForSimilarEdge(refDvp, refGeom);
+    if (fixedRef.getObject()) {
+        refToFix = fixedRef;
+        return true;
+    }
     return false;
 }
 
-//! search the referenced 3d object and the object cache for a vertex that is within
-//! a tolerance of the saved reference geometry and return a reference pointing
-//! to the matching vertex
+//! vertices are only matched exactly
 bool DimensionAutoCorrect::findSimilarVertex3d(ReferenceEntry& refToFix,
                                                const Part::TopoShape& refGeom) const
 {
-    // Base::Console().message("DAC::findSimilarVertex3d()\n");
     (void)refToFix;
     (void)refGeom;
-    // Base::Console().message("DAC::findSimilarVertex3d is not implemented yet\n");
     return false;
 }
 
 //! search the referenced 3d object and the object cache for an edge that is
 //! similar to the saved reference geometry and return a reference pointing
-//! to the similar edge
+//! to the similar edge.  The match must be unique across the referenced object and the cached objects.
 bool DimensionAutoCorrect::findSimilarEdge3d(ReferenceEntry& refToFix,
                                              const Part::TopoShape& refGeom) const
 {
-    // Base::Console().message("DAC::findSimilarEdge3d({})\n", refToFix.getObjectName());
-    (void)refToFix;
-    (void)refGeom;
-    // Base::Console().message("DAC::findSimilarEdge3d is not implemented yet\n");
-    return false;
+    std::vector<App::DocumentObject*> objects;
+    if (auto* refObj = refToFix.getObject()) {
+        objects.push_back(refObj);
+    }
+    for (auto& objectName : m_3dObjectCache) {
+        auto* object3d = getDimension()->getDocument()->getObject(objectName.c_str());
+        if (object3d && std::find(objects.begin(), objects.end(), object3d) == objects.end()) {
+            objects.push_back(object3d);
+        }
+    }
+
+    int found {0};
+    ReferenceEntry candidate;
+    for (auto* obj : objects) {
+        auto shape3d = Part::Feature::getShape(obj, Part::ShapeOption::ResolveLink | Part::ShapeOption::Transform);
+        if (shape3d.IsNull()) {
+            continue;
+        }
+        auto edgesAll = getDimension()->getEdges(shape3d);
+        size_t iEdge {1};
+        for (auto& edge : edgesAll) {
+            if (isSimilarEdge(edge.getShape(), refGeom.getShape())) {
+                found++;
+                candidate = ReferenceEntry(obj, std::string("Edge") + std::to_string(iEdge),
+                                           getDimension()->getDocument());
+            }
+            iEdge++;
+        }
+    }
+    if (found != 1) {
+        // none, or several: guessing would risk a silent retarget
+        m_similarAmbiguous = found > 1;
+        return false;
+    }
+    refToFix = candidate;
+    return true;
 }
 
 //! compare the geometry pointed to by a reference to the corresponding saved geometry
@@ -509,15 +587,126 @@ ReferenceEntry DimensionAutoCorrect::searchViewForExactEdge(DrawViewPart* obj,
 }
 
 
-//! search View (2d part display) for an edge that is similar to refEdge
+//! search View (2d part display) for an edge that is similar to refEdge.  Returns a reference only
+//! if exactly one view edge qualifies.
 ReferenceEntry DimensionAutoCorrect::searchViewForSimilarEdge(DrawViewPart* obj,
                                                               const Part::TopoShape& refEdge) const
 {
-    // Base::Console().message("DAC::searchViewForSimilarEdge()\n");
-    (void)obj;
-    (void)refEdge;
-    Base::Console().message("DAC::searchViewForSimilarEdge is not implemented yet\n");
-    return {};
+    auto gEdgeAll = getDimension()->getViewPart()->getEdgeGeometry();
+    int iEdge {0};
+    int found {0};
+    int iFound {-1};
+    for (auto& edge : gEdgeAll) {
+        Part::TopoShape temp = ReferenceEntry::asCanonicalTopoShape(edge->asTopoShape(), *obj);
+        if (isSimilarEdge(temp.getShape(), refEdge.getShape())) {
+            found++;
+            iFound = iEdge;
+        }
+        iEdge++;
+    }
+    if (found != 1) {
+        m_similarAmbiguous = found > 1;
+        return {};
+    }
+    return {obj, std::string("Edge") + std::to_string(iFound), getDimension()->getDocument()};
+}
+
+//! true if the 2d element a reference points at could be the saved element after a parametric edit: the
+//! same kind of element, and for a line also parallel to the saved line.  Points carry no direction, so a
+//! vertex is always plausible.  This only decides whether to keep quiet; it never changes a reference.
+bool DimensionAutoCorrect::isPlausibleEdit2d(const ReferenceEntry& ref, const Part::TopoShape& saved) const
+{
+    Part::TopoShape current = ref.asCanonicalTopoShape();
+    if (current.isNull() || saved.isNull()) {
+        return false;
+    }
+    const TopoDS_Shape& cur = current.getShape();
+    const TopoDS_Shape& old = saved.getShape();
+    if (cur.IsNull() || old.IsNull() || cur.ShapeType() != old.ShapeType()) {
+        return false;
+    }
+    if (cur.ShapeType() == TopAbs_VERTEX) {
+        return true;
+    }
+    if (cur.ShapeType() != TopAbs_EDGE) {
+        return false;
+    }
+    BRepAdaptor_Curve curCurve(TopoDS::Edge(cur));
+    BRepAdaptor_Curve oldCurve(TopoDS::Edge(old));
+    if (curCurve.GetType() != oldCurve.GetType()) {
+        return false;
+    }
+    if (oldCurve.GetType() == GeomAbs_Line) {
+        return std::fabs(curCurve.Line().Direction().Dot(oldCurve.Line().Direction())) > 1.0 - 1.0e-6;
+    }
+    return true;
+}
+
+//! true if candidate has the same curve type as saved, lies on the same carrier (same infinite line,
+//! or same circle: centre, axis, radius) and overlaps saved along it.  Only lines and circles/arcs
+//! are recognised; everything else is never "similar".  Direction of the edges does not matter.
+bool DimensionAutoCorrect::isSimilarEdge(const TopoDS_Shape& candidate, const TopoDS_Shape& saved)
+{
+    constexpr double carrierTol {1.0e-4};
+    constexpr double parallelTol {1.0e-9};
+    if (candidate.IsNull() || saved.IsNull() || candidate.ShapeType() != TopAbs_EDGE
+        || saved.ShapeType() != TopAbs_EDGE) {
+        return false;
+    }
+    TopoDS_Edge candEdge = TopoDS::Edge(candidate);
+    TopoDS_Edge savedEdge = TopoDS::Edge(saved);
+    BRepAdaptor_Curve candCurve(candEdge);
+    BRepAdaptor_Curve savedCurve(savedEdge);
+    if (candCurve.GetType() != savedCurve.GetType()) {
+        return false;
+    }
+
+    if (savedCurve.GetType() == GeomAbs_Line) {
+        gp_Lin lin = savedCurve.Line();
+        gp_Lin cin = candCurve.Line();
+        if (std::fabs(lin.Direction().Dot(cin.Direction())) < 1.0 - parallelTol) {
+            return false;
+        }
+        if (lin.Distance(cin.Location()) > carrierTol) {
+            return false;
+        }
+        // overlap of the two parameter intervals along the saved line
+        auto param = [&lin](const gp_Pnt& p) {
+            return gp_Vec(lin.Location(), p).Dot(gp_Vec(lin.Direction()));
+        };
+        double s0 = param(savedCurve.Value(savedCurve.FirstParameter()));
+        double s1 = param(savedCurve.Value(savedCurve.LastParameter()));
+        double c0 = param(candCurve.Value(candCurve.FirstParameter()));
+        double c1 = param(candCurve.Value(candCurve.LastParameter()));
+        double lo = std::max(std::min(s0, s1), std::min(c0, c1));
+        double hi = std::min(std::max(s0, s1), std::max(c0, c1));
+        return hi - lo > carrierTol;
+    }
+
+    if (savedCurve.GetType() == GeomAbs_Circle) {
+        gp_Circ sc = savedCurve.Circle();
+        gp_Circ cc = candCurve.Circle();
+        if (std::fabs(sc.Radius() - cc.Radius()) > carrierTol
+            || sc.Location().Distance(cc.Location()) > carrierTol
+            || std::fabs(sc.Axis().Direction().Dot(cc.Axis().Direction())) < 1.0 - parallelTol) {
+            return false;
+        }
+        // same circle; do the arcs overlap?  Test interior sample points of each against the other.
+        auto samplesOn = [](const BRepAdaptor_Curve& from, const TopoDS_Edge& onto) {
+            for (int k = 1; k < 8; k++) {
+                double u = from.FirstParameter()
+                    + (from.LastParameter() - from.FirstParameter()) * k / 8.0;
+                BRepBuilderAPI_MakeVertex mkVert(from.Value(u));
+                BRepExtrema_DistShapeShape dist(mkVert.Vertex(), onto);
+                if (dist.IsDone() && dist.Value() < carrierTol) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        return samplesOn(candCurve, savedEdge) || samplesOn(savedCurve, candEdge);
+    }
+    return false;
 }
 
 //! search model for for a 3d edge that is a match to refEdge
