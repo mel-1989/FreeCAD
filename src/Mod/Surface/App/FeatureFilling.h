@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include <functional>
 #include <App/PropertyLinks.h>
 #include <Mod/Part/App/FeaturePartSpline.h>
 #include <Mod/Surface/SurfaceGlobal.h>
@@ -50,6 +51,20 @@ public:
                                              // without a corresponding face)
     App::PropertyStringList UnboundFaces;   // Unbound constraint faces (C0, G1 and G2 are possible)
     App::PropertyIntegerList UnboundOrder;  // Order of constraint on curve faces
+    // Hidden mirrors of BoundaryFaces and UnboundFaces as links (one entry per edge, the sub-name is
+    // the face), so that the generic link layer carries the face names across model edits; the
+    // string lists are rewritten from them. Files without these properties open as before.
+    App::PropertyLinkSubList BoundaryFaceLinks;
+    App::PropertyLinkSubList UnboundFaceLinks;
+    // Hidden record of what each support face looked like when it last resolved (surface type and
+    // oriented normal at the boundary edge's midpoint), used to rescue a face whose mapped name the
+    // link layer lost.
+    App::PropertyStringList BoundaryFaceSig;
+    App::PropertyStringList UnboundFaceSig;
+    // Hidden copy of the face strings as of the last successful compute, to tell the entries the
+    // user edited since from stale ones.
+    App::PropertyStringList BoundaryFaceSynced;
+    App::PropertyStringList UnboundFaceSynced;
     App::PropertyLinkSubList FreeFaces;     // Free constraint faces
     App::PropertyIntegerList FreeOrder;     // Order of constraint on free faces
     App::PropertyLinkSubList Points;        // Constraint Points (on Surface)
@@ -70,6 +85,7 @@ public:
     // recalculate the feature
     App::DocumentObjectExecReturn* execute() override;
     short mustExecute() const override;
+    void onDocumentRestored() override;
     /// returns the type name of the view provider
     const char* getViewProviderName() const override
     {
@@ -77,10 +93,25 @@ public:
     }
 
 private:
+    std::vector<std::string> followedFaces(
+        const App::PropertyLinkSubList& edges,
+        App::PropertyStringList& faces,
+        App::PropertyLinkSubList& links,
+        App::PropertyStringList& sigs,
+        App::PropertyStringList& synced,
+        std::vector<std::function<void()>>& commits
+    );
+    bool seedMirror(
+        const App::PropertyLinkSubList& edges,
+        App::PropertyStringList& faces,
+        App::PropertyLinkSubList& links,
+        App::PropertyStringList& sigs,
+        App::PropertyStringList& synced
+    );
     void addConstraints(
         BRepFill_Filling& builder,
         const App::PropertyLinkSubList& edges,
-        const App::PropertyStringList& faces,
+        const std::vector<std::string>& faces,
         const App::PropertyIntegerList& orders,
         Standard_Boolean bnd
     );

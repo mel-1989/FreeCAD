@@ -61,7 +61,14 @@ App::DocumentObjectExecReturn* Sections::execute()
                 // get the sub-edge of the part's shape
                 const Part::TopoShape& shape = static_cast<Part::Feature*>(obj)->Shape.getShape();
                 TopoDS_Shape edge = shape.getSubShape(sub.c_str());
-                if (!edge.IsNull() && edge.ShapeType() == TopAbs_EDGE) {
+                if (edge.IsNull()) {
+                    // only a reference that no longer resolves is an error; a valid sub-shape that
+                    // is not an edge is skipped as before
+                    return new App::DocumentObjectExecReturn(
+                        "Section reference does not resolve (the reference may be lost)"
+                    );
+                }
+                if (edge.ShapeType() == TopAbs_EDGE) {
                     BRepAdaptor_Curve curve_adapt(TopoDS::Edge(edge));
                     const TopLoc_Location& loc = edge.Location();
                     Handle(Geom_TrimmedCurve) hCurve = new Geom_TrimmedCurve(

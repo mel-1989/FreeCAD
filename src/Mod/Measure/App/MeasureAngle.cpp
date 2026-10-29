@@ -630,6 +630,9 @@ App::DocumentObjectExecReturn* MeasureAngle::execute()
             | Part::ShapeOption::Transform,
         subs2.at(0).c_str()
     );
+    if (s1.IsNull() || s2.IsNull()) {
+        return new App::DocumentObjectExecReturn("Measured element no longer resolves");
+    }
     const bool s1Axis = isAxisBearingFace(s1);
     const bool s2Axis = isAxisBearingFace(s2);
     if (s1Axis || s2Axis) {

@@ -80,6 +80,9 @@ App::DocumentObjectExecReturn* Sewing::execute()
                 // we want only the subshape which is linked
                 for (const auto& jt : it.second) {
                     TopoDS_Shape sub = ts.getSubShape(jt.c_str());
+                    if (sub.IsNull()) {
+                        throw Standard_Failure("Sewing reference does not resolve to a shape");
+                    }
                     builder.Add(sub);
                 }
             }

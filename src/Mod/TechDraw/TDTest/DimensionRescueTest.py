@@ -379,6 +379,64 @@ class DimensionRescueTest(unittest.TestCase):
         for dim in (d3, d2):
             self.assertTrue(_broken(dim), "%s still %s with value %s" % (dim.Name, dim.State, dim.getRawValue()))
 
+    def addFillerBoxes(self, height):
+        """Two boxes beside the top +Y edge that lie on its line where the two notches (-15..-10, 10..15) will cut it
+        away, added to the view's Source.  With height == L their top edges even lie on the same 3d line."""
+        boxes = []
+        for k, (x0, x1) in enumerate([(-15.0, -10.0), (10.0, 15.0)]):
+            box = self.doc.addObject("Part::Box", "Fill%d" % k)
+            box.Length, box.Width, box.Height = x1 - x0, 4.0, height
+            box.Placement.Base = V(x0, H / 2 - 4, 0)
+            boxes.append(box)
+        self.view.Source = [self.body] + boxes
+        self.doc.recompute()
+        return boxes
+
+    def _fillersFillTheGaps(self, height):
+        self.addFillerBoxes(height)
+        dim = self.dim2d()
+        self.insertNotch(x0=-15.0, x1=-10.0)
+        self.insertNotch(x0=10.0, x1=15.0)
+        return dim
+
+    def testFillersFromOtherObjectsDoNotMakeCentrePieceRescuable(self):
+        """Other objects in the view draw collinear edges that exactly fill the gaps of the split edge (here at another
+        height).  They are not parts of the dimensioned edge, so the 20 mm centre piece is still a split, not a trim."""
+        dim = self._fillersFillTheGaps(L - 2.0)
+        self.assertTrue(_broken(dim), "dimension still %s with value %s" % (dim.State, dim.getRawValue()))
+
+    def testFillersOnTheSame3dLineDoNotMakeCentrePieceRescuable(self):
+        """Same as above with fillers of the same height: their top edges lie on the very same 3d line, but belong to
+        other objects."""
+        dim = self._fillersFillTheGaps(L)
+        self.assertTrue(_broken(dim), "dimension still %s with value %s" % (dim.State, dim.getRawValue()))
+
+    def testCollinearBoxBesideSymmetricTrimStillRescued(self):
+        """False-alarm control: a symmetric chamfer trim (40 to 36) of an edge with a collinear edge of another object
+        overlapping one end must still follow the edge."""
+        box = self.doc.addObject("Part::Box", "Ext")
+        box.Length, box.Width, box.Height = 7.0, 3.0, L
+        box.Placement.Base = V(-25.0, H / 2 - 3, 0)
+        self.view.Source = [self.body, box]
+        self.doc.recompute()
+        k, found = 0, None
+        while found is None:
+            e = self.view.getEdgeByIndex(k)
+            mid = e.valueAt((e.FirstParameter + e.LastParameter) / 2)
+            if type(e.Curve).__name__ == "Line" and abs(e.Curve.Direction.x) > 0.999 \
+                    and abs(e.Length - W) < 1e-3 and mid.y > 0:
+                found = "Edge%d" % k
+            k += 1
+        dim = self.doc.addObject("TechDraw::DrawViewDimension", "DimEdge")
+        self.page.addView(dim)
+        dim.Type = "Distance"
+        dim.References2D = [(self.view, found)]
+        self.doc.recompute()
+        self.assertAlmostEqual(dim.getRawValue(), W, places=3)
+        self.insertDressUp("Chamfer")  # 3 mm: 40 -> 34
+        self.assertFalse(_broken(dim), dim.State)
+        self.assertAlmostEqual(dim.getRawValue(), W - 6.0, places=3)
+
     def testInsertThenDeleteFilletReturns(self):
         """A rescued 2D reference follows the edge back when the fillet is deleted again."""
         dim = self.dim2d()
