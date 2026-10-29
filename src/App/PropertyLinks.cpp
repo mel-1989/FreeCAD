@@ -1525,13 +1525,17 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                 }
             }
             auto prev = _PrevLinkTarget.find(this);
+            // a match the gates below refused is not to be replaced by the extent rescue
+            bool gateRefused = false;
             if (prev != _PrevLinkTarget.end() && names.size()
                 && !retargetedGeometryRescueAccepted(*geo, prev->second, element, names)) {
                 names.clear();
+                gateRefused = true;
             }
             else if (prev == _PrevLinkTarget.end() && names.size()
                      && !recordedGeometryRescueAccepted(this, *geo, sub, shadow, element, names)) {
                 names.clear();
+                gateRefused = true;
             }
             if (names.empty() && missing) {
                 // geometry found nothing: follow the element-map history (single match only),
@@ -1553,7 +1557,7 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                     }
                 }
             }
-            if (names.empty() && missing && !reverse) {
+            if (names.empty() && missing && !reverse && !gateRefused) {
                 // last resort: a straight edge trimmed equally at both ends (D6 extent ruling);
                 // the anchor is the one kept for the stored name, on this feature or on the
                 // target the link was retargeted away from (found by pointer, never dereferenced
