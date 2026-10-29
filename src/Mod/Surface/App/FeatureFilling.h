@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include <functional>
 #include <App/PropertyLinks.h>
 #include <Mod/Part/App/FeaturePartSpline.h>
 #include <Mod/Surface/SurfaceGlobal.h>
@@ -92,11 +93,12 @@ private:
         const App::PropertyLinkSubList& edges,
         App::PropertyStringList& faces,
         App::PropertyLinkSubList& links,
-        App::PropertyStringList& sigs
+        App::PropertyStringList& sigs,
+        std::vector<std::function<void()>>& commits
     );
-    void seedMirror(
+    bool seedMirror(
         const App::PropertyLinkSubList& edges,
-        const App::PropertyStringList& faces,
+        App::PropertyStringList& faces,
         App::PropertyLinkSubList& links,
         App::PropertyStringList& sigs
     );

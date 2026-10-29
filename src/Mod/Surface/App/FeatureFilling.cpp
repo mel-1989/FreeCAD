@@ -23,6 +23,7 @@
  ***************************************************************************/
 
 #include <cstdio>
+#include <functional>
 #include <sstream>
 #include <string>
 
@@ -368,50 +369,72 @@ const TopoDS_Shape subShape(const App::DocumentObject* obj, const std::string& s
     return static_cast<const Part::Feature*>(obj)->Shape.getShape().getSubShape(sub.c_str());
 }
 
-// The mirror lost the support face's mapped name ("?"), but the boundary edge still resolves. The
-// face is the unique face adjacent to that edge that has the surface type, the number of outer-wire
-// edges and (within 0.5 degrees) the oriented normal the support face had when it last resolved
-// (same plane and same outer outline, as ruled in DECISIONS.md D6; a face whose outline was trimmed
-// is a different element). Returns "" when there is none or
-// more than one.
-std::string rescueFace(const App::DocumentObject* obj, const std::string& edgeSub, const std::string& sigStr)
+bool faceCarriesEdge(const App::DocumentObject* obj, const std::string& edgeSub, const std::string& faceName)
+{
+    TopoDS_Shape edge = subShape(obj, edgeSub);
+    TopoDS_Shape face = subShape(obj, faceName);
+    if (edge.IsNull() || face.IsNull() || edge.ShapeType() != TopAbs_EDGE
+        || face.ShapeType() != TopAbs_FACE) {
+        return false;
+    }
+    TopTools_IndexedMapOfShape edges;
+    TopExp::MapShapes(face, TopAbs_EDGE, edges);
+    return edges.Contains(edge);
+}
+
+// The mirror lost the support face's mapped name ("?"). The only thing accepted is the face the
+// visible string names, which is what stock FreeCAD resolves, and only when it is provably the face
+// the Filling was built on: it resolves, it carries the boundary edge, its surface type and oriented
+// normal (within 0.5 degrees) are the stored ones, its outer outline still has the stored number of
+// edges (a trimmed or split outline is a different element, DECISIONS.md D6), and no other face
+// adjacent to the edge has that type and normal (two coplanar faces at a seam are ambiguous). Other
+// faces are never searched. Returns false when any of this fails.
+bool acceptStringFace(
+    const App::DocumentObject* obj,
+    const std::string& edgeSub,
+    const std::string& faceName,
+    const std::string& sigStr
+)
 {
     FaceSig want;
     if (!decodeSig(sigStr, want) || !obj || !obj->isDerivedFrom<Part::Feature>()) {
-        return std::string();
+        return false;
     }
     TopoDS_Shape edge = subShape(obj, edgeSub);
-    if (edge.IsNull() || edge.ShapeType() != TopAbs_EDGE) {
-        return std::string();
+    TopoDS_Shape face = subShape(obj, faceName);
+    if (edge.IsNull() || edge.ShapeType() != TopAbs_EDGE || face.IsNull()
+        || face.ShapeType() != TopAbs_FACE) {
+        return false;
     }
     TopoDS_Shape whole = static_cast<const Part::Feature*>(obj)->Shape.getShape().getShape();
     TopTools_IndexedDataMapOfShapeListOfShape ancestors;
     TopExp::MapShapesAndAncestors(whole, TopAbs_EDGE, TopAbs_FACE, ancestors);
     if (!ancestors.Contains(edge)) {
-        return std::string();
+        return false;
     }
-    TopTools_IndexedMapOfShape faces;
-    TopExp::MapShapes(whole, TopAbs_FACE, faces);
-
-    int found = 0;
-    int foundIndex = 0;
+    FaceSig have;
+    if (!faceSignature(face, edge, have) || have.type != want.type
+        || have.outerEdges != want.outerEdges || have.normal.Dot(want.normal) <= 0.99996) {
+        return false;
+    }
+    bool carries = false;
+    int matching = 0;
     TopTools_IndexedMapOfShape seen;
     for (const TopoDS_Shape& cand : ancestors.FindFromKey(edge)) {
         if (seen.Contains(cand)) {
             continue;
         }
         seen.Add(cand);
+        if (cand.IsSame(face)) {
+            carries = true;
+        }
         FaceSig got;
         if (faceSignature(cand, edge, got) && got.type == want.type
-            && got.outerEdges == want.outerEdges && got.normal.Dot(want.normal) > 0.99996) {
-            ++found;
-            foundIndex = faces.FindIndex(cand);
+            && got.normal.Dot(want.normal) > 0.99996) {
+            ++matching;
         }
     }
-    if (found != 1 || foundIndex == 0) {
-        return std::string();
-    }
-    return "Face" + std::to_string(foundIndex);
+    return carries && matching == 1;
 }
 
 // Signatures for the current names; an entry that cannot be computed keeps its old value.
@@ -436,7 +459,8 @@ std::vector<std::string> currentSigs(
         TopoDS_Shape face = subShape(objs[i], names[i]);
         TopoDS_Shape edge = subShape(objs[i], edgeSubs[i]);
         FaceSig s;
-        if (!face.IsNull() && !edge.IsNull() && faceSignature(face, edge, s)) {
+        if (!face.IsNull() && !edge.IsNull() && faceCarriesEdge(objs[i], edgeSubs[i], names[i])
+            && faceSignature(face, edge, s)) {
             out[i] = encodeSig(s);
         }
     }
@@ -455,7 +479,8 @@ std::vector<std::string> Filling::followedFaces(
     const App::PropertyLinkSubList& edges,
     App::PropertyStringList& faces,
     App::PropertyLinkSubList& links,
-    App::PropertyStringList& sigs
+    App::PropertyStringList& sigs,
+    std::vector<std::function<void()>>& commits
 )
 {
     std::vector<std::string> names = faces.getValues();
@@ -474,39 +499,50 @@ std::vector<std::string> Filling::followedFaces(
         }
         else {
             for (std::size_t i = 0; i < followed.size(); ++i) {
-                if (!followed[i].empty() && followed[i][0] == '?') {
-                    std::string rescued;
-                    if (oldSigs.size() == names.size()) {
-                        rescued = rescueFace(objs[i], edgeSubs[i], oldSigs[i]);
-                    }
-                    if (rescued.empty()) {
-                        throw Standard_Failure("Support face reference is lost");
-                    }
-                    followed[i] = rescued;
-                    rebuild = true;
+                if (followed[i].empty()) {
+                    continue;
                 }
+                if (followed[i][0] != '?' && faceCarriesEdge(objs[i], edgeSubs[i], followed[i])) {
+                    continue;
+                }
+                // The link layer lost the mapped name, or followed it to a face that does not carry
+                // the boundary edge. Neither the string nor the mirror is rewritten from it; the
+                // string's own face is used only when it is provably the same element.
+                TopoDS_Shape edge = subShape(objs[i], edgeSubs[i]);
+                if (edge.IsNull()) {
+                    return names;  // the edge itself is gone: addConstraints reports it
+                }
+                if (oldSigs.size() != names.size()
+                    || !acceptStringFace(objs[i], edgeSubs[i], names[i], oldSigs[i])) {
+                    throw Standard_Failure("Support face reference is lost");
+                }
+                followed[i] = names[i];
+                rebuild = true;
             }
             if (followed != names) {
-                faces.setValues(followed);
+                // Written only when the whole feature computes: an error caused by something
+                // else (a lost edge) must not make the string follow a face the model may give
+                // back, because the string is what fork/main and the fallback above resolve.
+                commits.push_back([&faces, followed]() { faces.setValues(followed); });
                 names = followed;
             }
         }
     }
     if (rebuild) {
-        links.setValues(objs, names);
+        commits.push_back([&links, objs, names]() { links.setValues(objs, names); });
     }
     std::vector<std::string> newSigs = currentSigs(objs, edgeSubs, names, oldSigs);
     if (newSigs != oldSigs) {
-        sigs.setValues(newSigs);
+        commits.push_back([&sigs, newSigs]() { sigs.setValues(newSigs); });
     }
     return names;
 }
 
 // Build the mirror and the signatures from the strings of a freshly restored document, before any
 // edit, so a file saved by stock FreeCAD (no mirror) follows its faces from the first edit on.
-void Filling::seedMirror(
+bool Filling::seedMirror(
     const App::PropertyLinkSubList& edges,
-    const App::PropertyStringList& faces,
+    App::PropertyStringList& faces,
     App::PropertyLinkSubList& links,
     App::PropertyStringList& sigs
 )
@@ -515,15 +551,33 @@ void Filling::seedMirror(
     auto objs = edges.getValues();
     auto edgeSubs = edges.getSubValues();
     if (names.size() != objs.size() || objs.empty() || edgeSubs.size() != objs.size()) {
-        return;
+        return false;
     }
-    if (links.getValues() != objs || links.getSubValues().size() != names.size()) {
+    const std::vector<std::string> oldSigs = sigs.getValues();
+    const bool haveMirror = links.getValues() == objs && links.getSubValues().size() == names.size();
+    if (!haveMirror) {
         links.setValues(objs, names);
     }
-    std::vector<std::string> newSigs = currentSigs(objs, edgeSubs, names, sigs.getValues());
-    if (newSigs != sigs.getValues()) {
+    // An existing mirror and its signatures are kept as saved, even when the mirror holds a lost
+    // face ("?FaceN"): the string may be stale then, and a signature taken from it would record
+    // whatever face the stale name resolves to now.
+    if (haveMirror && oldSigs.size() == names.size()) {
+        // The restore flags every property of an object saved Touched as touched, and a touched
+        // string would be taken for a fresh edit and rebuild the mirror from the stale name; a
+        // mirror holding a lost face keeps its say, so the string fallback checks it instead.
+        for (const auto& sub : links.getSubValues()) {
+            if (!sub.empty() && sub[0] == '?') {
+                faces.purgeTouched();
+                break;
+            }
+        }
+        return true;
+    }
+    std::vector<std::string> newSigs = currentSigs(objs, edgeSubs, names, oldSigs);
+    if (newSigs != oldSigs) {
         sigs.setValues(newSigs);
     }
+    return false;
 }
 
 void Filling::onDocumentRestored()
@@ -560,6 +614,7 @@ App::DocumentObjectExecReturn* Filling::execute()
         }
 
         // Load the initial surface if set
+        std::vector<std::function<void()>> commits;  // property rewrites, applied on success only
         App::DocumentObject* initFace = InitialFace.getValue();
         if (initFace && initFace->isDerivedFrom<Part::Feature>()) {
             const Part::TopoShape& shape = static_cast<Part::Feature*>(initFace)->Shape.getShape();
@@ -578,7 +633,7 @@ App::DocumentObjectExecReturn* Filling::execute()
         addConstraints(
             builder,
             BoundaryEdges,
-            followedFaces(BoundaryEdges, BoundaryFaces, BoundaryFaceLinks, BoundaryFaceSig),
+            followedFaces(BoundaryEdges, BoundaryFaces, BoundaryFaceLinks, BoundaryFaceSig, commits),
             BoundaryOrder,
             Standard_True
         );
@@ -588,7 +643,7 @@ App::DocumentObjectExecReturn* Filling::execute()
             addConstraints(
                 builder,
                 UnboundEdges,
-                followedFaces(UnboundEdges, UnboundFaces, UnboundFaceLinks, UnboundFaceSig),
+                followedFaces(UnboundEdges, UnboundFaces, UnboundFaceLinks, UnboundFaceSig, commits),
                 UnboundOrder,
                 Standard_False
             );
@@ -614,6 +669,9 @@ App::DocumentObjectExecReturn* Filling::execute()
 
         // Return the face
         TopoDS_Face aFace = builder.Face();
+        for (const auto& commit : commits) {
+            commit();
+        }
         this->Shape.setValue(aFace);
         return App::DocumentObject::StdReturn;
     }

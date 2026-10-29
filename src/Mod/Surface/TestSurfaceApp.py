@@ -27,5 +27,7 @@ from SurfaceTests.TestReferenceErrors import (
     TestReferenceErrors,
     TestFillingFollowsSupportFace,
     TestFillingRescue,
+    TestFillingSeam,
+    TestFillingInsertThenDelete,
     TestSectionsSewingReferences,
 )

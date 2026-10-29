@@ -246,7 +246,9 @@ class TestFillingFollowsSupportFace(unittest.TestCase):
 
 
 class TestFillingRescue(unittest.TestCase):
-    """The local rescue through the boundary edge (hidden mirror lost its face: "?FaceN")."""
+    """The string fallback when the hidden mirror lost its face ("?FaceN"): the face the visible
+    string names is accepted only when it is provably the face the Filling was built on. Other
+    faces are never searched."""
 
     def setUp(self):
         self.doc = FreeCAD.newDocument("FillRescue")
@@ -274,19 +276,32 @@ class TestFillingRescue(unittest.TestCase):
     def tearDown(self):
         FreeCAD.closeDocument(self.doc.Name)
 
-    def _lose_face(self):
-        subs = [[""] if i != self.idx else ["?" + self.top] for i in range(len(self.edges))]
+    def _lose_face(self, name=None):
+        subs = [[""] if i != self.idx else ["?" + (name or self.top)] for i in range(len(self.edges))]
         self.fill.BoundaryFaceLinks = [(self.box, s) for s in subs]
         self.fill.touch()
         self.doc.recompute()
 
-    def test_lost_face_is_rescued_by_surface_type_and_normal(self):
+    def test_lost_face_is_recovered_through_the_string_face(self):
         self._lose_face()
         self.assertNotIn("Invalid", self.fill.State, self.fill.getStatusString())
         self.assertEqual(self.fill.BoundaryFaces[self.idx], self.top)
-        self.assertNotEqual(self.fill.BoundaryFaces[self.idx], self.py)
+        self.assertEqual(self.fill.BoundaryFaceLinks[0][1][self.idx], self.top)
 
-    def test_changed_normal_is_not_rescued(self):
+    def test_other_faces_are_never_searched(self):
+        # the string names the +Y face, the stored signature is the top face's: the top face is
+        # adjacent to the edge and matches the signature, but it is not what the string says
+        sig = list(self.fill.BoundaryFaceSig)
+        faces = list(self.fill.BoundaryFaces)
+        faces[self.idx] = self.py
+        self.fill.BoundaryFaces = faces
+        self.doc.recompute()
+        self.fill.BoundaryFaceSig = sig
+        self._lose_face(self.py)
+        self.assertIn("Invalid", self.fill.State)
+        self.assertEqual(self.fill.BoundaryFaces[self.idx], self.py)
+
+    def test_changed_normal_is_not_accepted(self):
         # the support face is recorded as facing down; neither face at the edge does
         sig = list(self.fill.BoundaryFaceSig)
         t, x, y, z, n = sig[self.idx].split()
@@ -295,14 +310,14 @@ class TestFillingRescue(unittest.TestCase):
         self._lose_face()
         self.assertIn("Invalid", self.fill.State)
 
-    def test_changed_surface_type_is_not_rescued(self):
+    def test_changed_surface_type_is_not_accepted(self):
         sig = list(self.fill.BoundaryFaceSig)
         sig[self.idx] = "1" + sig[self.idx][1:]  # not a plane
         self.fill.BoundaryFaceSig = sig
         self._lose_face()
         self.assertIn("Invalid", self.fill.State)
 
-    def test_trimmed_outline_is_not_rescued(self):
+    def test_trimmed_outline_is_not_accepted(self):
         sig = list(self.fill.BoundaryFaceSig)
         sig[self.idx] = sig[self.idx].rsplit(" ", 1)[0] + " 5"  # recorded with a five-edge outline
         self.fill.BoundaryFaceSig = sig
@@ -312,8 +327,118 @@ class TestFillingRescue(unittest.TestCase):
     def test_file_without_signature_keeps_the_error(self):
         self.fill.BoundaryFaceSig = []
         self._lose_face()
-        # the signature is rewritten only when a face resolves; nothing to rescue with here
+        # the signature is rewritten only when a face resolves; nothing to check the string with
         self.assertIn("Invalid", self.fill.State)
+
+    def test_error_rewrites_neither_string_nor_mirror(self):
+        sig = list(self.fill.BoundaryFaceSig)
+        sig[self.idx] = "1" + sig[self.idx][1:]
+        self.fill.BoundaryFaceSig = sig
+        self._lose_face()
+        self.assertIn("Invalid", self.fill.State)
+        self.assertEqual(self.fill.BoundaryFaces[self.idx], self.top)
+        self.assertEqual(self.fill.BoundaryFaceLinks[0][1][self.idx], "?" + self.top)
+
+    def test_reopened_lost_face_stays_lost_when_the_string_is_stale(self):
+        sig = list(self.fill.BoundaryFaceSig)
+        sig[self.idx] = "1" + sig[self.idx][1:]  # the string's face no longer matches
+        self.fill.BoundaryFaceSig = sig
+        self._lose_face()
+        self.assertIn("Invalid", self.fill.State)
+        path = os.path.join(tempfile.mkdtemp(), "lost.FCStd")
+        self.doc.saveAs(path)
+        FreeCAD.closeDocument(self.doc.Name)
+        self.doc = FreeCAD.openDocument(path)
+        fill = self.doc.getObject("Fill")
+        self.doc.recompute()
+        self.assertIn("Invalid", fill.State)
+        self.assertEqual(fill.BoundaryFaceLinks[0][1][self.idx], "?" + self.top)
+
+
+class TestFillingSeam(unittest.TestCase):
+    """Two coplanar faces meet at the boundary edge (an unrefined fusion): the face is ambiguous
+    once the link layer loses it, so the Filling errors rather than pick one (D6: no new silent
+    retarget against fork/main, which keeps the string's face)."""
+
+    def setUp(self):
+        self.doc = FreeCAD.newDocument("FillSeam")
+        a = self.doc.addObject("Part::Box", "A")
+        b = self.doc.addObject("Part::Box", "B")
+        b.Placement = FreeCAD.Placement(V(10, 0, 0), FreeCAD.Rotation())
+        fuse = self.doc.addObject("Part::MultiFuse", "Fuse")
+        fuse.Shapes = [a, b]
+        fuse.Refine = False
+        self.doc.recompute()
+        self.fuse = fuse
+        sh = fuse.Shape
+        self.tl = _plane_face(sh, (0, 0, 1), (5, 5, 10))
+        self.tr = _plane_face(sh, (0, 0, 1), (15, 5, 10))
+        self.assertNotEqual(self.tl, self.tr)
+        self.seam = _line_edge(sh, (0, 1, 0), (10, 5, 10))
+        tl = sh.getElement(self.tl)
+        edges = []
+        for e in tl.OuterWire.OrderedEdges:
+            edges.append("Edge%d" % (1 + [i for i, x in enumerate(sh.Edges) if x.isSame(e)][0]))
+        self.edges = edges
+        self.idx = edges.index(self.seam)
+        self.fill = self.doc.addObject("Surface::Filling", "Fill")
+        self.fill.BoundaryEdges = [(fuse, [e]) for e in edges]
+        faces = [""] * len(edges)
+        faces[self.idx] = self.tl
+        self.fill.BoundaryFaces = faces
+        self.fill.BoundaryOrder = [1 if i == self.idx else 0 for i in range(len(edges))]
+        self.doc.recompute()
+        self.assertNotIn("Invalid", self.fill.State, self.fill.getStatusString())
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.doc.Name)
+
+    def test_coplanar_neighbour_makes_a_lost_face_an_error(self):
+        subs = [[""] if i != self.idx else ["?" + self.tl] for i in range(len(self.edges))]
+        self.fill.BoundaryFaceLinks = [(self.fuse, s) for s in subs]
+        self.fill.touch()
+        self.doc.recompute()
+        self.assertIn("Invalid", self.fill.State)
+        self.assertEqual(self.fill.BoundaryFaces[self.idx], self.tl)
+
+
+@unittest.skipIf(Sketcher is None, "Sketcher or PartDesign not available")
+class TestFillingInsertThenDelete(unittest.TestCase):
+    """A feature inserted across the support breaks the Filling; deleting it brings the Filling
+    back on the same face (the error must not rewrite the face string or the mirror)."""
+
+    def setUp(self):
+        self.doc = FreeCAD.newDocument("FillInsDel")
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.doc.Name)
+
+    def test_insert_then_delete_recovers(self):
+        body, pad = _padded_body(self.doc)
+        fill = _top_filling(self.doc, body, L)
+        self.assertNotIn("Invalid", fill.State)
+        before = list(fill.BoundaryFaces)
+        sk = _sketch(self.doc, body, "SlotSketch", z=L, after=pad)
+        y0 = -5.0
+        pts = [V(-100, y0 - 1.2, 0), V(100, y0 - 1.2, 0), V(100, y0 + 1.2, 0), V(-100, y0 + 1.2, 0)]
+        for i in range(4):
+            sk.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 4]), False)
+        for i in range(4):
+            sk.addConstraint(Sketcher.Constraint("Coincident", i, 2, (i + 1) % 4, 1))
+        slot = self.doc.addObject("PartDesign::Pocket", "SlotPocket")
+        body.insertObject(slot, sk, True)
+        slot.Profile = sk
+        slot.Length = 5.0
+        body.Tip = slot
+        self.doc.recompute()
+        self.assertIn("Invalid", fill.State)  # the slot cuts the boundary edges across the top
+        body.removeObject(slot)
+        self.doc.removeObject(slot.Name)
+        body.removeObject(sk)
+        self.doc.removeObject(sk.Name)
+        self.doc.recompute()
+        self.assertNotIn("Invalid", fill.State, fill.getStatusString())
+        self.assertEqual(list(fill.BoundaryFaces), before)
 
 
 class TestSectionsSewingReferences(unittest.TestCase):
