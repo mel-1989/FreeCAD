@@ -468,6 +468,77 @@ class TestTrimmedEdgeRescue(unittest.TestCase):
                     with self.subTest(src=src, mode=mode, op=op):
                         self._fillet_copy_case(src, mode, op)
 
+    def _dropped_child_case(self, case, op):
+        """C = Compound[Q, X], where Q is a Mirror copy of X (dropm) or Cut(X) (dropx); the reference is
+        on X's top +Y edge, which is on solid 1 of C. In one recompute a fillet or chamfer is inserted
+        under X (X.Base = F) and X is dropped from C (dropm_both keeps it). Q now sits where X's
+        trimmed edge was, so the only edge a name-path walk could reach is Q's, on another solid. The
+        reference must be reported, never retargeted to Q's edge."""
+        V = App.Vector
+        doc = App.newDocument("TrimDropped")
+        try:
+            pl = doc.addObject("Part::Plane", "Rect")
+            pl.Length, pl.Width = 40, 20
+            e = doc.addObject("Part::Extrusion", "E")
+            e.Base, e.Dir, e.Solid, e.LengthFwd = pl, V(0, 0, 10), True, 10
+            t = doc.addObject("Part::Box", "Tool")
+            t.Length, t.Width, t.Height = 50, 4, 4
+            t.Placement.Base = V(-300, 300, 300)
+            doc.recompute()
+            vert = [i + 1 for i, ed in enumerate(e.Shape.Edges)
+                    if isinstance(ed.Curve, Part.Line) and abs(ed.Curve.Direction.z) > 0.999]
+            fl = doc.addObject("Part::Fillet" if op == "fillet" else "Part::Chamfer", "F")
+            fl.Base = e
+            fl.Edges = [(i, 3.0, 3.0) for i in vert]
+            t0 = doc.addObject("Part::Box", "Tool0")
+            t0.Placement.Base = V(-400, 400, 400)
+            x = doc.addObject("Part::Cut", "X")
+            x.Base, x.Tool = e, t0
+            if case == "dropx":
+                q = doc.addObject("Part::Cut", "Q")
+                q.Base, q.Tool = x, t
+            else:
+                q = doc.addObject("Part::Mirroring", "Q")
+                q.Source, q.Normal, q.Base = x, V(1, 0, 0), V(20, 0, 0)
+            c = doc.addObject("Part::Compound", "C")
+            c.Links = [q, x]
+            doc.recompute()
+
+            def on(ed, length):
+                return (isinstance(ed.Curve, Part.Line) and abs(ed.CenterOfMass.y - 20) < 1e-6
+                        and abs(ed.CenterOfMass.z - 10) < 1e-6 and abs(ed.Length - length) < 1e-6)
+
+            def solid_of(shape, name):
+                ed = shape.getElement(name)
+                return [k for k, s in enumerate(shape.Solids) if any(ed.isSame(z) for z in s.Edges)]
+
+            nm = [n for n in ("Edge%d" % (i + 1) for i, ed in enumerate(c.Shape.Edges)) if on(c.Shape.getElement(n), 40)
+                  and 1 in solid_of(c.Shape, n)][0]
+            f = doc.addObject("App::FeaturePython", "Consumer")
+            f.addProperty("App::PropertyLinkSub", "Ref")
+            f.Ref = (c, [nm])
+            doc.recompute()
+            x.Base = fl
+            if case != "dropm_both":
+                c.Links = [q]
+            doc.recompute()
+            sub = f.Ref[1][0] if f.Ref and f.Ref[1] else None
+            if case == "dropm_both":
+                # X stays: the reference may follow its own solid or be reported, never the copy's
+                if sub and not sub.startswith("?"):
+                    self.assertEqual(solid_of(c.Shape, sub), [1], "moved to another solid (%s)" % sub)
+            else:
+                self.assertTrue(sub is None or sub.startswith("?"),
+                                "retargeted to %s (%s %s)" % (sub, case, op))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_dropped_child_never_retargets_to_a_sibling_copy(self):
+        for case in ("dropx", "dropm", "dropm_both"):
+            for op in ("fillet", "chamfer"):
+                with self.subTest(case=case, op=op):
+                    self._dropped_child_case(case, op)
+
 
 
 def _trimmed_sig(before):

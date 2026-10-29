@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <set>
 #include <unordered_map>
@@ -1562,12 +1563,16 @@ static bool trimmedByFilletOrChamfer(const GeoFeature& geo,
         // down to the object that holds the matched alias, must be the owners of the candidate's
         // chain once the inserted fillet or chamfer (the owner of the trim step's result) is
         // taken out. A step through any other object disqualifies the candidate.
-        auto owners = [](const std::vector<ChainStep>& chain, bool skipTrim) {
+        // `trimAt` receives the position in the returned path where the skipped trim owner stood
+        auto owners = [](const std::vector<ChainStep>& chain, bool skipTrim, size_t* trimAt) {
             std::vector<long> path;
             for (const auto& st : chain) {
                 const bool trim = st.ops == modifiedFillet || st.ops == modifiedChamfer;
                 if (!(skipTrim && trim && st.resultOwner != 0)) {
                     path.push_back(st.resultOwner);
+                }
+                else if (trimAt) {
+                    *trimAt = path.size();
                 }
                 if (&st == &chain.back()) {
                     path.push_back(st.sourceOwner);
@@ -1599,28 +1604,40 @@ static bool trimmedByFilletOrChamfer(const GeoFeature& geo,
             }
         }
         else {
-            // every owner on the stored name's path must be on the candidate's, in the same order;
-            // the candidate's path may hold more (the inserted feature and the features that
-            // consume it up to the referenced object), each of which must be a dependency of the
-            // referenced object. A path through a sibling lacks an owner of the stored path.
-            const std::vector<long> want = owners(storedSteps, false);
-            const std::vector<long> got = owners(steps, true);
+            // The candidate's path is the stored path with the inserted feature taken out, and
+            // nothing else except features that sit directly above the insertion point (the
+            // inserted feature's consumers up to the referenced object), each a dependency of
+            // the referenced object. Concretely: the owners before the trim are the stored
+            // owners up to some point, then only such extras; after the trim the rest of the two
+            // paths is identical. An owner above a stored owner (a sibling such as a Mirror copy
+            // that sits beside the referenced child in a compound) lies between two stored
+            // owners and disqualifies the candidate.
+            const std::vector<long> want = owners(storedSteps, false, nullptr);
+            size_t trimAt = std::numeric_limits<size_t>::max();
+            const std::vector<long> got = owners(steps, true, &trimAt);
             auto deps = geo.getOutListRecursive();
             std::set<long> inChain;
             for (auto* o : deps) {
                 inChain.insert(o->getID());
             }
-            size_t k = 0;
-            lineageOk = !want.empty() && want.front() == got.front();
-            for (size_t i = 0; lineageOk && i < got.size(); ++i) {
-                if (k < want.size() && got[i] == want[k]) {
-                    ++k;
+            lineageOk = !want.empty() && !got.empty() && want.front() == got.front();
+            if (lineageOk) {
+                if (trimAt == std::numeric_limits<size_t>::max()) {
+                    lineageOk = got == want;  // the trim sits in the object itself: nothing was inserted
                 }
-                else if (got[i] != 0 && !inChain.count(got[i])) {
-                    lineageOk = false;
+                else {
+                    // m stored owners lead the path, then the extras up to the trim
+                    size_t m = 0;
+                    while (m < trimAt && m < want.size() && got[m] == want[m]) {
+                        ++m;
+                    }
+                    for (size_t i = m; lineageOk && i < trimAt; ++i) {
+                        lineageOk = got[i] != 0 && inChain.count(got[i]) && std::find(want.begin(), want.end(), got[i]) == want.end();
+                    }
+                    lineageOk = lineageOk && m >= 1 && got.size() - trimAt == want.size() - m
+                        && std::equal(got.begin() + static_cast<long>(trimAt), got.end(), want.begin() + static_cast<long>(m));
                 }
             }
-            lineageOk = lineageOk && k == want.size() && got.back() == want.back();
         }
         if (!lineageOk) {
             FC_WARN("fillet/chamfer trim rejected: " << candidate << " in " << geo.getFullName()
