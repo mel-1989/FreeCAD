@@ -865,6 +865,12 @@
      ]
     },
     {
+     "group": "References",
+     "name": "SavedGeometryTrusted",
+     "type": "App::PropertyBool",
+     "value": true
+    },
+    {
      "group": "Base",
      "name": "Scale",
      "type": "App::PropertyFloatConstraint",

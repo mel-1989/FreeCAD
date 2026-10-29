@@ -27,6 +27,9 @@
 
 #include <Mod/TechDraw/TechDrawGlobal.h>
 
+#include <utility>
+#include <vector>
+
 #include <DrawViewDimension.h>
 
 namespace Part
@@ -81,6 +84,11 @@ private:
     ReferenceEntry searchViewForExactEdge(DrawViewPart* obj, const Part::TopoShape& refEdge) const;
     ReferenceEntry searchViewForSimilarEdge(DrawViewPart* obj, const Part::TopoShape& refEdge) const;
 
+    bool isPlausibleEdit2d(const ReferenceEntry& ref, const Part::TopoShape& saved) const;
+    static bool isSimilarEdge(const TopoDS_Shape& candidate, const TopoDS_Shape& saved,
+                              bool* overlapOnly = nullptr,
+                              std::pair<double, double>* extent = nullptr);
+
     bool isMatchingGeometry(const ReferenceEntry& ref, const Part::TopoShape& savedGeometry) const;
 
     DrawViewDimension* getDimension() const
@@ -91,6 +99,8 @@ private:
 
     DrawViewDimension* m_dimension{nullptr};
     std::set<std::string> m_3dObjectCache;
+    // set by the phase 2 searches when several candidates qualified (so none may be chosen)
+    mutable bool m_similarAmbiguous{false};
 };
 
 }  // end namespace TechDraw

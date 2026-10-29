@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <set>
+#include <optional>
 
 #include <QDir>
 #include <QFileInfo>
@@ -824,13 +825,18 @@ std::unordered_map<const PropertyLinkBase*, AnchorMap>& anchorStore()
 
 static void dropAnchors(const PropertyLinkBase* link)
 {
+    // The GIL guards the store: recompute can run on the async worker while the main thread
+    // destroys or resolves links.
+    std::optional<Base::PyGILStateLocker> lock;
+    if (Py_IsInitialized()) {
+        lock.emplace();
+    }
     auto& store = anchorStore();
     auto it = store.find(link);
     if (it == store.end()) {
         return;
     }
-    if (Py_IsInitialized()) {
-        Base::PyGILStateLocker lock;
+    if (lock) {
         for (auto& kv : it->second) {
             Py_XDECREF(kv.second);
         }
@@ -880,6 +886,7 @@ static bool anchorAccepts(const PropertyLinkBase* link,
                           const std::string& storedName,
                           const std::string& candidate)
 {
+    Base::PyGILStateLocker lock;  // guards the store
     auto& store = anchorStore();
     auto it = store.find(link);
     if (it == store.end()) {
@@ -893,7 +900,6 @@ static bool anchorAccepts(const PropertyLinkBase* link,
     if (!gp) {
         return false;
     }
-    Base::PyGILStateLocker lock;
     PyObject* fn = gateFunction("same_el");
     PyObject* cand = fn ? elementObject(gp, candidate) : nullptr;
     bool ok = false;
@@ -922,6 +928,7 @@ static std::vector<std::string> anchoredSearch(const PropertyLinkBase* link,
                                                int mode)
 {
     std::vector<std::string> names;
+    Base::PyGILStateLocker lock;  // guards the store
     auto& store = anchorStore();
     auto it = store.find(link);
     if (it == store.end()) {
@@ -932,7 +939,6 @@ static std::vector<std::string> anchoredSearch(const PropertyLinkBase* link,
     if (a == it->second.end() || !gp) {
         return names;
     }
-    Base::PyGILStateLocker lock;
     PyObject* shape = const_cast<App::Property*>(static_cast<const App::Property*>(gp))->getPyObject();
     PyObject* fn = shape ? gateFunction(mode == 2 ? "drift" : "search") : nullptr;
     if (fn) {
@@ -958,6 +964,7 @@ static std::vector<std::string> anchoredSearch(const PropertyLinkBase* link,
 
 static bool hasAnchor(const PropertyLinkBase* link, const GeoFeature& geo, const std::string& storedName)
 {
+    Base::PyGILStateLocker lock;  // guards the store
     auto& store = anchorStore();
     auto it = store.find(link);
     return it != store.end() && it->second.count(anchorKey(geo, storedName));
