@@ -22,15 +22,24 @@
  *                                                                         *
  ***************************************************************************/
 
+#include <cstdio>
+#include <sstream>
 #include <string>
 
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepFill_Filling.hxx>
+#include <BRepGProp_Face.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
+#include <Geom2d_Curve.hxx>
 #include <TopExp.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
+#include <TopTools_ListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
+#include <TopoDS_Wire.hxx>
 #include <gp_Pnt.hxx>
 
 #include "FeatureFilling.h"
@@ -59,9 +68,17 @@ Filling::Filling()
                       "Order of constraint on curve faces (C0, G1 and G2 are possible)");
 
     ADD_PROPERTY_TYPE(BoundaryFaceLinks,(nullptr,""), "Filling", App::Prop_Hidden,
-                      "Boundary faces as links (kept in sync with BoundaryFaces)");
+                      "Boundary faces as links (kept in sync with BoundaryFaces). Do not set this by "
+                      "hand: it is maintained by the link layer and BoundaryFaces is rewritten from it, so a "
+                      "manual change silently overwrites BoundaryFaces (set BoundaryFaces instead)");
     ADD_PROPERTY_TYPE(UnboundFaceLinks,(nullptr,""), "Filling", App::Prop_Hidden,
-                      "Unbound constraint faces as links (kept in sync with UnboundFaces)");
+                      "Unbound constraint faces as links (kept in sync with UnboundFaces). Do not set this by "
+                      "hand: it is maintained by the link layer and UnboundFaces is rewritten from it, so a "
+                      "manual change silently overwrites UnboundFaces (set UnboundFaces instead)");
+    ADD_PROPERTY_TYPE(BoundaryFaceSig,(""), "Filling", App::Prop_Hidden,
+                      "Surface type and normal of each boundary face at its edge, as last resolved");
+    ADD_PROPERTY_TYPE(UnboundFaceSig,(""), "Filling", App::Prop_Hidden,
+                      "Surface type and normal of each unbound face at its edge, as last resolved");
     ADD_PROPERTY_TYPE(FreeFaces,(nullptr,""), "Filling", App::Prop_None, "Free constraint on a face");
     ADD_PROPERTY_TYPE(FreeOrder,(0), "Filling", App::Prop_None, "Order of constraint on free faces");
 
@@ -278,24 +295,176 @@ void Filling::addConstraints(BRepFill_Filling& builder, const App::PropertyLinkS
     }
 }
 
+namespace
+{
+
+struct FaceSig
+{
+    int type {-1};
+    gp_Vec normal;
+    int outerEdges {0};  // number of edges of the outer wire: a trimmed outline changes it
+};
+
+// Surface type and oriented normal of a face at the midpoint of one of its edges.
+bool faceSignature(const TopoDS_Shape& face, const TopoDS_Shape& edge, FaceSig& out)
+{
+    if (face.IsNull() || edge.IsNull() || face.ShapeType() != TopAbs_FACE
+        || edge.ShapeType() != TopAbs_EDGE) {
+        return false;
+    }
+    Standard_Real first = 0.0;
+    Standard_Real last = 0.0;
+    Handle(Geom2d_Curve) c2d = BRep_Tool::CurveOnSurface(TopoDS::Edge(edge), TopoDS::Face(face), first, last);
+    if (c2d.IsNull()) {
+        return false;
+    }
+    gp_Pnt2d uv = c2d->Value(0.5 * (first + last));
+    BRepGProp_Face gf(TopoDS::Face(face));
+    gp_Pnt p;
+    gp_Vec n;
+    gf.Normal(uv.X(), uv.Y(), p, n);
+    if (n.Magnitude() < 1e-12) {
+        return false;
+    }
+    n.Normalize();
+    out.type = static_cast<int>(BRepAdaptor_Surface(TopoDS::Face(face)).GetType());
+    out.normal = n;
+    TopoDS_Wire outer = BRepTools::OuterWire(TopoDS::Face(face));
+    TopTools_IndexedMapOfShape wireEdges;
+    if (!outer.IsNull()) {
+        TopExp::MapShapes(outer, TopAbs_EDGE, wireEdges);
+    }
+    out.outerEdges = wireEdges.Extent();
+    return true;
+}
+
+std::string encodeSig(const FaceSig& s)
+{
+    std::ostringstream os;
+    os.precision(17);
+    os << s.type << ' ' << s.normal.X() << ' ' << s.normal.Y() << ' ' << s.normal.Z() << ' '
+       << s.outerEdges;
+    return os.str();
+}
+
+bool decodeSig(const std::string& str, FaceSig& s)
+{
+    std::istringstream is(str);
+    double x = 0;
+    double y = 0;
+    double z = 0;
+    if (!(is >> s.type >> x >> y >> z >> s.outerEdges)) {
+        return false;
+    }
+    s.normal = gp_Vec(x, y, z);
+    return true;
+}
+
+const TopoDS_Shape subShape(const App::DocumentObject* obj, const std::string& sub)
+{
+    if (!obj || !obj->isDerivedFrom<Part::Feature>() || sub.empty()) {
+        return TopoDS_Shape();
+    }
+    return static_cast<const Part::Feature*>(obj)->Shape.getShape().getSubShape(sub.c_str());
+}
+
+// The mirror lost the support face's mapped name ("?"), but the boundary edge still resolves. The
+// face is the unique face adjacent to that edge that has the surface type, the number of outer-wire
+// edges and (within 0.5 degrees) the oriented normal the support face had when it last resolved
+// (same plane and same outer outline, as ruled in DECISIONS.md D6; a face whose outline was trimmed
+// is a different element). Returns "" when there is none or
+// more than one.
+std::string rescueFace(const App::DocumentObject* obj, const std::string& edgeSub, const std::string& sigStr)
+{
+    FaceSig want;
+    if (!decodeSig(sigStr, want) || !obj || !obj->isDerivedFrom<Part::Feature>()) {
+        return std::string();
+    }
+    TopoDS_Shape edge = subShape(obj, edgeSub);
+    if (edge.IsNull() || edge.ShapeType() != TopAbs_EDGE) {
+        return std::string();
+    }
+    TopoDS_Shape whole = static_cast<const Part::Feature*>(obj)->Shape.getShape().getShape();
+    TopTools_IndexedDataMapOfShapeListOfShape ancestors;
+    TopExp::MapShapesAndAncestors(whole, TopAbs_EDGE, TopAbs_FACE, ancestors);
+    if (!ancestors.Contains(edge)) {
+        return std::string();
+    }
+    TopTools_IndexedMapOfShape faces;
+    TopExp::MapShapes(whole, TopAbs_FACE, faces);
+
+    int found = 0;
+    int foundIndex = 0;
+    TopTools_IndexedMapOfShape seen;
+    for (const TopoDS_Shape& cand : ancestors.FindFromKey(edge)) {
+        if (seen.Contains(cand)) {
+            continue;
+        }
+        seen.Add(cand);
+        FaceSig got;
+        if (faceSignature(cand, edge, got) && got.type == want.type
+            && got.outerEdges == want.outerEdges && got.normal.Dot(want.normal) > 0.99996) {
+            ++found;
+            foundIndex = faces.FindIndex(cand);
+        }
+    }
+    if (found != 1 || foundIndex == 0) {
+        return std::string();
+    }
+    return "Face" + std::to_string(foundIndex);
+}
+
+// Signatures for the current names; an entry that cannot be computed keeps its old value.
+std::vector<std::string> currentSigs(
+    const std::vector<App::DocumentObject*>& objs,
+    const std::vector<std::string>& edgeSubs,
+    const std::vector<std::string>& names,
+    const std::vector<std::string>& old
+)
+{
+    std::vector<std::string> out(names.size());
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (names[i].empty()) {
+            continue;
+        }
+        if (old.size() == names.size()) {
+            out[i] = old[i];
+        }
+        if (i >= objs.size() || i >= edgeSubs.size()) {
+            continue;
+        }
+        TopoDS_Shape face = subShape(objs[i], names[i]);
+        TopoDS_Shape edge = subShape(objs[i], edgeSubs[i]);
+        FaceSig s;
+        if (!face.IsNull() && !edge.IsNull() && faceSignature(face, edge, s)) {
+            out[i] = encodeSig(s);
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
 // The face names of BoundaryFaces and UnboundFaces are bare strings, which the link layer does not
 // follow when the model changes. The hidden link property mirrors them with the edges' objects; the
 // link layer rescues those, and the strings are rewritten from them. The links are rebuilt from the
-// strings whenever the user (or a stock file) supplies the strings.
+// strings whenever the user (or a stock file) supplies the strings. When the link layer cannot
+// rescue a face (its name becomes "?"), the face is looked for locally through the boundary edge,
+// by the surface type and normal it had when it last resolved.
 std::vector<std::string> Filling::followedFaces(
     const App::PropertyLinkSubList& edges,
     App::PropertyStringList& faces,
-    App::PropertyLinkSubList& links
+    App::PropertyLinkSubList& links,
+    App::PropertyStringList& sigs
 )
 {
     std::vector<std::string> names = faces.getValues();
     auto objs = edges.getValues();
-    if (names.size() != objs.size()) {
+    auto edgeSubs = edges.getSubValues();
+    if (names.size() != objs.size() || objs.empty() || edgeSubs.size() != objs.size()) {
         return names;
     }
-    if (objs.empty()) {
-        return names;
-    }
+    std::vector<std::string> oldSigs = sigs.getValues();
 
     bool rebuild = faces.isTouched() || links.getValues() != objs;
     if (!rebuild) {
@@ -304,9 +473,17 @@ std::vector<std::string> Filling::followedFaces(
             rebuild = true;
         }
         else {
-            for (const auto& n : followed) {
-                if (!n.empty() && n[0] == '?') {
-                    throw Standard_Failure("Support face reference is lost");
+            for (std::size_t i = 0; i < followed.size(); ++i) {
+                if (!followed[i].empty() && followed[i][0] == '?') {
+                    std::string rescued;
+                    if (oldSigs.size() == names.size()) {
+                        rescued = rescueFace(objs[i], edgeSubs[i], oldSigs[i]);
+                    }
+                    if (rescued.empty()) {
+                        throw Standard_Failure("Support face reference is lost");
+                    }
+                    followed[i] = rescued;
+                    rebuild = true;
                 }
             }
             if (followed != names) {
@@ -318,7 +495,46 @@ std::vector<std::string> Filling::followedFaces(
     if (rebuild) {
         links.setValues(objs, names);
     }
+    std::vector<std::string> newSigs = currentSigs(objs, edgeSubs, names, oldSigs);
+    if (newSigs != oldSigs) {
+        sigs.setValues(newSigs);
+    }
     return names;
+}
+
+// Build the mirror and the signatures from the strings of a freshly restored document, before any
+// edit, so a file saved by stock FreeCAD (no mirror) follows its faces from the first edit on.
+void Filling::seedMirror(
+    const App::PropertyLinkSubList& edges,
+    const App::PropertyStringList& faces,
+    App::PropertyLinkSubList& links,
+    App::PropertyStringList& sigs
+)
+{
+    const std::vector<std::string>& names = faces.getValues();
+    auto objs = edges.getValues();
+    auto edgeSubs = edges.getSubValues();
+    if (names.size() != objs.size() || objs.empty() || edgeSubs.size() != objs.size()) {
+        return;
+    }
+    if (links.getValues() != objs || links.getSubValues().size() != names.size()) {
+        links.setValues(objs, names);
+    }
+    std::vector<std::string> newSigs = currentSigs(objs, edgeSubs, names, sigs.getValues());
+    if (newSigs != sigs.getValues()) {
+        sigs.setValues(newSigs);
+    }
+}
+
+void Filling::onDocumentRestored()
+{
+    Part::Spline::onDocumentRestored();
+    bool wasTouched = isTouched();
+    seedMirror(BoundaryEdges, BoundaryFaces, BoundaryFaceLinks, BoundaryFaceSig);
+    seedMirror(UnboundEdges, UnboundFaces, UnboundFaceLinks, UnboundFaceSig);
+    if (!wasTouched) {
+        purgeTouched();
+    }
 }
 
 App::DocumentObjectExecReturn* Filling::execute()
@@ -362,7 +578,7 @@ App::DocumentObjectExecReturn* Filling::execute()
         addConstraints(
             builder,
             BoundaryEdges,
-            followedFaces(BoundaryEdges, BoundaryFaces, BoundaryFaceLinks),
+            followedFaces(BoundaryEdges, BoundaryFaces, BoundaryFaceLinks, BoundaryFaceSig),
             BoundaryOrder,
             Standard_True
         );
@@ -372,7 +588,7 @@ App::DocumentObjectExecReturn* Filling::execute()
             addConstraints(
                 builder,
                 UnboundEdges,
-                followedFaces(UnboundEdges, UnboundFaces, UnboundFaceLinks),
+                followedFaces(UnboundEdges, UnboundFaces, UnboundFaceLinks, UnboundFaceSig),
                 UnboundOrder,
                 Standard_False
             );

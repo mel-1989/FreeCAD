@@ -55,6 +55,11 @@ public:
     // string lists are rewritten from them. Files without these properties open as before.
     App::PropertyLinkSubList BoundaryFaceLinks;
     App::PropertyLinkSubList UnboundFaceLinks;
+    // Hidden record of what each support face looked like when it last resolved (surface type and
+    // oriented normal at the boundary edge's midpoint), used to rescue a face whose mapped name the
+    // link layer lost.
+    App::PropertyStringList BoundaryFaceSig;
+    App::PropertyStringList UnboundFaceSig;
     App::PropertyLinkSubList FreeFaces;     // Free constraint faces
     App::PropertyIntegerList FreeOrder;     // Order of constraint on free faces
     App::PropertyLinkSubList Points;        // Constraint Points (on Surface)
@@ -75,6 +80,7 @@ public:
     // recalculate the feature
     App::DocumentObjectExecReturn* execute() override;
     short mustExecute() const override;
+    void onDocumentRestored() override;
     /// returns the type name of the view provider
     const char* getViewProviderName() const override
     {
@@ -85,7 +91,14 @@ private:
     std::vector<std::string> followedFaces(
         const App::PropertyLinkSubList& edges,
         App::PropertyStringList& faces,
-        App::PropertyLinkSubList& links
+        App::PropertyLinkSubList& links,
+        App::PropertyStringList& sigs
+    );
+    void seedMirror(
+        const App::PropertyLinkSubList& edges,
+        const App::PropertyStringList& faces,
+        App::PropertyLinkSubList& links,
+        App::PropertyStringList& sigs
     );
     void addConstraints(
         BRepFill_Filling& builder,
