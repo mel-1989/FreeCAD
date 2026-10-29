@@ -710,6 +710,61 @@ def drift(shape, anchor):
         return []
     except Exception:
         return []
+def _line_ends(e):
+    # (first point, last point) of a straight edge with two vertices, else None
+    try:
+        if e.ShapeType != "Edge" or type(e.Curve).__name__ not in ("Line", "LineSegment"):
+            return None
+        v = e.Vertexes
+        if len(v) != 2:
+            return None
+        return v[0].Point, v[1].Point
+    except Exception:
+        return None
+def extent_rescue(shape, anchor):
+    # D6 extent ruling (run 005, TechDraw phase 2, lifted to 3D): a straight edge that an edit
+    # trims equally at both ends is still the same element. The new edge must lie on the anchor's
+    # carrier line inside its extent with the same midpoint, and it must be the ONLY edge of the
+    # shape on that carrier overlapping the anchor's extent: a centre piece of a split edge keeps
+    # the old midpoint but is a split, not the same element. Exactly one answer or none.
+    try:
+        ends = _line_ends(anchor)
+        if ends is None:
+            return []
+        a0, a1 = ends
+        length = (a1 - a0).Length
+        if length <= 2 * TOL:
+            return []
+        d = (a1 - a0) * (1.0 / length)
+        found = []
+        n = len(shape.Edges)
+        for i in range(1, n + 1):
+            e = shape.getElement("Edge%d" % i)
+            q = _line_ends(e)
+            if q is None:
+                continue
+            on = True
+            for p in q:
+                w = p - a0
+                if (w - d * w.dot(d)).Length > TOL:
+                    on = False
+                    break
+            if not on:
+                continue
+            t0, t1 = sorted(((q[0] - a0).dot(d), (q[1] - a0).dot(d)))
+            if min(t1, length) - max(t0, 0.0) <= TOL:
+                continue  # collinear but outside the anchor's extent
+            found.append((i, t0, t1))
+        if len(found) != 1:
+            return []
+        i, t0, t1 = found[0]
+        if t0 < -TOL or t1 > length + TOL or t1 - t0 <= TOL:
+            return []
+        if abs((t0 + t1) / 2.0 - length / 2.0) > TOL:
+            return []
+        return ["Edge%d" % i]
+    except Exception:
+        return []
 def same_el(a, b):
     try:
         if a.ShapeType != b.ShapeType:
@@ -951,6 +1006,46 @@ static std::vector<std::string> anchoredSearch(const PropertyLinkBase* link,
                 if (n) {
                     names.emplace_back(n);
                 }
+            }
+        }
+        if (!r) {
+            PyErr_Clear();
+        }
+        Py_XDECREF(r);
+    }
+    Py_XDECREF(shape);
+    return names;
+}
+
+/// Extent rescue (D6 extent ruling): the anchor of `storedName` (kept under `anchorGeo`, the
+/// feature that held the name when the link last resolved it: `geo` itself, or the target the link
+/// was retargeted away from) was a straight edge and the new shape of `geo` has exactly one edge on its carrier overlapping its extent, inside it with the same
+/// midpoint (trimmed equally at both ends, or unchanged). See `extent_rescue` in the gate source.
+static std::vector<std::string> anchoredExtentRescue(const PropertyLinkBase* link,
+                                                     const GeoFeature& anchorGeo,
+                                                     const GeoFeature& geo,
+                                                     const std::string& storedName)
+{
+    std::vector<std::string> names;
+    Base::PyGILStateLocker lock;  // guards the store
+    auto& store = anchorStore();
+    auto it = store.find(link);
+    if (it == store.end()) {
+        return names;
+    }
+    auto a = it->second.find(anchorKey(anchorGeo, storedName));
+    auto* gp = geo.getPropertyOfGeometry();
+    if (a == it->second.end() || !gp) {
+        return names;
+    }
+    PyObject* shape = const_cast<App::Property*>(static_cast<const App::Property*>(gp))->getPyObject();
+    PyObject* fn = shape ? gateFunction("extent_rescue") : nullptr;
+    if (fn) {
+        PyObject* r = PyObject_CallFunction(fn, "OO", shape, a->second);
+        if (r && PyList_Check(r) && PyList_Size(r) == 1) {
+            const char* n = PyUnicode_AsUTF8(PyList_GetItem(r, 0));
+            if (n) {
+                names.emplace_back(n);
             }
         }
         if (!r) {
@@ -1233,6 +1328,19 @@ static std::vector<std::string> rescueByHistory(const GeoFeature& geo,
 /// chain of records from the link's current name; the first record whose original target is `obj`
 /// and whose original name resolves in `obj` wins. Nothing is searched by geometry or history, so
 /// the outcome is exactly what the link would have resolved to had it never been rescued.
+// Records spent by a restore during one updateLinkReference pass over the subs of a link: a link
+// can hold the same sub twice (an Assembly joint's Reference with its element repeated), and the
+// second one must find the record the first one used.
+namespace
+{
+struct SpentRecords
+{
+    const PropertyLinkBase* prop = nullptr;
+    std::vector<RescueRecord> recs;
+};
+thread_local SpentRecords* spentSink = nullptr;
+}  // namespace
+
 static bool restoreByRescueRecord(const PropertyLinkBase* prop,
                                   DocumentObject* feature,
                                   App::DocumentObject* obj,
@@ -1242,17 +1350,28 @@ static bool restoreByRescueRecord(const PropertyLinkBase* prop,
                                   std::string& restoredSub)
 {
     auto it = _RescueRecords.find(prop);
-    if (it == _RescueRecords.end() || !obj->getNameInDocument()) {
+    SpentRecords* spent = spentSink && spentSink->prop == prop ? spentSink : nullptr;
+    if ((it == _RescueRecords.end() && (!spent || spent->recs.empty()))
+        || !obj->getNameInDocument()) {
         return false;
     }
-    auto& recs = it->second;
     std::string key = rescueNameOf(sub, shadow);
     std::vector<std::string> visited;
     for (int hop = 0; hop < RescueRecordMaxChain; ++hop) {
-        auto r = std::find_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
-            return x.key == key;
-        });
-        if (r == recs.end()) {
+        const RescueRecord* r = nullptr;
+        if (it != _RescueRecords.end()) {
+            auto f = std::find_if(it->second.begin(), it->second.end(), [&](const RescueRecord& x) {
+                return x.key == key;
+            });
+            r = f == it->second.end() ? nullptr : &*f;
+        }
+        if (!r && spent) {
+            auto f = std::find_if(spent->recs.begin(), spent->recs.end(), [&](const RescueRecord& x) {
+                return x.key == key;
+            });
+            r = f == spent->recs.end() ? nullptr : &*f;
+        }
+        if (!r) {
             return false;
         }
         visited.push_back(r->key);
@@ -1272,11 +1391,25 @@ static bool restoreByRescueRecord(const PropertyLinkBase* prop,
                 restoredSub = r->sub;
                 FC_WARN("restored element reference " << key << " -> " << r->shadow.newName
                                                       << " in " << obj->getFullName());
-                recs.erase(std::remove_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
+                auto isVisited = [&](const RescueRecord& x) {
                     return std::find(visited.begin(), visited.end(), x.key) != visited.end();
-                }), recs.end());
-                if (recs.empty()) {
-                    _RescueRecords.erase(it);
+                };
+                if (spent) {
+                    // keep what this restore used for the other subs of the same pass
+                    if (it != _RescueRecords.end()) {
+                        for (const auto& x : it->second) {
+                            if (isVisited(x)) {
+                                spent->recs.push_back(x);
+                            }
+                        }
+                    }
+                }
+                if (it != _RescueRecords.end()) {
+                    auto& recs = it->second;
+                    recs.erase(std::remove_if(recs.begin(), recs.end(), isVisited), recs.end());
+                    if (recs.empty()) {
+                        _RescueRecords.erase(it);
+                    }
                 }
                 return true;
             }
@@ -1418,6 +1551,31 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                         histShadow = shadow;
                         rescuedByHistory = histTarget.size();
                     }
+                }
+            }
+            if (names.empty() && missing && !reverse) {
+                // last resort: a straight edge trimmed equally at both ends (D6 extent ruling);
+                // the anchor is the one kept for the stored name, on this feature or on the
+                // target the link was retargeted away from (found by pointer, never dereferenced
+                // unless it is still in the document)
+                const GeoFeature* anchorGeo = hasAnchor(this, *geo, element) ? geo : nullptr;
+                if (!anchorGeo && prev != _PrevLinkTarget.end() && geo->getDocument()) {
+                    for (auto* o : geo->getDocument()->getObjects()) {
+                        if (o == prev->second && o->getNameInDocument()) {
+                            auto* pg = freecad_cast<GeoFeature*>(o);
+                            if (pg && hasAnchor(this, *pg, element)) {
+                                anchorGeo = pg;
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (anchorGeo) {
+                    names = anchoredExtentRescue(this, *anchorGeo, *geo, element);
+                }
+                if (names.size()) {
+                    FC_WARN("element reference " << element << " in " << geo->getFullName()
+                                                 << " recovered by extent: " << names.front());
                 }
             }
             if (names.size() && !rescuedByHistory && !reverse && obj->getNameInDocument()) {
@@ -2630,6 +2788,21 @@ static bool updateLinkReference(App::PropertyLinkBase* prop,
     }
     int i = 0;
     bool touched = false;
+    SpentRecords spentHere;
+    spentHere.prop = prop;
+    struct SinkGuard
+    {
+        SpentRecords* saved;
+        explicit SinkGuard(SpentRecords* now)
+            : saved(spentSink)
+        {
+            spentSink = now;
+        }
+        ~SinkGuard()
+        {
+            spentSink = saved;
+        }
+    } sinkGuard {&spentHere};
     for (auto& sub : subs) {
         if (prop->_updateElementReference(feature,
                                           link,
