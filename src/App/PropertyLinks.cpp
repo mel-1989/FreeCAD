@@ -1425,8 +1425,18 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
             }
             if (names.size() && !rescuedByHistory && !reverse && obj->getNameInDocument()) {
                 // a geometric relink: remember the name it replaces, so that the original comes
-                // back by name when the new one is gone again (an insertion undone or deleted)
+                // back by name when the new one is gone again (an insertion undone or deleted).
+                // On a retargeted link the original lived on the previous target, which is
+                // found by pointer in the document (it can be gone) and named in the record.
                 histTarget = obj->getNameInDocument();
+                if (prev != _PrevLinkTarget.end()) {
+                    for (auto* o : geo->getDocument()->getObjects()) {
+                        if (o == prev->second && o->getNameInDocument()) {
+                            histTarget = o->getNameInDocument();
+                            break;
+                        }
+                    }
+                }
                 histSub = sub;
                 histShadow = shadow;
                 rescuedByHistory = true;
