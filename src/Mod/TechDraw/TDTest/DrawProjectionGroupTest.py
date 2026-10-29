@@ -92,5 +92,38 @@ class DrawProjectionGroupTest(unittest.TestCase):
         self.assertTrue("Up-to-date" in group.State)
 
 
+    def testRemovePageWithViews(self):
+        """Removing a page that holds several views, one of them a projection group with items,
+        removes every view and does not raise.  DrawPage::unsetupObject used to iterate
+        Page.Views while each removal shrank it (container-overflow under ASAN)."""
+        doc = self.document
+        group = doc.addObject("TechDraw::DrawProjGroup", "ProjGroup")
+        self.page.addView(group)
+        group.Source = [self.fusion]
+        group.addProjection("Front")
+        for name in ("Left", "Top", "Right"):
+            group.addProjection(name)
+        doc.recompute()
+
+        part1 = doc.addObject("TechDraw::DrawViewPart", "Part1")
+        part1.Source = [self.fusion]
+        self.page.addView(part1)
+        note = doc.addObject("TechDraw::DrawViewAnnotation", "Note")
+        self.page.addView(note)
+        part2 = doc.addObject("TechDraw::DrawViewPart", "Part2")
+        part2.Source = [self.fusion]
+        self.page.addView(part2)
+        doc.recompute()
+
+        names = [v.Name for v in self.page.Views]
+        names += [v.Name for v in group.Views]
+        self.assertGreaterEqual(len(names), 8)
+
+        doc.removeObject(self.page.Name)
+
+        for name in names:
+            self.assertIsNone(doc.getObject(name), name + " survived page removal")
+
+
 if __name__ == "__main__":
     unittest.main()
