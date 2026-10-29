@@ -7036,34 +7036,25 @@ void PropertyXLinkContainer::breakLink(App::DocumentObject* obj, bool clear)
     // (TransactionDocumentObject::applyNew rebuilds back-links from getOutListProp())
 }
 
-void PropertyXLinkContainer::removePropBackLinks(App::DocumentObject* owner, bool destroying)
+void PropertyXLinkContainer::removePropBackLinks(App::DocumentObject* owner)
 {
-    // While a whole document is torn down, same-document targets may already be freed (and
-    // _Deps still holds their pointers), so only cross-document targets are touched, and only
-    // those that are still objects of another open document.
-    std::set<DocumentObject*> liveXTargets;
-    if (destroying && !_PropDeps.empty()) {
-        for (auto* doc : GetApplication().getDocuments()) {
-            if (doc == owner->getDocument()) {
-                continue;
-            }
-            for (auto* o : doc->getObjects()) {
-                liveXTargets.insert(o);
-            }
+    if (_PropDeps.empty()) {
+        return;
+    }
+    // _PropDeps keeps pointers to targets that may have been removed or freed since (it is
+    // retained on removal so an undo can re-create the edges, and a document teardown frees
+    // objects one by one), so a target is only touched while it is still an object of an open
+    // document. During teardown the document's own array is already empty, which leaves
+    // exactly the cross-document targets.
+    std::set<DocumentObject*> live;
+    for (auto* doc : GetApplication().getDocuments()) {
+        for (auto* o : doc->getObjects()) {
+            live.insert(o);
         }
     }
     for (auto& [pair, hidden] : _PropDeps) {
         DocumentObject* target = pair.second;
-        // _Deps drops a target when it is removed, so membership proves the pointer is live
-        // outside document teardown. updateDepsProp adds these edges for cross-document
-        // targets too, so there is no same-document test otherwise.
-        if (hidden || !target) {
-            continue;
-        }
-        if (destroying ? !liveXTargets.contains(target) : !_Deps.contains(target)) {
-            continue;
-        }
-        if (target->isAttachedToDocument()) {
+        if (!hidden && target && live.contains(target) && target->isAttachedToDocument()) {
             target->_removeBackLinkProp(getName(), owner, pair.first.c_str());
         }
     }
