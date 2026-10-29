@@ -1316,3 +1316,45 @@ def create_all_fem_objects_doc(doc):
     doc.recompute()
 
     return doc
+
+
+class TestConstraintLostReference(unittest.TestCase):
+    """A multi-reference constraint reports an error when ANY reference no longer resolves."""
+
+    def setUp(self):
+        self.document = FreeCAD.newDocument(self.__class__.__name__)
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.document.Name)
+
+    def _box_and_faces(self):
+        box = self.document.addObject("Part::Box", "Box")
+        self.document.recompute()
+        return box
+
+    def _check(self, make):
+        box = self._box_and_faces()
+        con = make(self.document)
+        con.References = [(box, "Face1"), (box, "Face2")]
+        self.document.recompute()
+        self.assertNotIn("Invalid", con.State)
+        self.assertNotIn("Error", con.State)
+        self.assertEqual(len(con.Points) > 0, True)
+        # second reference is lost, the first stays valid
+        con.References = [(box, "Face1"), (box, "Face99")]
+        self.document.recompute()
+        self.assertTrue("Invalid" in con.State or "Error" in con.State, con.State)
+        self.assertIn("Face99", con.getStatusString())
+        # restoring it clears the error
+        con.References = [(box, "Face1"), (box, "Face2")]
+        self.document.recompute()
+        self.assertNotIn("Invalid", con.State)
+
+    def test_pressure_two_faces(self):
+        self._check(ObjectsFem.makeConstraintPressure)
+
+    def test_contact_two_faces(self):
+        self._check(ObjectsFem.makeConstraintContact)
+
+    def test_tie_two_faces(self):
+        self._check(ObjectsFem.makeConstraintTie)

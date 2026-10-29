@@ -1630,6 +1630,9 @@ public:
                   bool all = false,
                   std::vector<std::string>* subs = nullptr,
                   bool newStyle = true) const override;
+    /// Remove the property-level back-links this container recorded in _PropDeps (only
+    /// towards targets that are still live objects of an open document).
+    void removePropBackLinks(App::DocumentObject* owner);
     void getLinksProp(std::vector<std::pair<std::string, App::DocumentObject*>>& links,
                       bool all = false) const;
 

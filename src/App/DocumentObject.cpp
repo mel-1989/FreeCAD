@@ -27,6 +27,8 @@
 #include <memory>
 #include <map>
 #include <set>
+#include <mutex>
+#include <unordered_set>
 #include <vector>
 #include <string>
 
@@ -64,9 +66,38 @@ DocumentObjectExecReturn* DocumentObject::StdReturn = nullptr;
 // DocumentObject
 //===========================================================================
 
+namespace App
+{
+// Registry of live DocumentObject pointers, so a stale pointer kept in a property
+// (PropertyXLinkContainer::_PropDeps) can be tested in O(1) before it is dereferenced.
+namespace
+{
+std::mutex& liveObjectsMutex()
+{
+    static std::mutex m;
+    return m;
+}
+std::unordered_set<const DocumentObject*>& liveObjects()
+{
+    static std::unordered_set<const DocumentObject*> s;
+    return s;
+}
+}  // namespace
+
+bool isLiveDocumentObject(const DocumentObject* obj)
+{
+    std::lock_guard<std::mutex> lock(liveObjectsMutex());
+    return liveObjects().contains(obj);
+}
+}  // namespace App
+
 DocumentObject::DocumentObject()
     : ExpressionEngine()
 {
+    {
+        std::lock_guard<std::mutex> lock(liveObjectsMutex());
+        liveObjects().insert(this);
+    }
     // define Label of type 'Output' to avoid being marked as touched after relabeling
     ADD_PROPERTY_TYPE(Label, ("Unnamed"), "Base", Prop_Output, "User name of the object (UTF8)");
     ADD_PROPERTY_TYPE(Label2, (""), "Base", Prop_Hidden, "User description of the object (UTF8)");
@@ -85,6 +116,12 @@ DocumentObject::DocumentObject()
 
 DocumentObject::~DocumentObject()
 {
+    {
+        std::lock_guard<std::mutex> lock(liveObjectsMutex());
+        liveObjects().erase(this);
+    }
+    // cross-document expression targets outlive this object; drop our property back-links
+    ExpressionEngine.removePropBackLinks(this);
     if (!PythonObject.is(Py::_None())) {
         Base::PyGILStateLocker lock;
         // Remark: The API of Py::Object has been changed to set whether the wrapper owns the passed

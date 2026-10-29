@@ -57,6 +57,7 @@
 #endif
 
 #include <App/Document.h>
+#include <Base/Exception.h>
 #include <App/DocumentObjectPy.h>
 #include <App/FeaturePythonPyImp.h>
 #include <App/Datums.h>
@@ -177,11 +178,38 @@ void Constraint::onChanged(const App::Property* prop)
         TopoDS_Shape sh;
 
         bool execute = this->isRecomputing();
+        bool normalFound = false;
         for (std::size_t i = 0; i < Objects.size(); i++) {
             App::DocumentObject* obj = Objects[i];
+            if (!obj || !obj->isDerivedFrom<Part::Feature>()) {
+                if (execute) {
+                    throw Base::TypeError(
+                        std::string("Reference is not a Part feature: ") + (obj ? obj->getNameInDocument() : "(null)")
+                    );
+                }
+                continue;
+            }
             Part::Feature* feat = static_cast<Part::Feature*>(obj);
-            sh = Tools::getFeatureSubShape(feat, SubElements[i].c_str(), !execute);
-            if (!sh.IsNull() && sh.ShapeType() == TopAbs_FACE) {
+            // Every reference is resolved, not only the first face: during a recompute
+            // getSubShape throws for a sub-element that no longer exists, which puts the
+            // constraint in the Error state instead of leaving it silently Up-to-date
+            // with a lost reference.
+            try {
+                sh = Tools::getFeatureSubShape(feat, SubElements[i].c_str(), !execute);
+            }
+            catch (const Base::Exception& e) {
+                throw Base::ValueError(
+                    std::string("Reference ") + obj->getNameInDocument() + "." + SubElements[i]
+                    + " no longer resolves: " + e.what()
+                );
+            }
+            if (execute && sh.IsNull() && !SubElements[i].empty()) {
+                throw Base::ValueError(
+                    std::string("Reference sub-element no longer resolves: ") + obj->getNameInDocument()
+                    + "." + SubElements[i]
+                );
+            }
+            if (!normalFound && !sh.IsNull() && sh.ShapeType() == TopAbs_FACE) {
                 // Get face normal in center point
                 TopoDS_Face face = TopoDS::Face(sh);
                 BRepGProp_Face props(face);
@@ -192,8 +220,8 @@ void Constraint::onChanged(const App::Property* prop)
                 props.Normal((u1 + u2) / 2.0, (v1 + v2) / 2.0, center, normal);
                 normal.Normalize();
                 NormalDirection.setValue(normal.X(), normal.Y(), normal.Z());
-                // One face is enough...
-                break;
+                // One face is enough for the normal; the remaining references are still checked
+                normalFound = true;
             }
         }
 
@@ -275,6 +303,9 @@ bool Constraint::getPoints(
     TopoDS_Shape sh;
 
     for (std::size_t i = 0; i < Objects.size(); i++) {
+        if (!Objects[i] || !Objects[i]->isDerivedFrom<Part::Feature>()) {
+            return false;
+        }
         Part::Feature* feat = static_cast<Part::Feature*>(Objects[i]);
         sh = Tools::getFeatureSubShape(feat, SubElements[i].c_str(), true);
         if (sh.IsNull()) {

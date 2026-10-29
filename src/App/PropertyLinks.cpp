@@ -7023,10 +7023,38 @@ void PropertyXLinkContainer::breakLink(App::DocumentObject* obj, bool clear)
         onBreakLink(key);
         if (!v.second && key->getDocument() == owner->getDocument()) {
             key->_removeBackLink(owner);
+            key->_removeBackLinkProp(getName(), owner);
         }
     }
+    // Fine-grained mode records the expression edges only in _PropDeps; drop their
+    // property-level back-links too, otherwise the targets keep an InListProp edge to
+    // this (about to be removed) object.
+    removePropBackLinks(owner);
     _XLinks.clear();
     _Deps.clear();
+    // _PropDeps stays: it records the edges to re-create when the removal is undone
+    // (TransactionDocumentObject::applyNew rebuilds back-links from getOutListProp())
+}
+
+namespace App
+{
+bool isLiveDocumentObject(const DocumentObject* obj);
+}
+
+void PropertyXLinkContainer::removePropBackLinks(App::DocumentObject* owner)
+{
+    if (_PropDeps.empty()) {
+        return;
+    }
+    // _PropDeps keeps pointers to targets that may have been removed or freed since (it is
+    // retained on removal so an undo can re-create the edges, and a document teardown frees
+    // objects one by one), so a target is only touched while it is still a live object.
+    for (auto& [pair, hidden] : _PropDeps) {
+        DocumentObject* target = pair.second;
+        if (!hidden && target && isLiveDocumentObject(target) && target->isAttachedToDocument()) {
+            target->_removeBackLinkProp(getName(), owner, pair.first.c_str());
+        }
+    }
 }
 
 int PropertyXLinkContainer::checkRestore(std::string* msg) const
@@ -7344,9 +7372,11 @@ void PropertyXLinkContainer::clearDeps()
                 obj->_removeBackLinkProp(getName(), owner);
             }
         }
+        removePropBackLinks(owner);
     }
 
     _Deps.clear();
+    _PropDeps.clear();
     _XLinks.clear();
     _LinkRestored = false;
 }
