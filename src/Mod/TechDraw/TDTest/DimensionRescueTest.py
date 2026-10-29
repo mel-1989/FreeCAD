@@ -130,17 +130,17 @@ class DimensionRescueTest(unittest.TestCase):
         self.doc.commitTransaction()
         return feat
 
-    def insertFillet(self):
+    def insertFillet(self, radius=3.0, w=W, h=H):
         """Fillet the four vertical edges (r = 3) right after the pad: the referenced top edge shortens from 40 to 34."""
         edges = [
-            _line_edge(self.pad.Shape, (0, 0, 1), (sx * W / 2, sy * H / 2, L / 2))
+            _line_edge(self.pad.Shape, (0, 0, 1), (sx * w / 2, sy * h / 2, L / 2))
             for sx in (-1, 1)
             for sy in (-1, 1)
         ]
         fillet = self.doc.addObject("PartDesign::Fillet", "Fillet")
         self.body.insertObject(fillet, self.pad, True)
         fillet.Base = (self.pad, edges)
-        fillet.Radius = 3.0
+        fillet.Radius = radius
         self.doc.recompute()
         return fillet
 
@@ -285,6 +285,90 @@ class DimensionRescueTest(unittest.TestCase):
         self.assertAlmostEqual(dim.getRawValue(), W, places=3)
         self.assertTrue(dim.SavedGeometryTrusted)
         self.assertAlmostEqual(dim.SavedGeometry[0].Length, W, places=3)
+
+    def _constrainSketch(self):
+        sk = self.sketch
+        sk.addConstraint(Sketcher.Constraint("Horizontal", 0))
+        sk.addConstraint(Sketcher.Constraint("Horizontal", 2))
+        sk.addConstraint(Sketcher.Constraint("Vertical", 1))
+        sk.addConstraint(Sketcher.Constraint("Vertical", 3))
+        i = sk.addConstraint(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, W))
+        sk.renameConstraint(i, "Width")
+        i = sk.addConstraint(Sketcher.Constraint("DistanceY", 1, 1, 1, 2, H))
+        sk.renameConstraint(i, "Height")
+        sk.addConstraint(Sketcher.Constraint("Symmetric", 0, 1, 1, 2, -1, 1))
+        self.doc.recompute()
+
+    def _viewVertex(self, point, tol=1e-3):
+        i = 0
+        while True:
+            try:
+                v = self.view.getVertexByIndex(i)
+            except Exception:
+                raise LookupError("no view vertex at %s" % (point,))
+            if (v.Point - V(*point)).Length < tol:
+                return "Vertex%d" % i
+            i += 1
+
+    def testMovedVertexIsNotRewrittenOntoAnother(self):
+        """Two fillet-end vertices of a 2D-only DistanceY; the sketch height grows.  Both vertices move with the
+        profile, and an exact match to where one used to be (another vertex) must not retarget the dimension."""
+        self._constrainSketch()
+        self.sketch.setDatum("Width", FreeCAD.Units.Quantity("44 mm"))
+        self.sketch.setDatum("Height", FreeCAD.Units.Quantity("30 mm"))
+        # move the hole to (12, -4), r 2.5, as in the failing drawing
+        self.holeSketch.deleteAllGeometry()
+        self.holeSketch.addGeometry(Part.Circle(V(12, -4, 0), V(0, 0, 1), 2.5), False)
+        self.doc.recompute()
+        w, h = 44.0, 30.0
+        self.insertFillet(2.0, w, h)
+        a = self._viewVertex((-w / 2 + 2, h / 2, 0))
+        b = self._viewVertex((-w / 2, h / 2 - 2, 0))
+        dim = self.doc.addObject("TechDraw::DrawViewDimension", "DimV")
+        self.page.addView(dim)
+        dim.Type = "DistanceY"
+        dim.References2D = [(self.view, a), (self.view, b)]
+        self.doc.recompute()
+        self.assertAlmostEqual(dim.getRawValue(), 2.0, places=3)
+        self.sketch.setDatum("Height", FreeCAD.Units.Quantity("34 mm"))
+        self.doc.recompute()
+        self.assertFalse(_broken(dim), dim.State)
+        self.assertAlmostEqual(dim.getRawValue(), 2.0, places=3)
+
+    def testChamferEndsDoNotVetoSymmetricTrim(self):
+        """Front view: the top front edge is trimmed symmetrically by a width edit while chamfer segments continue
+        it on the same line; the unique same-midpoint edge is the dimensioned one."""
+        self._constrainSketch()
+        self.view.Direction = V(0, -1, 0)
+        self.doc.recompute()
+        edges = [
+            _line_edge(self.pad.Shape, (0, 0, 1), (sx * W / 2, sy * H / 2, L / 2))
+            for sx in (-1, 1)
+            for sy in (-1, 1)
+        ]
+        chamfer = self.doc.addObject("PartDesign::Chamfer", "Chamfer")
+        self.body.insertObject(chamfer, self.pad, True)
+        chamfer.Base = (self.pad, edges)
+        chamfer.Size = 2.0
+        self.doc.recompute()
+        k, found = 0, None
+        while found is None:
+            e = self.view.getEdgeByIndex(k)
+            mid = e.valueAt((e.FirstParameter + e.LastParameter) / 2)
+            if type(e.Curve).__name__ == "Line" and abs(e.Curve.Direction.x) > 0.999 \
+                    and abs(e.Length - (W - 4)) < 1e-3 and mid.y > 0:
+                found = "Edge%d" % k
+            k += 1
+        dim = self.doc.addObject("TechDraw::DrawViewDimension", "DimEdge")
+        self.page.addView(dim)
+        dim.Type = "DistanceX"
+        dim.References2D = [(self.view, found)]
+        self.doc.recompute()
+        self.assertAlmostEqual(dim.getRawValue(), W - 4, places=3)
+        self.sketch.setDatum("Width", FreeCAD.Units.Quantity("30 mm"))
+        self.doc.recompute()
+        self.assertFalse(_broken(dim), dim.State)
+        self.assertAlmostEqual(dim.getRawValue(), 30 - 4, places=3)
 
     def testInsertThenDeleteFilletReturns(self):
         """A rescued 2D reference follows the edge back when the fillet is deleted again."""

@@ -162,6 +162,7 @@ bool DimensionAutoCorrect::autocorrectReferences(std::vector<bool>& referenceSta
         return true;
     }
 
+    bool keptUnverified2d {false};
     size_t iRef {0};
     for (const auto& state : referenceState) {
         if (state) {
@@ -224,6 +225,7 @@ bool DimensionAutoCorrect::autocorrectReferences(std::vector<bool>& referenceSta
         // split or duplicated and any guess could be wrong.
         if (!fixedRef.is3d() && !m_similarAmbiguous && fixedRef.hasGeometry()
             && isPlausibleEdit2d(fixedRef, savedGeometry.at(iRef))) {
+            keptUnverified2d = true;
             referenceState.at(iRef) = true;
             repairedRefs.push_back(fixedRef);
             iRef++;
@@ -236,6 +238,16 @@ bool DimensionAutoCorrect::autocorrectReferences(std::vector<bool>& referenceSta
         repairedRefs.push_back(fixedRef);
         iRef++;
         // we could exit here
+    }
+
+    if (keptUnverified2d) {
+        // A 2d reference was only kept, not verified.  Unmodified autocorrect changes nothing unless every
+        // reference is fixed, and moving one end of a dimension while the other is a guess can silently retarget
+        // it (a vertex that moved in a parametric edit coinciding with another vertex's old place), so leave
+        // the references as they were.
+        for (size_t i = 0; i < repairedRefs.size() && i < refsAll.size(); i++) {
+            repairedRefs.at(i) = refsAll.at(i);
+        }
     }
 
     return result;
@@ -483,9 +495,11 @@ bool DimensionAutoCorrect::findSimilarEdge3d(ReferenceEntry& refToFix,
             iEdge++;
         }
     }
-    if (found != 1 || overlapping != 0) {
-        // none, or several: guessing would risk a silent retarget
-        m_similarAmbiguous = found + overlapping > 1;
+    if (found != 1) {
+        // none, or several: guessing would risk a silent retarget.  Pieces of the old extent that merely lie on
+        // the carrier do not veto a unique same-midpoint edge (chamfer ends that continue a trimmed edge);
+        // with no same-midpoint edge, several overlapping pieces mean the edge was split.
+        m_similarAmbiguous = found > 1 || (found == 0 && overlapping > 1);
         return false;
     }
     refToFix = candidate;
@@ -614,8 +628,8 @@ ReferenceEntry DimensionAutoCorrect::searchViewForSimilarEdge(DrawViewPart* obj,
         }
         iEdge++;
     }
-    if (found != 1 || overlapping != 0) {
-        m_similarAmbiguous = found + overlapping > 1;
+    if (found != 1) {
+        m_similarAmbiguous = found > 1 || (found == 0 && overlapping > 1);
         return {};
     }
     return {obj, std::string("Edge") + std::to_string(iFound), getDimension()->getDocument()};
