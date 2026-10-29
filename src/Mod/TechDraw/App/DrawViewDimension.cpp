@@ -326,9 +326,10 @@ void DrawViewDimension::onChanged(const App::Property* prop)
 
     // Undo, redo and restore put References2D/3D and SavedGeometry back together.  Re-saving geometry now would
     // record whatever the (not yet recomputed) view shows for the restored index, and corrupt the saved shape.
-    // Saved geometry that is not trusted (stock file, or not yet written) is refreshed at the end of execute instead.
+    // Saved geometry that is not trusted (a stock file's, possibly stale) is refreshed at the end of execute instead;
+    // with nothing saved yet there is nothing stale to protect, so a new dimension saves at once.
     bool restoringFromTransaction = (getDocument() && getDocument()->isPerformingTransaction())
-        || !SavedGeometryTrusted.getValue();
+        || (!SavedGeometryTrusted.getValue() && SavedGeometry.getSize() > 0);
 
     if (prop == &References2D) {
         if (!restoringFromTransaction) {
@@ -636,7 +637,7 @@ App::DocumentObjectExecReturn* DrawViewDimension::execute()
         m_hasGeometry = true;
     }
 
-    if (!SavedGeometryTrusted.getValue()) {
+    if (!SavedGeometryTrusted.getValue() || SavedGeometry.getSize() == 0) {
         // the references just validated against the current geometry; write the saved geometry and mark it
         updateSavedGeometry();
     }
