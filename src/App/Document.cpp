@@ -2582,6 +2582,10 @@ static void buildDependencyList(const std::vector<DocumentObject*>& objectArray,
                                  bool* touchCheck = nullptr)
 {
     std::map<DocumentObject*, std::vector<DocumentObject*>> outLists;
+    // objects in the order they were first reached: the edges are added in this order, not in the
+    // order of `outLists` (by pointer address), so that the topological sort of objects that do
+    // not depend on each other, and with it the recompute order, is the same from run to run
+    std::vector<DocumentObject*> reached;
     std::deque<DocumentObject*> objs;
 
     if (objectMap) {
@@ -2646,6 +2650,7 @@ static void buildDependencyList(const std::vector<DocumentObject*>& objectArray,
             }
 
             auto& outList = outLists[objF];
+            reached.push_back(objF);
             if (GetApplication().isFineGrainedRecomputeEnabled()) {
                 outList = getOutListFineGrained(objF, op);
             }
@@ -2657,8 +2662,8 @@ static void buildDependencyList(const std::vector<DocumentObject*>& objectArray,
     }
 
     if (objectMap && depList) {
-        for (const auto& [key, objects] : outLists) {
-            for (auto obj : objects) {
+        for (auto key : reached) {
+            for (auto obj : outLists[key]) {
                 if (obj && obj->isAttachedToDocument()) {
                     add_edge((*objectMap)[key], (*objectMap)[obj], *depList);
                 }
@@ -3077,6 +3082,27 @@ int Document::recompute(const std::vector<DocumentObject*>& objs,
     return objectCount;
 }
 
+namespace
+{
+// Orders objects by id (then by address, which only separates objects of different documents), so
+// that the sorts below, which pick the first object satisfying a condition from a map, pick the
+// same one in every run. A map ordered by address makes the recompute order of objects in a
+// dependency cycle, and with it what a failing recompute leaves behind, vary from run to run.
+struct ObjectIdLess
+{
+    bool operator()(const DocumentObject* a, const DocumentObject* b) const
+    {
+        if (!a || !b) {
+            return a < b;
+        }
+        if (a->getID() != b->getID()) {
+            return a->getID() < b->getID();
+        }
+        return a < b;
+    }
+};
+}  // namespace
+
 /*!
   Does almost the same as topologicalSort() until no object with an input degree of zero
   can be found. It then searches for objects with an output degree of zero until neither
@@ -3091,7 +3117,7 @@ DocumentP::partialTopologicalSort(const std::vector<DocumentObject*>& objects)
     std::vector<DocumentObject*> ret;
     ret.reserve(objects.size());
     // pairs of input and output degree
-    std::map<DocumentObject*, std::pair<int, int>> countMap;
+    std::map<DocumentObject*, std::pair<int, int>, ObjectIdLess> countMap;
 
     for (auto objectIt : objects) {
         // we need inlist with unique entries
@@ -3197,7 +3223,7 @@ DocumentP::topologicalSort(const std::vector<DocumentObject*>& objects) const
     // https://de.wikipedia.org/wiki/Topologische_Sortierung#Algorithmus_f.C3.BCr_das_Topologische_Sortieren
     std::vector<DocumentObject*> ret;
     ret.reserve(objects.size());
-    std::map<DocumentObject*, int> countMap;
+    std::map<DocumentObject*, int, ObjectIdLess> countMap;
 
     for (auto objectIt : objects) {
         // We now support externally linked objects
