@@ -757,3 +757,46 @@ class TestReferenceRescue(unittest.TestCase):
         self.assertNotEqual(chosen, [_edge_sig(pad.Shape, s) for s in before[1]])
         self._d5_delete(ins)
         self.assertNotEqual(list(b0.Base[1]), before[1])
+
+    def test_rejected_second_rescue_then_move_both_after_restores_references(self):
+        """A Draft consumer's face is rescued into a boss, then a polar pattern of the boss is
+        inserted behind it and the identity gate rejects the second rescue, so the link already
+        carries the missing mark for the boss's name. Moving boss and pattern behind the consumer
+        must still give the original face back."""
+        pad = self._pad()
+        sh = pad.Shape
+
+        def face(pred):
+            return [
+                "Face%d" % (i + 1) for i, f in enumerate(sh.Faces) if pred(f)
+            ][0]
+
+        def normal(f):
+            u0, u1, v0, v1 = f.ParameterRange
+            return f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+
+        b0 = _add(self.doc, self.body, "PartDesign::Draft", "B0")
+        b0.Base = (pad, [face(lambda f: (normal(f) - V(0, 1, 0)).Length < 1e-6)])
+        b0.NeutralPlane = (pad, [face(lambda f: abs(f.CenterOfMass.z) < 1e-6)])
+        b0.Angle = 2.0
+        self.doc.recompute()
+        self._valid(b0)
+        before = (b0.Shape.Volume, list(b0.Base[1]))
+        bs = _sketch(self.doc, self.body, "BossSk", z=L, after=pad)
+        _rect(bs, 12.0, 4.0, 4.0, 4.0)
+        boss = _add(self.doc, self.body, "PartDesign::Pad", "INSBo", bs)
+        boss.Profile = bs
+        boss.Length = 3.0
+        pat = _add(self.doc, self.body, "PartDesign::PolarPattern", "INS", boss)
+        pat.Originals = [boss]
+        pat.Axis = (_plane(self.body, "Z_Axis"), [""])
+        pat.Angle = 360
+        pat.Occurrences = 3
+        self.doc.recompute()
+        self.assertIs(b0.Base[0], pat)
+        for obj in (boss, pat):
+            self.body.removeObject(obj)
+        self.body.insertObject(boss, b0, True)
+        self.body.insertObject(pat, boss, True)
+        self.doc.recompute()
+        self._d5_restored(pad, b0, before)

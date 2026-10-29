@@ -964,6 +964,19 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
         _ElementRefMap[geo].insert(this);
     }
 
+    std::string restoredSub;
+    bool restored = false;
+    if (feature == geo && !reverse && GeoFeature::hasMissingElement(elementName.oldName.c_str())) {
+        // This runs before the "nothing changed" shortcut below: a link that already carries the
+        // missing mark for this very name would otherwise never get its original back.
+        // A name written by an earlier history rescue that is missing here: give the original
+        // name back first (by name only), before the missing mark overwrites the sub.
+        ShadowSub resolved;
+        if (restoreByRescueRecord(this, feature, obj, sub, shadow, resolved, restoredSub)) {
+            elementName.swap(resolved);
+            restored = true;
+        }
+    }
     if (!reverse) {
         if (elementName.newName.empty()) {
             shadow.oldName.swap(elementName.oldName);
@@ -975,18 +988,6 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
     }
 
     bool missing = GeoFeature::hasMissingElement(elementName.oldName.c_str());
-    std::string restoredSub;
-    bool restored = false;
-    if (feature == geo && missing && !reverse) {
-        // A name written by an earlier history rescue that is missing here: give the original
-        // name back first (by name only), before the missing mark overwrites the sub.
-        ShadowSub resolved;
-        if (restoreByRescueRecord(this, feature, obj, sub, shadow, resolved, restoredSub)) {
-            elementName.swap(resolved);
-            missing = false;
-            restored = true;
-        }
-    }
     bool rescuedByHistory = false;
     std::string histTarget;
     std::string histSub;
