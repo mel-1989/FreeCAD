@@ -800,3 +800,147 @@ class TestReferenceRescue(unittest.TestCase):
         self.body.insertObject(pat, boss, True)
         self.doc.recompute()
         self._d5_restored(pad, b0, before)
+
+    # -------------------------------------------------------------- round 7 repairs (G01, repair round 1)
+    def _draft_face(self, base, normal, name, angle, after):
+        sh = base.Shape
+
+        def n_of(f):
+            u0, u1, v0, v1 = f.ParameterRange
+            return f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+
+        side = [
+            "Face%d" % (i + 1)
+            for i, f in enumerate(sh.Faces)
+            if (n_of(f) - normal).Length < 1e-6 and isinstance(f.Surface, Part.Plane)
+        ][0]
+        bottom = [
+            "Face%d" % (i + 1)
+            for i, f in enumerate(sh.Faces)
+            if abs(f.CenterOfMass.z) < 1e-6 and isinstance(f.Surface, Part.Plane)
+        ][0]
+        d = _add(self.doc, self.body, "PartDesign::Draft", name, after)
+        d.Base = (base, [side])
+        d.NeutralPlane = (base, [bottom])
+        d.Angle = angle
+        self.doc.recompute()
+        return d
+
+    def test_undo_of_a_move_does_not_retarget_to_a_stale_index(self):
+        """Fails on 3992f8bd76: a fillet inserted in front of a chamfer (no recompute), moved
+        behind it and the move undone. The element cache of the fillet was filled from its shape
+        in the other position, where "Edge10" was an unrelated vertical edge, and FreeCAD's own
+        geometric search carried the chamfer's top edge over to it, silently. A retargeted link
+        may only take over an element that is provably the same as the previous target's."""
+        self.doc.UndoMode = 1
+        pad = self._pad()
+        cons = self._dressup("PartDesign::Chamfer", pad, ["Edge12", "Edge10"], 0.5)
+        self.doc.recompute()
+        self._valid(cons)
+        sigs = [_edge_sig(pad.Shape, e) for e in cons.Base[1]]
+        self.doc.openTransaction("insert")
+        fil = _add(self.doc, self.body, "PartDesign::Fillet", "InsFillet", pad)
+        fil.Base = (pad, ["Edge2"])
+        fil.Radius = 0.8
+        self.doc.commitTransaction()
+        self.doc.openTransaction("move")
+        self.body.removeObject(fil)
+        self.body.insertObject(fil, cons, True)
+        self.doc.commitTransaction()
+        self.doc.recompute()
+        self.doc.undo()
+        self.doc.recompute()
+        base, subs = cons.Base
+        for sub, expected in zip(subs, sigs):
+            if sub.startswith("?"):
+                continue
+            self.assertEqual(
+                _edge_sig(base.Shape, sub),
+                expected,
+                "%s on %s is a different element than the one the chamfer referenced" % (sub, base.Name),
+            )
+
+    def _undoable_insert(self):
+        self.doc.UndoMode = 1
+        pad, b0, before = self._d5_dressed_pad()
+        self.doc.openTransaction("insert")
+        ins = self._d5_insert(pad, "draft")
+        self.doc.commitTransaction()
+        self._d5_rescued(b0, ins)
+        return pad, b0, before
+
+    def _delete_in_transaction(self):
+        ins = self.doc.getObject("INS")
+        self.doc.openTransaction("delete")
+        self.body.removeObject(ins)
+        self.doc.removeObject("INS")
+        self.doc.commitTransaction()
+        self.doc.recompute()
+
+    def test_undo_redo_of_an_insert_keeps_the_rescue_records(self):
+        """Fails on 3992f8bd76: the undo/redo Paste brought the rescued name back without its
+        rescue record, so deleting the insert afterwards left the fillet edge missing."""
+        pad, b0, before = self._undoable_insert()
+        self.doc.undo()
+        self.doc.recompute()
+        self.doc.redo()
+        self.doc.recompute()
+        self._d5_rescued(b0, self.doc.getObject("INS"))
+        self._delete_in_transaction()
+        self._d5_restored(pad, b0, before)
+
+    def test_undo_of_a_delete_keeps_the_rescue_records(self):
+        """Fails on 3992f8bd76: restoring on the delete erased the record the undo of the delete
+        needs, so the second delete could not give the original edge back."""
+        pad, b0, before = self._undoable_insert()
+        self._delete_in_transaction()
+        self._d5_restored(pad, b0, before)
+        self.doc.undo()
+        self.doc.recompute()
+        self._d5_rescued(b0, self.doc.getObject("INS"))
+        self._delete_in_transaction()
+        self._d5_restored(pad, b0, before)
+
+    def test_middle_delete_of_a_chain_keeps_the_original_reachable(self):
+        """Fails on 3992f8bd76: two inserts rescued in a row, the first deleted. The second's
+        element is re-tracked by FreeCAD's mapping to a new mapped name no record was keyed on,
+        so deleting the second left the fillet edge missing."""
+        pad, b0, before = self._d5_dressed_pad()
+        ins1 = self._d5_insert(pad, "draft")
+        self._d5_rescued(b0, ins1)
+        ins2 = self._draft_face(ins1, V(0, 1, 0), "INS2", 3.0, ins1)
+        self.assertIs(b0.Base[0], ins2)
+        self._d5_delete(ins1)
+        self._d5_delete(ins2)
+        self._d5_restored(pad, b0, before)
+
+    def test_malformed_rescue_record_attribute_keeps_the_link(self):
+        """Fails on 3992f8bd76: a non-numeric HistRescue threw while reading the link and the
+        whole link was dropped. A malformed record is no record; the link is read as usual."""
+        import zipfile
+
+        pad, b0, before = self._d5_dressed_pad()
+        ins = self._d5_insert(pad, "draft")
+        self._d5_rescued(b0, ins)
+        with tempfile.TemporaryDirectory() as tmp:
+            good = os.path.join(tmp, "good.FCStd")
+            bad = os.path.join(tmp, "bad.FCStd")
+            self.doc.saveAs(good)
+            changed = 0
+            with zipfile.ZipFile(good) as zin, zipfile.ZipFile(bad, "w", zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    data = zin.read(item.filename)
+                    if item.filename == "Document.xml":
+                        text = data.decode("utf-8")
+                        changed = text.count('HistRescue="1"')
+                        data = text.replace('HistRescue="1"', 'HistRescue="abc"').encode("utf-8")
+                    zout.writestr(item, data)
+            self.assertGreater(changed, 0, "the saved file carries no rescue record")
+            App.closeDocument(self.doc.Name)
+            self.doc = App.openDocument(bad)
+            b0 = self.doc.getObject("Fillet")
+            self.assertIsNotNone(b0.Base[0], "the link was dropped")
+            self.doc.recompute()
+            self.assertIs(b0.Base[0], self.doc.getObject("INS"))
+            self.assertEqual(len(b0.Base[1]), 2)
+            self.assertFalse(b0.Base[1][0].startswith("?"), "the rescued edge went missing")

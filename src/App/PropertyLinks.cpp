@@ -801,32 +801,71 @@ static bool identityGateAccepts(const GeoFeature& geo,
 /// (form `;<mapped name>.<Type><N>`, possibly with a leading '?' on the index). Returns the
 /// indexed name of the single derived element, or an empty vector if there is none or the
 /// answer is ambiguous.
-static std::vector<std::string> rescueByHistory(const GeoFeature& geo,
-                                                const App::DocumentObject* prevTarget,
-                                                const char* element)
+static bool parseStoredElement(const char* element, std::string& mapped, std::string& type)
 {
     std::string s(element);
     if (s.compare(0, Data::ELEMENT_MAP_PREFIX_SIZE, Data::ELEMENT_MAP_PREFIX) != 0) {
-        return {};
+        return false;
     }
     s.erase(0, Data::ELEMENT_MAP_PREFIX_SIZE);
     auto dot = s.rfind('.');
     if (dot == std::string::npos || dot == 0) {
-        return {};
+        return false;
     }
     std::string idx = s.substr(dot + 1);
     s.erase(dot);
     if (!idx.empty() && idx[0] == Data::MISSING_PREFIX[0]) {
         idx.erase(0, 1);
     }
-    std::string type;
+    type.clear();
     for (char c : idx) {
         if (!std::isalpha(static_cast<unsigned char>(c))) {
             break;
         }
         type += c;
     }
-    if (type.empty()) {
+    mapped = std::move(s);
+    return !type.empty();
+}
+
+/// A retargeted link may only take over an element found by FreeCAD's own geometric search of
+/// the old shape (the element cache) when that element is provably the one the stored name
+/// designated in the previous target. The cache is keyed by the plain index and filled from the
+/// target's previous shape, which can be a different configuration of the feature (undo, a
+/// feature moved back): the index then names an unrelated element and the search lands on it.
+static bool retargetedGeometryRescueAccepted(const GeoFeature& geo,
+                                             const App::DocumentObject* prevTarget,
+                                             const char* element,
+                                             const std::vector<std::string>& names)
+{
+    std::string mapped;
+    std::string type;
+    if (names.size() != 1 || !parseStoredElement(element, mapped, type)) {
+        return false;
+    }
+    auto* prop = geo.getPropertyOfGeometry();
+    const Data::ComplexGeoData* data = prop ? prop->getComplexData() : nullptr;
+    if (!data || data->countSubElements(type.c_str())
+            < static_cast<unsigned long>(Data::IndexedName(names.front().c_str()).getIndex())) {
+        return false;
+    }
+    bool ok = identityGateAccepts(geo, prevTarget, Data::MappedName(mapped.c_str()), type, names.front());
+    if (!ok) {
+        FC_WARN("element reference " << element << " in " << geo.getFullName()
+                                      << ": geometric match " << names.front()
+                                      << " of a retargeted link is not provably the same element;"
+                                         " left missing");
+    }
+    return ok;
+}
+
+static std::vector<std::string> rescueByHistory(const GeoFeature& geo,
+                                                const App::DocumentObject* prevTarget,
+                                                const char* element)
+{
+    std::string s;
+    std::string type;
+    if (!parseStoredElement(element, s, type)) {
         return {};
     }
     auto* prop = geo.getPropertyOfGeometry();
@@ -1006,10 +1045,14 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
             if (names.empty() && missing) {
                 names = rescueDriftedElement(*geo, oldElement);
             }
+            auto prev = _PrevLinkTarget.find(this);
+            if (prev != _PrevLinkTarget.end() && names.size()
+                && !retargetedGeometryRescueAccepted(*geo, prev->second, element, names)) {
+                names.clear();
+            }
             if (names.empty() && missing) {
                 // geometry found nothing: follow the element-map history (single match only),
                 // but only for a link retargeted by an insertion, compared with its old target
-                auto prev = _PrevLinkTarget.find(this);
                 if (prev != _PrevLinkTarget.end()) {
                     names = rescueByHistory(*geo, prev->second, element);
                     if (names.size()) {
@@ -1073,9 +1116,29 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
     else {
         FC_TRACE(propertyName(this) << " element reference shadow update " << ret->getFullName()
                                     << " " << shadow.newName << " -> " << elementName.newName);
+        const std::string prevKey = rescueNameOf(sub, shadow);
         shadow.swap(elementName);
         if (shadow.newName.size() && Data::hasMappedElementName(sub.c_str())) {
             updateSub(shadow.newName);
+        }
+        if (!rescuedByHistory && !restored && shadow.newName.size() && prevKey != shadow.newName) {
+            // FreeCAD's own element mapping followed the element to a new mapped name: the
+            // record keyed on the old name belongs to the same element, so it follows too
+            auto rit = _RescueRecords.find(this);
+            if (rit != _RescueRecords.end()) {
+                auto& recs = rit->second;
+                auto old = std::find_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
+                    return x.key == prevKey;
+                });
+                if (old != recs.end()) {
+                    RescueRecord moved = *old;
+                    moved.key = shadow.newName;
+                    recs.erase(std::remove_if(recs.begin(), recs.end(), [&](const RescueRecord& x) {
+                        return x.key == prevKey || x.key == moved.key;
+                    }), recs.end());
+                    recs.push_back(std::move(moved));
+                }
+            }
         }
         if (rescuedByHistory && shadow.newName.size() && shadow.newName != histShadow.newName) {
             auto& recs = _RescueRecords[this];
@@ -2577,23 +2640,28 @@ void PropertyLinkSub::Restore(Base::XMLReader& reader)
             mapped.push_back(i);
         }
         if (reader.hasAttribute("HistRescue") && !reader.doNameMapping()) {
-            long n = reader.getAttribute<long>("HistRescue");
-            for (long k = 0; k < n && k < RescueRecordMaxChain; ++k) {
-                auto at = [&](const char* base) {
-                    std::string nm = base + std::to_string(k);
-                    return reader.hasAttribute(nm.c_str())
-                        ? std::string(reader.getAttribute<const char*>(nm.c_str()))
-                        : std::string();
-                };
-                RescueRecord rec;
-                rec.key = at("HistKey");
-                rec.target = at("HistTarget");
-                rec.sub = at("HistSub");
-                rec.shadow.newName = at("HistNew");
-                rec.shadow.oldName = at("HistOld");
-                if (rec.key.size() && rec.target.size()) {
-                    histRecords.push_back(std::move(rec));
+            try {
+                long n = reader.getAttribute<long>("HistRescue");
+                for (long k = 0; k < n && k < RescueRecordMaxChain; ++k) {
+                    auto at = [&](const char* base) {
+                        std::string nm = base + std::to_string(k);
+                        return reader.hasAttribute(nm.c_str())
+                            ? std::string(reader.getAttribute<const char*>(nm.c_str()))
+                            : std::string();
+                    };
+                    RescueRecord rec;
+                    rec.key = at("HistKey");
+                    rec.target = at("HistTarget");
+                    rec.sub = at("HistSub");
+                    rec.shadow.newName = at("HistNew");
+                    rec.shadow.oldName = at("HistOld");
+                    if (rec.key.size() && rec.target.size()) {
+                        histRecords.push_back(std::move(rec));
+                    }
                 }
+            }
+            catch (...) {
+                // a malformed record is no record; the link itself is read as usual
             }
         }
     }
@@ -2718,6 +2786,12 @@ Property* PropertyLinkSub::Copy() const
     p->_pcLinkSub = _pcLinkSub;
     p->_cSubList = _cSubList;
     p->_ShadowSubList = _ShadowSubList;
+    // the rescue records belong to the value: an undo or redo of this property must bring them
+    // back together with the rescued names
+    auto rit = _RescueRecords.find(this);
+    if (rit != _RescueRecords.end()) {
+        _RescueRecords[p] = rit->second;
+    }
     return p;
 }
 
@@ -2727,7 +2801,20 @@ void PropertyLinkSub::Paste(const Property& from)
         throw Base::TypeError("Incompatible property to paste to");
     }
     auto& link = static_cast<const PropertyLinkSub&>(from);
+    std::vector<RescueRecord> records;
+    auto rit = _RescueRecords.find(&link);
+    if (rit != _RescueRecords.end()) {
+        records = rit->second;
+    }
     setValue(link._pcLinkSub, link._cSubList, std::vector<ShadowSub>(link._ShadowSubList));
+    // set after the value: setValue prunes records that the new value cannot reach
+    if (records.empty()) {
+        _RescueRecords.erase(this);
+    }
+    else {
+        _RescueRecords[this] = std::move(records);
+        pruneRescueRecords(this, _cSubList, _ShadowSubList);
+    }
 }
 
 void PropertyLinkSub::getLinks(std::vector<App::DocumentObject*>& objs,
