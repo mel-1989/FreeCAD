@@ -84,6 +84,8 @@ std::unordered_set<const DocumentObject*>& liveObjects()
 }
 }  // namespace
 
+void prunePropDepTarget(const DocumentObject* target);  // PropertyLinks.cpp
+
 bool isLiveDocumentObject(const DocumentObject* obj)
 {
     std::lock_guard<std::mutex> lock(liveObjectsMutex());
@@ -120,6 +122,9 @@ DocumentObject::~DocumentObject()
         std::lock_guard<std::mutex> lock(liveObjectsMutex());
         liveObjects().erase(this);
     }
+    // expression owners (also in other documents, also removed ones kept for undo) hold this
+    // object in _PropDeps: forget it there before the memory goes away
+    App::prunePropDepTarget(this);
     // cross-document expression targets outlive this object; drop our property back-links
     ExpressionEngine.removePropBackLinks(this);
     if (!PythonObject.is(Py::_None())) {

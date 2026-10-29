@@ -23,7 +23,10 @@
  ***************************************************************************/
 
 #include <algorithm>
+#include <functional>
+#include <mutex>
 #include <set>
+#include <unordered_map>
 #include <optional>
 
 #include <QDir>
@@ -6948,13 +6951,116 @@ void PropertyXLinkList::setPyObject(PyObject* value)
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 TYPESYSTEM_SOURCE_ABSTRACT(App::PropertyXLinkContainer, App::PropertyLinkBase)
 
+namespace
+{
+// Reverse index of the targets kept in PropertyXLinkContainer::_PropDeps. _PropDeps outlives
+// the back-links on purpose (an expression owner removed inside a transaction keeps its edges
+// so undo can re-create them), so a target that is destroyed meanwhile (removed outside any
+// transaction, a cleared undo stack, or its document closed) leaves a dangling pointer in
+// every holder. ~DocumentObject asks this registry to erase those entries.
+struct PropDepRegistry
+{
+    using Deps = std::map<std::pair<std::string, DocumentObject*>, bool>;
+    struct Holder
+    {
+        std::function<void(const DocumentObject*)> prune;
+        std::set<const DocumentObject*> targets;
+    };
+    std::mutex mutex;
+    std::unordered_map<const void*, Holder> holders;
+    std::unordered_map<const DocumentObject*, std::set<const void*>> byTarget;
+
+    void unlinkHolder(const void* holder, Holder& h)
+    {
+        for (auto target : h.targets) {
+            auto it = byTarget.find(target);
+            if (it != byTarget.end()) {
+                it->second.erase(holder);
+                if (it->second.empty()) {
+                    byTarget.erase(it);
+                }
+            }
+        }
+        h.targets.clear();
+    }
+};
+
+PropDepRegistry& propDepRegistry()
+{
+    static PropDepRegistry* r = new PropDepRegistry;  // never destroyed: used during exit
+    return *r;
+}
+
+// Re-index `holder` after its _PropDeps changed. `makePrune` is only called for a holder that
+// is not yet registered.
+void syncPropDepsRegistry(const void* holder,
+                          const PropDepRegistry::Deps& deps,
+                          const std::function<std::function<void(const DocumentObject*)>()>& makePrune)
+{
+    auto& reg = propDepRegistry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    auto it = reg.holders.find(holder);
+    if (it != reg.holders.end()) {
+        reg.unlinkHolder(holder, it->second);
+    }
+    if (deps.empty()) {
+        if (it != reg.holders.end()) {
+            reg.holders.erase(it);
+        }
+        return;
+    }
+    if (it == reg.holders.end()) {
+        it = reg.holders.emplace(holder, PropDepRegistry::Holder {}).first;
+        it->second.prune = makePrune();
+    }
+    for (auto& kv : deps) {
+        if (kv.first.second) {
+            it->second.targets.insert(kv.first.second);
+            reg.byTarget[kv.first.second].insert(holder);
+        }
+    }
+}
+}  // namespace
+
+namespace App
+{
+/// Called from ~DocumentObject: forget `target` in every container's _PropDeps.
+void prunePropDepTarget(const DocumentObject* target)
+{
+    auto& reg = propDepRegistry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    auto it = reg.byTarget.find(target);
+    if (it == reg.byTarget.end()) {
+        return;
+    }
+    auto holders = std::move(it->second);
+    reg.byTarget.erase(it);
+    for (auto holder : holders) {
+        auto h = reg.holders.find(holder);
+        if (h != reg.holders.end()) {
+            h->second.prune(target);
+            h->second.targets.erase(target);
+        }
+    }
+}
+}  // namespace App
+
 PropertyXLinkContainer::PropertyXLinkContainer()
 {
     _pcScope = LinkScope::Global;
     _LinkRestored = false;
 }
 
-PropertyXLinkContainer::~PropertyXLinkContainer() = default;
+PropertyXLinkContainer::~PropertyXLinkContainer()
+{
+    auto& reg = propDepRegistry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    auto it = reg.holders.find(this);
+    if (it != reg.holders.end()) {
+        reg.unlinkHolder(this, it->second);
+        reg.holders.erase(it);
+    }
+}
 
 void PropertyXLinkContainer::afterRestore()
 {
@@ -7258,7 +7364,7 @@ void PropertyXLinkContainer::updateDepsProp(
     for (auto& [pair, hidden] : _PropDeps) {
         std::string const& propName = pair.first;
         DocumentObject* obj = pair.second;
-        if (!obj || !obj->isAttachedToDocument()) {
+        if (!obj || !isLiveDocumentObject(obj) || !obj->isAttachedToDocument()) {
             continue;
         }
         if (!hidden) {
@@ -7267,6 +7373,13 @@ void PropertyXLinkContainer::updateDepsProp(
     }
 
     _PropDeps = std::move(propDeps);
+    syncPropDepsRegistry(this, _PropDeps, [this]() {
+        return [this](const DocumentObject* target) {
+            std::erase_if(_PropDeps, [target](const auto& kv) {
+                return kv.first.second == target;
+            });
+        };
+    });
 }
 
 void PropertyXLinkContainer::updateDeps(std::map<DocumentObject*, bool>&& newDeps,
@@ -7377,6 +7490,13 @@ void PropertyXLinkContainer::clearDeps()
 
     _Deps.clear();
     _PropDeps.clear();
+    syncPropDepsRegistry(this, _PropDeps, [this]() {
+        return [this](const DocumentObject* target) {
+            std::erase_if(_PropDeps, [target](const auto& kv) {
+                return kv.first.second == target;
+            });
+        };
+    });
     _XLinks.clear();
     _LinkRestored = false;
 }
