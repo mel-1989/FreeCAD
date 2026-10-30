@@ -1126,6 +1126,23 @@ static TopoShape _getTopoShape(
         return shape;
     }
 
+    // A group or link group that contains itself, directly or through other groups (set from
+    // Python through ElementList, nothing refuses it), makes the walk below recurse until the
+    // stack overflows. The shape of an object cannot depend on itself: report it and give up.
+    static thread_local std::set<const App::DocumentObject*> inFlight;
+    if (!inFlight.insert(owner).second) {
+        FC_ERR("Cyclic link detected while computing the shape of " << owner->getFullName());
+        return TopoShape();
+    }
+    struct InFlightGuard
+    {
+        const App::DocumentObject* object;
+        ~InFlightGuard()
+        {
+            inFlight.erase(object);
+        }
+    } inFlightGuard {owner};
+
     if (obj != owner) {
         if (canCache(owner) && PropertyShapeCache::getShape(owner, shape)) {
             bool scaled = shape.transformShape(mat, false, true);
