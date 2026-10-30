@@ -305,7 +305,7 @@ class Document(PropertyContainer):
         """
         ...
 
-    def getAgentTurnChanges(self, json_values: bool = True, timeout: float = 60.0, /) -> dict[str, object]:
+    def getAgentTurnChanges(self, json_values: bool = True, timeout: float = 60.0) -> dict[str, object]:
         """
         What the active agent turn has changed so far, read from FreeCAD's own
         transaction records (the stored old property values), not from before
@@ -329,9 +329,10 @@ class Document(PropertyContainer):
         entry has "name", "type" (property TypeId), "change" ("modified",
         "added", "removed", "renamed" with "old_name", or "moved") and, except
         for renamed and moved, "old" and "new". A "modified" entry also has
-        "maybe_unchanged", True when the two values serialise equal: isSame is
-        unreliable for some types (a rebuilt shape is never the same), so such
-        an entry is kept rather than dropped and flagged for the caller. Objects of a linked document
+        "maybe_unchanged", True only for a shape property whose two (complete)
+        summaries are equal: isSame is unreliable for those (a rebuilt shape is
+        never the same), so the entry is kept and flagged. No other type is ever
+        flagged. Raises ValueError for a timeout outside 0..86400 seconds. Objects of a linked document
         are reported by that document's own call.
 
         With json_values (default) values go through AgentCore.state.values

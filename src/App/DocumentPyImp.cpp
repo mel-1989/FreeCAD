@@ -746,12 +746,8 @@ PyObject* DocumentPy::beginAgentTurn(PyObject* args)
     }
     Document* doc = getDocumentPtr();
     const auto wait = std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0));
-    bool idle = false;
-    {
-        // The worker may need the GIL to finish its recompute.
-        Base::PyGILStateRelease release;
-        idle = AgentTurnGuard::waitForWorker(*doc, wait);
-    }
+    // Gives up the GIL for the wait (the worker may need it); throws if the document was closed.
+    const bool idle = AgentTurnGuard::waitForWorkerReleasingGil(*doc, wait);
     if (!idle) {
         throw Base::RuntimeError("the document is still recomputing on the async worker");
     }
@@ -768,10 +764,7 @@ PyObject* DocumentPy::endAgentTurn(PyObject* args)
     }
     Document* doc = getDocumentPtr();
     const auto wait = std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0));
-    {
-        Base::PyGILStateRelease release;
-        AgentTurnGuard::waitForWorker(*doc, wait);
-    }
+    AgentTurnGuard::waitForWorkerReleasingGil(*doc, wait);
     // The wait above is repeated inside end(), which then refuses if the worker is still busy.
     const AgentTurnReport r = AgentTurnGuard::end(*doc, Base::asBoolean(commit), std::chrono::milliseconds(0));
     return reportToDict(r);
@@ -793,22 +786,24 @@ PyObject* DocumentPy::canEndAgentTurn(PyObject* args)
     }
     Document* doc = getDocumentPtr();
     std::string reason;
-    bool ok = false;
-    {
-        Base::PyGILStateRelease release;
-        ok = AgentTurnGuard::canEnd(*doc, std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0)), reason);
-    }
+    AgentTurnGuard::waitForWorkerReleasingGil(*doc, std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0)));
+    const bool ok = AgentTurnGuard::canEnd(*doc, std::chrono::milliseconds(0), reason);
     Py::Tuple result(2);
     result.setItem(0, Py::Boolean(ok));
     result.setItem(1, Py::String(reason));
     return Py::new_reference_to(result);
 }
 
-PyObject* DocumentPy::getAgentTurnChanges(PyObject* args)
+PyObject* DocumentPy::getAgentTurnChanges(PyObject* args, PyObject* kwds)
 {
+    static const std::array<const char*, 3> kwlist {"json_values", "timeout", nullptr};
     PyObject* jsonValues = Py_True;
     double timeout = 60.0;
-    if (!PyArg_ParseTuple(args, "|Od", &jsonValues, &timeout)) {
+    if (!Base::Wrapped_ParseTupleAndKeywords(args, kwds, "|Od", kwlist, &jsonValues, &timeout)) {
+        return nullptr;
+    }
+    if (!(timeout >= 0.0 && timeout <= 86400.0)) {  // also rejects NaN
+        PyErr_SetString(PyExc_ValueError, "timeout must be between 0 and 86400 seconds");
         return nullptr;
     }
     return AgentTurnIntrospect::asPython(

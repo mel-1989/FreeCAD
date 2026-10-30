@@ -320,22 +320,15 @@ void AgentTurnIntrospect::collectWith(Document& doc, std::chrono::milliseconds w
     if (!AgentTurnGuard::isActive(doc)) {
         throw Base::RuntimeError("no agent turn is active on this document");
     }
-    bool idle = false;
-    if (Py_IsInitialized() && PyGILState_Check()) {
-        // The worker may need the GIL to finish a Python feature's recompute.
-        Base::PyGILStateRelease release;
-        idle = AgentTurnGuard::waitForWorker(doc, wait);
-    }
-    else {
-        idle = AgentTurnGuard::waitForWorker(doc, wait);
-    }
-    if (!idle) {
+    const std::shared_ptr<AgentTurnState> turn = Transaction::accessDocument(doc).d->agent;
+    // Gives up the GIL for the wait; throws when the document was closed meanwhile.
+    if (!AgentTurnGuard::waitForWorkerReleasingGil(doc, wait)) {
         throw Base::RuntimeError("the document is still recomputing on the async worker");
     }
     auto acc = Transaction::accessDocument(doc);
     std::shared_ptr<AgentTurnState> st = acc.d->agent;
-    if (!st) {
-        throw Base::RuntimeError("no agent turn is active on this document");
+    if (!st || st != turn) {
+        throw Base::RuntimeError("the agent turn ended while waiting for the async worker");
     }
     // Keeps the worker from recording while the segments are read.
     std::lock_guard<std::recursive_mutex> lock(st->mutex);
@@ -481,23 +474,10 @@ Py::Object rawValue(const Property* prop, const Property* unitFrom)
     }
 }
 
-Py::Object jsonValue(
-    const Py::Object& converter,
-    const Property* prop,
-    const Property* unitFrom,
-    const std::string& typeName,
-    const Py::Object& removed
-)
+/// Phase 2 of asPython: runs Python code, so it must not hold the turn mutex.
+Py::Object convert(const Py::Object& converter, const Py::Object& raw, const std::string& typeName, const Py::Object& removed)
 {
-    if (!prop) {
-        return Py::None();
-    }
-    Py::Object xl;
-    if (!converter.isNone() && xlinkFamilyJson(prop, typeName, xl)) {
-        return xl;
-    }
-    Py::Object raw = rawValue(prop, unitFrom);
-    if (converter.isNone()) {
+    if (converter.isNone() || raw.isNone()) {
         return raw;
     }
     try {
@@ -516,31 +496,63 @@ Py::Object jsonValue(
     }
 }
 
+/// Phase 1 of asPython (under the turn mutex, no Python code runs): the property's value as a
+/// Python object, final already for the cross-document link family.
+Py::Object snapshotValue(const Property* prop, const Property* unitFrom, const std::string& typeName, bool jsonValues, bool& final)
+{
+    final = false;
+    if (!prop) {
+        return Py::None();
+    }
+    Py::Object xl;
+    if (jsonValues && xlinkFamilyJson(prop, typeName, xl)) {
+        final = true;
+        return xl;
+    }
+    return rawValue(prop, unitFrom);
+}
+
+/// Types for which Property::isSame is known to say "different" for equal values: a rebuilt shape.
+bool isShapeType(const std::string& typeName)
+{
+    return typeName.find("PartShape") != std::string::npos;
+}
+
+/// A shape summary that is complete (not an error or unserialised marker).
+bool isShapeSummary(const Py::Object& v)
+{
+    return v.isDict() && PyDict_GetItemString(v.ptr(), "null") != nullptr;
+}
+
+struct Pending
+{
+    Py::Dict entry;
+    Py::Object oldRaw;
+    Py::Object newRaw;
+    bool oldFinal {false};
+    bool newFinal {false};
+    bool modified {false};
+    bool values {false};
+    std::string typeName;
+};
+
 }  // namespace
 
 _object* AgentTurnIntrospect::asPython(Document& doc, bool jsonValues, std::chrono::milliseconds wait)
 {
-    Py::Object result;
+    Py::Dict out;
+    Py::Dict removedNames;
+    std::vector<Pending> pending;
+    // Phase 1, under the turn mutex: everything is read into Python objects, but no Python code
+    // runs, so the interpreter cannot hand the GIL to a thread that then waits for the mutex.
     collect(doc, wait, [&](const AgentTurnChangeSet& cs) {
-        Py::Object converter = Py::None();
-        if (jsonValues) {
-            try {
-                Py::Module values(PyImport_ImportModule("AgentCore.state.values"), true);
-                converter = values.getAttr("value_json");
-            }
-            catch (Py::Exception& e) {
-                e.clear();  // AgentCore not available: raw Python values
-            }
-        }
         // Removed objects have lost their Name, but old link values still point at them.
-        Py::Dict removedNames;
         for (const auto& oc : cs.objects) {
             if (oc.status == AgentObjectChange::Status::Removed && oc.object) {
                 Py::Object po(const_cast<DocumentObject*>(oc.object)->getPyObject(), true);
                 removedNames.setItem(Py::Long(reinterpret_cast<std::uintptr_t>(po.ptr())), Py::String(oc.name));
             }
         }
-        Py::Dict out;
         out.setItem("document", Py::String(doc.getName()));
         out.setItem("tid", Py::Long(cs.tid));
         out.setItem("turn", Py::String(cs.turnName));
@@ -565,19 +577,14 @@ _object* AgentTurnIntrospect::asPython(Document& doc, bool jsonValues, std::chro
                 }
                 if (pe.change == PropKind::Modified || pe.change == PropKind::Removed
                     || pe.change == PropKind::Added) {
-                    Py::Object oldJ = jsonValue(converter, pe.oldValue, pe.current, pe.typeName, removedNames);
-                    Py::Object newJ = jsonValue(converter, pe.current, nullptr, pe.typeName, removedNames);
-                    p.setItem("old", oldJ);
-                    p.setItem("new", newJ);
-                    // Property::isSame is not reliable for every type (a rebuilt shape is never
-                    // "same"); the entry stays, flagged, when the two values look alike.
-                    if (pe.change == PropKind::Modified) {
-                        const int eq = PyObject_RichCompareBool(oldJ.ptr(), newJ.ptr(), Py_EQ);
-                        if (eq < 0) {
-                            PyErr_Clear();
-                        }
-                        p.setItem("maybe_unchanged", Py::Boolean(eq == 1));
-                    }
+                    Pending pd;
+                    pd.entry = p;
+                    pd.values = true;
+                    pd.modified = pe.change == PropKind::Modified;
+                    pd.typeName = pe.typeName;
+                    pd.oldRaw = snapshotValue(pe.oldValue, pe.current, pe.typeName, jsonValues, pd.oldFinal);
+                    pd.newRaw = snapshotValue(pe.current, nullptr, pe.typeName, jsonValues, pd.newFinal);
+                    pending.push_back(std::move(pd));
                 }
                 props.append(p);
             }
@@ -585,9 +592,39 @@ _object* AgentTurnIntrospect::asPython(Document& doc, bool jsonValues, std::chro
             objects.append(o);
         }
         out.setItem("objects", objects);
-        result = out;
     });
-    PyObject* r = result.ptr();
+    // Phase 2, no turn lock: convert the snapshot with the F1 value representation.
+    Py::Object converter = Py::None();
+    if (jsonValues) {
+        try {
+            Py::Module values(PyImport_ImportModule("AgentCore.state.values"), true);
+            converter = values.getAttr("value_json");
+        }
+        catch (Py::Exception& e) {
+            e.clear();  // AgentCore not available: raw Python values
+        }
+    }
+    for (auto& pd : pending) {
+        Py::Object oldJ = pd.oldFinal ? pd.oldRaw : convert(converter, pd.oldRaw, pd.typeName, removedNames);
+        Py::Object newJ = pd.newFinal ? pd.newRaw : convert(converter, pd.newRaw, pd.typeName, removedNames);
+        pd.entry.setItem("old", oldJ);
+        pd.entry.setItem("new", newJ);
+        // Property::isSame says "different" for a rebuilt shape that is in fact unchanged: such an
+        // entry stays, flagged, when the two (complete) shape summaries are equal. No other type
+        // is ever flagged: JSON rounds floats, truncates long lists and cannot express every type.
+        if (pd.modified) {
+            bool maybe = false;
+            if (isShapeType(pd.typeName) && isShapeSummary(oldJ) && isShapeSummary(newJ)) {
+                const int eq = PyObject_RichCompareBool(oldJ.ptr(), newJ.ptr(), Py_EQ);
+                if (eq < 0) {
+                    PyErr_Clear();
+                }
+                maybe = eq == 1;
+            }
+            pd.entry.setItem("maybe_unchanged", Py::Boolean(maybe));
+        }
+    }
+    PyObject* r = out.ptr();
     Py_INCREF(r);
     return r;
 }

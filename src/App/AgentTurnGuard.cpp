@@ -100,16 +100,8 @@ void parkActiveSegment(Transaction::DocumentAccess& acc, AgentTurnState& st)
 /// reported as tampering so the turn is rejected, never half-applied.
 bool settleWorker(Document& doc, AgentTurnState& st, const char* what)
 {
-    bool idle = false;
-    if (Py_IsInitialized() && PyGILState_Check()) {
-        // Called from Python: the worker may need the GIL to finish a Python feature's
-        // recompute, so give it up for the wait. Nothing here touches a Python object.
-        Base::PyGILStateRelease release;
-        idle = AutoTransaction::waitForRecompute(doc.getName(), AgentTurnGuard::nestedWait);
-    }
-    else {
-        idle = AutoTransaction::waitForRecompute(doc.getName(), AgentTurnGuard::nestedWait);
-    }
+    // Throws when another Python thread closed the document during the wait.
+    const bool idle = AgentTurnGuard::waitForWorkerReleasingGil(doc, AgentTurnGuard::nestedWait);
     if (idle) {
         return true;
     }
@@ -271,6 +263,24 @@ AgentTurnReport AgentTurnGuard::end(Document& doc, bool commit, std::chrono::mil
 bool AgentTurnGuard::waitForWorker(Document& doc, std::chrono::milliseconds wait)
 {
     return AutoTransaction::waitForRecompute(doc.getName(), wait);
+}
+
+bool AgentTurnGuard::waitForWorkerReleasingGil(Document& doc, std::chrono::milliseconds wait)
+{
+    const std::string name = doc.getName();  // before the GIL is given up: doc may die meanwhile
+    bool idle = false;
+    if (Py_IsInitialized() && PyGILState_Check()) {
+        // The worker may need the GIL to finish a Python feature's recompute.
+        Base::PyGILStateRelease release;
+        idle = AutoTransaction::waitForRecompute(name, wait);
+    }
+    else {
+        idle = AutoTransaction::waitForRecompute(name, wait);
+    }
+    if (GetApplication().getDocument(name.c_str()) != &doc) {
+        throw Base::RuntimeError("the document was closed while waiting for the async worker");
+    }
+    return idle;
 }
 
 AgentTurnReport AgentTurnGuard::peek(Document& doc)
