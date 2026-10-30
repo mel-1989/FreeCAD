@@ -276,11 +276,12 @@ class _Active:
 
 def _is_touched_flag(diff):
     """A difference line (``compare.differences``) in an object's ``state`` list that involves the Touched flag.
-    Judged on the path's last segments and the value part only, so user text (a label) cannot pose as one."""
+    Judged on the whole path, anchored at the object's own ``state`` key, so neither user text (a label) nor a
+    user-keyed value (a PropertyMap key ``state``, whose path ends ``/value/state``) can pose as one."""
     path, _, value = diff.partition(": ")
     if path.startswith("["):  # "[LinkedDoc]" prefix; document names are identifiers
         path = path.split("]", 1)[-1]
-    return re.search(r"/state(/\d+)?$", path) is not None and "Touched" in value
+    return re.fullmatch(r"/objects/\d+/state(/\d+)?", path) is not None and "Touched" in value
 
 
 def _dump(doc):

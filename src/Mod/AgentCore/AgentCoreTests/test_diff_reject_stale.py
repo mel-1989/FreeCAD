@@ -96,6 +96,25 @@ class TestRejectNeverDiscardsLaterWork(unittest.TestCase):
             self.assertEqual((t.status, self.doc.Block.Length.Value), ("rejected", 40))
             self.doc.clearUndos()
 
+    def test_user_keyed_value_cannot_pose_as_a_touched_flag(self):
+        # a PropertyMap key "state" dumps under .../value/state; only the object's own state list is exempt
+        self.doc.Block.addProperty("App::PropertyMap", "m", "Test", "")
+        self.doc.Block.m = {"state": "a"}
+        self.doc.recompute()
+        self.doc.clearUndos()
+        for text in ("Touched", "my Touched note"):
+            t = self.propose()
+            self.doc.Block.m = {"state": text}
+            before = frozen(self.doc)
+            with self.assertRaises(TurnStale):
+                t.reject()
+            self.assertEqual(frozen(self.doc), before)
+            self.assertEqual((t.status, self.doc.Block.m), ("proposed", {"state": text}))
+            self.doc.Block.m = {"state": "a"}
+            t.reject()
+            self.assertEqual((t.status, self.doc.Block.Length.Value), ("rejected", 40))
+            self.doc.clearUndos()
+
     def test_human_undo_of_the_turn_then_reject_still_works(self):
         t = self.propose()
         self.doc.undo()                                      # nothing but the turn's own entry moved
