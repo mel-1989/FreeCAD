@@ -7,6 +7,10 @@ the document, for inspection. While the panel is open, the 3D view shows added m
 removed material in red (``overlay.py``). Accept and Reject are the only paths to a decision: they call
 the backend, which mints the token (``backends.py``). Closing the panel decides nothing; the turn stays
 ``proposed`` and the overlay goes away. The panel holds no token and no authority.
+
+An undecided turn is never lost: ``pending()`` is a per-session registry of the turns still ``proposed``,
+``review_pending()`` (the ``AgentCore_ReviewPending`` command) reopens the newest, and a console warning
+names any undecided turn when the panel is closed without a decision, or its document is saved or closed.
 """
 
 import FreeCAD as App
@@ -19,12 +23,78 @@ from . import model, overlay
 from .backends import LocalTurnBackend, RemoteTurnBackend, StaleChangeSet
 
 _CURRENT = None
+_SHOWN = None     # the panel whose task dialog is open (ours), until it closes
+_CLOSING = False  # our deferred closeDialog is queued
+_GEN = 0          # bumped on every show, so a queued close never hits a newer dialog
+_PENDING = []     # backends of reviewed turns that have no decision yet, oldest first
+_WATCH = []
 REFUSALS = (StaleChangeSet, TurnError, TokenRefused)
 PANEL_SIZE = (420, 600)
 
 
 def current():
     return _CURRENT
+
+
+def _warn(text):
+    App.Console.PrintWarning("AgentCore: " + text + "\n")
+
+
+def _alive(backend):
+    if backend.status() != "proposed":
+        return False
+    return backend.kind != "local" or backend.document in App.listDocuments()
+
+
+def pending():
+    """Backends of turns still waiting for a human decision, oldest first."""
+    _PENDING[:] = [b for b in _PENDING if _alive(b)]
+    return list(_PENDING)
+
+
+def _register(backend):
+    if all(b.turn_id != backend.turn_id for b in _PENDING):
+        _PENDING.append(backend)
+    if not _WATCH:
+        _WATCH.append(_DocWatch())
+        App.addDocumentObserver(_WATCH[0])
+
+
+def _forget(backend):
+    _PENDING[:] = [b for b in _PENDING if b is not backend]
+
+
+def _reset():
+    """Test hook: empty the registry and the dialog bookkeeping."""
+    global _CURRENT, _SHOWN, _CLOSING
+    _PENDING.clear()
+    _CURRENT = _SHOWN = None
+    _CLOSING = False
+
+
+def _undecided_text(backends):
+    return ", ".join(f"'{b.label}' on '{b.document}'" for b in backends) + \
+        " (reopen with Gui.runCommand('AgentCore_ReviewPending'))"
+
+
+class _DocWatch:
+    """Warn once when a document with an undecided turn is saved or closed."""
+
+    def slotStartSaveDocument(self, doc, _filename=None):
+        mine = [b for b in pending() if b.document == doc.Name]
+        if mine:
+            _warn("saving a document with agent changes nobody has accepted or rejected: " + _undecided_text(mine))
+
+    def slotDeletedDocument(self, doc=None, *_):
+        try:
+            name = doc.Name
+        except Exception:
+            name = None
+        gone = [b for b in _PENDING if b.kind == "local" and b.status() == "proposed"
+                and (b.document == name or b.document not in App.listDocuments())]
+        if gone:
+            _warn("document closed with undecided agent changes: " + _undecided_text(gone))
+            _PENDING[:] = [b for b in _PENDING if b not in gone]
 
 
 def _legend(text, color):
@@ -40,10 +110,12 @@ class ChangeSetPanel:
     def __init__(self, backend, with_overlay=True):
         self.backend = backend
         self.decision = None
+        self._warned = False
         self.message = ""
         self._rows = model.build_rows(backend.change_set())
         self.overlay = overlay.Overlay(backend.overlay_pieces()) if with_overlay else None
         self._build_form()
+        _register(backend)
         self.form.destroyed.connect(self._on_destroyed)
 
     # ------------------------------------------------------------ form
@@ -143,6 +215,7 @@ class ChangeSetPanel:
 
     def _decided(self, what, result):
         self.decision, self.result = what, result
+        _forget(self.backend)
         self.form.setEnabled(False)
         self._say(what.capitalize() + ".")
         self._close()
@@ -155,6 +228,7 @@ class ChangeSetPanel:
     def reject(self):   # the Close button: decides nothing
         self._detach()
         self._close_dialog_state()
+        self._warn_undecided()
         return True
 
     def accept(self):
@@ -182,19 +256,37 @@ class ChangeSetPanel:
             self.overlay.detach()
 
     def _close_dialog_state(self):
-        global _CURRENT
+        global _CURRENT, _SHOWN
         if _CURRENT is self:
             _CURRENT = None
+        if _SHOWN is self:
+            _SHOWN = None
 
     def _close(self):
         self._detach()
         mine = _CURRENT is self
         self._close_dialog_state()
         if mine:   # not inside the button's own click handler: the form is deleted with the dialog
-            QtCore.QTimer.singleShot(0, lambda: Gui.Control.activeDialog() and Gui.Control.closeDialog())
+            global _CLOSING
+            _CLOSING = True
+            gen = _GEN
+
+            def later():
+                global _CLOSING
+                _CLOSING = False
+                if gen == _GEN and Gui.Control.activeDialog():   # only our own dialog, never a newer one
+                    Gui.Control.closeDialog()
+            QtCore.QTimer.singleShot(0, later)
+
+    def _warn_undecided(self):
+        if self.decision is None and not self._warned and _alive(self.backend):
+            self._warned = True
+            _warn("review closed without a decision, the agent's changes are still live: "
+                  + _undecided_text([self.backend]))
 
     def _on_destroyed(self, *_):
         self._detach()
+        self._warn_undecided()
         self._close_dialog_state()
 
     # ------------------------------------------------------------ capture (baselines)
@@ -213,22 +305,45 @@ class ChangeSetPanel:
         return img.width(), img.height()
 
 
-def _show(panel):
-    global _CURRENT
+def _show(backend, make):
+    """Open ``make()``'s panel unless a foreign task dialog is open (then the review stays pending)."""
+    global _CURRENT, _SHOWN, _GEN
+    _register(backend)
     if Gui.Control.activeDialog():
-        Gui.Control.closeDialog()
-    _CURRENT = panel
+        if _SHOWN is None and not _CLOSING:
+            _warn(f"another task dialog is open, so the review of '{backend.label}' was not opened; it stays "
+                  "pending: finish that dialog, then Gui.runCommand('AgentCore_ReviewPending')")
+            return None
+        Gui.Control.closeDialog()   # ours: its turn is already in the registry, nothing is lost
+    panel = make()
+    _GEN += 1
+    _CURRENT = _SHOWN = panel
     Gui.Control.showDialog(panel)
     panel.attach_overlay()
     return panel
 
 
 def review(turn, with_overlay=True):
-    """Open the panel for a proposed in-process turn. The turn's document must have a 3D view."""
-    return _show(ChangeSetPanel(LocalTurnBackend(turn), with_overlay))
+    """Open the panel for a proposed in-process turn. The turn's document must have a 3D view.
+    Returns None, with the turn left pending, when another task dialog is open."""
+    backend = LocalTurnBackend(turn)
+    return _show(backend, lambda: ChangeSetPanel(backend, with_overlay))
 
 
 def review_remote(turn_id, fetch_change_set, label=None):
     """Open the panel for a turn running in an F4 worker. ``fetch_change_set()`` returns its
     current change set; Accept and Reject go to the GUI's approver, which the worker polls."""
-    return _show(ChangeSetPanel(RemoteTurnBackend(turn_id, fetch_change_set, label), with_overlay=False))
+    backend = RemoteTurnBackend(turn_id, fetch_change_set, label)
+    return _show(backend, lambda: ChangeSetPanel(backend, with_overlay=False))
+
+
+def review_pending(with_overlay=True):
+    """Reopen the panel for the newest undecided turn (the AgentCore_ReviewPending command)."""
+    todo = pending()
+    if not todo:
+        _warn("no agent change set is waiting for a decision")
+        return None
+    backend = todo[-1]
+    if _CURRENT is not None and _CURRENT.backend is backend:
+        return _CURRENT
+    return _show(backend, lambda: ChangeSetPanel(backend, with_overlay and backend.kind == "local"))
