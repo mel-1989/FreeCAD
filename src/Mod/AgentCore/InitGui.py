@@ -5,3 +5,9 @@
 import FreeCAD
 
 FreeCAD.__unit_test__ += ["TestAgentCoreGui"]
+
+# No workbench: the command is reachable as FreeCADGui.runCommand("AgentCore_ReviewPending") and from
+# Tools > Customize (Commands), where it can be put on any toolbar or menu.
+from AgentCore.gui import commands as _agentcore_commands  # noqa: E402
+
+_agentcore_commands.register()

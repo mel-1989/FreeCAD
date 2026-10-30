@@ -68,6 +68,7 @@ class GuiCase(unittest.TestCase):
             Gui.Control.closeDialog()
         pump()
         session._reset()
+        panel._reset()
         db.close(self.doc)
 
     def view(self):
@@ -340,6 +341,170 @@ class TestRemoteBackend(GuiCase):
         self.assertIn("changed after it was shown", p.message)
         self.assertEqual(session.approver().status(t.turn_id, d), "pending")
         t.reject()
+
+
+class TestPendingTurns(GuiCase):
+    """A turn nobody decided is never lost: registry, reopen command, warnings, no dialog clobbering."""
+
+    def setUp(self):
+        super().setUp()
+        self.warnings = []
+        self._warn = panel._warn
+        panel._warn = self.warnings.append
+        self.extra = []
+
+    def tearDown(self):
+        panel._warn = self._warn
+        if Gui.Control.activeDialog():
+            Gui.Control.closeDialog()
+        pump()
+        for d in self.extra:
+            db.close(d)
+        super().tearDown()
+
+    def second_doc(self):
+        d = build_doc("f3gui2")
+        self.extra.append(d)
+        return d
+
+    def test_close_without_decision_keeps_the_turn_pending_and_reopenable(self):
+        t = turn_for(self.doc)
+        p = panel.review(t)
+        Gui.Control.closeDialog()
+        pump()
+        self.assertEqual(t.status, "proposed")
+        self.assertEqual([b.turn_id for b in panel.pending()], [t.turn_id])
+        self.assertTrue(any("without a decision" in w and "AgentCore_ReviewPending" in w for w in self.warnings))
+        self.assertIsNone(panel.current())
+        p2 = panel.review_pending()
+        self.assertIsNotNone(p2)
+        self.assertIsNot(p2, p)
+        self.assertIs(panel.current(), p2)
+        self.click(p2.reject_button)
+        self.assertEqual(differences(self.pre, self.settled()), [])
+        self.assertEqual(t.status, "rejected")
+        self.assertEqual(panel.pending(), [])
+
+    def test_reject_after_the_human_edited_is_refused_in_plain_words(self):
+        t = turn_for(self.doc)
+        panel.review(t)
+        Gui.Control.closeDialog()                       # closed undecided, the human keeps working
+        pump()
+        self.doc.openTransaction("human")
+        self.doc.getObject("Block").Placement.Base = V(5, 5, 5)
+        self.doc.commitTransaction()
+        self.doc.recompute()
+        Gui.runCommand("AgentCore_ReviewPending")
+        pump()
+        p = panel.current()
+        self.assertIsNotNone(p)
+        self.click(p.reject_button)
+        self.assertEqual(t.status, "proposed")
+        self.assertIsNone(p.decision)
+        self.assertTrue(p.message.startswith("Reject refused"), p.message)
+        self.assertIn("undo your own edits", p.message)
+        self.assertEqual(self.doc.getObject("Block").Placement.Base, V(5, 5, 5))   # the human's edit survived
+        self.assertEqual(self.doc.getObject("Block").Length.Value, 55)
+        self.click(p.reject_button)                     # a second click does not claim "Rejected."
+        self.assertNotEqual(p.message, "Rejected.")
+        self.assertEqual(t.status, "proposed")
+        self.doc.undo()                                 # the human's own undo, then the retry works
+        self.doc.recompute()
+        self.click(p.reject_button)
+        self.assertEqual((t.status, p.decision), ("rejected", "rejected"))
+        self.assertEqual(differences(self.pre, self.settled()), [])
+
+    def test_reopen_with_nothing_pending_says_so(self):
+        self.assertIsNone(panel.review_pending())
+        self.assertTrue(any("no agent change set" in w for w in self.warnings))
+
+    def test_command_is_registered_and_reopens(self):
+        self.assertIn("AgentCore_ReviewPending", Gui.listCommands())
+        t = turn_for(self.doc)
+        panel.review(t)
+        Gui.Control.closeDialog()
+        pump()
+        Gui.runCommand("AgentCore_ReviewPending")
+        pump()
+        self.assertIsNotNone(panel.current())
+        self.assertEqual(panel.current().backend.turn_id, t.turn_id)
+        t.reject()
+
+    def test_save_with_an_undecided_turn_warns(self):
+        t = turn_for(self.doc)
+        panel.review(t)
+        Gui.Control.closeDialog()
+        pump()
+        del self.warnings[:]
+        path = os.path.join(tempfile.mkdtemp(), "pending.FCStd")
+        self.doc.saveAs(path)
+        self.assertTrue(any("saving" in w for w in self.warnings), self.warnings)
+        t.reject()
+
+    def test_closing_the_document_warns_and_drops_the_turn(self):
+        d = self.second_doc()
+        t = turn_for(d)
+        panel.review(t)
+        Gui.Control.closeDialog()
+        pump()
+        del self.warnings[:]
+        self.extra.remove(d)
+        db.close(d)
+        self.assertTrue(any("document closed" in w for w in self.warnings), self.warnings)
+        self.assertEqual(panel.pending(), [])
+
+    def test_deferred_close_never_closes_a_newer_dialog(self):
+        d2 = self.second_doc()
+        t1, t2 = turn_for(self.doc), turn_for(d2)
+        p1 = panel.review(t1)
+        p1.accept_button.click()          # no event pump: the queued closeDialog is still waiting
+        p2 = panel.review(t2)
+        pump(8)
+        self.assertTrue(Gui.Control.activeDialog())
+        self.assertIs(panel.current(), p2)
+        self.assertEqual(t2.status, "proposed")
+        self.assertEqual(t1.status, "accepted")
+        t2.reject()
+
+    def test_foreign_dialog_is_not_destroyed(self):
+        from PySide import QtWidgets
+
+        class Foreign:
+            def __init__(self):
+                self.form = QtWidgets.QLabel("someone else's dialog")
+
+            def getStandardButtons(self):
+                return 0x00200000   # Close
+
+        foreign = Foreign()
+        Gui.Control.showDialog(foreign)
+        t = turn_for(self.doc)
+        self.assertIsNone(panel.review(t))
+        self.assertTrue(Gui.Control.activeDialog())
+        self.assertTrue(any("another task dialog" in w for w in self.warnings))
+        self.assertEqual([b.turn_id for b in panel.pending()], [t.turn_id])
+        self.assertIsNone(panel.review_pending())   # still refused while the foreign dialog is open
+        Gui.Control.closeDialog()
+        pump()
+        p = panel.review_pending()
+        self.assertIsNotNone(p)
+        self.click(p.reject_button)
+        self.assertEqual(t.status, "rejected")
+
+    def test_second_review_replaces_the_first_only_after_it_is_pending(self):
+        d2 = self.second_doc()
+        t1, t2 = turn_for(self.doc), turn_for(d2)
+        p1 = panel.review(t1)
+        p2 = panel.review(t2)
+        pump()
+        self.assertIs(panel.current(), p2)
+        self.assertEqual({b.turn_id for b in panel.pending()}, {t1.turn_id, t2.turn_id})
+        self.assertEqual(t1.status, "proposed")
+        self.assertFalse(p1.overlay.attached)
+        p3 = panel.review_pending()          # newest is t2, already open: no-op
+        self.assertIs(p3, p2)
+        t1.reject()
+        t2.reject()
 
 
 if __name__ == "__main__":
