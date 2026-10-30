@@ -785,6 +785,120 @@ class TestNamePathRetarget(unittest.TestCase):
     def test_link_to_a_document_object_group_swapped_for_its_content_keeps_the_reference(self):
         self._swap(lambda x: self._link_to(self._group_of(x)), True, True)
 
+    # ------------------------------------------------ round 7: Python grouping holders, other documents
+    # An object with an App::GroupExtension (also its Python variants) that is not a Part::Feature
+    # only groups its children and is transparent; a Part::Feature other than Part::Compound
+    # computes its own shape and is an owner.
+    def _py_group_of(self, x):
+        w = self.doc.addObject("App::FeaturePython", "W")
+        w.addExtension("App::GroupExtensionPython")
+        w.addObject(x)
+        return w
+
+    def _geo_py_group_of(self, x):
+        w = self.doc.addObject("App::GeometryPython", "W")
+        w.addExtension("App::GeoFeatureGroupExtensionPython")
+        w.addObject(x)
+        return w
+
+    def test_feature_python_group_swapped_for_its_content_keeps_the_reference(self):
+        self._swap(self._py_group_of, True, True)
+
+    def test_content_swapped_for_a_feature_python_group_keeps_the_reference(self):
+        self._swap(self._py_group_of, True, False)
+
+    def test_geometry_python_group_swapped_for_its_content_keeps_the_reference(self):
+        self._swap(self._geo_py_group_of, True, True)
+
+    def test_content_swapped_for_a_geometry_python_group_keeps_the_reference(self):
+        self._swap(self._geo_py_group_of, True, False)
+
+    def test_document_object_group_python_swapped_for_its_content_keeps_the_reference(self):
+        def make(x):
+            g = self.doc.addObject("App::DocumentObjectGroupPython", "Grp")
+            g.addObject(x)
+            return g
+
+        self._swap(make, True, True)
+
+    # A Link to an object of another document: the names in its window carry that document's
+    # object IDs, which must not be looked up in this one. The host document is padded so that an
+    # App::Part (transparent) or a box (opaque) sits at the ID of the linked part W.
+    def _cross_document(self, host_object, rewire, nested=False):
+        import os
+        import tempfile
+
+        tmp = tempfile.mkdtemp()
+        host = self.doc
+        other = App.newDocument("NamePathRetargetB")
+        try:
+            def pad(d, n):
+                for _ in range(n):
+                    d.addObject("App::FeaturePython", "Pad")
+
+            gap = other.addObject("App::FeaturePython", "Gap").ID - host.addObject(
+                "App::FeaturePython", "Gap"
+            ).ID
+            pad(host if gap > 0 else other, abs(gap))
+            x = other.addObject("Part::Box", "X")
+            w = other.addObject("App::Part", "W")
+            w2 = other.addObject("App::Part", "W2")
+            if nested:
+                w2.addObject(x)
+                w.addObject(w2)
+            else:
+                w.addObject(x)
+            if host_object == "part":
+                pad(host, 1)
+                host.addObject("App::Part", "Coll")
+                self.assertEqual(host.getObject("Coll").ID, w.ID)
+            else:
+                pad(host, 1)
+                host.addObject("Part::Box", "Coll").Placement.Base = V(1000, 0, 0)
+                self.assertEqual(host.getObject("Coll").ID, w.ID)
+            y = self._box("Y", 100)
+            other.saveAs(os.path.join(tmp, "b.FCStd"))
+            host.saveAs(os.path.join(tmp, "a.FCStd"))
+            lk = host.addObject("App::Link", "L")
+            lk.LinkedObject = w
+            c = host.addObject("Part::Compound", "C")
+            c.Links = [lk, y]
+            other.recompute()
+            host.recompute()
+            cons = self._consumer(c, self._top_edge(c.Shape))
+            rewire(other, host, x, w, w2, c, lk)
+            other.recompute()
+            host.recompute()
+            sub = cons.Ref[1][0]
+            self.assertFalse(sub.startswith("?"), "reference lost: %s" % sub)
+            self.assertEqual(sub, self._top_edge(c.Shape))
+        finally:
+            App.closeDocument(other.Name)
+
+    def test_cross_document_link_part_wrapped_in_the_other_document_keeps_the_reference(self):
+        def rewire(other, host, x, w, w2, c, lk):
+            w.removeObject(x)
+            w2.addObject(x)
+            w.addObject(w2)
+
+        self._cross_document("part", rewire)
+
+    def test_cross_document_link_part_unwrapped_in_the_other_document_keeps_the_reference(self):
+        def rewire(other, host, x, w, w2, c, lk):
+            w2.removeObject(x)
+            w.removeObject(w2)
+            w.addObject(x)
+
+        self._cross_document("part", rewire, nested=True)
+
+    def test_cross_document_link_swapped_for_a_link_to_the_content_keeps_the_reference(self):
+        def rewire(other, host, x, w, w2, c, lk):
+            lx = host.addObject("App::Link", "LX")
+            lx.LinkedObject = x
+            c.Links = [lx, c.Links[1]]
+
+        self._cross_document("box", rewire)
+
     # a Link to a solid or compound passes the names through (no segment of its own)
     def test_link_to_a_box_swapped_for_the_box_keeps_the_reference(self):
         self._swap(lambda x: self._link_to(x), True, True)

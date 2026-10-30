@@ -990,35 +990,70 @@ static void parseOwnerSegment(const Data::MappedName& name, long& tag, int& pos,
 
 /// Whether the name of an element of a child carries this object's tag after a `:n` window that
 /// holds the child's chain, and the object has no element of its own to add: the walk of
-/// ownerTagOfElement looks through it to the child. An explicit whitelist, so that a new kind of
-/// container is an owner (the old reading, fork/main's result) until it is listed here:
-/// - Part::Compound and its subclasses (Part::Compound2): the child maps are its links;
-/// - App::Part and its subclasses (Assembly::AssemblyObject and AssemblyLink derive from it);
-/// - App::LinkGroup;
-/// - App::DocumentObjectGroup (a plain group with no shape of its own, probed: it adds its tag and
-///   a window like an App::Part; this is not a Body, whose GroupExtension holds shapes);
-/// - a plain App::Link (no ElementCount): when its target is a group the Link adds its own tag
+/// ownerTagOfElement looks through it to the child. The rule, read from FreeCAD's element maps
+/// (Part::Compound::execute, Part::Feature::_getTopoShape, Link.cpp) and its extensions
+/// (GroupExtension, LinkBaseExtension). An object is a transparent container when it
+/// - has an App::GroupExtension (GeoFeatureGroupExtension, OriginGroupExtension, their Python
+///   variants): App::Part, Assembly objects, App::DocumentObjectGroup and its Python subclass,
+///   App::FeaturePython with GroupExtensionPython, App::GeometryPython with
+///   GeoFeatureGroupExtensionPython; or
+/// - is an App::LinkGroup; or
+/// - is a Part::Compound or a subclass (Part::Compound2); or
+/// - is a plain App::Link (ElementCount 0): when its target is a group the Link adds its own tag
 ///   and a window, when its target is a solid or a compound it passes the names through; either
-///   way it is the same element as the target's, FreeCAD's own element map of Link.cpp.
-/// Everything else is an owner: PartDesign::Body (Part::BodyBase) and PartDesign::Boolean carry
-/// the tag of their tip or base feature in the window, which changes with every feature added;
-/// a link array (ElementCount > 0) makes every copy a different element (D6 run 008); a wrapper
-/// that computes a shape (CompoundFilter, BooleanFragments, a Python compound, Refine, Mirror,
-/// a Draft array) is a new object: D6 treats an element it produces as another element.
+///   way it is the same element as the target's.
+/// EXCEPT: any object derived from Part::Feature other than Part::Compound is an owner, since it
+/// computes its own shape (D6 run 011: shape-computing wrappers are opaque): PartDesign::Body and
+/// PartDesign::Boolean carry the tag of their tip or base feature in the window, BIM
+/// BuildingPart and any Part::FeaturePython compound compute a Shape. A link array
+/// (ElementCount > 0) makes every copy a different element (D6 run 008) and is an owner. Named
+/// opaque wrappers (CompoundFilter, BooleanFragments, Refine, Mirror, Draft arrays) are
+/// Part::Features or link arrays and fall under the two exceptions. A Link whose target lives in
+/// another document is not transparent for the walk: its window holds the other document's
+/// object IDs (see linksToOtherDocument), the caller returns owner unknown.
 static bool isTransparentContainer(const App::DocumentObject* obj)
 {
     static const Base::Type compoundType = Base::Type::fromName("Part::Compound");
+    static const Base::Type featureType = Base::Type::fromName("Part::Feature");
     if (!compoundType.isBad() && obj->isDerivedFrom(compoundType)) {
         return true;
     }
-    if (obj->isDerivedFrom<App::Part>() || obj->isDerivedFrom<App::LinkGroup>()
-        || obj->isDerivedFrom<App::DocumentObjectGroup>()) {
+    if (!featureType.isBad() && obj->isDerivedFrom(featureType)) {
+        return false;
+    }
+    if (obj->hasExtension(App::GroupExtension::getExtensionClassTypeId())
+        || obj->isDerivedFrom<App::LinkGroup>()) {
         return true;
     }
     if (obj->isDerivedFrom<App::Link>()) {
         const auto* count = dynamic_cast<const App::PropertyInteger*>(
             obj->getPropertyByName("ElementCount"));
         return count && count->getValue() == 0;
+    }
+    return false;
+}
+
+/// Whether the object, or one of the elements of a link group, links to an object of another
+/// document. Tags are object IDs of one document, so the names inside the window of such a link
+/// carry the IDs of the other document, and looking them up in this one reads unrelated objects.
+static bool linksToOtherDocument(const App::DocumentObject* obj)
+{
+    const auto isForeign = [obj](const App::DocumentObject* target) {
+        return target && target->getDocument() != obj->getDocument();
+    };
+    if (const auto* link = dynamic_cast<const App::PropertyLink*>(
+            obj->getPropertyByName("LinkedObject"))) {
+        if (isForeign(link->getValue())) {
+            return true;
+        }
+    }
+    if (const auto* list = dynamic_cast<const App::PropertyLinkList*>(
+            obj->getPropertyByName("ElementList"))) {
+        for (const auto* element : list->getValues()) {
+            if (isForeign(element) || (element && linksToOtherDocument(element))) {
+                return true;
+            }
+        }
     }
     return false;
 }
@@ -1054,6 +1089,9 @@ static long ownerTagOfElement(const App::Document* doc, const Data::MappedName& 
         }
         if (!isTransparentContainer(obj)) {
             return tag;
+        }
+        if (linksToOtherDocument(obj)) {
+            return 0;
         }
         if (windowStart < 0 || windowStart >= pos) {
             return 0;
