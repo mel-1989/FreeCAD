@@ -2,6 +2,7 @@
 
 add_executable(App_tests_run
         AgentTurnGuard.cpp
+        AgentTurnIntrospect.cpp
         AsyncRecompute.cpp
         Application.cpp
         ApplicationDirectories.cpp

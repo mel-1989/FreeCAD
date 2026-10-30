@@ -30,6 +30,7 @@ namespace App
 {
 
 class Document;
+class DocumentObject;
 class Property;
 class Transaction;
 
@@ -75,6 +76,8 @@ struct AgentObjectChange
     std::string name;
     std::string typeId;
     std::string label;
+    /// The object itself (for a removed one, the instance the transaction keeps). Not owned.
+    const DocumentObject* object {nullptr};
     Status status {Status::Modified};
     /// Another object of the same name was removed (when added) or created (when removed) in the turn.
     bool replaced {false};

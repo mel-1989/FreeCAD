@@ -54,11 +54,17 @@ def placement(p):
     return {"base": vec(p.Base), "rotation": [fnum(c) for c in q]}
 
 
+# Names of objects removed inside an agent turn, by id() of their Python object: a removed
+# object has no Name any more, but old property values (transaction records) still link to it.
+_REMOVED_NAMES = {}
+
+
 def _obj_name(o):
     try:
-        return o.Name
+        name = o.Name
     except Exception:
-        return None
+        name = None
+    return name if name is not None else _REMOVED_NAMES.get(id(o))
 
 
 def link_value(v):
@@ -69,14 +75,14 @@ def link_value(v):
         import FreeCAD
 
         if isinstance(v, FreeCAD.DocumentObject):
-            return {"object": v.Name}
+            return {"object": _obj_name(v)}
     except Exception:
         pass
     if isinstance(v, tuple) and len(v) == 2 and hasattr(v[0], "Name"):
         subs = v[1]
         if isinstance(subs, str):
             subs = [subs]
-        return {"object": v[0].Name, "subs": [str(s) for s in subs]}
+        return {"object": _obj_name(v[0]), "subs": [str(s) for s in subs]}
     if isinstance(v, (list, tuple)):
         return [link_value(x) for x in v]
     return to_json(v)
@@ -208,7 +214,7 @@ def to_json(v, depth=0):
     if isinstance(v, App.Units.Quantity):
         return quantity(v)
     if isinstance(v, App.DocumentObject):
-        return {"object": v.Name}
+        return {"object": _obj_name(v)}
     try:
         import Part
 
@@ -232,8 +238,21 @@ def to_json(v, depth=0):
     return {"unserialised": type(v).__name__}
 
 
-def value_json(v, ptype):
-    """JSON value of an already fetched property value, never raising."""
+def value_json(v, ptype, removed_names=None):
+    """JSON value of an already fetched property value, never raising.
+
+    ``removed_names`` maps ``id()`` of the Python object of a removed document object to the name
+    it had, so links to it still serialise by name.
+    """
+    global _REMOVED_NAMES
+    saved, _REMOVED_NAMES = _REMOVED_NAMES, removed_names or {}
+    try:
+        return _value_json(v, ptype)
+    finally:
+        _REMOVED_NAMES = saved
+
+
+def _value_json(v, ptype):
     try:
         if "PropertyLink" in ptype:
             return link_value(v)

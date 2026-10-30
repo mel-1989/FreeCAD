@@ -321,7 +321,10 @@ class Document(PropertyContainer):
         (old None), one deleted has change "removed" (new None). Each property
         entry has "name", "type" (property TypeId), "change" ("modified",
         "added", "removed", "renamed" with "old_name", or "moved") and, except
-        for renamed and moved, "old" and "new". Objects of a linked document
+        for renamed and moved, "old" and "new". A "modified" entry also has
+        "maybe_unchanged", True when the two values serialise equal: isSame is
+        unreliable for some types (a rebuilt shape is never the same), so such
+        an entry is kept rather than dropped and flagged for the caller. Objects of a linked document
         are reported by that document's own call.
 
         With json_values (default) values go through AgentCore.state.values

@@ -21,6 +21,8 @@
 
 #include <Base/Exception.h>
 #include <Base/Interpreter.h>
+#include <Base/Quantity.h>
+#include <Base/QuantityPy.h>
 #include <CXX/Objects.hxx>
 
 #include "AgentTurnGuard.h"
@@ -28,6 +30,8 @@
 #include "Document.h"
 #include "DocumentObject.h"
 #include "Property.h"
+#include "PropertyStandard.h"
+#include "PropertyUnits.h"
 #include "Transactions.h"
 #include "private/DocumentP.h"
 
@@ -115,6 +119,15 @@ struct ObjAcc
     std::vector<std::string> order;
     std::map<std::string, PropAcc> props;
 };
+
+/// A transaction keeps a copy of a Quantity property as a plain PropertyFloat (PropertyQuantity
+/// does not override Copy()), so Property::isSame() would call every such property changed.
+bool sameFloat(const Property& old, const Property& current)
+{
+    const auto* o = freecad_cast<const PropertyFloat*>(&old);
+    const auto* c = freecad_cast<const PropertyFloat*>(&current);
+    return o && c && o->getTypeId() == PropertyFloat::getClassTypeId() && o->getValue() == c->getValue();
+}
 
 void collectSegments(const Transaction* t, std::vector<const Transaction*>& out)
 {
@@ -223,6 +236,7 @@ AgentTurnChangeSet buildChangeSet(Document& doc, AgentTurnState& st, const std::
             continue;  // created and removed inside the turn: no net change
         }
         AgentObjectChange oc;
+        oc.object = obj;
         oc.typeId = obj->getTypeId().getName();
         oc.label = obj->Label.getValue();
         if (removed) {
@@ -258,7 +272,7 @@ AgentTurnChangeSet buildChangeSet(Document& doc, AgentTurnState& st, const std::
                     else {
                         bool same = false;
                         try {
-                            same = p.old->isSame(*e.current);
+                            same = p.old->isSame(*e.current) || sameFloat(*p.old, *e.current);
                         }
                         catch (...) {
                             ++cs.uncomparable;
@@ -364,12 +378,18 @@ const char* changeName(PropKind k)
 }
 
 /// Value of a property as a Python object; None when the property cannot express one.
-Py::Object rawValue(const Property* prop)
+Py::Object rawValue(const Property* prop, const Property* unitFrom)
 {
     if (!prop) {
         return Py::None();
     }
     try {
+        // Restore the unit that the transaction's float copy of a quantity lost.
+        const auto* q = unitFrom ? freecad_cast<const PropertyQuantity*>(unitFrom) : nullptr;
+        const auto* f = freecad_cast<const PropertyFloat*>(prop);
+        if (q && f && prop != unitFrom && f->getTypeId() == PropertyFloat::getClassTypeId()) {
+            return Py::asObject(new Base::QuantityPy(new Base::Quantity(f->getValue(), q->getUnit())));
+        }
         PyObject* o = const_cast<Property*>(prop)->getPyObject();
         if (!o) {
             PyErr_Clear();
@@ -383,20 +403,27 @@ Py::Object rawValue(const Property* prop)
     }
 }
 
-Py::Object jsonValue(const Py::Object& converter, const Property* prop, const std::string& typeName)
+Py::Object jsonValue(
+    const Py::Object& converter,
+    const Property* prop,
+    const Property* unitFrom,
+    const std::string& typeName,
+    const Py::Object& removed
+)
 {
     if (!prop) {
         return Py::None();
     }
-    Py::Object raw = rawValue(prop);
+    Py::Object raw = rawValue(prop, unitFrom);
     if (converter.isNone()) {
         return raw;
     }
     try {
         Py::Callable fn(converter);
-        Py::Tuple args(2);
+        Py::Tuple args(3);
         args.setItem(0, raw);
         args.setItem(1, Py::String(typeName));
+        args.setItem(2, removed);
         return fn.apply(args);
     }
     catch (Py::Exception& e) {
@@ -421,6 +448,14 @@ _object* AgentTurnIntrospect::asPython(Document& doc, bool jsonValues, std::chro
             }
             catch (Py::Exception& e) {
                 e.clear();  // AgentCore not available: raw Python values
+            }
+        }
+        // Removed objects have lost their Name, but old link values still point at them.
+        Py::Dict removedNames;
+        for (const auto& oc : cs.objects) {
+            if (oc.status == AgentObjectChange::Status::Removed && oc.object) {
+                Py::Object po(const_cast<DocumentObject*>(oc.object)->getPyObject(), true);
+                removedNames.setItem(Py::Long(reinterpret_cast<std::uintptr_t>(po.ptr())), Py::String(oc.name));
             }
         }
         Py::Dict out;
@@ -448,8 +483,19 @@ _object* AgentTurnIntrospect::asPython(Document& doc, bool jsonValues, std::chro
                 }
                 if (pe.change == PropKind::Modified || pe.change == PropKind::Removed
                     || pe.change == PropKind::Added) {
-                    p.setItem("old", jsonValue(converter, pe.oldValue, pe.typeName));
-                    p.setItem("new", jsonValue(converter, pe.current, pe.typeName));
+                    Py::Object oldJ = jsonValue(converter, pe.oldValue, pe.current, pe.typeName, removedNames);
+                    Py::Object newJ = jsonValue(converter, pe.current, nullptr, pe.typeName, removedNames);
+                    p.setItem("old", oldJ);
+                    p.setItem("new", newJ);
+                    // Property::isSame is not reliable for every type (a rebuilt shape is never
+                    // "same"); the entry stays, flagged, when the two values look alike.
+                    if (pe.change == PropKind::Modified) {
+                        const int eq = PyObject_RichCompareBool(oldJ.ptr(), newJ.ptr(), Py_EQ);
+                        if (eq < 0) {
+                            PyErr_Clear();
+                        }
+                        p.setItem("maybe_unchanged", Py::Boolean(eq == 1));
+                    }
                 }
                 props.append(p);
             }
