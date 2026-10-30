@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <vector>
 
 #include <BRepAdaptor_Surface.hxx>
@@ -57,7 +58,11 @@ namespace Part
 namespace
 {
 
-std::vector<gp_Pnt2d> faceSamples(const TopoDS_Face& face, int n)
+constexpr int maxSamples = 1000;
+
+// Returns false in `expired` when the deadline passed while building the grid.
+template<typename Expired>
+std::vector<gp_Pnt2d> faceSamples(const TopoDS_Face& face, int n, Expired expired, bool& timedOut)
 {
     std::vector<gp_Pnt2d> pts;
     double u0 = 0, u1 = 0, v0 = 0, v1 = 0;
@@ -65,6 +70,10 @@ std::vector<gp_Pnt2d> faceSamples(const TopoDS_Face& face, int n)
     BRepTopAdaptor_FClass2d classifier(face, Precision::Confusion());
     for (int grid : {n, std::max(3 * n, 15)}) {
         for (int i = 0; i < grid; ++i) {
+            if (expired()) {
+                timedOut = true;
+                return {};
+            }
             for (int j = 0; j < grid; ++j) {
                 double u = u0 + (u1 - u0) * (i + 0.5) / grid;
                 double v = v0 + (v1 - v0) * (j + 0.5) / grid;
@@ -90,9 +99,12 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
     }
     using Clock = std::chrono::steady_clock;
     const auto t0 = Clock::now();
-    if (samples < 1) {
-        samples = 1;
-    }
+    samples = std::clamp(samples, 1, maxSamples);
+    // timeBudgetS: NaN or negative = unlimited, 0 = stop at once, > 0 = seconds.
+    const bool limited = !std::isnan(timeBudgetS) && timeBudgetS >= 0.0;
+    auto expired = [&]() {
+        return limited && std::chrono::duration<double>(Clock::now() - t0).count() > timeBudgetS;
+    };
 
     WallThicknessResult best;
     Bnd_Box box;
@@ -104,7 +116,9 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
     box.Get(x0, y0, z0, x1, y1, z1);
     const double diag = std::max(gp_Pnt(x0, y0, z0).Distance(gp_Pnt(x1, y1, z1)), 1.0);
     const double reach = diag * 1.01;
-    const double eps = 1e-5 * std::max(1.0, diag);
+    // Hits closer than hitTol to the ray start (the face itself, at w == lift) are skipped;
+    // thinner walls than that are still seen, unlike the Python reference's start-match eps.
+    const double hitTol = 1e-7 * std::max(1.0, diag);
     const double lift = 1e-3 * std::max(1.0, diag);
 
     TopTools_IndexedMapOfShape allFaces;
@@ -126,7 +140,12 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
             std::vector<gp_Pnt2d> pts;
             BRepAdaptor_Surface surf;
             try {
-                pts = faceSamples(face, samples);
+                bool timedOut = false;
+                pts = faceSamples(face, samples, expired, timedOut);
+                if (timedOut) {
+                    best.complete = false;
+                    break;
+                }
                 surf.Initialize(face);
             }
             catch (Standard_Failure&) {
@@ -134,8 +153,7 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
             }
             const int gi = allFaces.FindIndex(face);
             for (const gp_Pnt2d& uv : pts) {
-                if (timeBudgetS >= 0.0
-                    && std::chrono::duration<double>(Clock::now() - t0).count() > timeBudgetS) {
+                if (expired()) {
                     best.complete = false;
                     break;
                 }
@@ -156,7 +174,7 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
                     double nearest = -1.0;
                     for (int k = 1; k <= inter.NbPnt(); ++k) {
                         double w = inter.WParameter(k);
-                        if (w > lift + eps && (nearest < 0.0 || w < nearest)) {
+                        if (w > lift + hitTol && (nearest < 0.0 || w < nearest)) {
                             nearest = w;
                         }
                     }

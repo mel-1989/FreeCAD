@@ -103,3 +103,24 @@ class TestWallThickness(unittest.TestCase):
         p = V(*r["point"])
         face = s.Faces[r["face"] - 1]
         self.assertLess(face.distToShape(Part.Vertex(p))[0], 1e-6)
+
+    def test_thin_walls_relative_to_diagonal(self):
+        # Walls thinner than 1e-5 of the diagonal must still be seen.
+        self.check(Part.makeBox(1e6, 1e6, 10), 10.0)
+        self.check(Part.makeBox(1000, 1000, 0.01), 0.01)
+        self.check(Part.makeBox(1000, 1000, 0.1), 0.1)
+
+    def test_time_budget_semantics(self):
+        s = solid_with_cavity()
+        for unlimited in (None, -1.0, float("nan")):
+            self.assertTrue(self.measure(s, timeBudget=unlimited)["complete"])
+        self.assertFalse(self.measure(s, timeBudget=0.0)["complete"])
+
+    def test_budget_enforced_while_sampling_and_samples_capped(self):
+        sph = Part.makeSphere(10).cut(Part.makeSphere(8, V(1, 0, 0)))
+        r = self.measure(sph, samples=5000, timeBudget=0.3)
+        self.assertFalse(r["complete"])
+        self.assertLess(r["elapsed_s"], 0.3 + 0.5)
+        # huge sample counts are clamped rather than exhausting memory
+        r = self.measure(Part.makeBox(1, 1, 1), samples=2**30, timeBudget=1.0)
+        self.assertIn("rays", r)

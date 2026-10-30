@@ -51,7 +51,9 @@ struct PartExport WallThicknessResult
  * samples, an upper bound of the true minimum (exact for plates, tubes, shells).
  * Shapes without solids give found == false and rays == 0.
  *
- * @param timeBudgetS stop sampling after this many seconds when > 0 (complete = false)
+ * @param samples clamped to 1..1000
+ * @param timeBudgetS NaN or negative = unlimited; 0 = stop at once; > 0 = stop sampling after this
+ *        many seconds (complete = false)
  * @throws Standard_NullObject for a null shape
  */
 PartExport WallThicknessResult minWallThickness(const TopoDS_Shape& shape,
