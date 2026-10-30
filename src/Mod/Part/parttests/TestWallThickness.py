@@ -137,6 +137,21 @@ class TestWallThickness(unittest.TestCase):
         self.check(Part.makeTorus(20, 5).cut(Part.makeTorus(20, 3.5)), 1.5)
         self.check(Part.makeSphere(10), 20.0)
 
+    def test_sample_on_face_boundary_does_not_read_as_zero(self):
+        # A sample on an edge also meets the adjacent face at the ray start; that is not a wall.
+        for tol in (1e-5, 1e-4, 1e-2):
+            s = Part.makeCone(10, 4, 20).cut(Part.makeCone(8, 2.5, 20))
+            s.fixTolerance(tol)
+            # Values from the Python reference kernel (independent of the start-face logic).
+            for n, ref in ((3, 0.6061), (4, 0.9773), (5, 1.485), (6, 0.9392), (7, 0.2018)):
+                r = self.measure(s, samples=n)
+                self.assertAlmostEqual(r["min"], ref, delta=1e-3, msg=(tol, n))
+        for n in range(2, 13):
+            wedge = Part.makeCone(10, 0, 20, V(0, 0, 0), V(0, 0, 1), 5)
+            self.assertGreater(self.measure(wedge, samples=n)["min"], 0.03, n)
+        wedge = Part.makeCone(10, 0, 20, V(0, 0, 0), V(0, 0, 1), 5)
+        self.assertAlmostEqual(self.measure(wedge, samples=2)["min"], 0.2187, delta=1e-3)
+
     def test_time_budget_semantics(self):
         s = solid_with_cavity()
         for unlimited in (None, -1.0, float("nan")):

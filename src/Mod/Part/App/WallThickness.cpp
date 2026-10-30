@@ -43,7 +43,9 @@
 #include <TopAbs.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
+#include <TopTools_MapOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <gp_Dir.hxx>
@@ -138,6 +140,8 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
         }
         TopTools_IndexedMapOfShape solidFaces;
         TopExp::MapShapes(solid, TopAbs_FACE, solidFaces);
+        TopTools_IndexedDataMapOfShapeListOfShape vertexFaces;
+        TopExp::MapShapesAndAncestors(solid, TopAbs_VERTEX, TopAbs_FACE, vertexFaces);
         for (int fi = 1; fi <= solidFaces.Extent() && best.complete; ++fi) {
             const TopoDS_Face face = TopoDS::Face(solidFaces(fi));
             std::vector<gp_Pnt2d> pts;
@@ -155,6 +159,18 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
                 continue;
             }
             const int gi = allFaces.FindIndex(face);
+            // Faces sharing an edge or vertex with the start face: a sample on (or within
+            // tolerance of) the shared boundary also meets the neighbour at w == lift.
+            TopTools_MapOfShape neighbours;
+            for (TopExp_Explorer ve(face, TopAbs_VERTEX); ve.More(); ve.Next()) {
+                int vi = vertexFaces.FindIndex(ve.Current());
+                if (vi == 0) {
+                    continue;
+                }
+                for (const TopoDS_Shape& nf : vertexFaces(vi)) {
+                    neighbours.Add(nf);
+                }
+            }
             for (const gp_Pnt2d& uv : pts) {
                 if (expired()) {
                     best.complete = false;
@@ -190,6 +206,9 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
                     double nearest = -1.0;
                     for (int k = 1; k <= inter.NbPnt(); ++k) {
                         double w = inter.WParameter(k);
+                        if (w - lift <= sameTol && neighbours.Contains(inter.Face(k))) {
+                            continue;
+                        }
                         if (k != startHit && w > lift && (nearest < 0.0 || w < nearest)) {
                             nearest = w;
                         }
