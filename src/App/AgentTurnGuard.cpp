@@ -15,7 +15,9 @@
  ******************************************************************************/
 
 #include <algorithm>
+#include <chrono>
 #include <format>
+#include <thread>
 #include <utility>
 
 #include <Base/Exception.h>
@@ -98,16 +100,16 @@ void parkActiveSegment(Transaction::DocumentAccess& acc, AgentTurnState& st)
 /// would otherwise land in a segment that is being detached or rolled back. Waits (without holding
 /// the turn mutex, which the worker needs to record); on timeout the operation is skipped and
 /// reported as tampering so the turn is rejected, never half-applied.
-bool settleWorker(Document& doc, AgentTurnState& st, const char* what)
+bool settleWorker(Document& doc, const std::shared_ptr<AgentTurnState>& st, const char* what)
 {
     // Throws when another Python thread closed the document during the wait.
     const bool idle = AgentTurnGuard::waitForWorkerReleasingGil(doc, AgentTurnGuard::nestedWait);
     if (idle) {
         return true;
     }
-    auto lock = AgentTurnGuard::acquire(st.mutex);
-    ++st.workerRefusals;
-    st.tampering.push_back(
+    auto lock = AgentTurnGuard::acquire(st);
+    ++st->workerRefusals;
+    st->tampering.push_back(
         std::format("{} skipped: the document was still recomputing on the async worker", what)
     );
     return false;
@@ -201,7 +203,7 @@ AgentTurnReport AgentTurnGuard::end(Document& doc, bool commit, std::chrono::mil
         return refuse("the document is still recomputing on the async worker");
     }
 
-    auto lock = AgentTurnGuard::acquire(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st);
     st->ending = true;
     if (commit && !st->tampering.empty()) {
         // A tampered turn (undo/redo/clearUndos refused, or a savepoint operation skipped because
@@ -246,13 +248,20 @@ AgentTurnReport AgentTurnGuard::end(Document& doc, bool commit, std::chrono::mil
     // The plain close now does the real work: it commits (one undo entry) or aborts
     // (restores the document), erases the turn's description and clears the booking.
     // Application::closeActiveTransaction does not treat the id as a turn any more
-    // because `ending` is set.
+    // because `ending` is set. It fires observers and, on abort, FeaturePython onChanged, which
+    // is Python: it runs outside the turn mutex, with the turn marked busy.
+    AgentTurnBusy busy;
+    busy.engage(st);
+    lock.unlock();
     GetApplication().closeActiveTransaction(
         commit ? TransactionCloseMode::Commit : TransactionCloseMode::Abort,
         st->tid
     );
-    acc.d->bookedTransaction = NullTransaction;
-    acc.d->agent.reset();
+    {
+        auto relock = AgentTurnGuard::acquire(st);
+        acc.d->bookedTransaction = NullTransaction;
+        acc.d->agent.reset();
+    }
 
     report.committed = commit;
     report.aborted = !commit;
@@ -267,20 +276,39 @@ bool AgentTurnGuard::waitForWorker(Document& doc, std::chrono::milliseconds wait
 
 bool AgentTurnGuard::waitForWorkerReleasingGil(Document& doc, std::chrono::milliseconds wait)
 {
+    using Clock = std::chrono::steady_clock;
     const std::string name = doc.getName();  // before the GIL is given up: doc may die meanwhile
+    const Document* const self = &doc;
+    const bool holdsGil = Py_IsInitialized() && PyGILState_Check();
+    const auto deadline = Clock::now() + wait;
     bool idle = false;
-    if (Py_IsInitialized() && PyGILState_Check()) {
-        // The worker may need the GIL to finish a Python feature's recompute.
-        Base::PyGILStateRelease release;
-        idle = AutoTransaction::waitForRecompute(name, wait);
+    for (;;) {
+        // A poll in slices: the document is looked up again after every wake.
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
+        const auto slice = std::clamp(left, std::chrono::milliseconds(0), std::chrono::milliseconds(50));
+        if (holdsGil) {
+            // The worker may need the GIL to finish a Python feature's recompute.
+            Base::PyGILStateRelease release;
+            idle = AutoTransaction::waitForRecompute(name, slice);
+        }
+        else {
+            idle = AutoTransaction::waitForRecompute(name, slice);
+        }
+        if (GetApplication().getDocument(name.c_str()) != self) {
+            throw Base::RuntimeError("the document was closed while waiting for the async worker");
+        }
+        // Also wait out another thread's nested abort or end() of the turn (it runs Python and
+        // needs the GIL, which this thread must not hold while it waits for the turn).
+        bool busyElsewhere = false;
+        if (idle) {
+            if (auto st = Transaction::accessDocument(doc).d->agent) {
+                busyElsewhere = st->busyDepth.load() > 0 && st->busyOwner.load() != std::this_thread::get_id();
+            }
+        }
+        if ((idle && !busyElsewhere) || Clock::now() >= deadline) {
+            return idle && !busyElsewhere;
+        }
     }
-    else {
-        idle = AutoTransaction::waitForRecompute(name, wait);
-    }
-    if (GetApplication().getDocument(name.c_str()) != &doc) {
-        throw Base::RuntimeError("the document was closed while waiting for the async worker");
-    }
-    return idle;
 }
 
 AgentTurnReport AgentTurnGuard::peek(Document& doc)
@@ -289,7 +317,7 @@ AgentTurnReport AgentTurnGuard::peek(Document& doc)
     if (!st) {
         return {};
     }
-    auto lock = AgentTurnGuard::acquire(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st);
     return makeReport(*st);
 }
 
@@ -319,10 +347,10 @@ int AgentTurnGuard::nestedOpen(Document& doc, const std::string& name, int viaGl
     if (!st) {
         return NullTransaction;
     }
-    if (!settleWorker(doc, *st, "nested open")) {
+    if (!settleWorker(doc, st, "nested open")) {
         return st->tid;
     }
-    auto lock = AgentTurnGuard::acquire(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st);
     if (doc.isTransactionLocked()) {
         // Same as Document::openTransaction: an open while locked is ignored.
         ++st->lockedOpens;
@@ -343,10 +371,10 @@ bool AgentTurnGuard::nestedCommit(Document& doc)
     if (!st) {
         return false;
     }
-    if (!settleWorker(doc, *st, "nested commit")) {
+    if (!settleWorker(doc, st, "nested commit")) {
         return true;
     }
-    auto lock = AgentTurnGuard::acquire(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st);
     if (st->savepointOpen) {
         st->savepointOpen = false;
         st->viaGlobalId = 0;
@@ -361,16 +389,16 @@ bool AgentTurnGuard::nestedCommit(Document& doc)
     return true;
 }
 
-Transaction* AgentTurnGuard::beginNestedAbort(Document& doc, std::unique_lock<std::recursive_mutex>& lock)
+Transaction* AgentTurnGuard::beginNestedAbort(Document& doc, AgentTurnBusy& busy)
 {
     auto st = hooked(doc);
     if (!st) {
         return nullptr;
     }
-    if (!settleWorker(doc, *st, "nested abort")) {
+    if (!settleWorker(doc, st, "nested abort")) {
         return nullptr;
     }
-    lock = AgentTurnGuard::acquire(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st);
     if (!st->savepointOpen) {
         // An abort with no open savepoint has nothing of its own to roll back; the
         // turn itself ends only through end().
@@ -387,6 +415,10 @@ Transaction* AgentTurnGuard::beginNestedAbort(Document& doc, std::unique_lock<st
         acc.undoMap.erase(st->tid);
         acc.d->activeUndoTransaction = nullptr;
     }
+    if (cur) {
+        // The caller applies the segment, which runs Python: outside the mutex, turn busy.
+        busy.engage(st);
+    }
     return cur;
 }
 
@@ -396,7 +428,7 @@ int AgentTurnGuard::ensureSegment(Document& doc)
     if (!st) {
         return NullTransaction;
     }
-    auto lock = AgentTurnGuard::acquire(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st);
     auto acc = Transaction::accessDocument(doc);
     if (acc.d->activeUndoTransaction) {
         return st->tid;
@@ -411,8 +443,10 @@ int AgentTurnGuard::ensureSegment(Document& doc)
     acc.undoMap[st->tid] = segment;
     acc.d->activeUndoTransaction = segment;
     if (!st->announced) {
+        // The signal runs observers (Python): raised when the last lock of this thread is released.
         st->announced = true;
-        doc.signalOpenTransaction(doc, st->name);
+        st->announceDue = true;
+        st->announceDoc = &doc;
     }
     return st->tid;
 }
@@ -421,7 +455,7 @@ void AgentTurnGuard::deferClose(Document& doc, bool abort)
 {
     auto st = hooked(doc);
     if (st) {
-        auto lock = AgentTurnGuard::acquire(st->mutex);
+        auto lock = AgentTurnGuard::acquire(st);
         st->pendingClose = std::max(st->pendingClose, abort ? 2 : 1);
     }
 }
@@ -432,7 +466,7 @@ int AgentTurnGuard::takeDeferredClose(Document& doc)
     if (!st || st->pendingClose == 0) {
         return 0;
     }
-    auto lock = AgentTurnGuard::acquire(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st);
     return std::exchange(st->pendingClose, 0);
 }
 
@@ -442,7 +476,7 @@ bool AgentTurnGuard::refuseHistory(Document& doc, const char* what)
     if (!st) {
         return false;
     }
-    auto lock = AgentTurnGuard::acquire(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st);
     const std::string call = what;
     if (call == "undo") {
         ++st->undoRefused;
@@ -463,40 +497,133 @@ void AgentTurnGuard::onDocumentDestroy(Document& doc)
     if (auto st = acc.d->agent) {
         // Parked segments go first (oldest first); the active one is committed and
         // deleted by clearUndos like any other.
-        auto lock = AgentTurnGuard::acquire(st->mutex);
+        auto lock = AgentTurnGuard::acquire(st, false);
         for (auto* segment : st->parked) {
             delete segment;
         }
         st->parked.clear();
         st->ending = true;
+        st->announceDue = false;  // the document is going away: no signal about it
         acc.d->agent.reset();
     }
 }
 
-std::unique_lock<std::recursive_mutex> AgentTurnGuard::lockFor(Document& doc)
+AgentTurnLock AgentTurnGuard::lockFor(Document& doc)
 {
     auto acc = Transaction::accessDocument(doc);
     auto st = acc.d->agent;
     if (!st) {
         return {};
     }
-    return AgentTurnGuard::acquire(st->mutex);
+    return AgentTurnGuard::acquire(st);
 }
 
-std::unique_lock<std::recursive_mutex> AgentTurnGuard::acquire(std::recursive_mutex& mutex)
+AgentTurnLock AgentTurnGuard::acquire(const std::shared_ptr<AgentTurnState>& st, bool respectBusy)
 {
-    std::unique_lock<std::recursive_mutex> lock(mutex, std::try_to_lock);
-    if (lock.owns_lock()) {
-        return lock;
+    const bool python = Py_IsInitialized();
+    const bool heldGil = python && PyGILState_Check();
+    for (;;) {
+        AgentTurnLock held;
+        held.state_ = st;
+        // GIL first, then the mutex, plainly blocking (see the lock order in the header).
+        if (python) {
+            held.gilState_ = static_cast<int>(PyGILState_Ensure());
+            held.gil_ = true;
+        }
+        held.lock_ = std::unique_lock<std::recursive_mutex>(st->mutex);
+        ++st->lockDepth;
+        if (!respectBusy || st->busyDepth.load() == 0 || st->busyOwner.load() == std::this_thread::get_id()) {
+            return held;
+        }
+        held.unlock();
+        if (heldGil) {
+            // Waiting would deadlock: the busy thread needs the GIL to finish.
+            throw Base::RuntimeError(
+                "the agent turn is being rolled back or closed by another thread; retry afterwards"
+            );
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    if (Py_IsInitialized() && PyGILState_Check()) {
-        // Never block on the mutex while holding the GIL: its holder may need the GIL (a nested
-        // abort runs Python while it holds the mutex). Wait without it, then take it back.
-        Base::PyGILStateRelease release;
-        lock.lock();
+}
+
+AgentTurnLock::AgentTurnLock(AgentTurnLock&& other) noexcept
+    : state_(std::move(other.state_))
+    , lock_(std::move(other.lock_))
+    , gil_(std::exchange(other.gil_, false))
+    , gilState_(other.gilState_)
+{}
+
+AgentTurnLock& AgentTurnLock::operator=(AgentTurnLock&& other) noexcept
+{
+    if (this != &other) {
+        unlock();
+        state_ = std::move(other.state_);
+        lock_ = std::move(other.lock_);
+        gil_ = std::exchange(other.gil_, false);
+        gilState_ = other.gilState_;
     }
-    else {
-        lock.lock();
+    return *this;
+}
+
+AgentTurnLock::~AgentTurnLock()
+{
+    unlock();
+}
+
+void AgentTurnLock::unlock()
+{
+    Document* announce = nullptr;
+    std::string name;
+    if (lock_.owns_lock()) {
+        if (--state_->lockDepth == 0 && state_->announceDue) {
+            state_->announceDue = false;
+            announce = state_->announceDoc;
+            name = state_->name;
+        }
+        lock_.unlock();
     }
-    return lock;
+    if (announce) {
+        // After the mutex, before the GIL goes: observers may run Python.
+        try {
+            announce->signalOpenTransaction(*announce, name);
+        }
+        catch (...) {
+            FC_ERR("signalOpenTransaction raised in an observer");
+        }
+    }
+    if (gil_) {
+        gil_ = false;
+        PyGILState_Release(static_cast<PyGILState_STATE>(gilState_));
+    }
+    state_.reset();
+}
+
+void AgentTurnBusy::engage(const std::shared_ptr<AgentTurnState>& st)
+{
+    // The caller holds the turn's lock.
+    st->busyOwner = std::this_thread::get_id();
+    ++st->busyDepth;
+    st_ = st;
+}
+
+void AgentTurnBusy::release() noexcept
+{
+    if (!st_) {
+        return;
+    }
+    try {
+        auto lock = AgentTurnGuard::acquire(st_, false);
+        if (--st_->busyDepth == 0) {
+            st_->busyOwner = std::thread::id {};
+        }
+    }
+    catch (...) {
+        FC_ERR("could not clear the agent turn's busy mark");
+    }
+    st_.reset();
+}
+
+AgentTurnBusy::~AgentTurnBusy()
+{
+    release();
 }

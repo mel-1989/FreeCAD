@@ -17,19 +17,45 @@
 #ifndef APP_AGENTTURNGUARD_H
 #define APP_AGENTTURNGUARD_H
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <FCGlobal.h>
+
+/*
+ * LOCK ORDER (the invariant of this file, Document's property hook, AgentTurnIntrospect and the
+ * Python bindings): the GIL is OUTSIDE the turn mutex, strictly.
+ *
+ * 1. A thread takes the GIL first, then the turn mutex. AgentTurnGuard::acquire() does both
+ *    (PyGILState_Ensure, then a plain blocking lock), so no caller can get the order wrong, and the
+ *    returned AgentTurnLock gives the mutex back first and the GIL last.
+ * 2. While the turn mutex is held no Python bytecode runs and the GIL is never given up or taken
+ *    (no PyGILStateRelease, no Py_BEGIN_ALLOW_THREADS, no blocking wait for another thread).
+ *    Py_INCREF/DECREF by the thread that holds the GIL is fine. Work that runs Python code
+ *    (a transaction's apply, which fires FeaturePython onChanged; closing a transaction, which
+ *    fires observers; comparing Python-object properties with __eq__) is done outside the mutex.
+ * 3. A thread that holds the GIL therefore never waits long for the mutex: its holder holds the
+ *    GIL as well and runs no Python, so it finishes without needing anything from the waiter.
+ *    Nothing releases the GIL in the middle of a document mutation, so no other Python thread can
+ *    close the document under a waiter.
+ *
+ * Work that must run Python on the turn's behalf outside the mutex marks the turn "busy"
+ * (AgentTurnBusy): the other threads that need the turn meanwhile get a RuntimeError when they
+ * hold the GIL (they must not wait for the busy thread, which needs the GIL to proceed) and wait
+ * without it when they do not (the recompute worker).
+ */
 
 namespace App
 {
 
 class Document;
 class Transaction;
+class AgentTurnLock;
 
 /**
  * @brief Per-document state of a guarded agent turn.
@@ -68,6 +94,14 @@ struct AgentTurnState
     std::size_t baseUndoCount {0};
     /// Guards the fields below and the active transaction against the recompute worker.
     std::recursive_mutex mutex;
+    /// Run Python outside the mutex (nested abort, end()): the owner is busy, others must not touch the turn.
+    std::atomic<int> busyDepth {0};
+    std::atomic<std::thread::id> busyOwner {};
+    /// How many AgentTurnLocks the owner of the mutex holds (changed under the mutex only).
+    int lockDepth {0};
+    /// The first change of the turn needs signalOpenTransaction; raised when the last lock is released.
+    bool announceDue {false};
+    Document* announceDoc {nullptr};
     /// Segments parked by nested opens, oldest first (owned).
     std::vector<Transaction*> parked;
 
@@ -121,6 +155,57 @@ struct AgentTurnReport
     std::vector<std::string> tampering;
 };
 
+/**
+ * @brief Holds a turn's mutex and, beneath it, the GIL (see the lock order at the top of this file).
+ *
+ * Releasing the last lock a thread holds on a turn also raises a deferred signalOpenTransaction,
+ * which runs observers (Python) and so must not run under the mutex.
+ */
+class AppExport AgentTurnLock
+{
+public:
+    AgentTurnLock() = default;
+    AgentTurnLock(const AgentTurnLock&) = delete;
+    AgentTurnLock& operator=(const AgentTurnLock&) = delete;
+    AgentTurnLock(AgentTurnLock&& other) noexcept;
+    AgentTurnLock& operator=(AgentTurnLock&& other) noexcept;
+    ~AgentTurnLock();
+
+    bool owns_lock() const
+    {
+        return lock_.owns_lock();
+    }
+    /// Give the mutex back, then the GIL.
+    void unlock();
+
+private:
+    friend class AgentTurnGuard;
+    std::shared_ptr<AgentTurnState> state_;
+    std::unique_lock<std::recursive_mutex> lock_;
+    bool gil_ {false};
+    int gilState_ {0};
+};
+
+/**
+ * @brief Marks a turn busy while its owner runs Python outside the mutex (a nested abort's
+ * rollback, the close of the turn's transaction). Clears the mark on destruction.
+ */
+class AppExport AgentTurnBusy
+{
+public:
+    AgentTurnBusy() = default;
+    AgentTurnBusy(const AgentTurnBusy&) = delete;
+    AgentTurnBusy& operator=(const AgentTurnBusy&) = delete;
+    ~AgentTurnBusy();
+
+    /// Mark @p st busy for the calling thread. The caller holds the turn's lock.
+    void engage(const std::shared_ptr<AgentTurnState>& st);
+    void release() noexcept;
+
+private:
+    std::shared_ptr<AgentTurnState> st_;
+};
+
 class AppExport AgentTurnGuard
 {
 public:
@@ -159,13 +244,14 @@ public:
     /// True when end() would not refuse now: not transacting, not locked, and the worker idle within @p wait. @p reason says why not.
     static bool canEnd(Document& doc, std::chrono::milliseconds wait, std::string& reason);
 
-    /// Wait until the async worker is not recomputing @p doc (false on timeout). Callers that hold the Python GIL release it around this.
+    /// Wait until the async worker is not recomputing @p doc (false on timeout). Callers that hold the Python GIL use the variant below.
     static bool waitForWorker(Document& doc, std::chrono::milliseconds wait);
     /**
      * @brief waitForWorker() for callers that hold the GIL: gives it up for the wait.
      *
-     * The document may be closed by another Python thread meanwhile, so nothing of @p doc is read
-     * during the wait, and the document is looked up again afterwards.
+     * Never called with a turn mutex held. The wait is a poll in slices of 50 ms; the GIL is given
+     * up for each slice and the document is looked up again after every wake, because another
+     * Python thread may close it meanwhile (nothing of @p doc is read while the GIL is away).
      * @throw Base::RuntimeError when the document no longer exists.
      */
     static bool waitForWorkerReleasingGil(Document& doc, std::chrono::milliseconds wait);
@@ -189,9 +275,11 @@ public:
     /**
      * A transaction was aborted: detach the segment recorded since the savepoint and return it, or
      * null when there is nothing to roll back. The caller (Document::_abortTransaction) applies it
-     * backwards under the rollback flag and deletes it; @p lock keeps the recompute worker out meanwhile.
+     * backwards under the rollback flag and deletes it. The apply runs Python (FeaturePython
+     * onChanged), so it runs OUTSIDE the turn mutex: @p busy marks the turn busy meanwhile, and
+     * other threads that need the turn are refused (GIL holders) or wait (the worker).
      */
-    static Transaction* beginNestedAbort(Document& doc, std::unique_lock<std::recursive_mutex>& lock);
+    static Transaction* beginNestedAbort(Document& doc, AgentTurnBusy& busy);
     /// The first change after a savepoint needs an active transaction: open the segment. Returns the turn id.
     static int ensureSegment(Document& doc);
     /// A close arrived while the transactions were locked: remember it.
@@ -203,18 +291,17 @@ public:
     /// The document is being destroyed: drop the turn.
     static void onDocumentDestroy(Document& doc);
     /// Lock that serialises the recompute worker against turn bookkeeping (empty when no turn).
-    static std::unique_lock<std::recursive_mutex> lockFor(Document& doc);
+    static AgentTurnLock lockFor(Document& doc);
 
     /**
-     * @brief Lock a turn's mutex without ever blocking while holding the GIL.
+     * @brief Take the GIL, then the turn's mutex (blocking), and keep @p st alive meanwhile.
      *
-     * Lock ordering rule for this file, the property-change hook and the Python bindings: a thread
-     * may take the GIL while holding a turn mutex (a nested abort runs Python features' onChanged
-     * under it), but must never wait for a turn mutex while holding the GIL. Every acquisition
-     * therefore goes through here: try_lock first, and when that fails with the GIL held, give the
-     * GIL up for the wait and take it back (mutex then GIL) afterwards.
+     * The only way to lock a turn. When another thread has marked the turn busy (AgentTurnBusy)
+     * this refuses with Base::RuntimeError if the caller holds the GIL (waiting would deadlock:
+     * the busy thread needs the GIL), and polls without the GIL otherwise. @p respectBusy false
+     * skips that check (the document is being destroyed).
      */
-    static std::unique_lock<std::recursive_mutex> acquire(std::recursive_mutex& mutex);
+    static AgentTurnLock acquire(const std::shared_ptr<AgentTurnState>& st, bool respectBusy = true);
 };
 
 }  // namespace App

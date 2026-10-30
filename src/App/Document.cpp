@@ -722,8 +722,10 @@ void Document::_abortTransaction()
 
     if (d->agent && AgentTurnGuard::turnId(*this) != NullTransaction) {
         // Guarded agent turn: roll back only the segment recorded since the nested open.
-        std::unique_lock<std::recursive_mutex> turnLock;
-        if (Transaction* segment = AgentTurnGuard::beginNestedAbort(*this, turnLock)) {
+        // The segment's apply runs Python (FeaturePython onChanged), so it runs outside the turn
+        // mutex with the turn marked busy; see the lock order in AgentTurnGuard.h.
+        AgentTurnBusy turnBusy;
+        if (Transaction* segment = AgentTurnGuard::beginNestedAbort(*this, turnBusy)) {
             {
                 Base::FlagToggler<bool> flag(d->rollback);
                 Application::TransactionSignaller signaller(true, true);
@@ -1007,7 +1009,9 @@ void Document::onBeforeChangeProperty(const TransactionalObject* Who, const Prop
     // In a guarded turn the recompute worker records into the turn too: serialise it against
     // the turn's savepoint bookkeeping on the main thread. The lock is taken before the rollback
     // flag is read, because a nested abort sets that flag while it holds the same lock.
-    std::unique_lock<std::recursive_mutex> turnLock;
+    // The lock takes the GIL first (lock order GIL, then turn mutex), because recording a
+    // Python-object property copies it.
+    AgentTurnLock turnLock;
     if (d->agent) {
         turnLock = AgentTurnGuard::lockFor(*this);
     }
