@@ -34,6 +34,26 @@ another way (more than a sign flip) is reported lost.
 dependencies failed or was not recomputed. Such a reference is always
 reported ``lost`` (the would-be verdict is kept under ``provisional``),
 because nothing about stale geometry can be confirmed.
+
+When the FreeCAD build has the C++ journal of element-reference updates
+(``Document.getElementReferenceEvents``), the tracker also reads it. A tracked
+reference with a matching C++ event gets ``freecad_event`` (the event dict). A
+C++ ``remapped`` event makes ``property_updated`` authoritative (FreeCAD itself
+rewrote the property), and a C++ ``lost`` event makes ``property_marked_missing``
+true. The C++ side cannot see an element map that keeps a name on the wrong
+element, so the geometry checks above stay the oracle for that case. C++ events
+that match no tracked reference are listed under ``untracked_events`` in the
+report. Without the journal everything works as before.
+
+The journal is an incremental log of what FreeCAD's ``_updateElementReference`` rewrote, not a
+replayable history. Undo, redo, Body relinking, deleting a feature and user assignments change
+properties without an event, so the property is always read for its current value and the events
+only say what FreeCAD did. A ``lost`` event means the reference's mapped name is gone; the visible
+sub may still show the old index because FreeCAD writes the mapped name back over the "?" mark.
+``restored`` also covers a recovery from the missing mark and may carry an unchanged short sub;
+a reference can leave and return within one edit, and every step is logged. ``freecad_event`` is
+trusted for ``property_updated`` only when it ends on the sub the property has now. The report's
+``journal_truncated`` is true when the size cap discarded events newer than the snapshot.
 """
 
 import re
@@ -252,6 +272,11 @@ def _short_for(shape, mapped):
     return s
 
 
+def _sub_element(sub):
+    """Short element name of a sub-element string (``Pad.Face3``, ``?Face3`` -> ``Face3``)."""
+    return split_subname(sub or "")[1].lstrip("?")
+
+
 class ReferenceTracker:
     """Snapshot element references now; classify them after a recompute."""
 
@@ -259,11 +284,20 @@ class ReferenceTracker:
         self.doc = doc
         self.records = []
         self.events = []
+        self.cpp_events = []
+        self.untracked_events = []
+        self.journal_seq = None
+        self.journal_truncated = False
         self.snapshot()
 
     # -- snapshot ---------------------------------------------------------
     def snapshot(self):
         self.records = []
+        self.cpp_events = []
+        self.untracked_events = []
+        self.journal_seq = None
+        if hasattr(self.doc, "lastElementReferenceEventSeq"):
+            self.journal_seq = self.doc.lastElementReferenceEventSeq()
         for obj in self.doc.Objects:
             for prop in obj.PropertiesList:
                 try:
@@ -285,7 +319,8 @@ class ReferenceTracker:
                     self.records.append({
                         "owner": obj.Name, "property": prop, "index": index,
                         "linked": linked.Name, "path": path, "element_owner": owner.Name,
-                        "element": element, "mapped": mapped,
+                        "element": element, "mapped": mapped, "sub": sub, "prop_len": len(pairs),
+                        "linked_doc": getattr(getattr(linked, "Document", None), "Name", None),
                         "sig": signature(shape, element) if shape is not None else None,
                         "carrier": carrier(shape, element) if shape is not None else None,
                         "valid_before": not sub.startswith("?") and shape is not None and signature(shape, element) is not None,
@@ -495,8 +530,111 @@ class ReferenceTracker:
         hits = [c for c in self._candidates(shape, rec) if (signature(shape, c) or {}).get("loose") == rec["sig"]["loose"]]
         return hits[0] if len(hits) == 1 else None
 
+    def _read_journal(self):
+        """The C++ journal entries since the snapshot, oldest first ([] without a journal)."""
+        if self.journal_seq is None or not hasattr(self.doc, "getElementReferenceEvents"):
+            return []
+        return list(self.doc.getElementReferenceEvents(self.journal_seq))
+
+    def _flat_length(self, rec):
+        """Number of flattened subs the record's property holds now (-1 if unreadable)."""
+        obj = self.doc.getObject(rec["owner"])
+        try:
+            return len(_pairs(obj.getPropertyByName(rec["property"])))
+        except Exception:  # noqa: BLE001
+            return -1
+
+    def _match_journal(self, cpp_events):
+        """Attach the C++ events to the records and return the set of event seqs used.
+
+        The events of one (owner, property) are replayed in seq order. Every record sits at a
+        position (its ``index`` in the flattened property, the event's ``subIndex``) and holds a
+        current sub, starting at its snapshot sub. An event belongs to the record at its position
+        whose current sub equals the event's ``oldSub``; the record then moves to ``newSub``. So
+        one sub's hop can never be taken as another sub's, however many edits the window spans,
+        and the target is not compared (an inserted feature that was deleted again leaves events
+        whose target is neither the snapshot's nor today's), except that a cross-document
+        ``targetDocument`` must be a document the reference could point into.
+        While the property has the snapshot's length the event's position is authoritative and
+        the record's current sub is reset to the event's ``oldSub`` first (a silent rewrite such
+        as undo or deleting an inserted feature leaves no event). Events without a position
+        (``subIndex`` -1, or an older build), and events of a property whose length changed,
+        fall back to the unique record of that property whose current sub equals ``oldSub``."""
+        used = set()
+        by_prop = {}
+        for ce in sorted(cpp_events, key=lambda c: c["seq"]):
+            by_prop.setdefault((ce["owner"], ce["property"]), []).append(ce)
+        for rec in self.records:
+            rec["cpp_chain"] = []
+        recs = {}
+        for rec in self.records:
+            recs.setdefault((rec["owner"], rec["property"]), []).append(rec)
+        for key, events in by_prop.items():
+            group = recs.get(key, [])
+            if not group:
+                continue
+            cur = {id(r): r["sub"] for r in group}
+            at = {r["index"]: r for r in group}
+            docs = {}
+            for r in group:
+                now, _why = self._current(r)
+                d = {r.get("linked_doc"), getattr(getattr(now[0], "Document", None), "Name", None) if now else None,
+                     self.doc.Name}
+                docs[id(r)] = d - {None}
+            # The position is authoritative while the property still has the snapshot's length:
+            # a silent rewrite (undo, deleting an inserted feature, FreeCAD writing a mapped
+            # name back over a "?") can leave the replayed sub stale, and the event's oldSub
+            # says what the sub really was. After a length change positions mean nothing.
+            same_length = self._flat_length(group[0]) == group[0].get("prop_len")
+            for ce in events:
+                idx = ce.get("subIndex", -1)
+                rec = at.get(idx) if idx is not None and idx >= 0 and same_length else None
+                if rec is not None:
+                    cur[id(rec)] = ce["oldSub"]
+                else:
+                    rec = at.get(idx) if idx is not None and idx >= 0 else None
+                    if rec is None or cur[id(rec)] != ce["oldSub"]:
+                        same = [r for r in group if cur[id(r)] == ce["oldSub"]]
+                        rec = same[0] if len(same) == 1 else None
+                if rec is None:
+                    continue
+                if ce.get("targetDocument") and ce["targetDocument"] not in docs[id(rec)]:
+                    continue
+                rec["cpp_chain"].append(ce)
+                cur[id(rec)] = ce["newSub"]
+                used.add(ce["seq"])
+        return used
+
+    def _apply_journal(self, ev, rec):
+        chain = rec.get("cpp_chain") or []
+        if not chain:
+            return
+        last = chain[-1]
+        ev["freecad_event"] = dict(last)
+        if len(chain) > 1:
+            ev["freecad_events"] = [dict(c) for c in chain]
+        if last["kind"] == "lost":
+            ev["property_marked_missing"] = True
+        elif ev["outcome"] == "remapped" and last["kind"] in ("remapped", "restored"):
+            # FreeCAD rewrote the property itself, provided the event ends where the property
+            # stands now; an event that ends elsewhere is attached but not trusted
+            if _sub_element(last["newSub"]) == ev.get("now_points_to") == ev.get("new_element"):
+                ev["property_updated"] = True
+                ev["stale"] = False
+
     def classify(self):
-        self.events = [self._classify(r) for r in self.records]
+        cpp_events = self._read_journal()
+        self.journal_truncated = bool(
+            self.journal_seq is not None and hasattr(self.doc, "lastDroppedElementReferenceEventSeq")
+            and self.doc.lastDroppedElementReferenceEventSeq() > self.journal_seq)
+        self.cpp_events = cpp_events
+        used = self._match_journal(cpp_events)
+        self.untracked_events = [dict(c) for c in cpp_events if c["seq"] not in used]
+        self.events = []
+        for r in self.records:
+            ev = self._classify(r)
+            self._apply_journal(ev, r)
+            self.events.append(ev)
         return self.events
 
     def report(self):
@@ -505,7 +643,11 @@ class ReferenceTracker:
         counts = {"kept": 0, "remapped": 0, "lost": 0}
         for e in self.events:
             counts[e["outcome"]] += 1
-        return {"references": len(self.records), "counts": counts, "events": self.events}
+        out = {"references": len(self.records), "counts": counts, "events": self.events}
+        if self.journal_seq is not None:
+            out["untracked_events"] = self.untracked_events
+            out["journal_truncated"] = self.journal_truncated
+        return out
 
     @property
     def remapped(self):

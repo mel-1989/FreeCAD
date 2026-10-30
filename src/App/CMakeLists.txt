@@ -277,6 +277,8 @@ SET(Properties_CPP_SRCS
     PropertyFile.cpp
     PropertyGeo.cpp
     PropertyLinks.cpp
+    ElementReferenceEvents.cpp
+    ElementReferenceEvents.h
     PropertyPythonObject.cpp
     PropertyStandard.cpp
     PropertyUnits.cpp

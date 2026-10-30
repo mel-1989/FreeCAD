@@ -114,6 +114,43 @@ class Document(PropertyContainer):
         """
         ...
 
+    def getElementReferenceEvents(self, since: int = 0) -> list[dict[str, object]]:
+        """
+        Return the journal of element-reference updates of this document, oldest first.
+
+        Each event is a dict with the keys seq, document, owner, property, target,
+        targetDocument, subIndex (position of the sub in the property, -1 if unknown), oldSub, newSub, oldMapped, newMapped, kind ("remapped", "lost" or "restored")
+        and basis ("element_map", "geometry", "anchored", "history" or "record").
+        Only events with seq greater than `since` are returned (a negative or
+        out-of-range `since` raises ValueError). The journal is observational, bounded, and empty after a
+        document is loaded. It is an incremental log of what FreeCAD's reference
+        update rewrote, not a replayable history: undo, redo, relinking and user
+        assignments change properties without events, so read the property for its
+        current value. A "lost" event means the mapped name is gone even if the
+        visible sub still shows the old index.
+        """
+        ...
+
+    def clearElementReferenceEvents(self) -> None:
+        """
+        Drop the element-reference events recorded for this document.
+        """
+        ...
+
+    def lastDroppedElementReferenceEventSeq(self) -> int:
+        """
+        Return the highest sequence number discarded from this document's journal by
+        its size cap (0 if none). Events were lost for a reader whose `since` is below it.
+        """
+        ...
+
+    def lastElementReferenceEventSeq(self) -> int:
+        """
+        Return the highest event sequence number handed out so far in this process
+        (0 if none), usable as the `since` argument of getElementReferenceEvents().
+        """
+        ...
+
     def load(self, path: str, /) -> None:
         """
         Load the document from the given path.

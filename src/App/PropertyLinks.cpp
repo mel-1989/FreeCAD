@@ -48,6 +48,7 @@
 #include "DocumentObserver.h"
 #include "ObjectIdentifier.h"
 #include "ElementNamingUtils.h"
+#include "ElementReferenceEvents.h"
 #include "GeoFeature.h"
 #include "ComplexGeoData.h"
 #include "GeoFeatureGroupExtension.h"
@@ -1504,6 +1505,189 @@ static bool restoreByRescueRecord(const PropertyLinkBase* prop,
     return false;
 }
 
+namespace
+{
+// Position of the sub being updated within its property; set by the callers that loop over subs.
+thread_local int g_elementRefSubIndex = -1;
+
+struct SubIndexScope
+{
+    explicit SubIndexScope(int i)
+    {
+        g_elementRefSubIndex = i;
+    }
+    ~SubIndexScope()
+    {
+        g_elementRefSubIndex = -1;
+    }
+};
+
+/**
+ * Observational recorder for PropertyLinkBase::_updateElementReference. It is constructed once
+ * the function is past its "nothing changed" early returns, reads the state the function ends
+ * with in its destructor and appends at most one ElementReferenceEvent to the journal. It never
+ * writes to anything the function owns.
+ *
+ * Suppressed, so that loading a file does not flood the journal: the `reverse` pass (element
+ * map regeneration on load or version change), and any link whose document is restoring or
+ * importing or whose owner is restoring.
+ */
+struct ElementReferenceRecorder
+{
+    const PropertyLinkBase* prop;
+    const App::DocumentObject* target;
+    const std::string& sub;
+    const ElementNamePair& shadow;
+    const bool& reverse;
+    const bool& missing;
+    const bool& restored;
+    const bool& rescuedByHistory;
+    const bool& histGeometric;
+    const bool& anchored;
+    std::string oldSub;
+    std::string oldMapped;
+    std::string oldShort;
+    int subIndex {-1};
+
+    static std::string shortName(const std::string& indexed, const std::string& fallbackSub)
+    {
+        // the indexed name (Face3) the reference designates; a mapped name carries no index
+        const char* e = Data::findElementName(indexed.c_str());
+        if (e && e[0] && !Data::isMappedElement(e)) {
+            return e;
+        }
+        e = Data::findElementName(fallbackSub.c_str());
+        if (e && e[0] && !Data::isMappedElement(e)) {
+            return e;
+        }
+        return {};
+    }
+
+    // The child links inside a PropertyXLinkSubList have no name of their own: report the list.
+    std::string propertyNameOf(const App::DocumentObject* owner, int& offset) const
+    {
+        offset = 0;
+        if (prop->getName() && prop->getName()[0]) {
+            return prop->getName();
+        }
+        std::vector<App::Property*> props;
+        owner->getPropertyList(props);
+        for (auto* p : props) {
+            if (auto* list = freecad_cast<App::PropertyXLinkSubList*>(p)) {
+                int before = 0;
+                for (const auto& child : list->getSubListValues()) {
+                    if (&child == prop) {
+                        offset = before;
+                        return list->getName() ? list->getName() : "";
+                    }
+                    before += std::max<int>(1, static_cast<int>(child.getSubValues().size()));
+                }
+            }
+        }
+        return "?unnamed";
+    }
+
+    ElementReferenceRecorder(const PropertyLinkBase* p,
+                             const App::DocumentObject* t,
+                             const std::string& s,
+                             const ElementNamePair& sh,
+                             const bool& rev,
+                             const bool& miss,
+                             const bool& rest,
+                             const bool& resc,
+                             const bool& histGeo,
+                             const bool& anch)
+        : prop(p)
+        , target(t)
+        , sub(s)
+        , shadow(sh)
+        , reverse(rev)
+        , missing(miss)
+        , restored(rest)
+        , rescuedByHistory(resc)
+        , histGeometric(histGeo)
+        , anchored(anch)
+        , oldSub(s)
+        , oldMapped(sh.newName)
+        , oldShort(shortName(sh.oldName, s))
+        , subIndex(g_elementRefSubIndex)
+    {}
+
+    ElementReferenceRecorder(const ElementReferenceRecorder&) = delete;
+    ElementReferenceRecorder& operator=(const ElementReferenceRecorder&) = delete;
+
+    ~ElementReferenceRecorder()
+    {
+        if (reverse || std::uncaught_exceptions() > 0) {
+            return;
+        }
+        try {
+            emit();
+        }
+        catch (...) {
+        }
+    }
+
+    void emit() const
+    {
+        using Event = App::ElementReferenceEvent;
+        auto* owner = freecad_cast<const App::DocumentObject*>(prop->getContainer());
+        if (!owner || !owner->getNameInDocument() || !owner->getDocument() || owner->isRestoring()) {
+            return;
+        }
+        const App::Document* doc = owner->getDocument();
+        if (doc->testStatus(App::Document::Restoring) || doc->testStatus(App::Document::Importing)) {
+            return;
+        }
+        const std::string newShort = shortName(shadow.oldName, sub);
+        Event ev;
+        if (restored) {
+            ev.kind = Event::Kind::Restored;
+            ev.basis = Event::Basis::Record;
+        }
+        else if (missing) {
+            ev.kind = Event::Kind::Lost;
+            ev.basis = Event::Basis::ElementMap;
+        }
+        else {
+            // only a change of the designated short element name counts; a mapped name that
+            // changed under the same index is the element map keeping up, not a remap
+            if (oldShort.empty() || newShort.empty() || oldShort == newShort) {
+                return;
+            }
+            // a reference coming back from the missing mark (?Edge5 -> Edge5) is a recovery
+            ev.kind = oldShort.rfind('?', 0) == 0 ? Event::Kind::Restored : Event::Kind::Remapped;
+            if (anchored) {
+                ev.basis = Event::Basis::Anchored;
+            }
+            else if (histGeometric) {
+                ev.basis = Event::Basis::Geometry;
+            }
+            else if (rescuedByHistory) {
+                ev.basis = Event::Basis::History;
+            }
+            else {
+                ev.basis = Event::Basis::ElementMap;
+            }
+        }
+        ev.document = doc->getName();
+        ev.owner = owner->getNameInDocument();
+        int offset = 0;
+        ev.property = propertyNameOf(owner, offset);
+        ev.subIndex = subIndex >= 0 ? subIndex + offset : -1;
+        ev.target = target && target->getNameInDocument() ? target->getNameInDocument() : "";
+        if (target && target->getDocument()) {
+            ev.targetDocument = target->getDocument()->getName();
+        }
+        ev.oldSub = oldSub;
+        ev.newSub = sub;
+        ev.oldMapped = oldMapped;
+        ev.newMapped = shadow.newName;
+        App::ElementReferenceJournal::record(doc, std::move(ev));
+    }
+};
+}  // namespace
+
 bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                                                App::DocumentObject* obj,
                                                std::string& sub,
@@ -1579,6 +1763,17 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
     bool missing = GeoFeature::hasMissingElement(elementName.oldName.c_str());
     bool rescuedByHistory = false;
     bool histGeometric = false;
+    bool anchoredSearchUsed = false;
+    ElementReferenceRecorder journalRecorder(this,
+                                             obj,
+                                             sub,
+                                             shadow,
+                                             reverse,
+                                             missing,
+                                             restored,
+                                             rescuedByHistory,
+                                             histGeometric,
+                                             anchoredSearchUsed);
     std::string histTarget;
     std::string histSub;
     ShadowSub histShadow;
@@ -1599,6 +1794,7 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                 }
                 disambiguateByAnchor(this, *geo, element, names);
                 filterByChildTag(*geo, element, names);
+                anchoredSearchUsed = names.size() > 0;
             }
             else {
                 names = geo->searchElementCache(oldElement, Data::SearchOption::CheckGeometry);
@@ -2850,6 +3046,7 @@ static bool updateLinkReference(App::PropertyLinkBase* prop,
     int i = 0;
     bool touched = false;
     for (auto& sub : subs) {
+        SubIndexScope subIndexScope(i);
         if (prop->_updateElementReference(feature,
                                           link,
                                           sub,
@@ -4225,6 +4422,7 @@ void PropertyLinkSubList::updateElementReference(DocumentObject* feature, bool r
     bool touched = false;
     for (auto& sub : _lSubList) {
         auto obj = _lValueList[i];
+        SubIndexScope subIndexScope(i);
         if (_updateElementReference(feature,
                                     obj,
                                     sub,

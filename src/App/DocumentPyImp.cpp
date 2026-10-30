@@ -29,6 +29,7 @@
 #include "Document.h"
 #include "DocumentObject.h"
 #include "DocumentObjectPy.h"
+#include "ElementReferenceEvents.h"
 #include "DocumentSettings.h"
 #include "DocumentSettingsPy.h"
 #include "MergeDocuments.h"
@@ -190,6 +191,72 @@ PyObject* DocumentPy::canWriteRecoverySnapshot(PyObject* args)
     }
 
     return Py::new_reference_to(Py::Boolean(getDocumentPtr()->canWriteRecoverySnapshot()));
+}
+
+PyObject* DocumentPy::getElementReferenceEvents(PyObject* args, PyObject* kwd)
+{
+    long long since = 0;
+    static const std::array<const char*, 2> kwlist {"since", nullptr};
+    if (!Base::Wrapped_ParseTupleAndKeywords(args, kwd, "|L", kwlist, &since)) {
+        if (PyErr_ExceptionMatches(PyExc_OverflowError)) {
+            PyErr_Clear();
+            PyErr_SetString(PyExc_ValueError, "since is out of range");
+        }
+        return nullptr;
+    }
+    if (since < 0) {
+        PyErr_SetString(PyExc_ValueError, "since must not be negative");
+        return nullptr;
+    }
+    PY_TRY
+    {
+        Py::List result;
+        for (const auto& e : ElementReferenceJournal::events(getDocumentPtr(), static_cast<std::uint64_t>(since))) {
+            Py::Dict d;
+            d.setItem("seq", Py::Long(static_cast<unsigned long long>(e.seq)));
+            d.setItem("document", Py::String(e.document));
+            d.setItem("owner", Py::String(e.owner));
+            d.setItem("property", Py::String(e.property));
+            d.setItem("target", Py::String(e.target));
+            d.setItem("targetDocument", Py::String(e.targetDocument));
+            d.setItem("subIndex", Py::Long(static_cast<long>(e.subIndex)));
+            d.setItem("oldSub", Py::String(e.oldSub));
+            d.setItem("newSub", Py::String(e.newSub));
+            d.setItem("oldMapped", Py::String(e.oldMapped));
+            d.setItem("newMapped", Py::String(e.newMapped));
+            d.setItem("kind", Py::String(ElementReferenceEvent::kindName(e.kind)));
+            d.setItem("basis", Py::String(ElementReferenceEvent::basisName(e.basis)));
+            result.append(d);
+        }
+        return Py::new_reference_to(result);
+    }
+    PY_CATCH
+}
+
+PyObject* DocumentPy::clearElementReferenceEvents(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    ElementReferenceJournal::clear(getDocumentPtr());
+    Py_Return;
+}
+
+PyObject* DocumentPy::lastDroppedElementReferenceEventSeq(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    return Py::new_reference_to(
+        Py::Long(static_cast<unsigned long long>(ElementReferenceJournal::lastDroppedSeq(getDocumentPtr()))));
+}
+
+PyObject* DocumentPy::lastElementReferenceEventSeq(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    return Py::new_reference_to(Py::Long(static_cast<unsigned long long>(ElementReferenceJournal::lastSeq())));
 }
 
 PyObject* DocumentPy::load(PyObject* args)
