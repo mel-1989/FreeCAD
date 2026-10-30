@@ -1052,12 +1052,12 @@ class TopoShape(ComplexGeoData):
         ...
 
     @constmethod
-    def minWallThickness(self, samples: int = 5, timeBudget: float = None) -> dict:
+    def minWallThickness(self, samples: int = 5, timeBudget: float = None, perFace: bool = False) -> dict:
         """
         Minimum wall thickness by ray casting along inward face normals.
-        minWallThickness(samples=5, timeBudget=None) -> dict
+        minWallThickness(samples=5, timeBudget=None, perFace=False) -> dict
         --
-        Rays start at a samples x samples grid of points on every face of every solid and run along the inward normal; the thickness at a point is the distance to the nearest exit hit on the same solid. The result is the minimum over all samples, an upper bound of the true minimum. Keys: min (float or None), point ([x, y, z] or None), face (1-based index into Faces or None), rays, complete (False when timeBudget seconds ran out), kernel, elapsed_s. samples is clamped to 1..1000. timeBudget: None, a negative value or NaN means unlimited, 0 stops at once. Shapes without solids give min None and rays 0.
+        Rays start at a samples x samples grid of points on every face of every solid and run along the inward normal; the thickness at a point is the distance to the nearest exit hit on the same solid. The result is the minimum over all samples, an upper bound of the true minimum. Keys: min (float or None), point ([x, y, z] or None), face (1-based index into Faces or None), rays, complete (False when timeBudget seconds ran out), kernel, elapsed_s. samples is clamped to 1..1000. timeBudget: None, a negative value or NaN means unlimited, 0 stops at once. Shapes without solids give min None and rays 0. perFace=True adds the key faces: a list with one entry per face in Faces order, the minimum thickness measured from rays starting on that face, or None when none of its rays hit (the minimum over the non-None entries equals min). It reuses the same ray loop, so it costs nothing extra.
         """
         ...
 

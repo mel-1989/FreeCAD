@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include <TopoDS_Shape.hxx>
 #include <gp_Pnt.hxx>
 #include <Mod/Part/PartGlobal.h>
@@ -38,6 +40,9 @@ struct PartExport WallThicknessResult
     int faceIndex = 0;         // 1-based index into the shape's faces (TopExp::MapShapes order)
     int rays = 0;              // number of rays cast
     bool complete = true;      // false when the time budget stopped sampling early
+    // Per face (index = faceIndex - 1, TopExp::MapShapes order): the minimum thickness measured
+    // from that face, or a negative value when no ray from it hit anything.
+    std::vector<double> faceMinimum;
 };
 
 /**

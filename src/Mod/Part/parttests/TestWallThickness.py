@@ -275,3 +275,46 @@ class TestWallThickness(unittest.TestCase):
         # huge sample counts are clamped rather than exhausting memory
         r = self.measure(Part.makeBox(1, 1, 1), samples=2**30, timeBudget=1.0)
         self.assertIn("rays", r)
+
+    def test_per_face_stepped_block(self):
+        # a 30 x 30 x 20 block fused with a 30 x 30 x 2 plate: thin plate faces, thick block faces
+        shape = Part.makeBox(30, 30, 20).fuse(Part.makeBox(30, 30, 2, V(30, 0, 0))).removeSplitter()
+        r = self.measure(shape, perFace=True)
+        faces = r["faces"]
+        self.assertEqual(len(faces), len(shape.Faces))
+        vals = [f for f in faces if f is not None]
+        self.assertTrue(vals)
+        self.assertAlmostEqual(min(vals), r["min"], delta=1e-12)
+        self.assertAlmostEqual(r["min"], 2.0, delta=TOL)
+        self.assertEqual(faces[r["face"] - 1], r["min"])
+        thin = [faces[i] for i, f in enumerate(shape.Faces)
+                if abs(f.normalAt(0, 0).z) > 0.9 and f.CenterOfMass.x > 30 and f.CenterOfMass.x < 60]
+        thick = [faces[i] for i, f in enumerate(shape.Faces)
+                 if abs(f.normalAt(0, 0).z) > 0.9 and f.CenterOfMass.x < 30]
+        self.assertTrue(thin and thick)
+        for t in thin:
+            self.assertAlmostEqual(t, 2.0, delta=TOL)
+        for t in thick:
+            self.assertAlmostEqual(t, 20.0, delta=TOL)
+        self.assertGreater(len(set(round(v, 6) for v in vals)), 1)
+
+    def test_per_face_is_opt_in(self):
+        box = Part.makeBox(10, 20, 30)
+        self.assertNotIn("faces", box.minWallThickness())
+        self.assertNotIn("faces", box.minWallThickness(perFace=False))
+        r = box.minWallThickness(perFace=True)
+        self.assertEqual(len(r["faces"]), 6)
+        self.assertEqual(r["rays"], box.minWallThickness()["rays"])  # same ray loop
+
+    def test_per_face_none_without_hits_and_no_solids(self):
+        r = Part.makeBox(1, 1, 1).Faces[0].minWallThickness(perFace=True)
+        self.assertIsNone(r["min"])
+        self.assertEqual(r["faces"], [None])
+        r = Part.makeLine(V(0, 0, 0), V(1, 0, 0)).minWallThickness(perFace=True)
+        self.assertEqual(r["faces"], [])
+
+    def test_per_face_cavity_solid(self):
+        shape = solid_with_cavity()
+        r = shape.minWallThickness(perFace=True)
+        self.assertEqual(len(r["faces"]), len(shape.Faces))
+        self.assertTrue(all(f is not None and abs(f - 2.0) < TOL for f in r["faces"]), r["faces"])

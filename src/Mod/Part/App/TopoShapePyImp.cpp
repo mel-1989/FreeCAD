@@ -2103,8 +2103,9 @@ PyObject* TopoShapePy::minWallThickness(PyObject* args, PyObject* keywds) const
 {
     int samples = 5;
     PyObject* pyBudget = Py_None;
-    static const std::array<const char*, 3> kwd_list {"samples", "timeBudget", nullptr};
-    if (!Base::Wrapped_ParseTupleAndKeywords(args, keywds, "|iO", kwd_list, &samples, &pyBudget)) {
+    PyObject* pyPerFace = Py_False;
+    static const std::array<const char*, 4> kwd_list {"samples", "timeBudget", "perFace", nullptr};
+    if (!Base::Wrapped_ParseTupleAndKeywords(args, keywds, "|iOO", kwd_list, &samples, &pyBudget, &pyPerFace)) {
         return nullptr;
     }
     double budget = -1.0;
@@ -2142,6 +2143,13 @@ PyObject* TopoShapePy::minWallThickness(PyObject* args, PyObject* keywds) const
         d.setItem("complete", Py::Boolean(r.complete));
         d.setItem("kernel", Py::String("part-cpp/1"));
         d.setItem("elapsed_s", Py::Float(elapsed));
+        if (PyObject_IsTrue(pyPerFace) > 0) {
+            Py::List faces;
+            for (double v : r.faceMinimum) {
+                faces.append(v < 0.0 ? Py::None() : Py::Object(Py::Float(v)));
+            }
+            d.setItem("faces", faces);
+        }
         return Py::new_reference_to(d);
     }
     catch (Standard_Failure& e) {

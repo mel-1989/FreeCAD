@@ -30,7 +30,7 @@ class TestSdkConformance(unittest.TestCase):
             os.makedirs(parts)
             mc.save_fixtures(["box", "tube"], parts)
             cfg = {"freecadcmd": mc.freecadcmd(), "fixture": fixture, "parts": parts, "out": d,
-                   "env": {"PYTHONPATH": mc.AGENTCORE_SRC, "QT_QPA_PLATFORM": "offscreen",
+                   "env": {"PYTHONPATH": mc.AGENTCORE_SRC, "QT_QPA_PLATFORM": "offscreen", "CADFORK_RENDER": "0",
                            "CADFORK_MCP_PYTHONPATH": mc.MCP_FIX,  # real F3: AgentTurn from AgentCore.diff
                            "HOME": os.environ.get("HOME", ""), "PATH": os.environ.get("PATH", "")}}
             cfgp = os.path.join(d, "cfg.json")

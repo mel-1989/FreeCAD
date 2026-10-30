@@ -128,6 +128,7 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
 
     TopTools_IndexedMapOfShape allFaces;
     TopExp::MapShapes(shape, TopAbs_FACE, allFaces);
+    best.faceMinimum.assign(static_cast<size_t>(allFaces.Extent()), -1.0);
 
     for (TopExp_Explorer se(shape, TopAbs_SOLID); se.More() && best.complete; se.Next()) {
         const TopoDS_Shape& solid = se.Current();
@@ -223,6 +224,12 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
                         continue;
                     }
                     double t = nearest - lift;
+                    if (gi >= 1) {
+                        double& fm = best.faceMinimum[static_cast<size_t>(gi - 1)];
+                        if (fm < 0.0 || t < fm) {
+                            fm = t;
+                        }
+                    }
                     if (!best.found || t < best.minimum) {
                         best.found = true;
                         best.minimum = t;
