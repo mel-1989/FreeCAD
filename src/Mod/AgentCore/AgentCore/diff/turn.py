@@ -8,7 +8,11 @@ Usage::
     cs = turn.change_set()      # what changed, plus F2 verify before/after
     turn.reject()               # or turn.accept(token), token from ApplyAuthority
 
-How the transaction is held (headless, Python only, no C++ guard yet):
+How the transaction is held. With the C++ guard (``Document.beginAgentTurn``, used
+whenever the build has it) the turn is one guarded transaction and nested
+transactions are savepoints inside it, see "The C++ guard" below. Without it
+(older builds, or ``AgentTurn(..., use_guard=False)``) the Python fallback
+described next detects the splits after the fact:
 
 - On entry the document is *settled* (one ``recompute()`` outside any
   transaction, so the before-state is a fixed point), F2's checks run, the
@@ -35,6 +39,18 @@ How the transaction is held (headless, Python only, no C++ guard yet):
 - On exit the document is settled inside the turn (``recompute()``), F2 runs
   again, the last segment is committed and the observer removed. The turn
   is then *proposed*: nothing more is recorded into it.
+
+**The C++ guard.** ``doc.beginAgentTurn(name)`` books the turn transaction and
+``doc.endAgentTurn(commit)`` ends it. While it is active, every nested open
+(``doc.openTransaction``, ``App.setActiveTransaction``, ``AutoTransaction``,
+GUI ``doCommand``) is a savepoint inside the one transaction: a nested commit
+keeps its changes, a nested abort rolls back only the changes since its own
+open, an empty close is absorbed, and ``undo``/``redo``/``clearUndos`` are
+refused and reported as tampering. The turn then always has one segment (one
+undo entry), ``accept`` never flattens a single-document turn, and the
+document observer is not installed. The change set's ``transactions`` keys are
+filled from the guard's report. ``endAgentTurn`` waits for a recompute of the
+document on the async worker, so a turn never commits halfway through one.
 
 ``reject`` restores a dump equal to the pre-turn dump (see ``compare`` for
 the transient caches excluded; ``result["exact"]`` is the no-tolerance,
@@ -261,8 +277,10 @@ class AgentTurn:
     """
 
     def __init__(self, doc, label="agent turn", store=None, checks=None, verify=True, geometry_diff=True,
-                 tol=geometry.DEFAULT_TOL, docs=None):
+                 tol=geometry.DEFAULT_TOL, docs=None, use_guard=True):
         self.doc = doc
+        self.use_guard = bool(use_guard)
+        self._guarded = False
         self.label = label
         self.store = store
         self.checks = checks
@@ -280,7 +298,7 @@ class AgentTurn:
         self._cs = None
         self.result = None
         self.snapshot = None
-        self.tampered = []       # history tampering seen during the turn (undo, redo, clearUndos)
+        self._tampered = []      # history tampering seen during the turn (undo, redo, clearUndos)
         self._repairing = False
 
     # ------------------------------------------------------------ records
@@ -307,11 +325,24 @@ class AgentTurn:
     segments = property(lambda self: self._main()["segments"])
     _events = property(lambda self: self._main()["events"])
 
+    @property
+    def tampered(self):
+        """History tampering seen so far. With the C++ guard it is read live from the
+        documents, so a caller can check it while the turn is still open."""
+        if self._guarded and self.status == "open" and not self._closing:
+            for rec in self._recs:
+                try:
+                    for why in rec["doc"].agentTurnStatus()["tampering"]:
+                        self._tamper(rec, why)
+                except Exception:
+                    pass
+        return self._tampered
+
     def _tamper(self, rec, why):
         rec["tampered"] = True
         msg = f"{rec['name']}: {why}"
-        if msg not in self.tampered:
-            self.tampered.append(msg)
+        if msg not in self._tampered:
+            self._tampered.append(msg)
 
     def _check_history(self, rec):
         """clearUndos (and a lost pre-turn entry) fire no observer slot; they
@@ -400,10 +431,26 @@ class AgentTurn:
         self.snapshot = self._main()["snapshot"]
         self.status = "open"
         self._closing = False
-        self._obs = _Observer(self)
-        App.addDocumentObserver(self._obs)
-        for rec in reversed(self._recs):  # main document last, so it ends up active
-            self._book(rec)
+        self._guarded = self.use_guard and all(hasattr(r["doc"], "beginAgentTurn") for r in self._recs)
+        if self._guarded:
+            begun = []
+            try:
+                for rec in reversed(self._recs):  # main document last
+                    rec["guard_tid"] = rec["doc"].beginAgentTurn(self.undo_name)
+                    begun.append(rec)
+            except Exception:
+                for rec in begun:
+                    try:
+                        rec["doc"].endAgentTurn(False)
+                    except Exception:
+                        pass
+                self.status = "new"
+                raise
+        else:
+            self._obs = _Observer(self)
+            App.addDocumentObserver(self._obs)
+            for rec in reversed(self._recs):  # main document last, so it ends up active
+                self._book(rec)
         App.setActiveDocument(self.doc.Name)
         return self
 
@@ -435,8 +482,44 @@ class AgentTurn:
         self._cs = self._build_change_set()
         return False
 
+    def _end_guard(self, commit=True):
+        """End the C++ guarded turn of every document and turn its report into the
+        records the rest of this module reads (one commit event when the turn
+        recorded something, the nested opens and aborts, tampering)."""
+        first = None
+        for rec in self._recs:
+            d = rec["doc"]
+            if not d.isAgentTurnActive():
+                continue
+            rep = d.endAgentTurn(commit)
+            if rep["refused"]:
+                first = first or TurnError(f"guarded turn of {rec['name']} could not end: {rep['reason']}")
+                continue
+            rec["guard_report"] = rep
+            ev = [("open", n) for n in rep["nested_names"]]
+            ev += [("abort", "")] * rep["nested_aborts"]
+            if rep["recorded"]:
+                ev.append(("commit", self.undo_name))
+            rec["events"] = ev
+            for why in rep["tampering"]:
+                self._tamper(rec, why)
+        if first is not None:
+            for rec in self._recs:  # leave nothing open
+                try:
+                    if rec["doc"].isAgentTurnActive():
+                        rec["doc"].endAgentTurn(False)
+                except Exception:
+                    pass
+            raise first
+
     def _close_recording(self):
         self._closing = True
+        if self._guarded:
+            try:
+                self._end_guard(True)
+            finally:
+                self._release_stale()
+            return
         try:
             for rec in self._recs:
                 d = rec["doc"]

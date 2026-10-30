@@ -153,6 +153,9 @@ public:
     /// Wait until the async worker is not recomputing @p doc (false on timeout). Callers that hold the Python GIL release it around this.
     static bool waitForWorker(Document& doc, std::chrono::milliseconds wait);
 
+    /// The turn's counters and tampering so far, without ending it (default report when no turn is active).
+    static AgentTurnReport peek(Document& doc);
+
     /// True while a guarded turn is active on @p doc (also during end()).
     static bool isActive(const Document& doc);
 

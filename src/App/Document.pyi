@@ -281,6 +281,14 @@ class Document(PropertyContainer):
         """
         ...
 
+    def agentTurnStatus(self) -> dict[str, object]:
+        """
+        The active agent turn's counters and tampering so far, without ending
+        it. Same keys as endAgentTurn's result; all zero or empty when no turn
+        is active.
+        """
+        ...
+
     def isAgentTurnActive(self) -> bool:
         """
         True while a guarded agent turn is active on this document.

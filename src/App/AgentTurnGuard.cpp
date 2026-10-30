@@ -215,6 +215,16 @@ bool AgentTurnGuard::waitForWorker(Document& doc, std::chrono::milliseconds wait
     return AutoTransaction::waitForRecompute(doc.getName(), wait);
 }
 
+AgentTurnReport AgentTurnGuard::peek(Document& doc)
+{
+    auto st = Transaction::accessDocument(doc).d->agent;
+    if (!st) {
+        return {};
+    }
+    std::lock_guard<std::recursive_mutex> lock(st->mutex);
+    return makeReport(*st);
+}
+
 bool AgentTurnGuard::isActive(const Document& doc)
 {
     return Transaction::accessDocument(const_cast<Document&>(doc)).d->agent != nullptr;

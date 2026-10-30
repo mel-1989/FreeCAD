@@ -697,6 +697,43 @@ PyObject* DocumentPy::openTransaction(PyObject* args)
     Py_Return;
 }
 
+namespace
+{
+PyObject* reportToDict(const AgentTurnReport& r)
+{
+    Py::Dict d;
+    auto strings = [](const std::vector<std::string>& v) {
+        Py::List list;
+        for (const auto& item : v) {
+            list.append(Py::String(item));
+        }
+        return list;
+    };
+    d.setItem("tid", Py::Long(r.tid));
+    d.setItem("name", Py::String(r.name));
+    d.setItem("refused", Py::Boolean(r.refused));
+    d.setItem("reason", Py::String(r.reason));
+    d.setItem("committed", Py::Boolean(r.committed));
+    d.setItem("aborted", Py::Boolean(r.aborted));
+    d.setItem("recorded", Py::Boolean(r.recorded));
+    d.setItem("undo_entries", Py::Long(r.undoEntries));
+    d.setItem("segments", Py::Long(r.segments));
+    d.setItem("nested_opens", Py::Long(r.nestedOpens));
+    d.setItem("nested_commits", Py::Long(r.nestedCommits));
+    d.setItem("nested_aborts", Py::Long(r.nestedAborts));
+    d.setItem("stray_closes", Py::Long(r.strayCloses));
+    d.setItem("empty_closes", Py::Long(r.emptyCloses));
+    d.setItem("locked_opens", Py::Long(r.lockedOpens));
+    d.setItem("undo_refused", Py::Long(r.undoRefused));
+    d.setItem("redo_refused", Py::Long(r.redoRefused));
+    d.setItem("clear_undos_refused", Py::Long(r.clearUndosRefused));
+    d.setItem("nested_names", strings(r.nestedNames));
+    d.setItem("tampering", strings(r.tampering));
+    d.setItem("tampered", Py::Boolean(!r.tampering.empty()));
+    return Py::new_reference_to(d);
+}
+}  // namespace
+
 PyObject* DocumentPy::beginAgentTurn(PyObject* args)
 {
     const char* name = "Agent turn";
@@ -734,36 +771,15 @@ PyObject* DocumentPy::endAgentTurn(PyObject* args)
     }
     // The wait above is repeated inside end(), which then refuses if the worker is still busy.
     const AgentTurnReport r = AgentTurnGuard::end(*doc, Base::asBoolean(commit), std::chrono::milliseconds(0));
-    Py::Dict d;
-    auto strings = [](const std::vector<std::string>& v) {
-        Py::List list;
-        for (const auto& item : v) {
-            list.append(Py::String(item));
-        }
-        return list;
-    };
-    d.setItem("tid", Py::Long(r.tid));
-    d.setItem("name", Py::String(r.name));
-    d.setItem("refused", Py::Boolean(r.refused));
-    d.setItem("reason", Py::String(r.reason));
-    d.setItem("committed", Py::Boolean(r.committed));
-    d.setItem("aborted", Py::Boolean(r.aborted));
-    d.setItem("recorded", Py::Boolean(r.recorded));
-    d.setItem("undo_entries", Py::Long(r.undoEntries));
-    d.setItem("segments", Py::Long(r.segments));
-    d.setItem("nested_opens", Py::Long(r.nestedOpens));
-    d.setItem("nested_commits", Py::Long(r.nestedCommits));
-    d.setItem("nested_aborts", Py::Long(r.nestedAborts));
-    d.setItem("stray_closes", Py::Long(r.strayCloses));
-    d.setItem("empty_closes", Py::Long(r.emptyCloses));
-    d.setItem("locked_opens", Py::Long(r.lockedOpens));
-    d.setItem("undo_refused", Py::Long(r.undoRefused));
-    d.setItem("redo_refused", Py::Long(r.redoRefused));
-    d.setItem("clear_undos_refused", Py::Long(r.clearUndosRefused));
-    d.setItem("nested_names", strings(r.nestedNames));
-    d.setItem("tampering", strings(r.tampering));
-    d.setItem("tampered", Py::Boolean(!r.tampering.empty()));
-    return Py::new_reference_to(d);
+    return reportToDict(r);
+}
+
+PyObject* DocumentPy::agentTurnStatus(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    return reportToDict(AgentTurnGuard::peek(*getDocumentPtr()));
 }
 
 PyObject* DocumentPy::isAgentTurnActive(PyObject* args)
@@ -802,7 +818,8 @@ PyObject* DocumentPy::undo(PyObject* args)
     if (!PyArg_ParseTuple(args, "")) {
         return nullptr;
     }
-    if (getDocumentPtr()->getAvailableUndos()) {
+    // In a guarded agent turn the call always reaches the document, which refuses it and records the tampering.
+    if (getDocumentPtr()->getAvailableUndos() || AgentTurnGuard::isActive(*getDocumentPtr())) {
         getDocumentPtr()->undo();
     }
     Py_Return;
@@ -813,7 +830,7 @@ PyObject* DocumentPy::redo(PyObject* args)
     if (!PyArg_ParseTuple(args, "")) {
         return nullptr;
     }
-    if (getDocumentPtr()->getAvailableRedos()) {
+    if (getDocumentPtr()->getAvailableRedos() || AgentTurnGuard::isActive(*getDocumentPtr())) {
         getDocumentPtr()->redo();
     }
     Py_Return;
