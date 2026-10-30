@@ -32,6 +32,7 @@
 
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
+#include <BRep_Tool.hxx>
 #include <BRepTools.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
 #include <Bnd_Box.hxx>
@@ -116,9 +117,11 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
     box.Get(x0, y0, z0, x1, y1, z1);
     const double diag = std::max(gp_Pnt(x0, y0, z0).Distance(gp_Pnt(x1, y1, z1)), 1.0);
     const double reach = diag * 1.01;
-    // Hits closer than hitTol to the ray start (the face itself, at w == lift) are skipped;
-    // thinner walls than that are still seen, unlike the Python reference's start-match eps.
-    const double hitTol = 1e-7 * std::max(1.0, diag);
+    // The start face is skipped by identity, never by distance: the ray starts at w == lift
+    // above the sample and meets the start face there again. Only that one hit (same face,
+    // at w == lift within the intersector's accuracy) is dropped; a wall of any thickness
+    // behind it is a different face (or, on a curved face, a hit far from w == lift).
+    const double startTol = 1e-9 * std::max(1.0, diag);
     const double lift = 1e-3 * std::max(1.0, diag);
 
     TopTools_IndexedMapOfShape allFaces;
@@ -171,10 +174,23 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
                     gp_Lin ray(a, gp_Dir(-n.X(), -n.Y(), -n.Z()));
                     inter.Perform(ray, 0.0, lift + reach);
                     ++best.rays;
+                    // The start hit is the same-face hit nearest to w == lift, if it lies
+                    // within the face tolerance of it. Exactly one hit is excluded.
+                    const double faceTol = std::max(BRep_Tool::Tolerance(face), Precision::Confusion());
+                    const double sameTol = std::max(10.0 * faceTol, startTol);
+                    int startHit = 0;
+                    double startDist = sameTol;
+                    for (int k = 1; k <= inter.NbPnt(); ++k) {
+                        double d = std::abs(inter.WParameter(k) - lift);
+                        if (d <= startDist && inter.Face(k).IsSame(face)) {
+                            startDist = d;
+                            startHit = k;
+                        }
+                    }
                     double nearest = -1.0;
                     for (int k = 1; k <= inter.NbPnt(); ++k) {
                         double w = inter.WParameter(k);
-                        if (w > lift + hitTol && (nearest < 0.0 || w < nearest)) {
+                        if (k != startHit && w > lift && (nearest < 0.0 || w < nearest)) {
                             nearest = w;
                         }
                     }

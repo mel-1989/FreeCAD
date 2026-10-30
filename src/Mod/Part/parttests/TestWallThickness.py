@@ -110,6 +110,33 @@ class TestWallThickness(unittest.TestCase):
         self.check(Part.makeBox(1000, 1000, 0.01), 0.01)
         self.check(Part.makeBox(1000, 1000, 0.1), 0.1)
 
+    def test_walls_thinner_than_1e7_of_diagonal(self):
+        # The start face is skipped by identity, not by distance, so these walls are seen.
+        self.check(Part.makeBox(1000, 1000, 0.05), 0.05)
+        self.check(Part.makeBox(1e6, 1e6, 0.05), 0.05)
+        self.check(Part.makeBox(1e6, 1e6, 1e-3), 1e-3)
+        self.check(Part.makeBox(1000, 1000, 1e-5), 1e-5)
+
+    def test_micron_scale_wall_on_small_box(self):
+        b = Part.makeBox(10, 10, 1e-6)
+        self.assertTrue(b.isValid())
+        r = self.measure(b)
+        self.assertIsNotNone(r["min"])
+        self.assertAlmostEqual(r["min"], 1e-6, delta=1e-9)
+
+    def test_thick_wall_on_huge_part(self):
+        # A 10 mm wall on a 1 km part must read 10, not the part size.
+        self.check(Part.makeBox(1000000, 1000000, 10), 10.0)
+        tube = Part.makeCylinder(500000, 1000000).cut(Part.makeCylinder(499990, 1000000))
+        self.check(tube, 10.0, samples=7)
+
+    def test_curved_far_side_of_same_face_is_a_wall(self):
+        # The opposite side of the same face (inner cylinder, sphere, torus) is a real wall.
+        self.check(Part.makeCylinder(10, 30).cut(Part.makeCylinder(8.5, 30)), 1.5)
+        self.check(Part.makeSphere(10).cut(Part.makeSphere(8)), 2.0)
+        self.check(Part.makeTorus(20, 5).cut(Part.makeTorus(20, 3.5)), 1.5)
+        self.check(Part.makeSphere(10), 20.0)
+
     def test_time_budget_semantics(self):
         s = solid_with_cavity()
         for unlimited in (None, -1.0, float("nan")):
