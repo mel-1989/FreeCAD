@@ -228,6 +228,10 @@ class TestRenderTool(unittest.TestCase):
 
 
 def _gui_here():
+    # Opt-in first: without it nothing probes for or launches the GUI (hard rule 1: never a window on the laptop).
+    # The workshop's GUI gate (harness/gui/suites.py) sets it on the mini; CADFORK_GUI_RUNNER only locates the runner.
+    if os.environ.get("AGENTCORE_GUI_TESTS") != "1":
+        return False
     try:
         host.availability(mc.freecadcmd())
         return True
@@ -235,7 +239,7 @@ def _gui_here():
         return False
 
 
-@unittest.skipUnless(_gui_here(), "no GUI build or display for the real render")
+@unittest.skipUnless(_gui_here(), "opens the FreeCAD GUI: set AGENTCORE_GUI_TESTS=1 (mini only, never the laptop) with a GUI build")
 class TestRealGuiRender(unittest.TestCase):
     """One real launch of the GUI (about 20 s): a stepped block rendered as a thickness map."""
 
