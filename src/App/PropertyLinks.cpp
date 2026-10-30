@@ -1631,6 +1631,9 @@ struct ElementReferenceRecorder
     void emit() const
     {
         using Event = App::ElementReferenceEvent;
+        if (App::ElementReferenceJournal::suppressed()) {
+            return;  // an undo, redo or rollback reports its net change itself
+        }
         auto* owner = freecad_cast<const App::DocumentObject*>(prop->getContainer());
         if (!owner || !owner->getNameInDocument() || !owner->getDocument() || owner->isRestoring()) {
             return;

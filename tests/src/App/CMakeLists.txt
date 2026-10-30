@@ -16,6 +16,7 @@ add_executable(App_tests_run
         ExpressionParser.cpp
         QuantityInput.cpp
         ElementMap.cpp
+        ElementReferenceEvents.cpp
         ElementNamingUtils.cpp
         IndexedName.cpp
         License.cpp

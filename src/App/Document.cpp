@@ -71,6 +71,7 @@
 #include <Base/UnitsApi.h>
 
 #include "Document.h"
+#include "ElementReferenceEvents.h"
 #include "private/DocumentP.h"
 #include "Application.h"
 #include "AgentTurnGuard.h"
@@ -195,6 +196,7 @@ bool Document::undo(const int id)
     if (mUndoTransactions.empty()) {
         return false;
     }
+    ElementReferenceHistoryScope history(*this, ElementReferenceEvent::Basis::Undo);
     // redo
     d->activeUndoTransaction = new Transaction(mUndoTransactions.back()->getID());
     d->activeUndoTransaction->Name = mUndoTransactions.back()->Name;
@@ -221,6 +223,8 @@ bool Document::undo(const int id)
             obj->setStatus(ObjectStatus::PendingTransactionUpdate, false);
         }
     }
+
+    history.finish();
 
     signalUndo(*this);  // now signal the undo
     signalBecameStable(*this);
@@ -249,6 +253,8 @@ bool Document::redo(const int id)
 
     assert(mRedoTransactions.size() != 0);
 
+    ElementReferenceHistoryScope history(*this, ElementReferenceEvent::Basis::Redo);
+
     // undo
     d->activeUndoTransaction = new Transaction(mRedoTransactions.back()->getID());
     d->activeUndoTransaction->Name = mRedoTransactions.back()->Name;
@@ -274,6 +280,8 @@ bool Document::redo(const int id)
             obj->setStatus(ObjectStatus::PendingTransactionUpdate, false);
         }
     }
+
+    history.finish();
 
     signalRedo(*this);
     signalBecameStable(*this);
@@ -719,8 +727,10 @@ void Document::_abortTransaction()
             {
                 Base::FlagToggler<bool> flag(d->rollback);
                 Application::TransactionSignaller signaller(true, true);
+                ElementReferenceHistoryScope history(*this, ElementReferenceEvent::Basis::Rollback);
                 segment->apply(*this, false);
                 delete segment;
+                history.finish();
                 signalAbortTransaction(*this);
             }
             signalBecameStable(*this);
@@ -736,7 +746,9 @@ void Document::_abortTransaction()
             Application::TransactionSignaller signaller(true, true);
 
             // applying the so far made changes
+            ElementReferenceHistoryScope history(*this, ElementReferenceEvent::Basis::Rollback);
             d->activeUndoTransaction->apply(*this, false);
+            history.finish();
 
             // destroy the undo
             mUndoMap.erase(d->activeUndoTransaction->getID());

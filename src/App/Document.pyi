@@ -119,13 +119,17 @@ class Document(PropertyContainer):
         Return the journal of element-reference updates of this document, oldest first.
 
         Each event is a dict with the keys seq, document, owner, property, target,
-        targetDocument, subIndex (position of the sub in the property, -1 if unknown), oldSub, newSub, oldMapped, newMapped, kind ("remapped", "lost" or "restored")
-        and basis ("element_map", "geometry", "anchored", "history" or "record").
+        targetDocument, oldTarget (only set on history events), subIndex (position of the sub in the property, -1 if unknown), oldSub, newSub, oldMapped, newMapped, kind ("remapped", "lost", "restored", "added" or "removed")
+        and basis ("element_map", "geometry", "anchored", "history", "record", "undo", "redo" or "rollback").
+        Undo, redo, abort and agent-turn savepoint rollback record events with basis "undo", "redo" or
+        "rollback": one per flattened reference whose target, sub or mapped name differs before and after the
+        step, compared position by position. "added" (empty oldSub) and "removed" (empty newSub) cover lists that
+        grow or shrink and objects that the step creates or deletes.
         Only events with seq greater than `since` are returned (a negative or
         out-of-range `since` raises ValueError). The journal is observational, bounded, and empty after a
         document is loaded. It is an incremental log of what FreeCAD's reference
-        update rewrote, not a replayable history: undo, redo, relinking and user
-        assignments change properties without events, so read the property for its
+        update rewrote and of what undo, redo and rollback changed; relinking and user
+        assignments still change properties without events, so read the property for its
         current value. A "lost" event means the mapped name is gone even if the
         visible sub still shows the old index.
         """
