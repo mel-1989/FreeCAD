@@ -50,6 +50,10 @@
 #include "ElementNamingUtils.h"
 #include "GeoFeature.h"
 #include "ComplexGeoData.h"
+#include "GeoFeatureGroupExtension.h"
+#include "Link.h"
+#include "DocumentObjectGroup.h"
+#include "Part.h"
 
 
 FC_LOG_LEVEL_INIT("PropertyLinks", true, true)
@@ -973,6 +977,217 @@ static bool hasAnchor(const PropertyLinkBase* link, const GeoFeature& geo, const
     return it != store.end() && it->second.count(anchorKey(geo, storedName));
 }
 
+static bool parseStoredElement(const char* element, std::string& mapped, std::string& type);
+
+static void parseOwnerSegment(const Data::MappedName& name, long& tag, int& pos, int& windowStart)
+{
+    // pos: where the trailing ";:H<tag>" starts; windowStart: where the postfix that preceded it
+    // (the op codes the tag segment encodes, `:n` in ";:H<tag>:n,E") begins.
+    tag = 0;
+    pos = name.findTagInElementName(&tag, &windowStart, nullptr, nullptr, true, false);
+    tag = std::labs(tag);
+}
+
+/// Whether the name of an element of a child carries this object's tag after a `:n` window that
+/// holds the child's chain, and the object has no element of its own to add: the walk of
+/// ownerTagOfElement looks through it to the child. The rule, read from FreeCAD's element maps
+/// (Part::Compound::execute, Part::Feature::_getTopoShape, Link.cpp) and its extensions
+/// (GroupExtension, LinkBaseExtension): owner is the exception, transparent is the default.
+/// The reason is one-sided. filterByChildTag runs after disambiguateByAnchor and only drops
+/// candidates, so classifying an object as transparent can only remove reports and can never
+/// create a retarget that fork/main would not also make; classifying a grouping type as an owner
+/// is what loses references that fork/main keeps. So the owners are named, and everything else
+/// (every App::GroupExtension holder whatever its base class: BIM Site, Project, BuildingPart,
+/// Part::FeaturePython with GroupExtensionPython, Python groups, App::Part, Assembly objects,
+/// App::DocumentObjectGroup; App::LinkGroup; a plain App::Link) is transparent. The owners are
+/// - Part::BodyBase and subclasses (PartDesign::Body): the window carries the tag of the tip;
+/// - PartDesign::Boolean: it holds a GeoFeatureGroupExtension but computes its own shape;
+/// - any Part::Feature without an App::GroupExtension (CompoundFilter, BooleanFragments, Refine,
+///   Mirror, a Part::FeaturePython compound, a plain solid): it computes its own shape (D6 run
+///   011: shape-computing wrappers are opaque);
+/// - an object with a link array (ElementCount > 0): every copy is a different element (D6 run
+///   008).
+/// Part::Compound and subclasses stay transparent: their child maps are their Links.
+static bool isTransparentContainer(const App::DocumentObject* obj)
+{
+    static const Base::Type compoundType = Base::Type::fromName("Part::Compound");
+    static const Base::Type featureType = Base::Type::fromName("Part::Feature");
+    const Base::Type bodyType = Base::Type::fromName("Part::BodyBase");
+    const Base::Type booleanType = Base::Type::fromName("PartDesign::Boolean");
+    if (const auto* count = dynamic_cast<const App::PropertyInteger*>(
+            obj->getPropertyByName("ElementCount"))) {
+        if (count->getValue() > 0) {
+            return false;
+        }
+    }
+    if (!compoundType.isBad() && obj->isDerivedFrom(compoundType)) {
+        return true;
+    }
+    if ((!bodyType.isBad() && obj->isDerivedFrom(bodyType))
+        || (!booleanType.isBad() && obj->isDerivedFrom(booleanType))) {
+        return false;
+    }
+    if (obj->hasExtension(App::GroupExtension::getExtensionClassTypeId())) {
+        return true;
+    }
+    return !(!featureType.isBad() && obj->isDerivedFrom(featureType));
+}
+
+/// Whether the compound has anything in another document among the objects it depends on,
+/// followed through Link chains, subname targets and XLinks. Tags are object IDs of one
+/// document, so the names inside the window of such a link carry the IDs of the other document,
+/// and looking them up in this one reads unrelated objects. fork/main's behaviour (no child-tag
+/// filter) is kept for the whole compound then.
+static bool dependsOnOtherDocument(const GeoFeature& geo,
+                                   std::set<const App::DocumentObject*>& seen)
+{
+    // The same walk as DocumentObject::getOutListRecursive (getOutList follows XLinks and
+    // subname targets), but with a visited set instead of an exception: that function throws on
+    // a cyclic dependency, which a document can be in for a moment while objects are regrouped,
+    // and the throw would skip the rest of the element-reference resolution.
+    const App::Document* doc = geo.getDocument();
+    // On return without a cross-document dependency, `seen` is the compound and its out-list
+    // closure: the only objects whose IDs can appear as tags in the compound's element names.
+    seen.insert(&geo);
+    std::vector<const App::DocumentObject*> todo {&geo};
+    while (!todo.empty()) {
+        const auto* cur = todo.back();
+        todo.pop_back();
+        for (const auto* obj : cur->getOutList()) {
+            if (!obj || !seen.insert(obj).second) {
+                continue;
+            }
+            if (obj->getDocument() != doc) {
+                return true;
+            }
+            todo.push_back(obj);
+        }
+    }
+    return false;
+}
+
+/// The object that owns an element: the tag the element's name ends with, looked through any
+/// number of transparent containers (isTransparentContainer). A container's map encodes each
+/// element of a child with the child's tag, after the postfix of the grandchild map that was
+/// expanded into it, so the name of an element of X inside C1 inside C2 ends
+/// ";:H<X>,E;:H<C1>:8,E;:H<C2>:12,E": the `:n` of a tag is the length of the postfix in front of
+/// it, and for a container that is the chain of the containers and the owner inside it. Only tags
+/// in that window are read; the tags before it are the element's history (an X made from Q has
+/// Q's tag there) and never count. A tag whose object exists and is not a transparent container
+/// is the owner. Returns 0 (owner unknown) when the name carries no tag, when the walk meets a
+/// tag whose object is gone (a container deleted since the name was stored), or when it ends on a
+/// container whose window cannot be read: a child with fewer than five elements of the type is
+/// named element by element into the container, ";:H<child>,E;:H<C1>,E" with no `:n`, and the
+/// text in front of that tag is not guaranteed to end in the child's own tag (the encoder does
+/// not force it), so it is not read.
+static long ownerTagOfElement(const App::Document* doc,
+                              const std::set<const App::DocumentObject*>* closure,
+                              const Data::MappedName& name)
+{
+    Data::MappedName cur(name);
+    for (int depth = 0; depth < 64; ++depth) {
+        long tag = 0;
+        int pos = -1;
+        int windowStart = 0;
+        parseOwnerSegment(cur, tag, pos, windowStart);
+        if (pos < 0 || tag == 0) {
+            return 0;
+        }
+        const auto* obj = doc ? doc->getObjectByID(tag) : nullptr;
+        if (!obj) {
+            return 0;
+        }
+        // With a closure (the current shape's names), a tag whose object is not the compound or
+        // in its out-list closure is no containment of this compound: the names of a shape copied
+        // from elsewhere without a link carry the IDs of another document. Owner unknown. A stored
+        // name has no closure: its owner or containers may have left the compound since (a dropped
+        // child or a removed wrapper still exists in the document).
+        if (closure && closure->find(obj) == closure->end()) {
+            return 0;
+        }
+        if (!isTransparentContainer(obj)) {
+            return tag;
+        }
+        if (windowStart < 0 || windowStart >= pos) {
+            return 0;
+        }
+        cur = Data::MappedName(cur, windowStart, pos - windowStart);
+    }
+    return 0;
+}
+
+/// A candidate found by the anchored search must come from the same child of a compound as the
+/// element the link designated. A compound that drops a child, or a coincident copy of the same
+/// solid (a Mirror, a Link, a frozen copy, a sibling child) that joins or moves onto the carrier
+/// while the referenced edge is cut away, offers an element with the very same vertices, curve
+/// and midpoint under another child; geometry cannot tell it from the original, ownership can.
+/// D6: an element of another solid is a different element, so it is reported rather than taken.
+/// The owner (ownerTagOfElement) is read from the mapped name on both sides, the stored name and
+/// the candidate's, so wrapping X into a sub-compound, App::Part or LinkGroup, or unwrapping it,
+/// keeps the owner. Only a
+/// candidate that is in a child map of the compound is judged (child maps form for five or more
+/// elements of a type): for a shape with no child maps, or a stored name that carries no tag, or
+/// a shape that is not a Part::Compound, nothing is known about the owner and the old behaviour
+/// stays (fork/main takes the geometric match). The same holds when either owner is unknown
+/// (a deleted container, or a container with no readable window), so a reference is only given up
+/// on when both owners are known non-compound objects and differ. A Link or frozen copy that
+/// carries the very same tag as the referenced child is not separated.
+static void filterByChildTag(const GeoFeature& geo,
+                             const char* element,
+                             std::vector<std::string>& names)
+{
+    // Only a Part::Compound: its child maps are its Links. The child maps of other shapes (a
+    // PartDesign body split by a pocket and rejoined by a pad) carry the tags of later features
+    // of one chain, which are the same element under a new tag.
+    static const Base::Type compoundType = Base::Type::fromName("Part::Compound");
+    if (compoundType.isBad() || !geo.isDerivedFrom(compoundType)) {
+        return;
+    }
+    std::set<const App::DocumentObject*> closure;
+    if (dependsOnOtherDocument(geo, closure)) {
+        return;
+    }
+    std::string mapped;
+    std::string type;
+    auto* prop = geo.getPropertyOfGeometry();
+    const Data::ComplexGeoData* data = prop ? prop->getComplexData() : nullptr;
+    if (names.empty() || !data || !parseStoredElement(element, mapped, type)) {
+        return;
+    }
+    const App::Document* doc = geo.getDocument();
+    const long stored = ownerTagOfElement(doc, nullptr, Data::MappedName(mapped.c_str()));
+    if (stored == 0) {
+        return;
+    }
+    const auto children = data->getMappedChildElements();
+    if (children.empty()) {
+        return;
+    }
+    std::vector<std::string> keep;
+    for (const auto& n : names) {
+        Data::IndexedName idx(n.c_str());
+        bool other = false;
+        for (const auto& c : children) {
+            const int first = c.indexedName.getIndex() + c.offset;
+            if (std::strcmp(c.indexedName.getType(), idx.getType()) == 0
+                && idx.getIndex() >= first && idx.getIndex() < first + c.count) {
+                const long cand = ownerTagOfElement(doc, &closure, data->getMappedName(idx));
+                other = cand != 0 && cand != stored;
+                break;
+            }
+        }
+        if (!other) {
+            keep.push_back(n);
+        }
+    }
+    if (keep.size() != names.size()) {
+        FC_WARN("element reference " << element << " in " << geo.getFullName()
+                                      << ": geometric match is an element of another child;"
+                                         " left missing");
+    }
+    names = keep;
+}
+
 /// Several elements match the anchor's search: only one that is geometrically identical to the
 /// anchor may be taken, and only if it is the only one; otherwise none (never pick one silently).
 static void disambiguateByAnchor(const PropertyLinkBase* link,
@@ -1383,6 +1598,7 @@ bool PropertyLinkBase::_updateElementReference(DocumentObject* feature,
                     names = anchoredSearch(this, *geo, element, 2);
                 }
                 disambiguateByAnchor(this, *geo, element, names);
+                filterByChildTag(*geo, element, names);
             }
             else {
                 names = geo->searchElementCache(oldElement, Data::SearchOption::CheckGeometry);
