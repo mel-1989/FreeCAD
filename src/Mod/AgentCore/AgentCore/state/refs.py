@@ -46,9 +46,13 @@ that match no tracked reference are listed under ``untracked_events`` in the
 report. Without the journal everything works as before.
 
 The journal is an incremental log of what FreeCAD's ``_updateElementReference`` rewrote, not a
-replayable history. Undo, redo, Body relinking, deleting a feature and user assignments change
-properties without an event, so the property is always read for its current value and the events
-only say what FreeCAD did. A ``lost`` event means the reference's mapped name is gone; the visible
+replayable history. Body relinking, deleting a feature and user assignments change properties
+without an event, so the property is always read for its current value and the events only say
+what FreeCAD did. Undo, redo, abort and savepoint rollback do journal what they changed (basis
+``undo``, ``redo``, ``rollback``): such an event is attached to its record as ``freecad_event`` and
+``history_step`` names the basis, but it never sets ``property_updated`` (the step reverted a value,
+FreeCAD did not follow geometry), and the ``added`` / ``removed`` events, which create or drop a
+whole reference, stay in ``untracked_events``. A ``lost`` event means the reference's mapped name is gone; the visible
 sub may still show the old index because FreeCAD writes the mapped name back over the "?" mark.
 ``restored`` also covers a recovery from the missing mark and may carry an unchanged short sub;
 a reference can leave and return within one edit, and every step is logged. ``freecad_event`` is
@@ -69,6 +73,12 @@ LINK_SUB_TYPES = {
     "App::PropertyLinkSubListHidden", "App::PropertyXLinkSub", "App::PropertyXLinkSubList",
     "App::PropertyXLinkSubHidden", "App::PropertyXLink", "App::PropertyXLinkList",
 }
+# Events written by a history step (undo, redo, abort or savepoint rollback). They say what the step
+# did to a reference; they are not FreeCAD rewriting a reference to follow geometry.
+HISTORY_BASES = ("undo", "redo", "rollback")
+# History events that create or drop a whole reference (a list grew or shrank, an object came or
+# went); they belong to no tracked record, so they are reported as untracked.
+WHOLESALE_KINDS = ("added", "removed")
 POS_TOL = 1e-4
 SIZE_TOL = 1e-4
 
@@ -563,6 +573,8 @@ class ReferenceTracker:
         used = set()
         by_prop = {}
         for ce in sorted(cpp_events, key=lambda c: c["seq"]):
+            if ce.get("kind") in WHOLESALE_KINDS:
+                continue
             by_prop.setdefault((ce["owner"], ce["property"]), []).append(ce)
         for rec in self.records:
             rec["cpp_chain"] = []
@@ -611,10 +623,15 @@ class ReferenceTracker:
             return
         last = chain[-1]
         ev["freecad_event"] = dict(last)
+        if last.get("basis") in HISTORY_BASES:
+            # undo, redo or rollback put this value back: attach the event, claim no remap
+            ev["history_step"] = last["basis"]
         if len(chain) > 1:
             ev["freecad_events"] = [dict(c) for c in chain]
         if last["kind"] == "lost":
             ev["property_marked_missing"] = True
+        elif last.get("basis") in HISTORY_BASES:
+            pass
         elif ev["outcome"] == "remapped" and last["kind"] in ("remapped", "restored"):
             # FreeCAD rewrote the property itself, provided the event ends where the property
             # stands now; an event that ends elsewhere is attached but not trusted

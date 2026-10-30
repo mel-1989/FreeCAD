@@ -220,6 +220,7 @@ PyObject* DocumentPy::getElementReferenceEvents(PyObject* args, PyObject* kwd)
             d.setItem("owner", Py::String(e.owner));
             d.setItem("property", Py::String(e.property));
             d.setItem("target", Py::String(e.target));
+            d.setItem("oldTarget", Py::String(e.oldTarget));
             d.setItem("targetDocument", Py::String(e.targetDocument));
             d.setItem("subIndex", Py::Long(static_cast<long>(e.subIndex)));
             d.setItem("oldSub", Py::String(e.oldSub));

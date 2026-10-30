@@ -4,6 +4,7 @@
 #define APP_ELEMENTREFERENCEEVENTS_H
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 #include <fastsignals/signal.h>
@@ -22,6 +23,8 @@ struct AppExport ElementReferenceEvent
         Remapped,  ///< the reference now designates a different short element name
         Lost,      ///< the reference newly entered the missing state
         Restored,  ///< a rescue record gave an earlier name back
+        Added,     ///< undo, redo or rollback created a reference (a list grew, an object came back)
+        Removed,   ///< undo, redo or rollback dropped a reference (a list shrank, an object went)
     };
     enum class Basis
     {
@@ -30,6 +33,9 @@ struct AppExport ElementReferenceEvent
         Anchored,    ///< an anchored search (G01 anchors) found the successor
         History,     ///< the element-map history found the successor
         Record,      ///< a rescue record was replayed
+        Undo,        ///< Document::undo restored the reference
+        Redo,        ///< Document::redo restored the reference
+        Rollback,    ///< an aborted transaction or an agent-turn savepoint restored the reference
     };
 
     std::uint64_t seq {0};   ///< process-wide, strictly increasing
@@ -37,6 +43,7 @@ struct AppExport ElementReferenceEvent
     std::string owner;       ///< name of the object holding the link property
     std::string property;    ///< name of the link property
     std::string target;      ///< name of the linked object (after the update)
+    std::string oldTarget;   ///< name of the linked object before; only set by undo, redo and rollback events
     std::string targetDocument;  ///< name of the document of the linked object
     int subIndex {-1};       ///< position of the sub in the property (see below), -1 if unknown
     std::string oldSub;      ///< sub-element string before the update
@@ -59,8 +66,8 @@ struct AppExport ElementReferenceEvent
  *
  * What the journal is, and is not. It is an incremental log of the rewrites that
  * _updateElementReference performed, in order. It is not a replayable history of the property:
- * undo and redo, Body relinking, deleting a feature and user assignments rewrite properties
- * without an event, so a consumer must read the property for its current value and use the
+ * Body relinking, deleting a feature and user assignments rewrite properties
+ * without an event (undo, redo and rollback do emit events, see below), so a consumer must read the property for its current value and use the
  * events only to learn what FreeCAD did and why. Further caveats:
  * - `lost` means the reference's mapped name is gone. The visible sub may still show the old
  *   index, because updateLinkReference writes the mapped name back over the "?" mark.
@@ -73,6 +80,18 @@ struct AppExport ElementReferenceEvent
  *   child. It matches the order in which Python flattens the property value, and it is the same
  *   for every event of one update pass, so (owner, property, subIndex, oldSub) identifies the
  *   reference an event belongs to.
+ * - Undo, redo, abort and an agent-turn savepoint rollback do emit events (basis `undo`, `redo`,
+ *   `rollback`): the link properties of the document are compared before and after the history
+ *   step and every flattened reference that differs gets one event, so the journal and the
+ *   document agree after a history step. A reference at the same position with another target,
+ *   sub or mapped name is `remapped` (`lost` when it newly carries the missing mark, `restored`
+ *   when it loses it); a position that only exists after is `added` (oldSub empty) and one that
+ *   only existed before is `removed` (newSub empty), which also covers objects that undo creates
+ *   or deletes. Positions are compared index by index, so a list that loses its first entry
+ *   reports every later position as changed and the last as removed. The reference updates that
+ *   the step itself triggers are not recorded separately, so the same change is never reported
+ *   twice; a recompute after the step records its own events as usual. `oldTarget` is set only
+ *   on these events.
  * - A reference may leave and return within one edit (`Edge8`, `?Edge8`, `Edge8`); every step
  *   is logged.
  * - The journal keeps at most MaxEventsPerDocument events. lastDroppedSeq() tells a reader
@@ -93,9 +112,38 @@ public:
     /// Highest seq discarded from doc's journal by the size cap (0 if none, reset by clear).
     static std::uint64_t lastDroppedSeq(const Document* doc);
     static void clear(const Document* doc);
+    /// True while the calling thread is inside an ElementReferenceHistoryScope of `doc`; the
+    /// per-update recorder stays quiet for that document then, because the scope reports the net
+    /// change itself. Scopes of other documents do not mute it.
+    static bool suppressed(const Document* doc);
 
     /// Emitted after each recorded event, on the thread that recorded it.
     static fastsignals::signal<void(const ElementReferenceEvent&)> signalEvent;
+};
+
+/**
+ * RAII bracket around one history step (undo, redo, abort, savepoint rollback). The constructor
+ * snapshots the element references of every link property of the document, finish() (or the
+ * destructor) snapshots again and records one event per flattened reference that differs, with
+ * the given basis (Undo, Redo or Rollback). Purely observational: it only reads properties.
+ * While it lives, the per-update recorder of PropertyLinkBase is suppressed on this thread.
+ */
+class AppExport ElementReferenceHistoryScope
+{
+public:
+    ElementReferenceHistoryScope(const Document& doc, ElementReferenceEvent::Basis basis);
+    ~ElementReferenceHistoryScope();
+    ElementReferenceHistoryScope(const ElementReferenceHistoryScope&) = delete;
+    ElementReferenceHistoryScope& operator=(const ElementReferenceHistoryScope&) = delete;
+
+    /// Compare and record now (idempotent, never throws); the destructor calls it if you did not.
+    void finish();
+
+private:
+    void release();
+    void compareAndRecord();
+    struct Impl;
+    std::unique_ptr<Impl> impl;
 };
 
 }  // namespace App

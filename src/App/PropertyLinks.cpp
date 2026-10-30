@@ -1639,6 +1639,9 @@ struct ElementReferenceRecorder
         if (doc->testStatus(App::Document::Restoring) || doc->testStatus(App::Document::Importing)) {
             return;
         }
+        if (App::ElementReferenceJournal::suppressed(doc)) {
+            return;  // an undo, redo or rollback of this document reports its net change itself
+        }
         const std::string newShort = shortName(shadow.oldName, sub);
         Event ev;
         if (restored) {
