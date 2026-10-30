@@ -88,9 +88,44 @@ def diff(a, b):
     return {k: (a.get(k), b.get(k)) for k in set(a) | set(b) if a.get(k) != b.get(k)}
 
 
+def build_binder():
+    doc = App.newDocument("undo_binder")
+    body, sk, pad = topo_scenarios.base_pad(doc, 24, 14, 5)
+    binder = body.newObject("PartDesign::SubShapeBinder", "Binder")
+    binder.Support = [(pad, ["Face1"])]
+    doc.recompute()
+    return doc, ("Binder", "Support", 0)
+
+
+def edit_binder_support(doc):
+    pad = doc.getObject("Pad")
+    doc.getObject("Binder").Support = [(pad, ["Face2", "Face3", "Face4"])]
+
+
+def edit_binder_shrink(doc):
+    pad = doc.getObject("Pad")
+    doc.getObject("Binder").Support = [(pad, ["Face1"]), (doc.getObject("Sketch"), [""])]
+    doc.getObject("Binder").Support = [(pad, [])]
+
+
+def edit_attach_other_face(doc):
+    # a direct reassignment of a LinkSub: nothing journals it, undo must
+    hs = doc.getObject("HoleSketch")
+    hs.AttachmentSupport = (doc.getObject("Pad"), ["Face2"])
+
+
+
+EXTRA = [
+    ("binder_support_grows", build_binder, edit_binder_support),
+    ("binder_support_shrinks", build_binder, edit_binder_shrink),
+    ("attach_other_face", topo_scenarios.build_attach, edit_attach_other_face),
+]
+
+
 class Tally:
     def __init__(self):
         self.steps = {}
+        self.moved = {}  # step -> (agree, total) over steps where the step changed some reference
         self.bad = []
         self.events = {}
 
@@ -101,6 +136,9 @@ class Tally:
         d = diff(predicted, actual)
         ok, total = self.steps.get(step, (0, 0))
         self.steps[step] = (ok + (0 if d else 1), total + 1)
+        if model != actual:
+            ok, total = self.moved.get(step, (0, 0))
+            self.moved[step] = (ok + (0 if d else 1), total + 1)
         for e in events:
             self.events[e["basis"]] = self.events.get(e["basis"], 0) + 1
         if d:
@@ -111,7 +149,6 @@ class Tally:
 def commit_pass(name, build, edit, tally):
     doc, _target = build()
     try:
-        doc.UndoMode = 1
         doc.clearUndos()
         model = model_of(doc)
         seq = doc.lastElementReferenceEventSeq()
@@ -135,7 +172,6 @@ def commit_pass(name, build, edit, tally):
 def abort_pass(name, build, edit, tally):
     doc, _target = build()
     try:
-        doc.UndoMode = 1
         doc.clearUndos()
         doc.openTransaction("edit")
         edit(doc)
@@ -152,7 +188,7 @@ class TestStateUndoEvents(unittest.TestCase):
     def test_journal_replay_agrees_with_the_document(self):
         tally = Tally()
         names = []
-        for sc in topo_scenarios.SCENARIOS:
+        for sc in list(topo_scenarios.SCENARIOS) + EXTRA:
             name, build, edit = sc[0], sc[1], sc[2]
             names.append(name)
             try:
@@ -165,8 +201,8 @@ class TestStateUndoEvents(unittest.TestCase):
                 tally.bad.append((name, "abort_pass raised", repr(e)))
         total_ok = sum(o for o, _ in tally.steps.values())
         total = sum(t for _, t in tally.steps.values())
-        print("\nundo-event replay: %d scenarios, %d of %d steps agree; per step %s; events by basis %s" %
-              (len(names), total_ok, total, tally.steps, tally.events))
+        print("\nundo-event replay: %d scenarios, %d of %d steps agree; per step %s; steps that changed a reference %s; events by basis %s" %
+              (len(names), total_ok, total, tally.steps, tally.moved, tally.events))
         for b in tally.bad:
             print("  DISAGREE", b)
         self.assertEqual(tally.bad, [], "\n".join(map(str, tally.bad)))

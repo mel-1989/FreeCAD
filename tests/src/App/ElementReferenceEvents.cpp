@@ -31,7 +31,6 @@ protected:
     {
         _docName = App::GetApplication().getUniqueDocumentName("ref_events");
         _doc = App::GetApplication().newDocument(_docName.c_str(), "testUser");
-        _doc->setUndoMode(1);
         _a = static_cast<App::FeatureTest*>(_doc->addObject("App::FeatureTest", "A"));
         _b = static_cast<App::FeatureTest*>(_doc->addObject("App::FeatureTest", "B"));
         _c = static_cast<App::FeatureTest*>(_doc->addObject("App::FeatureTest", "C"));
