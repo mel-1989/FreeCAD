@@ -61,6 +61,7 @@ turn left. ``accept`` requires an ``ApplyToken`` minted by the installed
 ``ApplyAuthority`` and is all or nothing across covered documents.
 """
 
+import re
 import itertools
 import os
 import secrets
@@ -271,6 +272,15 @@ class _Active:
         if self.prev and self.prev != self.doc.Name and self.prev in App.listDocuments():
             App.setActiveDocument(self.prev)
         return False
+
+
+def _is_touched_flag(diff):
+    """A difference line (``compare.differences``) in an object's ``state`` list that involves the Touched flag.
+    Judged on the path's last segments and the value part only, so user text (a label) cannot pose as one."""
+    path, _, value = diff.partition(": ")
+    if path.startswith("["):  # "[LinkedDoc]" prefix; document names are identifiers
+        path = path.split("]", 1)[-1]
+    return re.search(r"/state(/\d+)?$", path) is not None and "Touched" in value
 
 
 def _dump(doc):
@@ -772,9 +782,18 @@ class AgentTurn:
     def _foreign(diffs):
         """Differences that are work to protect: not a Touched flag left by the human's own Undo, and not the
         document's own label or file name (Save As renames it while a turn waits)."""
-        return [x for x in diffs
-                if not ("/state" in x.split(":", 1)[0] and "Touched" in x)
-                and not x.lstrip("[").split("]", 1)[-1].startswith("/document/")]
+        out = []
+        for x in diffs:
+            # judge the path only (text before the first ": "), never the values, which hold user text
+            path = x.split(": ", 1)[0]
+            if path.startswith("["):  # "[LinkedDoc]" prefix; document names are identifiers
+                path = path.split("]", 1)[-1]
+            if _is_touched_flag(x):
+                continue
+            if path.startswith("/document/"):
+                continue
+            out.append(x)
+        return out
 
     def _rec_differences(self, rec):
         d = rec["doc"]
@@ -930,7 +949,7 @@ class AgentTurn:
             # placements) bit for bit. Anything else (Invalid flags after a
             # Body delete is undone) gets the settling recompute.
             gaps = compare.differences(rec["before"], _dump(d), rel_tol=0.0, abs_tol=0.0)
-            only_touched = all("/state" in x.split(":", 1)[0] and "Touched" in x for x in gaps)
+            only_touched = all(_is_touched_flag(x) for x in gaps)
             if only_touched and not compare.raw_differences(rec["before_raw"], compare.raw_state(d)):
                 transplant.align_touched(d, rec["before"])
                 settled[name] = False

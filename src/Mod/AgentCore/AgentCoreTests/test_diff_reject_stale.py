@@ -81,6 +81,21 @@ class TestRejectNeverDiscardsLaterWork(unittest.TestCase):
         self.assertTrue(res["equal"], res["differences"])
         self.assertEqual((self.doc.Block.Length.Value, self.doc.Block.Height.Value), (40, 10))
 
+    def test_user_text_cannot_pose_as_an_exempt_path(self):
+        # the exemptions (Touched flags, /document/*) are judged on the difference's path, never on its values
+        for prop, text in (("Label", "x]/document/y"), ("Label2", "]/document/"), ("Label", "Touched")):
+            t = self.propose()
+            setattr(self.doc.Block, prop, text)
+            before = frozen(self.doc)
+            with self.assertRaises(TurnStale):
+                t.reject()
+            self.assertEqual(frozen(self.doc), before)
+            self.assertEqual((t.status, getattr(self.doc.Block, prop)), ("proposed", text))
+            setattr(self.doc.Block, prop, "Block" if prop == "Label" else "")
+            t.reject()
+            self.assertEqual((t.status, self.doc.Block.Length.Value), ("rejected", 40))
+            self.doc.clearUndos()
+
     def test_human_undo_of_the_turn_then_reject_still_works(self):
         t = self.propose()
         self.doc.undo()                                      # nothing but the turn's own entry moved
