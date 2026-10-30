@@ -3088,9 +3088,10 @@ static bool isThickSolidNoOp(const TopoDS_Shape& input, const TopoDS_Shape& resu
     GProp_GProps volIn, volOut;
     BRepGProp::VolumeProperties(input, volIn);
     BRepGProp::VolumeProperties(result, volOut);
-    double vIn = volIn.Mass();
-    double vOut = volOut.Mass();
-    return vIn != 0.0 && std::fabs(vIn - vOut) <= 1e-9 * std::max(std::fabs(vIn), std::fabs(vOut));
+    // OCCT returns some outward shells of single-face solids (sphere, torus) inverted
+    double vIn = std::fabs(volIn.Mass());
+    double vOut = std::fabs(volOut.Mass());
+    return vIn != 0.0 && std::fabs(vIn - vOut) <= 1e-9 * std::max(vIn, vOut);
 }
 
 TopoShape& TopoShape::makeElementThickSolid(

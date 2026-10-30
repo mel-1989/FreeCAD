@@ -61,6 +61,20 @@ class TestThicknessNoOp(unittest.TestCase):
                 self.doc.recompute()
                 self.assertIn("Invalid", thick.State)
 
+    def test_sphere_and_torus_outward_raise(self):
+        # OCCT returns these inverted (volume -Vin); still a no-op
+        for shape in (Part.makeSphere(8), Part.makeTorus(10, 3)):
+            with self.subTest(shape=shape.Faces[0].Surface.TypeId):
+                with self.assertRaises(Exception):
+                    shape.makeThickness([shape.Faces[0]], 1, 1e-7, False, False, 0, 0)
+
+    def test_cylinder_outward(self):
+        cyl = Part.makeCylinder(5, 10)
+        top = [f for f in cyl.Faces if f.BoundBox.ZMin > 9.99]
+        shell = cyl.makeThickness(top, 1, 1e-4, False, False, 0, 2)
+        self.assertTrue(shell.isValid())
+        self.assertAlmostEqual(shell.Volume, 458.6725, places=3)
+
     def test_plain_box_inward(self):
         box = Part.makeBox(10, 10, 10)
         top = [f for f in box.Faces if f.BoundBox.ZMin > 9.99]
