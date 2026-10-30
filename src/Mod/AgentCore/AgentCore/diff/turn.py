@@ -439,6 +439,7 @@ class AgentTurn:
                 rec["snapshot"] = self.store.save_before(d, self.turn_id, self.label, dump=rec["before"])
             rec["before_cap"] = transplant.capture(d)
             rec["before_raw"] = compare.raw_state_of_capture(rec["before_cap"])
+            rec["before_geo"] = _geo_signature(d)
             rec["base_undo"] = d.UndoCount
             rec["base_names"] = list(d.UndoNames)
         self.snapshot = self._main()["snapshot"]
@@ -740,11 +741,14 @@ class AgentTurn:
         if self.status == "open":
             methods = {rec["name"]: self._rewind(rec) for rec in self._recs}
             return self._finish_reject(methods)
-        stale = self._stale_reasons()
+        try:
+            stale = self._stale_reasons()
+        except ReferenceError:   # a covered document was closed (saved, closed, reopened): nothing to rewind
+            raise TurnStale("reject refused: a document of this turn was closed, so the turn can no longer be "
+                            "rewound; reopen the file and review its history there") from None
         if stale:  # before anything is touched: rewinding would discard work the turn did not make
             raise TurnStale("reject refused: the document changed after this turn and rewinding would discard "
-                            "that work; undo your own edits (or use the snapshot revert, which discards "
-                            "later work on purpose) and reject again: " + "; ".join(stale[:6]))
+                            "that work; undo your own edits and reject again: " + "; ".join(stale[:6]))
         saved = {rec["name"]: self._save_after(rec) for rec in self._recs}
         methods = {}
         try:
@@ -764,19 +768,37 @@ class AgentTurn:
                                   "proposed" if ok else "the documents could not be fully put back: "
                                   + "; ".join(left[:5]))) from exc
 
+    @staticmethod
+    def _foreign(diffs):
+        """Differences that are work to protect: not a Touched flag left by the human's own Undo, and not the
+        document's own label or file name (Save As renames it while a turn waits)."""
+        return [x for x in diffs
+                if not ("/state" in x.split(":", 1)[0] and "Touched" in x)
+                and not x.lstrip("[").split("]", 1)[-1].startswith("/document/")]
+
     def _rec_differences(self, rec):
         d = rec["doc"]
         prefix = "" if rec is self._main() else f"[{rec['name']}]"
         out = [prefix + x for x in compare.differences(rec["after"], _dump(d))]
         return out + [prefix + x for x in _geo_differences(rec.get("after_geo", {}), _geo_signature(d))]
 
+    def _before_differences(self, rec):
+        """Live state against the turn's recorded before-state: dump, geometry signature and raw property bytes."""
+        d = rec["doc"]
+        prefix = "" if rec is self._main() else f"[{rec['name']}]"
+        out = [prefix + x for x in compare.differences(rec["before"], _dump(d))]
+        if "before_geo" in rec:
+            out += [prefix + x for x in _geo_differences(rec["before_geo"], _geo_signature(d))]
+        out += [prefix + "raw: " + x for x in compare.raw_differences(rec["before_raw"], compare.raw_state(d))]
+        return out
+
     def _stale_reasons(self):
         """Why reject would discard something the turn did not make (empty: safe).
 
         Per covered document either the turn's entries were undone through the
-        stack and nothing but them (the human's own Undo; the rewind only drops
-        the turn's redo entries), or the document equals the reviewed
-        after-state and no foreign transaction sits on the stack."""
+        stack and the content is the turn's before-state (the human's own Undo,
+        plus nothing: an edit made after it is work to protect), or the document
+        equals the reviewed after-state and no foreign transaction sits on the stack."""
         out = []
         for rec in self._recs:
             d, name = rec["doc"], rec["name"]
@@ -785,19 +807,23 @@ class AgentTurn:
             count, names = rec["exit_undo"]
             if self.undo_name in list(d.RedoNames):
                 k = count - d.UndoCount
-                if 0 < k <= max(rec["segments"], 1) and list(d.UndoNames) == names[k:] and \
-                        all(n == self.undo_name for n in list(d.RedoNames)[:k]):
+                if not (0 < k <= max(rec["segments"], 1) and list(d.UndoNames) == names[k:] and
+                        all(n == self.undo_name for n in list(d.RedoNames)[:k])):
+                    out.append(f"{name}: the undo stack no longer matches the turn")
                     continue
-                out.append(f"{name}: the undo stack no longer matches the turn")
+                if k < names.count(self.undo_name):
+                    # only some of the turn's entries are undone: the content is neither the before-
+                    # nor the after-state, so edits made since cannot be told apart from the turn's own
+                    out.append(f"{name}: the turn is only partly undone; undo the rest of it yourself, then reject")
+                    continue
+                drift = self._foreign(self._before_differences(rec))
+                if drift:
+                    out.append(f"{name}: edited after the turn was undone ({drift[0]})")
                 continue
             if (d.UndoCount, list(d.UndoNames)) != (count, names):
                 out.append(f"{name}: another transaction was recorded after the turn "
                            f"(undo stack now {list(d.UndoNames)[:3]})")
-            # not work to protect: a Touched flag left by the human's own Undo, and the document's
-            # own label or file name (Save As renames it while a turn waits)
-            drift = [x for x in self._rec_differences(rec)
-                     if not ("/state" in x.split(":", 1)[0] and "Touched" in x)
-                     and not x.lstrip("[").split("]", 1)[-1].startswith("/document/")]
+            drift = self._foreign(self._rec_differences(rec))
             if drift:
                 out.append(f"{name}: no longer equals the turn's after-state ({drift[0]})")
         return out

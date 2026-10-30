@@ -14,7 +14,7 @@ if FIX not in sys.path:
     sys.path.insert(0, FIX)
 
 import diff_builders as db  # noqa: E402
-from AgentCore.diff import AgentTurn, ApplyAuthority, RejectFailed, TurnStale  # noqa: E402
+from AgentCore.diff import AgentTurn, ApplyAuthority, RejectFailed, SnapshotStore, TurnStale  # noqa: E402
 from AgentCore.diff import compare  # noqa: E402
 
 
@@ -88,6 +88,106 @@ class TestRejectNeverDiscardsLaterWork(unittest.TestCase):
         self.assertTrue(res["equal"], res["differences"])
         self.assertEqual(self.doc.RedoCount, 0)
 
+    def _refused_keeping(self, t):
+        before = frozen(self.doc)
+        with self.assertRaises(TurnStale):
+            t.reject()
+        self.assertEqual(frozen(self.doc), before)
+        self.assertEqual((t.status, t.result), ("proposed", None))
+
+    def test_undo_of_the_turn_then_untransacted_edit_is_refused(self):
+        t = self.propose()
+        self.doc.undo()
+        self.doc.recompute()
+        self.doc.Block.Height = 11
+        self.doc.recompute()
+        self._refused_keeping(t)
+        self.assertEqual((self.doc.Block.Height.Value, self.doc.Block.Length.Value), (11, 40))
+        self.doc.Block.Height = 10                           # back to the before-state: reject goes through
+        self.doc.recompute()
+        res = t.reject()
+        self.assertTrue(res["equal"], res["differences"])
+        self.assertEqual(self.doc.RedoCount, 0)
+
+    def test_undo_of_the_turn_then_new_object_is_refused(self):
+        t = self.propose()
+        self.doc.undo()
+        self.doc.addObject("Part::Box", "Mine")
+        self.doc.recompute()
+        self._refused_keeping(t)
+        self.assertIsNotNone(self.doc.getObject("Mine"))
+
+    def test_undo_of_the_turn_then_edit_of_the_same_property_is_refused(self):
+        t = self.propose()
+        self.doc.undo()
+        self.doc.Block.Length = 77
+        self.doc.recompute()
+        self._refused_keeping(t)
+        self.assertEqual(self.doc.Block.Length.Value, 77)
+
+    def test_partial_undo_of_a_two_segment_turn(self):
+        with AgentTurn(self.doc, label="two", verify=False) as t:
+            self.doc.openTransaction("s1")
+            self.doc.Block.Length = 50
+            self.doc.commitTransaction()
+            self.doc.openTransaction("s2")
+            self.doc.Block.Width = 33
+            self.doc.commitTransaction()
+        self.doc.undo()
+        self.doc.recompute()
+        self.doc.Block.Height = 12                           # untransacted, on top of a half-undone turn
+        self.doc.recompute()
+        self._refused_keeping(t)
+        self.assertEqual(self.doc.Block.Height.Value, 12)
+
+    def test_undo_of_the_turn_leaving_only_touched_flags_still_rejects(self):
+        t = self.propose()
+        self.doc.undo()
+        self.doc.Hole.touch()
+        res = t.reject()
+        self.assertTrue(res["equal"], res["differences"])
+        self.assertEqual(self.doc.Block.Length.Value, 40)
+
+    def test_trimmed_stack_without_human_edits_rejects_from_the_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # use_guard=False: only the Python fallback splits into more entries than UndoMaxStackSize (20)
+            with AgentTurn(self.doc, label="many", verify=False, store=SnapshotStore(tmp), use_guard=False) as t:
+                for i in range(25):
+                    self.doc.openTransaction(f"s{i}")
+                    self.doc.Block.Length = 41 + i
+                    self.doc.commitTransaction()
+            self.assertFalse(t.change_set()["transactions"]["undo_complete"])
+            res = t.reject()                                 # no human edit anywhere: not stale
+            self.assertEqual((res["method"], self.doc.Block.Length.Value), ("snapshot", 40))
+            self.assertTrue(res["equal"], res["differences"])
+
+    def test_trimmed_stack_without_snapshot_rejects_from_the_capture(self):
+        with AgentTurn(self.doc, label="many", verify=False, use_guard=False) as t:
+            for i in range(25):
+                self.doc.openTransaction(f"s{i}")
+                self.doc.Block.Length = 41 + i
+                self.doc.commitTransaction()
+        res = t.reject()
+        self.assertTrue(res["equal"], res["differences"])
+        self.assertIn("capture", res["method"])
+        self.assertEqual(self.doc.Block.Length.Value, 40)
+
+    def test_reject_after_save_close_and_reopen_is_a_clear_refusal(self):
+        t = self.propose()
+        path = os.path.join(tempfile.mkdtemp(prefix="f3rc"), "x.FCStd")
+        try:
+            self.doc.saveAs(path)
+            App.closeDocument(self.doc.Name)
+            doc2 = App.openDocument(path)
+            with self.assertRaises(TurnStale) as cm:
+                t.reject()
+            self.assertIn("closed", str(cm.exception))
+            self.assertEqual(doc2.Block.Length.Value, 50)
+            App.closeDocument(doc2.Name)
+        finally:
+            shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+        self.doc = db.build_holed_block("f3_stale_after_close")   # tearDown closes this one
+
     def test_failure_mid_reject_restores_the_after_state(self):
         t = self.propose()
         before = frozen(self.doc)
@@ -156,6 +256,36 @@ class TestRejectAcrossDocuments(unittest.TestCase):
         self.src.undo()
         res = t.reject()
         self.assertTrue(res["equal"], res["differences"])
+
+    def test_undo_then_untransacted_edit_in_the_linked_document_refuses(self):
+        with AgentTurn(self.asm, label="cross", verify=False) as t:
+            self.asm.LinkBox.LinkedObject.Length = 20
+        self.src.undo()
+        self.asm.undo()
+        self.src.SrcCyl.Height = 77
+        self.src.recompute()
+        before = frozen(self.src, self.asm)
+        with self.assertRaises(TurnStale):
+            t.reject()
+        self.assertEqual(frozen(self.src, self.asm), before)
+        self.assertEqual(self.src.SrcCyl.Height.Value, 77)
+
+    def test_trimmed_cross_document_turn_rejects_from_snapshots(self):
+        store = SnapshotStore(os.path.join(self.tmp, "snaps"))
+        with AgentTurn(self.asm, label="cross", verify=False, store=store, use_guard=False) as t:
+            for i in range(25):
+                self.src.openTransaction(f"s{i}")
+                self.src.SrcBox.Length = 21 + i
+                self.src.commitTransaction()
+                self.asm.openTransaction(f"a{i}")
+                self.asm.LinkBox.Placement.Base = App.Vector(i + 1, 0, 0)
+                self.asm.commitTransaction()
+        open_before = sorted(App.listDocuments())
+        res = t.reject()                                     # no human edit anywhere: not stale
+        self.assertEqual(res["methods"][self.asm.Name], "snapshot")
+        self.assertTrue(res["equal"], res["differences"])
+        self.assertEqual(sorted(App.listDocuments()), open_before)
+        self.assertEqual((self.src.SrcBox.Length.Value, self.asm.LinkBox.Placement.Base), (12, App.Vector(0, 50, 0)))
 
     def test_failure_in_the_second_document_puts_the_first_back(self):
         with AgentTurn(self.asm, label="cross", verify=False) as t:
