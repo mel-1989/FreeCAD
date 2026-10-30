@@ -298,3 +298,65 @@ class TestJournalMatching(unittest.TestCase):
                 doc.getElementReferenceEvents(2**64)
         finally:
             App.closeDocument(doc.Name)
+
+    def test_silent_revert_does_not_desync_the_replay(self):
+        """Inserting a feature and deleting it again puts the property back without an event; the
+        events of the next edit must still go to the sub at their own position."""
+        doc, body, sk, pad = _pad_doc("JM.revert")
+        try:
+            edges = ["Edge1", "Edge8", "Edge2", "Edge5", "Edge11", "Edge12"]
+            fil = _add(doc, body, "PartDesign::Fillet", "Fillet")
+            fil.Base = (pad, edges)
+            fil.Radius = 0.5
+            doc.recompute()
+            before = list(fil.Base[1])
+            tr = state.track_references(doc)
+            hs = _sketch(doc, body, "HoleSketch", z=L, after=pad)
+            _circle(hs, -10.0, 0.0, 2.0)
+            hp = _add(doc, body, "PartDesign::Pocket", "HolePocket", hs)
+            hp.Profile = hs
+            hp.Length = 2 * L
+            doc.recompute()
+            self.assertIs(fil.Base[0], hp)
+            body.removeObject(hp)
+            doc.removeObject(hp.Name)
+            doc.recompute()
+            self.assertEqual(list(fil.Base[1]), before, "deleting the feature must revert the property")
+            _split_bottom(sk)
+            doc.recompute()
+            tr.classify()
+            self.assertTrue(any(r["cpp_chain"] for r in tr.records))
+            for rec in tr.records:
+                for ce in rec["cpp_chain"]:
+                    self.assertEqual(ce["subIndex"], rec["index"], (rec["index"], rec["sub"], ce))
+            for ev, rec in zip(tr.events, tr.records):
+                if ev.get("property_marked_missing"):
+                    cur, _ = tr._current(rec)
+                    self.assertTrue(rec["cpp_chain"][-1]["kind"] == "lost")
+                    self.assertEqual(rec["cpp_chain"][-1]["subIndex"], rec["index"])
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_lost_whose_mark_was_written_back_keeps_the_next_event(self):
+        doc, body, sk, pad = _pad_doc("JM.writeback")
+        try:
+            hold = doc.addObject("App::FeaturePython", "Hold")
+            hold.addProperty("App::PropertyLinkSub", "Ref")
+            hold.Ref = (pad, ["Edge1", "Edge8"])
+            doc.recompute()
+            tr = state.track_references(doc)
+
+            def mk(seq, o, n, k, idx):
+                return {"seq": seq, "document": doc.Name, "owner": "Hold", "property": "Ref", "target": "Pad",
+                        "targetDocument": doc.Name, "subIndex": idx, "oldSub": o, "newSub": n, "oldMapped": "",
+                        "newMapped": "", "kind": k, "basis": "element_map"}
+
+            # FreeCAD wrote the mapped name back over the "?": the property still reads Edge1
+            fake = [mk(10**9 + 1, "Edge1", "?Edge1", "lost", 0), mk(10**9 + 2, "Edge1", "Edge1", "restored", 0)]
+            tr._read_journal = lambda: fake
+            tr.classify()
+            self.assertEqual([c["seq"] for c in tr.records[0]["cpp_chain"]], [10**9 + 1, 10**9 + 2])
+            self.assertEqual(tr.records[1]["cpp_chain"], [])
+            self.assertEqual(tr.untracked_events, [])
+        finally:
+            App.closeDocument(doc.Name)

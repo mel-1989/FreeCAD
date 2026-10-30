@@ -319,7 +319,7 @@ class ReferenceTracker:
                     self.records.append({
                         "owner": obj.Name, "property": prop, "index": index,
                         "linked": linked.Name, "path": path, "element_owner": owner.Name,
-                        "element": element, "mapped": mapped, "sub": sub,
+                        "element": element, "mapped": mapped, "sub": sub, "prop_len": len(pairs),
                         "linked_doc": getattr(getattr(linked, "Document", None), "Name", None),
                         "sig": signature(shape, element) if shape is not None else None,
                         "carrier": carrier(shape, element) if shape is not None else None,
@@ -536,6 +536,14 @@ class ReferenceTracker:
             return []
         return list(self.doc.getElementReferenceEvents(self.journal_seq))
 
+    def _flat_length(self, rec):
+        """Number of flattened subs the record's property holds now (-1 if unreadable)."""
+        obj = self.doc.getObject(rec["owner"])
+        try:
+            return len(_pairs(obj.getPropertyByName(rec["property"])))
+        except Exception:  # noqa: BLE001
+            return -1
+
     def _match_journal(self, cpp_events):
         """Attach the C++ events to the records and return the set of event seqs used.
 
@@ -547,9 +555,11 @@ class ReferenceTracker:
         and the target is not compared (an inserted feature that was deleted again leaves events
         whose target is neither the snapshot's nor today's), except that a cross-document
         ``targetDocument`` must be a document the reference could point into.
-        Events without a position (``subIndex`` -1, or an older build) and events whose position
-        holds a different sub (the list changed length) fall back to the unique record of that
-        property whose current sub equals ``oldSub``."""
+        While the property has the snapshot's length the event's position is authoritative and
+        the record's current sub is reset to the event's ``oldSub`` first (a silent rewrite such
+        as undo or deleting an inserted feature leaves no event). Events without a position
+        (``subIndex`` -1, or an older build), and events of a property whose length changed,
+        fall back to the unique record of that property whose current sub equals ``oldSub``."""
         used = set()
         by_prop = {}
         for ce in sorted(cpp_events, key=lambda c: c["seq"]):
@@ -571,11 +581,21 @@ class ReferenceTracker:
                 d = {r.get("linked_doc"), getattr(getattr(now[0], "Document", None), "Name", None) if now else None,
                      self.doc.Name}
                 docs[id(r)] = d - {None}
+            # The position is authoritative while the property still has the snapshot's length:
+            # a silent rewrite (undo, deleting an inserted feature, FreeCAD writing a mapped
+            # name back over a "?") can leave the replayed sub stale, and the event's oldSub
+            # says what the sub really was. After a length change positions mean nothing.
+            same_length = self._flat_length(group[0]) == group[0].get("prop_len")
             for ce in events:
-                rec = at.get(ce.get("subIndex", -1))
-                if rec is None or cur[id(rec)] != ce["oldSub"]:
-                    same = [r for r in group if cur[id(r)] == ce["oldSub"]]
-                    rec = same[0] if len(same) == 1 else None
+                idx = ce.get("subIndex", -1)
+                rec = at.get(idx) if idx is not None and idx >= 0 and same_length else None
+                if rec is not None:
+                    cur[id(rec)] = ce["oldSub"]
+                else:
+                    rec = at.get(idx) if idx is not None and idx >= 0 else None
+                    if rec is None or cur[id(rec)] != ce["oldSub"]:
+                        same = [r for r in group if cur[id(r)] == ce["oldSub"]]
+                        rec = same[0] if len(same) == 1 else None
                 if rec is None:
                     continue
                 if ce.get("targetDocument") and ce["targetDocument"] not in docs[id(rec)]:
