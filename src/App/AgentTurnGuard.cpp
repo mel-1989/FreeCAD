@@ -19,6 +19,7 @@
 #include <utility>
 
 #include <Base/Exception.h>
+#include <Base/Interpreter.h>
 #include <Base/Tools.h>
 
 #include "AgentTurnGuard.h"
@@ -99,7 +100,17 @@ void parkActiveSegment(Transaction::DocumentAccess& acc, AgentTurnState& st)
 /// reported as tampering so the turn is rejected, never half-applied.
 bool settleWorker(Document& doc, AgentTurnState& st, const char* what)
 {
-    if (AutoTransaction::waitForRecompute(doc.getName(), AgentTurnGuard::nestedWait)) {
+    bool idle = false;
+    if (Py_IsInitialized() && PyGILState_Check()) {
+        // Called from Python: the worker may need the GIL to finish a Python feature's
+        // recompute, so give it up for the wait. Nothing here touches a Python object.
+        Base::PyGILStateRelease release;
+        idle = AutoTransaction::waitForRecompute(doc.getName(), AgentTurnGuard::nestedWait);
+    }
+    else {
+        idle = AutoTransaction::waitForRecompute(doc.getName(), AgentTurnGuard::nestedWait);
+    }
+    if (idle) {
         return true;
     }
     std::lock_guard<std::recursive_mutex> lock(st.mutex);
@@ -200,6 +211,13 @@ AgentTurnReport AgentTurnGuard::end(Document& doc, bool commit, std::chrono::mil
 
     std::unique_lock<std::recursive_mutex> lock(st->mutex);
     st->ending = true;
+    if (commit && !st->tampering.empty()) {
+        // A tampered turn (undo/redo/clearUndos refused, or a savepoint operation skipped because
+        // the worker was busy) is never committed, not even by a direct C++ caller: abort it.
+        commit = false;
+        report.reason = "the turn was tampered with, so it was aborted instead of committed";
+        report.tampering = st->tampering;
+    }
 
     // Fold: the active segment is the newest, the parked ones are older.
     Transaction* base = acc.d->activeUndoTransaction;

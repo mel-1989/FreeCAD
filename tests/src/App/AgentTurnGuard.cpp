@@ -343,15 +343,19 @@ TEST_F(AgentTurnGuardTest, UndoAndRedoAreRefusedAndReported)
     EXPECT_EQ(_a->Integer.getValue(), 6) << "the refused undo changed nothing";
     EXPECT_EQ(undos(), 2) << "the human's entry plus the turn's pending one: nothing was undone";
 
+    // A tampered turn is never committed, even when the caller asks for it: it is aborted.
     const auto report = App::AgentTurnGuard::end(*_doc, true);
     EXPECT_EQ(report.undoRefused, 1);
     EXPECT_EQ(report.redoRefused, 1);
     EXPECT_EQ(report.clearUndosRefused, 1);
     EXPECT_EQ(report.tampering.size(), 3U);
-    EXPECT_EQ(undos(), 2);
-    const auto names = _doc->getAvailableUndoNames();
-    EXPECT_EQ(names.front(), "the turn");
-    EXPECT_EQ(names.back(), "human");
+    EXPECT_FALSE(report.committed);
+    EXPECT_TRUE(report.aborted);
+    EXPECT_EQ(report.undoEntries, 0);
+    EXPECT_FALSE(report.reason.empty());
+    EXPECT_EQ(_a->Integer.getValue(), 5) << "the turn's change was rolled back";
+    EXPECT_EQ(undos(), 1);
+    EXPECT_EQ(_doc->getAvailableUndoNames().front(), "human");
 }
 
 TEST_F(AgentTurnGuardTest, EndWithAbortRestoresEveryProperty)

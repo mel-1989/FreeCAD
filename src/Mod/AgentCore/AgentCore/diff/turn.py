@@ -281,6 +281,7 @@ class AgentTurn:
         self.doc = doc
         self.use_guard = bool(use_guard)
         self._guarded = False
+        self._guard_failed = False
         self.label = label
         self.store = store
         self.checks = checks
@@ -455,6 +456,8 @@ class AgentTurn:
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        if self._guard_failed:
+            return False  # already ended and rejected by a refused guarded end
         try:
             if exc_type is None:
                 for rec in reversed(self._recs):
@@ -497,7 +500,7 @@ class AgentTurn:
             ok, why = rec["doc"].canEndAgentTurn(60.0)
             if not ok:
                 blocked.append(f"{rec['name']}: {why}")
-        done = []
+        done, taken = [], []
         failure = None
         if blocked:
             failure = TurnError("guarded turn could not end, aborted in every document: " + "; ".join(blocked))
@@ -510,10 +513,13 @@ class AgentTurn:
                 if commit:  # raced with the worker after the check: take the others back
                     for prev in done:
                         if prev["guard_report"]["recorded"]:
+                            n = prev["doc"].UndoCount
                             try:
                                 prev["doc"].undo()
                             except Exception:
                                 pass
+                            if prev["doc"].UndoCount < n:
+                                taken.append(prev)
                     commit = False
                 continue
             rec["guard_report"] = rep
@@ -532,6 +538,17 @@ class AgentTurn:
                         rec["doc"].endAgentTurn(False)
                 except Exception:
                     pass
+            # The turn is over, rejected, in every document: documents that never committed are
+            # already restored; the ones taken back were undone above, so reject must not undo them
+            # again (that would eat the human's previous entry) and their redo entry is dropped.
+            for rec in self._recs:
+                if any(rec is t for t in taken):
+                    rec["phase"] = "undone"
+            self._guard_failed = True
+            try:
+                self._finish_reject({rec["name"]: "undo" for rec in self._recs}, guard_error=str(failure))
+            except Exception:
+                self.status = "rejected"
             raise failure
 
     def _close_recording(self):
@@ -663,6 +680,8 @@ class AgentTurn:
         the redo stack, so a later ``redo()`` cannot bring the rejected
         changes back without an apply token.
         """
+        if self._guard_failed and self.status == "rejected":
+            return self.result  # the guarded end already rejected the turn; nothing more to undo
         if self.status not in ("open", "proposed"):
             raise TurnError(f"cannot reject a turn that is {self.status}")
         if self.status == "open":  # exception inside the body

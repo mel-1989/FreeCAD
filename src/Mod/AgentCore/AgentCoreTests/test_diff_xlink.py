@@ -17,7 +17,7 @@ if FIX not in sys.path:
 
 import diff_builders as db  # noqa: E402
 from AgentCore.diff import AgentTurn, ApplyAuthority, SnapshotStore, differences  # noqa: E402
-from AgentCore.diff.turn import _dump  # noqa: E402
+from AgentCore.diff.turn import TurnError, _dump  # noqa: E402
 
 
 def settled(doc):
@@ -232,6 +232,81 @@ class TestXLinkGuiUndo(unittest.TestCase):
         self.assertNotEqual(out["changed"], out["before"])
         self.assertEqual(out["undo_counts_after_undo"], [0, 0], out)    # one Std_Undo emptied both stacks
         self.assertEqual(out["after_undo"], out["before"], out)         # and both documents are back
+
+
+class _RefusingOnce:
+    """Document proxy whose guarded end refuses a commit once, as if a worker recompute had been
+    queued for it between the pre-check and the end."""
+
+    def __init__(self, doc):
+        object.__setattr__(self, "_d", doc)
+        object.__setattr__(self, "refused", 0)
+
+    def __getattr__(self, name):
+        return getattr(self._d, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._d, name, value)
+
+    def endAgentTurn(self, commit=True, timeout=60.0):
+        if commit and not self.refused:
+            object.__setattr__(self, "refused", 1)
+            rep = self._d.agentTurnStatus()
+            rep["refused"], rep["reason"] = True, "simulated worker race"
+            return rep
+        return self._d.endAgentTurn(commit, timeout)
+
+
+@unittest.skipUnless(hasattr(App.Document, "beginAgentTurn"), "needs the C++ agent turn guard")
+class TestRacedMultiDocumentEnd(unittest.TestCase):
+    """A commit that refuses after another document already committed: the turn ends rejected."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="f3race")
+        self.src, self.asm = db.build_xlink_pair(self.tmp)
+        self.asm.openTransaction("human edit")
+        self.asm.getObject("LinkBox").Label = "human"
+        self.asm.commitTransaction()
+        self.src.openTransaction("human src")
+        self.src.getObject("SrcCyl").Radius = 3
+        self.src.commitTransaction()
+        self.src.recompute()
+        self.pre = {d.Name: (settled(d), list(d.UndoNames)) for d in (self.asm, self.src)}
+
+    def tearDown(self):
+        db.close(self.asm, self.src)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _state(self):
+        for d in (self.asm, self.src):
+            self.assertEqual(differences(self.pre[d.Name][0], settled(d)), [], d.Name)
+            self.assertEqual(list(d.UndoNames), self.pre[d.Name][1], d.Name)   # the human's entries intact
+            self.assertEqual(list(d.RedoNames), [], d.Name)                    # nothing of the turn to redo
+            self.assertFalse(d.isAgentTurnActive(), d.Name)
+
+    def test_refusal_after_another_document_committed_rejects_the_whole_turn(self):
+        wrapped = _RefusingOnce(self.src)
+        t = AgentTurn(self.asm, label="raced", verify=False, geometry_diff=False, docs=[self.asm, wrapped])
+        with self.assertRaises(TurnError):
+            with t:
+                self.asm.openTransaction("y")
+                self.asm.getObject("LinkBox").LinkPlacement = App.Placement(App.Vector(9, 9, 9), App.Rotation())
+                self.asm.commitTransaction()
+                self.src.openTransaction("x")
+                self.src.getObject("SrcBox").Length = 20
+                self.src.commitTransaction()
+                self.src.recompute()
+                self.asm.recompute()
+        self.assertEqual(wrapped.refused, 1)
+        self.assertEqual(t.status, "rejected")
+        self.assertIsNotNone(t.result)
+        self._state()
+        # a later reject, or leaving the block again, changes nothing (no second undo)
+        before = {d.Name: (list(d.UndoNames), list(d.RedoNames)) for d in (self.asm, self.src)}
+        self.assertIs(t.reject(), t.result)
+        t.__exit__(RuntimeError, RuntimeError("late"), None)
+        self.assertEqual(before, {d.Name: (list(d.UndoNames), list(d.RedoNames)) for d in (self.asm, self.src)})
+        self._state()
 
 
 if __name__ == "__main__":
