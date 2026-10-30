@@ -26,7 +26,10 @@
 
 #pragma once
 
+#include <list>
+#include <map>
 #include <unordered_map>
+#include <vector>
 #include <Base/Factory.h>
 #include <Base/Persistence.h>
 #include <App/PropertyContainer.h>
@@ -46,6 +49,7 @@ namespace App
 class Document;
 class Property;
 class Transaction;
+struct DocumentP;
 class TransactionObject;
 class TransactionalObject;
 
@@ -167,12 +171,49 @@ public:
      */
     void addObjectChange(const TransactionalObject* Obj, const Property* Prop);
 
+    /**
+     * @brief Make this transaction a composite that also owns earlier segments.
+     *
+     * Used by the agent turn guard (AgentTurnGuard.h) to fold the savepoint
+     * segments of one turn into a single undo entry.  The segments are given
+     * oldest first and are owned by this transaction afterwards.  Undoing the
+     * composite applies this transaction first and then the segments from the
+     * newest to the oldest; destroying it destroys the oldest segment first.
+     */
+    void adoptEarlierSegments(std::vector<Transaction*> segments);
+
+    /// Number of segments (this transaction counts as one).
+    std::size_t segmentCount() const;
+
+    /**
+     * @brief Private state of a Document that the agent turn guard works on.
+     *
+     * Document befriends Transaction; this accessor hands the pieces the guard
+     * needs to AgentTurnGuard without adding anything to Document.h.
+     */
+    struct DocumentAccess
+    {
+        DocumentP* d;
+        std::list<Transaction*>& undo;
+        std::map<int, Transaction*>& undoMap;
+        std::list<Transaction*>& redo;
+        std::map<int, Transaction*>& redoMap;
+    };
+    static DocumentAccess accessDocument(Document& doc);
+    /// Drop the redo stack of @p doc (Document::_clearRedos).
+    static void clearRedosOf(Document& doc);
+
 private:
+    void applyOwn(Document& Doc, bool forward);
+    /// Destroy the recorded entries as the destructor does (objects removed from the document are freed).
+    void releaseOwn();
     void changeProperty(TransactionalObject* Obj,
                         std::function<void(TransactionObject* to)> changeFunc);
 
 private:
     int transID;
+    /// Earlier segments of a composite transaction, oldest first (owned).
+    std::vector<Transaction*> _Earlier;
     using Info = std::pair<const TransactionalObject*, TransactionObject*>;
     bmi::multi_index_container<
         Info,

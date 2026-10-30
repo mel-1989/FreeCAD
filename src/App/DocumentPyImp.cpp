@@ -26,6 +26,7 @@
 #include <Base/Interpreter.h>
 #include <Base/Stream.h>
 
+#include "AgentTurnGuard.h"
 #include "Document.h"
 #include "DocumentObject.h"
 #include "DocumentObjectPy.h"
@@ -694,6 +695,83 @@ PyObject* DocumentPy::openTransaction(PyObject* args)
 
     getDocumentPtr()->openTransaction(cmd.c_str());
     Py_Return;
+}
+
+PyObject* DocumentPy::beginAgentTurn(PyObject* args)
+{
+    const char* name = "Agent turn";
+    double timeout = 60.0;
+    if (!PyArg_ParseTuple(args, "|sd", &name, &timeout)) {
+        return nullptr;
+    }
+    Document* doc = getDocumentPtr();
+    const auto wait = std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0));
+    bool idle = false;
+    {
+        // The worker may need the GIL to finish its recompute.
+        Base::PyGILStateRelease release;
+        idle = AgentTurnGuard::waitForWorker(*doc, wait);
+    }
+    if (!idle) {
+        throw Base::RuntimeError("the document is still recomputing on the async worker");
+    }
+    const int tid = AgentTurnGuard::begin(*doc, name, std::chrono::milliseconds(0));
+    return Py::new_reference_to(Py::Long(tid));
+}
+
+PyObject* DocumentPy::endAgentTurn(PyObject* args)
+{
+    PyObject* commit = Py_True;
+    double timeout = 60.0;
+    if (!PyArg_ParseTuple(args, "|O!d", &PyBool_Type, &commit, &timeout)) {
+        return nullptr;
+    }
+    Document* doc = getDocumentPtr();
+    const auto wait = std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0));
+    {
+        Base::PyGILStateRelease release;
+        AgentTurnGuard::waitForWorker(*doc, wait);
+    }
+    // The wait above is repeated inside end(), which then refuses if the worker is still busy.
+    const AgentTurnReport r = AgentTurnGuard::end(*doc, Base::asBoolean(commit), std::chrono::milliseconds(0));
+    Py::Dict d;
+    auto strings = [](const std::vector<std::string>& v) {
+        Py::List list;
+        for (const auto& item : v) {
+            list.append(Py::String(item));
+        }
+        return list;
+    };
+    d.setItem("tid", Py::Long(r.tid));
+    d.setItem("name", Py::String(r.name));
+    d.setItem("refused", Py::Boolean(r.refused));
+    d.setItem("reason", Py::String(r.reason));
+    d.setItem("committed", Py::Boolean(r.committed));
+    d.setItem("aborted", Py::Boolean(r.aborted));
+    d.setItem("recorded", Py::Boolean(r.recorded));
+    d.setItem("undo_entries", Py::Long(r.undoEntries));
+    d.setItem("segments", Py::Long(r.segments));
+    d.setItem("nested_opens", Py::Long(r.nestedOpens));
+    d.setItem("nested_commits", Py::Long(r.nestedCommits));
+    d.setItem("nested_aborts", Py::Long(r.nestedAborts));
+    d.setItem("stray_closes", Py::Long(r.strayCloses));
+    d.setItem("empty_closes", Py::Long(r.emptyCloses));
+    d.setItem("locked_opens", Py::Long(r.lockedOpens));
+    d.setItem("undo_refused", Py::Long(r.undoRefused));
+    d.setItem("redo_refused", Py::Long(r.redoRefused));
+    d.setItem("clear_undos_refused", Py::Long(r.clearUndosRefused));
+    d.setItem("nested_names", strings(r.nestedNames));
+    d.setItem("tampering", strings(r.tampering));
+    d.setItem("tampered", Py::Boolean(!r.tampering.empty()));
+    return Py::new_reference_to(d);
+}
+
+PyObject* DocumentPy::isAgentTurnActive(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    return Py::new_reference_to(Py::Boolean(AgentTurnGuard::isActive(*getDocumentPtr())));
 }
 
 PyObject* DocumentPy::abortTransaction(PyObject* args)

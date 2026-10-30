@@ -26,6 +26,7 @@
 
 #include <cstddef>
 #include <FCGlobal.h>
+#include <chrono>
 #include <string>
 
 #include "TransactionDefs.h"
@@ -71,6 +72,19 @@ public:
      * transaction,
      */
     void close(TransactionCloseMode mode = TransactionCloseMode::Commit);
+
+    /**
+     * @brief Wait until no recompute of a document is queued or running on the async worker.
+     *
+     * Lives here because AutoTransaction is a friend of Application and the
+     * worker state is private to it. Used by the agent turn guard so a turn
+     * never commits halfway through a recompute.
+     *
+     * @param[in] docName: internal name of the document
+     * @param[in] timeout: longest wait
+     * @return false when the worker was still busy with the document at the timeout
+     */
+    static bool waitForRecompute(const std::string& docName, std::chrono::milliseconds timeout);
 
 private:
     int tid { 0 };

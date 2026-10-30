@@ -73,6 +73,7 @@
 #include "Document.h"
 #include "private/DocumentP.h"
 #include "Application.h"
+#include "AgentTurnGuard.h"
 #include "AutoTransaction.h"
 #include "BackupPolicy.h"
 #include "ExpressionParser.h"
@@ -173,6 +174,9 @@ bool Document::checkOnCycle()
 
 bool Document::undo(const int id)
 {
+    if (d->agent && AgentTurnGuard::refuseHistory(*this, "undo")) {
+        return false;
+    }
     if (id != 0) {
         const auto it = mUndoMap.find(id);
         if (it == mUndoMap.end()) {
@@ -226,6 +230,9 @@ bool Document::undo(const int id)
 
 bool Document::redo(const int id)
 {
+    if (d->agent && AgentTurnGuard::refuseHistory(*this, "redo")) {
+        return false;
+    }
     if (id != 0) {
         const auto it = mRedoMap.find(id);
         if (it == mRedoMap.end()) {
@@ -399,6 +406,11 @@ int Document::_openTransaction(std::string name, int id)
         return 0;
     }
 
+    // In a guarded agent turn this only opens the next segment of the turn's one transaction.
+    if (d->agent && AgentTurnGuard::turnId(*this) != NullTransaction) {
+        return AgentTurnGuard::ensureSegment(*this);
+    }
+
     // Avoid recursive calls that is possible while
     // clearing the redo transactions and will cause
     // a double deletion of some transaction and thus
@@ -452,6 +464,10 @@ void Document::renameTransaction(const std::string& name, const int id) const
 }
 int Document::setActiveTransaction(TransactionName name, int tid)
 {
+    // In a guarded agent turn every open is a savepoint inside the turn's transaction.
+    if (d->agent && AgentTurnGuard::turnId(*this) != NullTransaction) {
+        return AgentTurnGuard::nestedOpen(*this, name.name);
+    }
     // Probably a group transaction situation
     if (tid != NullTransaction) {
         if (!GetApplication().transactionIsActive(tid)) {
@@ -493,6 +509,16 @@ void Document::unlockTransaction()
 {
     if (d->TransactionLock > 0) {
         d->TransactionLock--;
+        if (d->TransactionLock == 0 && d->agent) {
+            // A nested close that arrived while locked is performed now.
+            const int pending = AgentTurnGuard::takeDeferredClose(*this);
+            if (pending == 2) {
+                _abortTransaction();
+            }
+            else if (pending == 1) {
+                _commitTransaction(false);
+            }
+        }
     }
 }
 bool Document::isTransactionLocked() const
@@ -586,6 +612,12 @@ void Document::commitTransaction() // NOLINT
         return;
     }
 
+    if (const int turn = d->agent ? AgentTurnGuard::turnId(*this) : NullTransaction) {
+        // Guarded agent turn: this closes a savepoint, never the turn.
+        GetApplication().commitTransaction(turn);
+        return;
+    }
+
     if (d->activeUndoTransaction) {
         // This will iterate over all documents and ask them to
         // commit their transaction if their ID matches
@@ -610,6 +642,10 @@ bool Document::_commitTransaction(const bool notify)
     if (d->committing) {
         // for a recursive call return without printing a warning
         return false;
+    }
+
+    if (d->agent && AgentTurnGuard::turnId(*this) != NullTransaction) {
+        return AgentTurnGuard::nestedCommit(*this);
     }
 
     d->bookedTransaction = 0;
@@ -652,6 +688,11 @@ void Document::abortTransaction() const
         }
         return;
     }
+    if (const int turn = d->agent ? AgentTurnGuard::turnId(*this) : NullTransaction) {
+        // Guarded agent turn: this rolls back to the savepoint, never the whole turn.
+        GetApplication().abortTransaction(turn);
+        return;
+    }
     if (d->activeUndoTransaction) {
         GetApplication().abortTransaction(d->activeUndoTransaction->getID());
     } else {
@@ -669,6 +710,22 @@ void Document::_abortTransaction()
         if (FC_LOG_INSTANCE.isEnabled(FC_LOGLEVEL_LOG)) {
             FC_WARN("Cannot abort transaction while transacting");
         }
+    }
+
+    if (d->agent && AgentTurnGuard::turnId(*this) != NullTransaction) {
+        // Guarded agent turn: roll back only the segment recorded since the nested open.
+        std::unique_lock<std::recursive_mutex> turnLock;
+        if (Transaction* segment = AgentTurnGuard::beginNestedAbort(*this, turnLock)) {
+            {
+                Base::FlagToggler<bool> flag(d->rollback);
+                Application::TransactionSignaller signaller(true, true);
+                segment->apply(*this, false);
+                delete segment;
+                signalAbortTransaction(*this);
+            }
+            signalBecameStable(*this);
+        }
+        return;
     }
 
     d->bookedTransaction = 0;
@@ -764,6 +821,9 @@ void Document::clearDocument() // NOLINT
 
 void Document::clearUndos()
 {
+    if (d->agent && AgentTurnGuard::refuseHistory(*this, "clearUndos")) {
+        return;
+    }
     if (isPerformingTransaction() || d->committing) {
         FC_ERR("Cannot clear undos while transacting");
         return;
@@ -933,6 +993,12 @@ void Document::onBeforeChangeProperty(const TransactionalObject* Who, const Prop
         signalBeforeChangeObject(*static_cast<const DocumentObject*>(Who), *What);
     }
     if (!d->rollback && !globalIsRelabeling && !d->definingTransaction) {
+        // In a guarded turn the recompute worker records into the turn too: serialise it
+        // against the turn's savepoint bookkeeping on the main thread.
+        std::unique_lock<std::recursive_mutex> turnLock;
+        if (d->agent) {
+            turnLock = AgentTurnGuard::lockFor(*this);
+        }
         _checkTransaction(nullptr, What, __LINE__);
         if (d->activeUndoTransaction) {
             d->activeUndoTransaction->addObjectChange(Who, What);
@@ -1064,6 +1130,8 @@ Document::~Document()
 #ifdef FC_LOGUPDATECHAIN
     Console().log("-App::Document: {} {}\n", getName(), this);
 #endif
+
+    AgentTurnGuard::onDocumentDestroy(*this);
 
     try {
         clearUndos();

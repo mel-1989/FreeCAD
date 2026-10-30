@@ -67,6 +67,7 @@ namespace App
 {
 using HasherMap = boost::bimap<StringHasherRef, int>;
 class Transaction;
+struct AgentTurnState;
 
 // Pimpl class
 struct DocumentP
@@ -83,6 +84,8 @@ struct DocumentP
     long lastObjectId {};
     DocumentObject* activeObject {nullptr};
     Transaction* activeUndoTransaction {nullptr};
+    // State of a guarded agent turn on this document, if one is active (AgentTurnGuard.h)
+    std::shared_ptr<AgentTurnState> agent;
     // pointer to the python class
     Py::Object DocumentPythonObject;
     int iTransactionMode {0};

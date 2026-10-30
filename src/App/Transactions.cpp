@@ -25,7 +25,11 @@
 
 #include <cassert>
 
+#include <algorithm>
 #include <atomic>
+#include <list>
+#include <map>
+#include <vector>
 #include <Base/Console.h>
 #include <Base/Reader.h>
 #include <Base/Writer.h>
@@ -55,6 +59,18 @@ Transaction::Transaction(int id)
 }
 
 Transaction::~Transaction()
+{
+    // Oldest segment first: an object can appear in several segments, but once
+    // removed from the document it never appears in a later one (see
+    // Document::clearUndos).
+    for (auto* segment : _Earlier) {
+        delete segment;
+    }
+    _Earlier.clear();
+    releaseOwn();
+}
+
+void Transaction::releaseOwn()
 {
     auto& index = _Objects.get<0>();
     for (const auto& It : index) {
@@ -88,6 +104,7 @@ Transaction::~Transaction()
         }
         delete It.second;
     }
+    index.clear();
 }
 
 static std::atomic<int> _TransactionID;
@@ -129,11 +146,40 @@ int Transaction::getID() const
 
 bool Transaction::isEmpty() const
 {
-    return _Objects.empty();
+    return _Objects.empty()
+        && std::all_of(_Earlier.begin(), _Earlier.end(), [](const Transaction* t) {
+               return t->isEmpty();
+           });
+}
+
+void Transaction::adoptEarlierSegments(std::vector<Transaction*> segments)
+{
+    // Segments already owned by this transaction stay older than the new ones.
+    _Earlier.insert(_Earlier.begin(), segments.begin(), segments.end());
+}
+
+std::size_t Transaction::segmentCount() const
+{
+    return 1 + _Earlier.size();
+}
+
+Transaction::DocumentAccess Transaction::accessDocument(Document& doc)
+{
+    return {doc.d, doc.mUndoTransactions, doc.mUndoMap, doc.mRedoTransactions, doc.mRedoMap};
+}
+
+void Transaction::clearRedosOf(Document& doc)
+{
+    doc._clearRedos();
 }
 
 bool Transaction::hasObject(const TransactionalObject* Obj) const
 {
+    if (std::any_of(_Earlier.begin(), _Earlier.end(), [Obj](const Transaction* t) {
+            return t->hasObject(Obj);
+        })) {
+        return true;
+    }
 #if BOOST_VERSION < 107500
     return !!_Objects.get<1>().count(Obj);
 #else
@@ -185,6 +231,39 @@ void Transaction::addOrRemoveProperty(TransactionalObject* Obj, const Property* 
 
 
 void Transaction::apply(Document& Doc, bool forward)
+{
+    if (_Earlier.empty()) {
+        applyOwn(Doc, forward);
+        return;
+    }
+    // Composite: undo runs newest to oldest (this transaction is the newest
+    // segment), redo oldest to newest.
+    //
+    // Each segment is released as soon as it is applied, exactly as if it had
+    // been undone (and deleted) on its own: an object removed again by an older
+    // segment must not still be owned by a newer one when that is deleted.
+    // The callers delete the transaction right after applying it.
+    if (forward) {
+        for (auto* segment : _Earlier) {
+            segment->applyOwn(Doc, true);
+            delete segment;
+        }
+        _Earlier.clear();
+        applyOwn(Doc, true);
+    }
+    else {
+        applyOwn(Doc, false);
+        releaseOwn();
+        while (!_Earlier.empty()) {
+            Transaction* segment = _Earlier.back();
+            _Earlier.pop_back();
+            segment->applyOwn(Doc, false);
+            delete segment;
+        }
+    }
+}
+
+void Transaction::applyOwn(Document& Doc, bool forward)
 {
     std::string errMsg;
     try {
