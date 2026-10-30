@@ -32,6 +32,7 @@
 
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
+#include <BRep_Tool.hxx>
 #include <BRepTools.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
 #include <Bnd_Box.hxx>
@@ -42,7 +43,9 @@
 #include <TopAbs.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
+#include <TopTools_MapOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <gp_Dir.hxx>
@@ -116,9 +119,11 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
     box.Get(x0, y0, z0, x1, y1, z1);
     const double diag = std::max(gp_Pnt(x0, y0, z0).Distance(gp_Pnt(x1, y1, z1)), 1.0);
     const double reach = diag * 1.01;
-    // Hits closer than hitTol to the ray start (the face itself, at w == lift) are skipped;
-    // thinner walls than that are still seen, unlike the Python reference's start-match eps.
-    const double hitTol = 1e-7 * std::max(1.0, diag);
+    // The start face is skipped by identity, never by distance: the ray starts at w == lift
+    // above the sample and meets the start face there again. Only that one hit (same face,
+    // at w == lift within the intersector's accuracy) is dropped; a wall of any thickness
+    // behind it is a different face (or, on a curved face, a hit far from w == lift).
+    const double startTol = 1e-9 * std::max(1.0, diag);
     const double lift = 1e-3 * std::max(1.0, diag);
 
     TopTools_IndexedMapOfShape allFaces;
@@ -135,6 +140,8 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
         }
         TopTools_IndexedMapOfShape solidFaces;
         TopExp::MapShapes(solid, TopAbs_FACE, solidFaces);
+        TopTools_IndexedDataMapOfShapeListOfShape vertexFaces;
+        TopExp::MapShapesAndAncestors(solid, TopAbs_VERTEX, TopAbs_FACE, vertexFaces);
         for (int fi = 1; fi <= solidFaces.Extent() && best.complete; ++fi) {
             const TopoDS_Face face = TopoDS::Face(solidFaces(fi));
             std::vector<gp_Pnt2d> pts;
@@ -152,6 +159,18 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
                 continue;
             }
             const int gi = allFaces.FindIndex(face);
+            // Faces sharing an edge or vertex with the start face: a sample on (or within
+            // tolerance of) the shared boundary also meets the neighbour at w == lift.
+            TopTools_MapOfShape neighbours;
+            for (TopExp_Explorer ve(face, TopAbs_VERTEX); ve.More(); ve.Next()) {
+                int vi = vertexFaces.FindIndex(ve.Current());
+                if (vi == 0) {
+                    continue;
+                }
+                for (const TopoDS_Shape& nf : vertexFaces(vi)) {
+                    neighbours.Add(nf);
+                }
+            }
             for (const gp_Pnt2d& uv : pts) {
                 if (expired()) {
                     best.complete = false;
@@ -171,10 +190,32 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
                     gp_Lin ray(a, gp_Dir(-n.X(), -n.Y(), -n.Z()));
                     inter.Perform(ray, 0.0, lift + reach);
                     ++best.rays;
+                    // The start hit is the same-face hit nearest to w == lift, if it lies
+                    // within the face tolerance of it. Exactly one hit is excluded.
+                    const double faceTol = std::max(BRep_Tool::Tolerance(face), Precision::Confusion());
+                    const double sameTol = std::max(10.0 * faceTol, startTol);
+                    int startHit = 0;
+                    double startDist = sameTol;
+                    for (int k = 1; k <= inter.NbPnt(); ++k) {
+                        double d = std::abs(inter.WParameter(k) - lift);
+                        if (d <= startDist && inter.Face(k).IsSame(face)) {
+                            startDist = d;
+                            startHit = k;
+                        }
+                    }
                     double nearest = -1.0;
                     for (int k = 1; k <= inter.NbPnt(); ++k) {
                         double w = inter.WParameter(k);
-                        if (w > lift + hitTol && (nearest < 0.0 || w < nearest)) {
+                        // Neighbour window: tighter than the start-face one (no 10x), so a
+                        // real sliver near a shared edge on a tolerant shape still counts.
+                        if (w - lift <= diag && neighbours.Contains(inter.Face(k))) {
+                            const double hitTol = BRep_Tool::Tolerance(inter.Face(k));
+                            // 2x for the intersector's error (about 1.4e-7 seen at tolerance 1e-7)
+                            if (w - lift <= std::max(2.0 * std::max(faceTol, hitTol), 5e-7) + startTol) {
+                                continue;
+                            }
+                        }
+                        if (k != startHit && w > lift && (nearest < 0.0 || w < nearest)) {
                             nearest = w;
                         }
                     }
