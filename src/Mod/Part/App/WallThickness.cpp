@@ -206,8 +206,14 @@ WallThicknessResult minWallThickness(const TopoDS_Shape& shape, int samples, dou
                     double nearest = -1.0;
                     for (int k = 1; k <= inter.NbPnt(); ++k) {
                         double w = inter.WParameter(k);
-                        if (w - lift <= sameTol && neighbours.Contains(inter.Face(k))) {
-                            continue;
+                        // Neighbour window: tighter than the start-face one (no 10x), so a
+                        // real sliver near a shared edge on a tolerant shape still counts.
+                        if (w - lift <= diag && neighbours.Contains(inter.Face(k))) {
+                            const double hitTol = BRep_Tool::Tolerance(inter.Face(k));
+                            // 2x for the intersector's error (about 1.4e-7 seen at tolerance 1e-7)
+                            if (w - lift <= std::max(2.0 * std::max(faceTol, hitTol), 5e-7) + startTol) {
+                                continue;
+                            }
                         }
                         if (k != startHit && w > lift && (nearest < 0.0 || w < nearest)) {
                             nearest = w;

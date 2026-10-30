@@ -15,6 +15,108 @@ def solid_with_cavity():
     return outer.cut(inner)
 
 
+# Cone with fixTolerance(1e-2) (face tolerance 0.01), from the r015 verifier.
+CONE96_BREP = """DBRep_DrawableShape
+
+CASCADE Topology V1, (c) Matra-Datavision
+Locations 0
+Curve2ds 4
+1 0 20.591260281974002 1 0 
+1 6.2831853071795862 -0 0 1 
+1 0 -0 0 1 
+1 0 0 1 0 
+Curves 3
+2 2.9999999999999991 2.9999999999999991 10 0 0 -1 2.2204460492503136e-16 -1 -0 -1 2.2204460492503136e-16 -0 1.999999999999998
+1 3.0000000000000084 -16.999999999999996 0 -4.082086890494704e-16 0.87415727612153771 0.48564293117863216 
+2 2.9999999999999991 2.9999999999999991 0 0 0 -1 2.2204460492503136e-16 -1 -0 -1 2.2204460492503136e-16 -0 20
+Polygon3D 0
+PolygonOnTriangulations 0
+Surfaces 3
+3 2.9999999999999991 2.9999999999999991 0 -0 -0 1 2.2204460492503136e-16 -1 -0 -1 2.2204460492503136e-16 -0 20
+-1.0636978224025597
+1 2.9999999999999991 2.9999999999999991 10 -0 -0 1 2.2204460492503136e-16 -1 -0 -1 2.2204460492503136e-16 -0 
+1 2.9999999999999991 2.9999999999999991 0 -0 -0 1 2.2204460492503136e-16 -1 -0 -1 2.2204460492503136e-16 -0 
+Triangulations 0
+
+TShapes 13
+Ve
+0.01
+3 1 10
+0 0
+
+0101101
+*
+Ed
+ 0.01 1 1 0
+1  1 0 0 6.28318530717959
+2  1 1 0 0 6.28318530717959
+0
+
+0101000
++13 0 -13 0 *
+Ve
+0.01
+3.00000000000001 -17 0
+0 0
+
+0101101
+*
+Ed
+ 0.01 1 1 0
+1  2 0 0 20.591260281974
+3  2 3CN 1 0 0 20.591260281974
+0
+
+0101000
+-13 0 +11 0 *
+Ed
+ 0.01 1 1 0
+1  3 0 0 6.28318530717959
+2  4 1 0 0 6.28318530717959
+0
+
+0101000
++11 0 -11 0 *
+Wi
+
+0101100
+-12 0 +10 0 +9 0 -10 0 *
+Fa
+0  0.01 1 0
+
+0111000
++8 0 *
+Wi
+
+0101100
++12 0 *
+Fa
+0  0.01 2 0
+
+0111000
++6 0 *
+Wi
+
+0101100
+-9 0 *
+Fa
+0  0.01 3 0
+
+0111000
+-4 0 *
+Sh
+
+0101100
+-7 0 -5 0 +3 0 *
+So
+
+1100000
++2 0 *
+
++1 0 
+"""
+
+
 class TestWallThickness(unittest.TestCase):
     """Part.Shape.minWallThickness against analytic walls (C++ kernel, Part/App/WallThickness.cpp)."""
 
@@ -151,6 +253,13 @@ class TestWallThickness(unittest.TestCase):
             self.assertGreater(self.measure(wedge, samples=n)["min"], 0.03, n)
         wedge = Part.makeCone(10, 0, 20, V(0, 0, 0), V(0, 0, 1), 5)
         self.assertAlmostEqual(self.measure(wedge, samples=2)["min"], 0.2187, delta=1e-3)
+
+    def test_sliver_near_rim_on_tolerant_cone(self):
+        # Sliver between the base plane and the cone face (0.0688 thick) at a rim sample,
+        # thinner than 10x the face tolerance: it is a wall, not the neighbour at the ray start.
+        s = Part.Shape()
+        s.importBrepFromString(CONE96_BREP)
+        self.assertAlmostEqual(self.measure(s, samples=9)["min"], 0.0688, delta=1e-3)
 
     def test_time_budget_semantics(self):
         s = solid_with_cavity()
