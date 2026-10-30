@@ -114,6 +114,31 @@ class Document(PropertyContainer):
         """
         ...
 
+    def getElementReferenceEvents(self, since: int = ..., /) -> list[dict[str, object]]:
+        """
+        Return the journal of element-reference updates of this document, oldest first.
+
+        Each event is a dict with the keys seq, document, owner, property, target,
+        oldSub, newSub, oldMapped, newMapped, kind ("remapped", "lost" or "restored")
+        and basis ("element_map", "geometry", "anchored", "history" or "record").
+        Only events with seq greater than `since` are returned. The journal is
+        observational, bounded, and empty after a document is loaded.
+        """
+        ...
+
+    def clearElementReferenceEvents(self) -> None:
+        """
+        Drop the element-reference events recorded for this document.
+        """
+        ...
+
+    def lastElementReferenceEventSeq(self) -> int:
+        """
+        Return the highest event sequence number handed out so far in this process
+        (0 if none), usable as the `since` argument of getElementReferenceEvents().
+        """
+        ...
+
     def load(self, path: str, /) -> None:
         """
         Load the document from the given path.

@@ -62,6 +62,7 @@ set(PartDesign_TestScripts
     PartDesignTests/TestDraft.py
     PartDesignTests/TestThickness.py
     PartDesignTests/TestReferenceRescue.py
+    PartDesignTests/TestElementReferenceEvents.py
     PartDesignTests/TestNamePathRetarget.py
     PartDesignTests/TestTopologicalNamingProblem.py
     PartDesignTests/TestInvoluteGear.py
