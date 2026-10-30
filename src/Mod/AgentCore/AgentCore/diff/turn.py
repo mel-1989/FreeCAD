@@ -485,32 +485,54 @@ class AgentTurn:
     def _end_guard(self, commit=True):
         """End the C++ guarded turn of every document and turn its report into the
         records the rest of this module reads (one commit event when the turn
-        recorded something, the nested opens and aborts, tampering)."""
-        first = None
-        for rec in self._recs:
+        recorded something, the nested opens and aborts, tampering).
+
+        All or nothing across documents: every covered document is first checked
+        to be able to end (worker idle, not locked) and nothing is committed
+        unless all can. If one cannot, every turn is aborted instead; if a commit
+        still refuses after others committed, those entries are undone again."""
+        active = [rec for rec in self._recs if rec["doc"].isAgentTurnActive()]
+        blocked = []
+        for rec in active:
+            ok, why = rec["doc"].canEndAgentTurn(60.0)
+            if not ok:
+                blocked.append(f"{rec['name']}: {why}")
+        done = []
+        failure = None
+        if blocked:
+            failure = TurnError("guarded turn could not end, aborted in every document: " + "; ".join(blocked))
+            commit = False
+        for rec in active:
             d = rec["doc"]
-            if not d.isAgentTurnActive():
-                continue
             rep = d.endAgentTurn(commit)
             if rep["refused"]:
-                first = first or TurnError(f"guarded turn of {rec['name']} could not end: {rep['reason']}")
+                failure = failure or TurnError(f"guarded turn of {rec['name']} could not end: {rep['reason']}")
+                if commit:  # raced with the worker after the check: take the others back
+                    for prev in done:
+                        if prev["guard_report"]["recorded"]:
+                            try:
+                                prev["doc"].undo()
+                            except Exception:
+                                pass
+                    commit = False
                 continue
             rec["guard_report"] = rep
+            done.append(rec)
             ev = [("open", n) for n in rep["nested_names"]]
             ev += [("abort", "")] * rep["nested_aborts"]
-            if rep["recorded"]:
+            if rep["recorded"] and rep["committed"]:
                 ev.append(("commit", self.undo_name))
             rec["events"] = ev
             for why in rep["tampering"]:
                 self._tamper(rec, why)
-        if first is not None:
+        if failure is not None:
             for rec in self._recs:  # leave nothing open
                 try:
                     if rec["doc"].isAgentTurnActive():
                         rec["doc"].endAgentTurn(False)
                 except Exception:
                     pass
-            raise first
+            raise failure
 
     def _close_recording(self):
         self._closing = True

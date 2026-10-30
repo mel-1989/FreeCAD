@@ -992,13 +992,14 @@ void Document::onBeforeChangeProperty(const TransactionalObject* Who, const Prop
     if (Who->isDerivedFrom<DocumentObject>()) {
         signalBeforeChangeObject(*static_cast<const DocumentObject*>(Who), *What);
     }
+    // In a guarded turn the recompute worker records into the turn too: serialise it against
+    // the turn's savepoint bookkeeping on the main thread. The lock is taken before the rollback
+    // flag is read, because a nested abort sets that flag while it holds the same lock.
+    std::unique_lock<std::recursive_mutex> turnLock;
+    if (d->agent) {
+        turnLock = AgentTurnGuard::lockFor(*this);
+    }
     if (!d->rollback && !globalIsRelabeling && !d->definingTransaction) {
-        // In a guarded turn the recompute worker records into the turn too: serialise it
-        // against the turn's savepoint bookkeeping on the main thread.
-        std::unique_lock<std::recursive_mutex> turnLock;
-        if (d->agent) {
-            turnLock = AgentTurnGuard::lockFor(*this);
-        }
         _checkTransaction(nullptr, What, __LINE__);
         if (d->activeUndoTransaction) {
             d->activeUndoTransaction->addObjectChange(Who, What);

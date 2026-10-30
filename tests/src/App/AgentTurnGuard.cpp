@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include <chrono>
+#include <atomic>
 #include <condition_variable>
 #include <future>
 #include <mutex>
@@ -94,9 +95,41 @@ public:
     }
 };
 
+
+// A worker-safe feature that writes a property thousands of times during its recompute, so the
+// main thread's savepoint operations overlap the worker.
+inline std::atomic<bool> agentLoopStarted {false};
+
+class AgentLoopWriter: public App::DocumentObject
+{
+    PROPERTY_HEADER_WITH_OVERRIDE(App::AgentLoopWriter);
+
+public:
+    App::PropertyInteger Value;
+
+    AgentLoopWriter()
+    {
+        ADD_PROPERTY(Value, (0));
+    }
+    bool canRecomputeOnWorker() const override
+    {
+        return true;
+    }
+    App::DocumentObjectExecReturn* execute() override
+    {
+        agentLoopStarted = true;
+        for (int i = 1; i <= 3000; ++i) {
+            Value.setValue(i);
+            std::this_thread::yield();
+        }
+        return StdReturn;
+    }
+};
+
 }  // namespace App
 
 PROPERTY_SOURCE(App::AgentWorkerWriter, App::DocumentObject)
+PROPERTY_SOURCE(App::AgentLoopWriter, App::DocumentObject)
 
 class AgentTurnGuardTest: public ::testing::Test
 {
@@ -107,6 +140,7 @@ protected:
         static bool registered = false;
         if (!registered) {
             App::AgentWorkerWriter::init();
+            App::AgentLoopWriter::init();
             registered = true;
         }
     }
@@ -511,4 +545,50 @@ TEST_F(AgentTurnGuardTest, OutsideATurnTransactionsBehaveAsBefore)
     EXPECT_EQ(_a->Integer.getValue(), 5);
     EXPECT_TRUE(_doc->undo());
     EXPECT_EQ(_a->Integer.getValue(), 4);
+}
+
+// Nested open/abort cycles on the main thread while the worker keeps writing a property: every
+// savepoint operation waits for the worker, so the worker's writes stay inside the turn and
+// rejecting the turn restores the pre-turn value. (Found by the V-r016-opus verifier.)
+TEST_F(AgentTurnGuardTest, NestedAbortsDuringAsyncRecomputeKeepWorkerWritesInTheTurn)
+{
+    auto* w = static_cast<App::AgentLoopWriter*>(_doc->addObject("App::AgentLoopWriter", "Loop"));
+    ASSERT_NE(w, nullptr);
+    ASSERT_EQ(w->Value.getValue(), 0);
+
+    App::AgentTurnGuard::begin(*_doc, "the turn");
+    _a->Integer.setValue(1);
+    App::agentLoopStarted = false;
+    w->touch();
+    App::GetApplication().queueRecomputeRequest(App::RecomputeRequest::fromDocumentObject(*w));
+    while (!App::agentLoopStarted) {
+        std::this_thread::yield();
+    }
+    for (int i = 0; i < 300; ++i) {
+        _doc->openTransaction("nested");
+        _a->Integer.setValue(100 + i);
+        _doc->abortTransaction();
+    }
+    ASSERT_TRUE(App::AutoTransaction::waitForRecompute(_doc->getName(), 30s));
+
+    const auto report = App::AgentTurnGuard::end(*_doc, false, 10s);
+    EXPECT_FALSE(report.refused);
+    EXPECT_EQ(report.workerRefusals, 0);
+    EXPECT_EQ(w->Value.getValue(), 0) << "worker writes escaped the guarded turn";
+    EXPECT_EQ(_a->Integer.getValue(), 4711);
+    EXPECT_EQ(undos(), 0);
+}
+
+TEST_F(AgentTurnGuardTest, CanEndReportsBusyWorkerAndLock)
+{
+    App::AgentTurnGuard::begin(*_doc, "t");
+    std::string why;
+    EXPECT_TRUE(App::AgentTurnGuard::canEnd(*_doc, 10ms, why));
+    {
+        App::TransactionLocker locker(_doc);
+        EXPECT_FALSE(App::AgentTurnGuard::canEnd(*_doc, 10ms, why));
+        EXPECT_NE(why.find("locked"), std::string::npos);
+    }
+    App::AgentTurnGuard::end(*_doc, false);
+    EXPECT_FALSE(App::AgentTurnGuard::canEnd(*_doc, 10ms, why));
 }

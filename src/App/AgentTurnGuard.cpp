@@ -59,6 +59,7 @@ AgentTurnReport makeReport(const AgentTurnState& st)
     r.undoRefused = st.undoRefused;
     r.redoRefused = st.redoRefused;
     r.clearUndosRefused = st.clearUndosRefused;
+    r.workerRefusals = st.workerRefusals;
     r.nestedNames = st.nestedNames;
     r.tampering = st.tampering;
     return r;
@@ -92,7 +93,46 @@ void parkActiveSegment(Transaction::DocumentAccess& acc, AgentTurnState& st)
     }
 }
 
+/// Savepoint operations must not overlap a worker recompute of the same document: the worker's write
+/// would otherwise land in a segment that is being detached or rolled back. Waits (without holding
+/// the turn mutex, which the worker needs to record); on timeout the operation is skipped and
+/// reported as tampering so the turn is rejected, never half-applied.
+bool settleWorker(Document& doc, AgentTurnState& st, const char* what)
+{
+    if (AutoTransaction::waitForRecompute(doc.getName(), AgentTurnGuard::nestedWait)) {
+        return true;
+    }
+    std::lock_guard<std::recursive_mutex> lock(st.mutex);
+    ++st.workerRefusals;
+    st.tampering.push_back(
+        std::format("{} skipped: the document was still recomputing on the async worker", what)
+    );
+    return false;
+}
+
 }  // namespace
+
+bool AgentTurnGuard::canEnd(Document& doc, std::chrono::milliseconds wait, std::string& reason)
+{
+    auto acc = Transaction::accessDocument(doc);
+    if (!acc.d->agent) {
+        reason = "no agent turn is active on this document";
+        return false;
+    }
+    if (doc.isPerformingTransaction() || acc.d->committing) {
+        reason = "the document is undoing, redoing or committing";
+        return false;
+    }
+    if (doc.isTransactionLocked()) {
+        reason = "the document's transactions are locked";
+        return false;
+    }
+    if (!AutoTransaction::waitForRecompute(doc.getName(), wait)) {
+        reason = "the document is still recomputing on the async worker";
+        return false;
+    }
+    return true;
+}
 
 int AgentTurnGuard::begin(Document& doc, const std::string& name, std::chrono::milliseconds wait)
 {
@@ -251,6 +291,9 @@ int AgentTurnGuard::nestedOpen(Document& doc, const std::string& name, int viaGl
     if (!st) {
         return NullTransaction;
     }
+    if (!settleWorker(doc, *st, "nested open")) {
+        return st->tid;
+    }
     std::lock_guard<std::recursive_mutex> lock(st->mutex);
     if (doc.isTransactionLocked()) {
         // Same as Document::openTransaction: an open while locked is ignored.
@@ -272,6 +315,9 @@ bool AgentTurnGuard::nestedCommit(Document& doc)
     if (!st) {
         return false;
     }
+    if (!settleWorker(doc, *st, "nested commit")) {
+        return true;
+    }
     std::lock_guard<std::recursive_mutex> lock(st->mutex);
     if (st->savepointOpen) {
         st->savepointOpen = false;
@@ -291,6 +337,9 @@ Transaction* AgentTurnGuard::beginNestedAbort(Document& doc, std::unique_lock<st
 {
     auto st = hooked(doc);
     if (!st) {
+        return nullptr;
+    }
+    if (!settleWorker(doc, *st, "nested abort")) {
         return nullptr;
     }
     lock = std::unique_lock<std::recursive_mutex>(st->mutex);

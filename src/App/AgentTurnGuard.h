@@ -80,6 +80,7 @@ struct AgentTurnState
     int undoRefused {0};
     int redoRefused {0};
     int clearUndosRefused {0};
+    int workerRefusals {0};
     std::vector<std::string> nestedNames;
     std::vector<std::string> tampering;
 
@@ -114,6 +115,8 @@ struct AgentTurnReport
     int undoRefused {0};
     int redoRefused {0};
     int clearUndosRefused {0};
+    /// Savepoint operations skipped because the async worker was still recomputing the document.
+    int workerRefusals {0};
     std::vector<std::string> nestedNames;
     std::vector<std::string> tampering;
 };
@@ -121,6 +124,9 @@ struct AgentTurnReport
 class AppExport AgentTurnGuard
 {
 public:
+    /// Longest a nested open, commit or abort waits for the worker.
+    static constexpr std::chrono::milliseconds nestedWait {10000};
+
     /// Longest end() or begin() waits for the document's recompute on the worker.
     static constexpr std::chrono::milliseconds defaultWait {60000};
 
@@ -149,6 +155,9 @@ public:
      * @throw Base::RuntimeError when no turn is active.
      */
     static AgentTurnReport end(Document& doc, bool commit, std::chrono::milliseconds wait = defaultWait);
+
+    /// True when end() would not refuse now: not transacting, not locked, and the worker idle within @p wait. @p reason says why not.
+    static bool canEnd(Document& doc, std::chrono::milliseconds wait, std::string& reason);
 
     /// Wait until the async worker is not recomputing @p doc (false on timeout). Callers that hold the Python GIL release it around this.
     static bool waitForWorker(Document& doc, std::chrono::milliseconds wait);

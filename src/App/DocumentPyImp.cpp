@@ -727,6 +727,7 @@ PyObject* reportToDict(const AgentTurnReport& r)
     d.setItem("undo_refused", Py::Long(r.undoRefused));
     d.setItem("redo_refused", Py::Long(r.redoRefused));
     d.setItem("clear_undos_refused", Py::Long(r.clearUndosRefused));
+    d.setItem("worker_refusals", Py::Long(r.workerRefusals));
     d.setItem("nested_names", strings(r.nestedNames));
     d.setItem("tampering", strings(r.tampering));
     d.setItem("tampered", Py::Boolean(!r.tampering.empty()));
@@ -780,6 +781,25 @@ PyObject* DocumentPy::agentTurnStatus(PyObject* args)
         return nullptr;
     }
     return reportToDict(AgentTurnGuard::peek(*getDocumentPtr()));
+}
+
+PyObject* DocumentPy::canEndAgentTurn(PyObject* args)
+{
+    double timeout = 60.0;
+    if (!PyArg_ParseTuple(args, "|d", &timeout)) {
+        return nullptr;
+    }
+    Document* doc = getDocumentPtr();
+    std::string reason;
+    bool ok = false;
+    {
+        Base::PyGILStateRelease release;
+        ok = AgentTurnGuard::canEnd(*doc, std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0)), reason);
+    }
+    Py::Tuple result(2);
+    result.setItem(0, Py::Boolean(ok));
+    result.setItem(1, Py::String(reason));
+    return Py::new_reference_to(result);
 }
 
 PyObject* DocumentPy::isAgentTurnActive(PyObject* args)

@@ -276,8 +276,17 @@ class Document(PropertyContainer):
         Returns a dict with: tid, name, refused, reason, committed, aborted,
         recorded, undo_entries, segments, nested_opens, nested_commits,
         nested_aborts, stray_closes, empty_closes, locked_opens, undo_refused,
-        redo_refused, clear_undos_refused, nested_names, tampering (list of
+        redo_refused, clear_undos_refused, worker_refusals, nested_names, tampering (list of
         str) and tampered (bool).
+        """
+        ...
+
+    def canEndAgentTurn(self, timeout: float = 60.0, /) -> tuple[bool, str]:
+        """
+        Check that endAgentTurn would not refuse: no undo/redo in progress,
+        transactions not locked, and the async worker idle for this document
+        within `timeout` seconds. Returns (ok, reason). Lets a caller covering
+        several documents check them all before ending any.
         """
         ...
 
