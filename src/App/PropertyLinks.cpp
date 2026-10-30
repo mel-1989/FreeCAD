@@ -992,67 +992,72 @@ static void parseOwnerSegment(const Data::MappedName& name, long& tag, int& pos,
 /// holds the child's chain, and the object has no element of its own to add: the walk of
 /// ownerTagOfElement looks through it to the child. The rule, read from FreeCAD's element maps
 /// (Part::Compound::execute, Part::Feature::_getTopoShape, Link.cpp) and its extensions
-/// (GroupExtension, LinkBaseExtension). An object is a transparent container when it
-/// - has an App::GroupExtension (GeoFeatureGroupExtension, OriginGroupExtension, their Python
-///   variants): App::Part, Assembly objects, App::DocumentObjectGroup and its Python subclass,
-///   App::FeaturePython with GroupExtensionPython, App::GeometryPython with
-///   GeoFeatureGroupExtensionPython; or
-/// - is an App::LinkGroup; or
-/// - is a Part::Compound or a subclass (Part::Compound2); or
-/// - is a plain App::Link (ElementCount 0): when its target is a group the Link adds its own tag
-///   and a window, when its target is a solid or a compound it passes the names through; either
-///   way it is the same element as the target's.
-/// EXCEPT: any object derived from Part::Feature other than Part::Compound is an owner, since it
-/// computes its own shape (D6 run 011: shape-computing wrappers are opaque): PartDesign::Body and
-/// PartDesign::Boolean carry the tag of their tip or base feature in the window, BIM
-/// BuildingPart and any Part::FeaturePython compound compute a Shape. A link array
-/// (ElementCount > 0) makes every copy a different element (D6 run 008) and is an owner. Named
-/// opaque wrappers (CompoundFilter, BooleanFragments, Refine, Mirror, Draft arrays) are
-/// Part::Features or link arrays and fall under the two exceptions. A Link whose target lives in
-/// another document is not transparent for the walk: its window holds the other document's
-/// object IDs (see linksToOtherDocument), the caller returns owner unknown.
+/// (GroupExtension, LinkBaseExtension): owner is the exception, transparent is the default.
+/// The reason is one-sided. filterByChildTag runs after disambiguateByAnchor and only drops
+/// candidates, so classifying an object as transparent can only remove reports and can never
+/// create a retarget that fork/main would not also make; classifying a grouping type as an owner
+/// is what loses references that fork/main keeps. So the owners are named, and everything else
+/// (every App::GroupExtension holder whatever its base class: BIM Site, Project, BuildingPart,
+/// Part::FeaturePython with GroupExtensionPython, Python groups, App::Part, Assembly objects,
+/// App::DocumentObjectGroup; App::LinkGroup; a plain App::Link) is transparent. The owners are
+/// - Part::BodyBase and subclasses (PartDesign::Body): the window carries the tag of the tip;
+/// - PartDesign::Boolean: it holds a GeoFeatureGroupExtension but computes its own shape;
+/// - any Part::Feature without an App::GroupExtension (CompoundFilter, BooleanFragments, Refine,
+///   Mirror, a Part::FeaturePython compound, a plain solid): it computes its own shape (D6 run
+///   011: shape-computing wrappers are opaque);
+/// - an object with a link array (ElementCount > 0): every copy is a different element (D6 run
+///   008).
+/// Part::Compound and subclasses stay transparent: their child maps are their Links.
 static bool isTransparentContainer(const App::DocumentObject* obj)
 {
     static const Base::Type compoundType = Base::Type::fromName("Part::Compound");
     static const Base::Type featureType = Base::Type::fromName("Part::Feature");
+    const Base::Type bodyType = Base::Type::fromName("Part::BodyBase");
+    const Base::Type booleanType = Base::Type::fromName("PartDesign::Boolean");
+    if (const auto* count = dynamic_cast<const App::PropertyInteger*>(
+            obj->getPropertyByName("ElementCount"))) {
+        if (count->getValue() > 0) {
+            return false;
+        }
+    }
     if (!compoundType.isBad() && obj->isDerivedFrom(compoundType)) {
         return true;
     }
-    if (!featureType.isBad() && obj->isDerivedFrom(featureType)) {
+    if ((!bodyType.isBad() && obj->isDerivedFrom(bodyType))
+        || (!booleanType.isBad() && obj->isDerivedFrom(booleanType))) {
         return false;
     }
-    if (obj->hasExtension(App::GroupExtension::getExtensionClassTypeId())
-        || obj->isDerivedFrom<App::LinkGroup>()) {
+    if (obj->hasExtension(App::GroupExtension::getExtensionClassTypeId())) {
         return true;
     }
-    if (obj->isDerivedFrom<App::Link>()) {
-        const auto* count = dynamic_cast<const App::PropertyInteger*>(
-            obj->getPropertyByName("ElementCount"));
-        return count && count->getValue() == 0;
-    }
-    return false;
+    return !(!featureType.isBad() && obj->isDerivedFrom(featureType));
 }
 
-/// Whether the object, or one of the elements of a link group, links to an object of another
-/// document. Tags are object IDs of one document, so the names inside the window of such a link
-/// carry the IDs of the other document, and looking them up in this one reads unrelated objects.
-static bool linksToOtherDocument(const App::DocumentObject* obj)
+/// Whether the compound has anything in another document among the objects it depends on,
+/// followed through Link chains, subname targets and XLinks. Tags are object IDs of one
+/// document, so the names inside the window of such a link carry the IDs of the other document,
+/// and looking them up in this one reads unrelated objects. fork/main's behaviour (no child-tag
+/// filter) is kept for the whole compound then.
+static bool dependsOnOtherDocument(const GeoFeature& geo)
 {
-    const auto isForeign = [obj](const App::DocumentObject* target) {
-        return target && target->getDocument() != obj->getDocument();
-    };
-    if (const auto* link = dynamic_cast<const App::PropertyLink*>(
-            obj->getPropertyByName("LinkedObject"))) {
-        if (isForeign(link->getValue())) {
-            return true;
-        }
-    }
-    if (const auto* list = dynamic_cast<const App::PropertyLinkList*>(
-            obj->getPropertyByName("ElementList"))) {
-        for (const auto* element : list->getValues()) {
-            if (isForeign(element) || (element && linksToOtherDocument(element))) {
+    // The same walk as DocumentObject::getOutListRecursive (getOutList follows XLinks and
+    // subname targets), but with a visited set instead of an exception: that function throws on
+    // a cyclic dependency, which a document can be in for a moment while objects are regrouped,
+    // and the throw would skip the rest of the element-reference resolution.
+    const App::Document* doc = geo.getDocument();
+    std::set<const App::DocumentObject*> seen {&geo};
+    std::vector<const App::DocumentObject*> todo {&geo};
+    while (!todo.empty()) {
+        const auto* cur = todo.back();
+        todo.pop_back();
+        for (const auto* obj : cur->getOutList()) {
+            if (!obj || !seen.insert(obj).second) {
+                continue;
+            }
+            if (obj->getDocument() != doc) {
                 return true;
             }
+            todo.push_back(obj);
         }
     }
     return false;
@@ -1090,9 +1095,6 @@ static long ownerTagOfElement(const App::Document* doc, const Data::MappedName& 
         if (!isTransparentContainer(obj)) {
             return tag;
         }
-        if (linksToOtherDocument(obj)) {
-            return 0;
-        }
         if (windowStart < 0 || windowStart >= pos) {
             return 0;
         }
@@ -1126,6 +1128,9 @@ static void filterByChildTag(const GeoFeature& geo,
     // of one chain, which are the same element under a new tag.
     static const Base::Type compoundType = Base::Type::fromName("Part::Compound");
     if (compoundType.isBad() || !geo.isDerivedFrom(compoundType)) {
+        return;
+    }
+    if (dependsOnOtherDocument(geo)) {
         return;
     }
     std::string mapped;

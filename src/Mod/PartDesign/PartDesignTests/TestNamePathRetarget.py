@@ -824,7 +824,7 @@ class TestNamePathRetarget(unittest.TestCase):
     # A Link to an object of another document: the names in its window carry that document's
     # object IDs, which must not be looked up in this one. The host document is padded so that an
     # App::Part (transparent) or a box (opaque) sits at the ID of the linked part W.
-    def _cross_document(self, host_object, rewire, nested=False):
+    def _cross_document(self, host_object, rewire, nested=False, via="direct"):
         import os
         import tempfile
 
@@ -861,6 +861,16 @@ class TestNamePathRetarget(unittest.TestCase):
             host.saveAs(os.path.join(tmp, "a.FCStd"))
             lk = host.addObject("App::Link", "L")
             lk.LinkedObject = w
+            if via == "chain":
+                # L1 -> L2 (a local Link) -> the other document's part
+                lk2 = host.addObject("App::Link", "L1")
+                lk2.LinkedObject = lk
+                lk = lk2
+            elif via == "sub":
+                # a Link with a subname target through the local Link L
+                ls = host.addObject("App::Link", "Ls")
+                ls.LinkedObject = (lk, "X.")
+                lk = ls
             c = host.addObject("Part::Compound", "C")
             c.Links = [lk, y]
             other.recompute()
@@ -898,6 +908,94 @@ class TestNamePathRetarget(unittest.TestCase):
             c.Links = [lx, c.Links[1]]
 
         self._cross_document("box", rewire)
+
+    # Round 8: the cross-document check covers the whole compound (everything in its recursive
+    # out list), so a Link chain or a subname Link that ends in another document is covered too.
+    def test_cross_document_link_chain_wrapped_in_the_other_document_keeps_the_reference(self):
+        def rewire(other, host, x, w, w2, c, lk):
+            w.removeObject(x)
+            w2.addObject(x)
+            w.addObject(w2)
+
+        self._cross_document("part", rewire, via="chain")
+
+    def test_cross_document_link_chain_unwrapped_in_the_other_document_keeps_the_reference(self):
+        def rewire(other, host, x, w, w2, c, lk):
+            w2.removeObject(x)
+            w.removeObject(w2)
+            w.addObject(x)
+
+        self._cross_document("part", rewire, nested=True, via="chain")
+
+    def test_cross_document_subname_link_swapped_for_a_link_chain_keeps_the_reference(self):
+        def rewire(other, host, x, w, w2, c, lk):
+            l1 = host.addObject("App::Link", "L1")
+            l1.LinkedObject = host.getObject("L")
+            c.Links = [l1, c.Links[1]]
+
+        self._cross_document("box", rewire, via="sub")
+
+    def test_cross_document_link_chain_swapped_for_a_subname_link_keeps_the_reference(self):
+        def rewire(other, host, x, w, w2, c, lk):
+            ls = host.addObject("App::Link", "Ls")
+            ls.LinkedObject = (host.getObject("L"), "X.")
+            c.Links = [ls, c.Links[1]]
+
+        self._cross_document("box", rewire, via="chain")
+
+    # A Geometry Python group wrapped around X puts the document in a transient cyclic state;
+    # fork/main reports the reference there, and the walk over the compound's dependencies must
+    # not throw (DocumentObject::getOutListRecursive does) and turn that report into a retarget.
+    def test_content_swapped_for_a_geometry_python_group_with_a_cycle_is_reported(self):
+        d = self.doc
+        x = d.addObject("Part::Box", "X")
+        y = self._box("Y", 100)
+        c = d.addObject("Part::Compound", "C")
+        c.Links = [x, y]
+        d.recompute()
+        cons = self._consumer(c, self._top_edge(c.Shape))
+        c.Links = [self._geo_py_group_of(x), y]
+        d.recompute()
+        self._assert_reported(cons)
+
+    # Round 8: grouping holders that are Part::Features (BIM Site and Project, a Part::FeaturePython
+    # with a group extension) only present their children and are transparent.
+    def _feature_python_group_of(self, x):
+        w = self.doc.addObject("Part::FeaturePython", "W")
+        w.addExtension("App::GroupExtensionPython")
+        w.addObject(x)
+        return w
+
+    def test_part_feature_python_group_swapped_for_its_content_keeps_the_reference(self):
+        self._swap(self._feature_python_group_of, True, True)
+
+    def test_content_swapped_for_a_part_feature_python_group_keeps_the_reference(self):
+        self._swap(self._feature_python_group_of, True, False)
+
+    def _arch_group_of(self, maker):
+        try:
+            import Arch
+        except ImportError:
+            self.skipTest("the BIM workbench (Arch) is not available in this build")
+
+        def make(x):
+            w = getattr(Arch, maker)([])
+            w.addObject(x)
+            return w
+
+        return make
+
+    def test_site_swapped_for_its_content_keeps_the_reference(self):
+        self._swap(self._arch_group_of("makeSite"), True, True)
+
+    def test_content_swapped_for_a_site_keeps_the_reference(self):
+        self._swap(self._arch_group_of("makeSite"), True, False)
+
+    def test_project_swapped_for_its_content_keeps_the_reference(self):
+        self._swap(self._arch_group_of("makeProject"), True, True)
+
+    def test_content_swapped_for_a_project_keeps_the_reference(self):
+        self._swap(self._arch_group_of("makeProject"), True, False)
 
     # a Link to a solid or compound passes the names through (no segment of its own)
     def test_link_to_a_box_swapped_for_the_box_keeps_the_reference(self):
