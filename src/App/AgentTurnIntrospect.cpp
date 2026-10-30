@@ -31,6 +31,7 @@
 #include "DocumentObject.h"
 #include "Property.h"
 #include "PropertyLinks.h"
+#include "PropertyPythonObject.h"
 #include "PropertyStandard.h"
 #include "PropertyUnits.h"
 #include "Transactions.h"
@@ -278,7 +279,17 @@ AgentTurnChangeSet buildChangeSet(Document& doc, AgentTurnState& st, const std::
                     else {
                         bool same = false;
                         try {
-                            same = p.old->isSame(*e.current) || sameFloat(*p.old, *e.current);
+                            const bool oldPy = freecad_cast<const PropertyPythonObject*>(p.old) != nullptr;
+                            const bool curPy = freecad_cast<const PropertyPythonObject*>(e.current) != nullptr;
+                            if (oldPy || curPy) {
+                                // Property::isSame pickles through Python and == runs __eq__: neither
+                                // may run under the turn mutex. Two Python objects are compared after
+                                // the lock is released; a change of type is a change.
+                                e.pyCompare = oldPy && curPy;
+                            }
+                            else {
+                                same = p.old->isSame(*e.current) || sameFloat(*p.old, *e.current);
+                            }
                         }
                         catch (...) {
                             ++cs.uncomparable;
@@ -331,7 +342,7 @@ void AgentTurnIntrospect::collectWith(Document& doc, std::chrono::milliseconds w
         throw Base::RuntimeError("the agent turn ended while waiting for the async worker");
     }
     // Keeps the worker from recording while the segments are read.
-    std::lock_guard<std::recursive_mutex> lock(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st);
     std::vector<const Transaction*> segs(st->parked.begin(), st->parked.end());
     if (acc.d->activeUndoTransaction) {
         segs.push_back(acc.d->activeUndoTransaction);
@@ -533,7 +544,23 @@ struct Pending
     bool newFinal {false};
     bool modified {false};
     bool values {false};
+    bool pyCompare {false};
+    bool drop {false};
     std::string typeName;
+};
+
+/// One property's dict in the result, and the Pending entry that decides whether it stays (-1: none).
+struct PropOut
+{
+    Py::Dict dict;
+    int pending {-1};
+};
+
+struct ObjOut
+{
+    Py::Dict dict;
+    std::vector<PropOut> props;
+    bool modified {false};
 };
 
 }  // namespace
@@ -543,8 +570,9 @@ _object* AgentTurnIntrospect::asPython(Document& doc, bool jsonValues, std::chro
     Py::Dict out;
     Py::Dict removedNames;
     std::vector<Pending> pending;
-    // Phase 1, under the turn mutex: everything is read into Python objects, but no Python code
-    // runs, so the interpreter cannot hand the GIL to a thread that then waits for the mutex.
+    std::vector<ObjOut> objOut;
+    // Phase 1, under the turn mutex: everything is read into Python objects. No Python code runs
+    // here (see the lock order in AgentTurnGuard.h): the values are only fetched.
     collect(doc, wait, [&](const AgentTurnChangeSet& cs) {
         // Removed objects have lost their Name, but old link values still point at them.
         for (const auto& oc : cs.objects) {
@@ -558,17 +586,18 @@ _object* AgentTurnIntrospect::asPython(Document& doc, bool jsonValues, std::chro
         out.setItem("turn", Py::String(cs.turnName));
         out.setItem("segments", Py::Long(cs.segments));
         out.setItem("uncomparable", Py::Long(cs.uncomparable));
-        Py::List objects;
         for (const auto& oc : cs.objects) {
+            ObjOut oo;
             Py::Dict o;
+            oo.modified = oc.status == AgentObjectChange::Status::Modified;
             o.setItem("name", Py::String(oc.name));
             o.setItem("type", Py::String(oc.typeId));
             o.setItem("label", Py::String(oc.label));
             o.setItem("status", Py::String(statusName(oc.status)));
             o.setItem("replaced", Py::Boolean(oc.replaced));
-            Py::List props;
             for (const auto& pe : oc.properties) {
                 Py::Dict p;
+                PropOut po;
                 p.setItem("name", Py::String(pe.name));
                 p.setItem("type", Py::String(pe.typeName));
                 p.setItem("change", Py::String(changeName(pe.change)));
@@ -582,16 +611,18 @@ _object* AgentTurnIntrospect::asPython(Document& doc, bool jsonValues, std::chro
                     pd.values = true;
                     pd.modified = pe.change == PropKind::Modified;
                     pd.typeName = pe.typeName;
+                    pd.pyCompare = pe.pyCompare;
                     pd.oldRaw = snapshotValue(pe.oldValue, pe.current, pe.typeName, jsonValues, pd.oldFinal);
                     pd.newRaw = snapshotValue(pe.current, nullptr, pe.typeName, jsonValues, pd.newFinal);
+                    po.pending = static_cast<int>(pending.size());
                     pending.push_back(std::move(pd));
                 }
-                props.append(p);
+                po.dict = p;
+                oo.props.push_back(std::move(po));
             }
-            o.setItem("properties", props);
-            objects.append(o);
+            oo.dict = o;
+            objOut.push_back(std::move(oo));
         }
-        out.setItem("objects", objects);
     });
     // Phase 2, no turn lock: convert the snapshot with the F1 value representation.
     Py::Object converter = Py::None();
@@ -609,6 +640,20 @@ _object* AgentTurnIntrospect::asPython(Document& doc, bool jsonValues, std::chro
         Py::Object newJ = pd.newFinal ? pd.newRaw : convert(converter, pd.newRaw, pd.typeName, removedNames);
         pd.entry.setItem("old", oldJ);
         pd.entry.setItem("new", newJ);
+        bool pyMaybe = false;
+        if (pd.pyCompare) {
+            // Python-object properties: the same object is no change; equal by == is flagged, not
+            // dropped, because a proxy's __eq__ may be permissive and hide a real change.
+            if (pd.oldRaw.ptr() == pd.newRaw.ptr()) {
+                pd.drop = true;
+                continue;
+            }
+            const int eq = PyObject_RichCompareBool(pd.oldRaw.ptr(), pd.newRaw.ptr(), Py_EQ);
+            if (eq < 0) {
+                PyErr_Clear();
+            }
+            pyMaybe = eq == 1;
+        }
         // Property::isSame says "different" for a rebuilt shape that is in fact unchanged: such an
         // entry stays, flagged, when the two (complete) shape summaries are equal. No other type
         // is ever flagged: JSON rounds floats, truncates long lists and cannot express every type.
@@ -621,9 +666,28 @@ _object* AgentTurnIntrospect::asPython(Document& doc, bool jsonValues, std::chro
                 }
                 maybe = eq == 1;
             }
-            pd.entry.setItem("maybe_unchanged", Py::Boolean(maybe));
+            pd.entry.setItem("maybe_unchanged", Py::Boolean(maybe || pyMaybe));
         }
     }
+    // Assemble: a modified object whose every property was dropped is dropped with them.
+    Py::List objects;
+    for (auto& oo : objOut) {
+        Py::List props;
+        std::size_t kept = 0;
+        for (auto& po : oo.props) {
+            if (po.pending >= 0 && pending[static_cast<std::size_t>(po.pending)].drop) {
+                continue;
+            }
+            props.append(po.dict);
+            ++kept;
+        }
+        if (kept == 0 && oo.modified) {
+            continue;
+        }
+        oo.dict.setItem("properties", props);
+        objects.append(oo.dict);
+    }
+    out.setItem("objects", objects);
     PyObject* r = out.ptr();
     Py_INCREF(r);
     return r;

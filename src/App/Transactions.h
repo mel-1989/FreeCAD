@@ -201,7 +201,7 @@ public:
     };
     static DocumentAccess accessDocument(Document& doc);
     /// Drop the redo stack of @p doc (Document::_clearRedos).
-    static void clearRedosOf(Document& doc);
+    static void clearRedosOf(Document& doc, std::list<Transaction*>* detach = nullptr);
 
 private:
     void applyOwn(Document& Doc, bool forward);

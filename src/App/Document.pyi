@@ -331,8 +331,13 @@ class Document(PropertyContainer):
         for renamed and moved, "old" and "new". A "modified" entry also has
         "maybe_unchanged", True only for a shape property whose two (complete)
         summaries are equal: isSame is unreliable for those (a rebuilt shape is
-        never the same), so the entry is kept and flagged. No other type is ever
-        flagged. Raises ValueError for a timeout outside 0..86400 seconds. Objects of a linked document
+        never the same), so the entry is kept and flagged. A Python-object
+        property whose new value is a different object that compares equal (==) to
+        the old one is flagged as well (a permissive __eq__ may hide a real
+        change); the very same object is no change and is left out. No other type
+        is ever flagged. While another thread rolls back a nested transaction or
+        ends the turn this waits for it; a property set from a second Python thread
+        meanwhile raises RuntimeError. Raises ValueError for a timeout outside 0..86400 seconds. Objects of a linked document
         are reported by that document's own call.
 
         With json_values (default) values go through AgentCore.state.values

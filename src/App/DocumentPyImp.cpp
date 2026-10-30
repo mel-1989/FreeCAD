@@ -735,6 +735,17 @@ PyObject* reportToDict(const AgentTurnReport& r)
     d.setItem("tampered", Py::Boolean(!r.tampering.empty()));
     return Py::new_reference_to(d);
 }
+
+/// Seconds to milliseconds; sets ValueError and returns false for NaN, negative or huge values.
+bool agentTimeout(double seconds, std::chrono::milliseconds& out)
+{
+    if (!(seconds >= 0.0 && seconds <= 86400.0)) {
+        PyErr_SetString(PyExc_ValueError, "timeout must be between 0 and 86400 seconds");
+        return false;
+    }
+    out = std::chrono::milliseconds(static_cast<long long>(seconds * 1000.0));
+    return true;
+}
 }  // namespace
 
 PyObject* DocumentPy::beginAgentTurn(PyObject* args)
@@ -745,7 +756,10 @@ PyObject* DocumentPy::beginAgentTurn(PyObject* args)
         return nullptr;
     }
     Document* doc = getDocumentPtr();
-    const auto wait = std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0));
+    std::chrono::milliseconds wait;
+    if (!agentTimeout(timeout, wait)) {
+        return nullptr;
+    }
     // Gives up the GIL for the wait (the worker may need it); throws if the document was closed.
     const bool idle = AgentTurnGuard::waitForWorkerReleasingGil(*doc, wait);
     if (!idle) {
@@ -763,7 +777,10 @@ PyObject* DocumentPy::endAgentTurn(PyObject* args)
         return nullptr;
     }
     Document* doc = getDocumentPtr();
-    const auto wait = std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0));
+    std::chrono::milliseconds wait;
+    if (!agentTimeout(timeout, wait)) {
+        return nullptr;
+    }
     AgentTurnGuard::waitForWorkerReleasingGil(*doc, wait);
     // The wait above is repeated inside end(), which then refuses if the worker is still busy.
     const AgentTurnReport r = AgentTurnGuard::end(*doc, Base::asBoolean(commit), std::chrono::milliseconds(0));
@@ -786,7 +803,11 @@ PyObject* DocumentPy::canEndAgentTurn(PyObject* args)
     }
     Document* doc = getDocumentPtr();
     std::string reason;
-    AgentTurnGuard::waitForWorkerReleasingGil(*doc, std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0)));
+    std::chrono::milliseconds wait;
+    if (!agentTimeout(timeout, wait)) {
+        return nullptr;
+    }
+    AgentTurnGuard::waitForWorkerReleasingGil(*doc, wait);
     const bool ok = AgentTurnGuard::canEnd(*doc, std::chrono::milliseconds(0), reason);
     Py::Tuple result(2);
     result.setItem(0, Py::Boolean(ok));
@@ -802,14 +823,14 @@ PyObject* DocumentPy::getAgentTurnChanges(PyObject* args, PyObject* kwds)
     if (!Base::Wrapped_ParseTupleAndKeywords(args, kwds, "|Od", kwlist, &jsonValues, &timeout)) {
         return nullptr;
     }
-    if (!(timeout >= 0.0 && timeout <= 86400.0)) {  // also rejects NaN
-        PyErr_SetString(PyExc_ValueError, "timeout must be between 0 and 86400 seconds");
+    std::chrono::milliseconds wait;
+    if (!agentTimeout(timeout, wait)) {
         return nullptr;
     }
     return AgentTurnIntrospect::asPython(
         *getDocumentPtr(),
         Base::asBoolean(jsonValues),
-        std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0))
+        wait
     );
 }
 

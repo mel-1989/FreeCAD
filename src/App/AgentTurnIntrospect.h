@@ -71,6 +71,13 @@ struct AgentObjectChange
         const Property* oldValue {nullptr};
         /// The live property (null: it no longer exists). Not owned.
         const Property* current {nullptr};
+        /**
+         * Both values are Python-object properties and whether they differ is undecided: comparing
+         * them runs Python (__eq__), which must not happen under the turn mutex. The entry is listed
+         * as modified; asPython() decides after the lock is released (identical object: dropped;
+         * equal by ==: kept and flagged maybe_unchanged).
+         */
+        bool pyCompare {false};
     };
 
     std::string name;
@@ -101,8 +108,10 @@ public:
      * @brief Collect the changes of the active guarded turn on @p doc.
      *
      * Waits for the async recompute worker to be idle (@p wait; the GIL is released for the
-     * wait when the caller holds it) and holds the turn mutex while reading, so the worker cannot record meanwhile. The visitor runs under
-     * that lock, so the Property pointers it receives are valid only during the call.
+     * wait when the caller holds it) and holds the turn mutex while reading, so the worker cannot
+     * record meanwhile. The visitor runs under that lock, so the Property pointers it receives are
+     * valid only during the call, and it must not run Python code (see the lock order in
+     * AgentTurnGuard.h).
      * @throw Base::RuntimeError when no turn is active or the worker does not become idle.
      */
     template<class Visitor>

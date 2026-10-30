@@ -597,7 +597,7 @@ void Document::_checkTransaction(DocumentObject* pcDelObj, const Property* What,
     }
 }
 
-void Document::_clearRedos()
+void Document::_clearRedos(std::list<Transaction*>* detach)
 {
     if (isPerformingTransaction() || d->committing) {
         FC_ERR("Cannot clear redo while transacting");
@@ -605,6 +605,11 @@ void Document::_clearRedos()
     }
 
     mRedoMap.clear();
+    if (detach) {
+        // The caller destroys them later, outside its locks (their destructors may run Python).
+        detach->splice(detach->end(), mRedoTransactions);
+        return;
+    }
     while (!mRedoTransactions.empty()) {
         delete mRedoTransactions.back();
         mRedoTransactions.pop_back();
@@ -722,8 +727,10 @@ void Document::_abortTransaction()
 
     if (d->agent && AgentTurnGuard::turnId(*this) != NullTransaction) {
         // Guarded agent turn: roll back only the segment recorded since the nested open.
-        std::unique_lock<std::recursive_mutex> turnLock;
-        if (Transaction* segment = AgentTurnGuard::beginNestedAbort(*this, turnLock)) {
+        // The segment's apply runs Python (FeaturePython onChanged), so it runs outside the turn
+        // mutex with the turn marked busy; see the lock order in AgentTurnGuard.h.
+        AgentTurnBusy turnBusy;
+        if (Transaction* segment = AgentTurnGuard::beginNestedAbort(*this, turnBusy)) {
             {
                 Base::FlagToggler<bool> flag(d->rollback);
                 Application::TransactionSignaller signaller(true, true);
@@ -1001,13 +1008,21 @@ void Document::onChanged(const Property* prop)
 
 void Document::onBeforeChangeProperty(const TransactionalObject* Who, const Property* What)
 {
+    if (d->agent) {
+        // Refuse before anything is touched or signalled: when another thread has the turn busy
+        // and this one holds the GIL, the lock throws, and the property is still untouched.
+        // (The lock is released at once; Python observers must not run under it.)
+        AgentTurnGuard::lockFor(*this);
+    }
     if (Who->isDerivedFrom<DocumentObject>()) {
         signalBeforeChangeObject(*static_cast<const DocumentObject*>(Who), *What);
     }
     // In a guarded turn the recompute worker records into the turn too: serialise it against
     // the turn's savepoint bookkeeping on the main thread. The lock is taken before the rollback
     // flag is read, because a nested abort sets that flag while it holds the same lock.
-    std::unique_lock<std::recursive_mutex> turnLock;
+    // The lock takes the GIL first (lock order GIL, then turn mutex), because recording a
+    // Python-object property copies it.
+    AgentTurnLock turnLock;
     if (d->agent) {
         turnLock = AgentTurnGuard::lockFor(*this);
     }
