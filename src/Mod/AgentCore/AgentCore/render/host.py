@@ -6,7 +6,8 @@ the isolated user configuration, the timeout kill and the survivor check; this m
 Where to find things (all optional):
 
 - ``CADFORK_RENDER=0``: disable rendering (``render`` then answers ``unavailable``).
-- ``CADFORK_GUI_RUNNER``: path of ``run_gui.py`` (default: the workshop under ``~/_agents/repos/app development/cad-fork``).
+- ``CADFORK_GUI_RUNNER``: path of the workshop's ``harness/gui/run_gui.py`` (required for rendering; without it
+  ``render`` answers ``unavailable``). The workshop's ``harness/env.sh`` exports it.
 - ``CADFORK_GUI_BUILD_DIR``: build directory holding ``bin/FreeCAD`` (default: the parent of the ``FreeCADCmd`` in use).
 """
 
@@ -17,8 +18,6 @@ import subprocess
 import sys
 
 ENTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui_entry.py")
-DEFAULT_RUNNER = os.path.join(os.path.expanduser("~"), "_agents", "repos", "app development", "cad-fork",
-                              "harness", "gui", "run_gui.py")
 
 
 class RenderUnavailable(Exception):
@@ -54,13 +53,26 @@ def availability(freecadcmd=None):
     if sys.platform != "darwin":
         raise RenderUnavailable("GUI rendering is implemented for the Mac mini's Cocoa display only "
                                 f"(platform {sys.platform})")
-    runner = os.environ.get("CADFORK_GUI_RUNNER") or DEFAULT_RUNNER
+    runner = os.environ.get("CADFORK_GUI_RUNNER")
+    if not runner:
+        raise RenderUnavailable("the GUI harness runner is not configured (set CADFORK_GUI_RUNNER to the workshop's "
+                                "harness/gui/run_gui.py)")
     if not os.path.isfile(runner):
         raise RenderUnavailable(f"GUI harness runner not found at {runner} (set CADFORK_GUI_RUNNER)")
     bd = _build_dir(freecadcmd)
     if not bd or not os.path.isfile(os.path.join(bd, "bin", "FreeCAD")):
         raise RenderUnavailable(f"no GUI build: {os.path.join(bd or '<build>', 'bin', 'FreeCAD')} is missing")
     return runner, bd
+
+
+def warnings_for(info, thickness_map):
+    """Warnings for a render whose document has nothing to colour (``info`` is the GUI process's outcome)."""
+    out = []
+    if info.get("shape_objects") == 0:
+        out.append("no shapes: the document is empty, the image is blank")
+    elif thickness_map and not (info.get("thickness_map") or {}).get("faces_total"):
+        out.append("no solids: thickness map empty")
+    return out
 
 
 def render_file(fcstd, out_png, view="iso", width=480, height=360, thickness_map=None, timeout=240.0,
@@ -99,4 +111,7 @@ def render_file(fcstd, out_png, view="iso", width=480, height=360, thickness_map
         tm.pop("objects", None)
         res["thickness_map"] = tm
         res["thickness_faces"] = info["thickness_map"].get("objects")
+    warnings = warnings_for(info, thickness_map)
+    if warnings:
+        res["warnings"] = warnings
     return res

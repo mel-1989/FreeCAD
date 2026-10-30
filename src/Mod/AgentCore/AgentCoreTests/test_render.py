@@ -185,6 +185,38 @@ class TestRenderTool(unittest.TestCase):
         self.assertEqual(res["structuredContent"]["error"], "unavailable")
         self.assertIn("no GUI build", res["structuredContent"]["message"])
 
+    def test_unavailable_without_runner_names_the_variable(self):
+        env = {k: v for k, v in os.environ.items() if k != "CADFORK_GUI_RUNNER"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            res = self.render(doc=self.doc)
+        self.assertTrue(res["isError"])
+        self.assertEqual(res["structuredContent"]["error"], "unavailable")
+        self.assertIn("CADFORK_GUI_RUNNER", res["structuredContent"]["message"])
+
+    def test_numeric_arguments_are_checked(self):
+        bads = [dict(width=63), dict(width=2049), dict(width=-5), dict(height=0), dict(height=100000),
+                dict(width=480.5), dict(width="480"), dict(width=True), dict(min_ok=0), dict(min_ok=-1),
+                dict(min_ok="1"), dict(min_ok=float("inf")), dict(min_ok=True), dict(samples=0), dict(samples=51),
+                dict(samples=2.5)]
+        with mock.patch.object(host, "availability", return_value=("r", "b")), \
+                mock.patch.object(host, "render_file", side_effect=self.fake_render):
+            for bad in bads:
+                res = self.render(doc=self.doc, **bad)
+                self.assertTrue(res["isError"], bad)
+                self.assertEqual(res["structuredContent"]["error"], "bad_argument", bad)
+            self.assertEqual(self.calls, [])
+            for ok in (dict(width=64, height=2048), dict(min_ok=0.5, samples=50), dict(samples=1)):
+                res = self.render(doc=self.doc, **ok)
+                self.assertFalse(res["isError"], ok)
+
+    def test_warnings_for_empty_and_solidless_documents(self):
+        self.assertEqual(host.warnings_for({"shape_objects": 0}, None),
+                         ["no shapes: the document is empty, the image is blank"])
+        self.assertEqual(host.warnings_for({"shape_objects": 1, "thickness_map": {"faces_total": 0}}, {"min_ok": 1}),
+                         ["no solids: thickness map empty"])
+        self.assertEqual(host.warnings_for({"shape_objects": 1}, None), [])
+        self.assertEqual(host.warnings_for({"shape_objects": 2, "thickness_map": {"faces_total": 8}}, {"min_ok": 1}), [])
+
     def test_gui_failure_is_a_clean_error(self):
         with mock.patch.object(host, "availability", return_value=("r", "b")), \
                 mock.patch.object(host, "render_file", side_effect=host.RenderFailed("boom", returncode=1)):
@@ -232,3 +264,15 @@ class TestRealGuiRender(unittest.TestCase):
             self.assertGreater(red, 500)
             self.assertGreater(blue, 500)
             self.assertFalse(os.path.exists(out + ".json"))
+
+    def test_empty_document_renders_with_a_warning(self):
+        with tempfile.TemporaryDirectory(prefix="acrender-") as d:
+            doc = FreeCAD.newDocument("emptydoc")
+            try:
+                fcstd = os.path.join(d, "empty.FCStd")
+                doc.saveAs(fcstd)
+            finally:
+                FreeCAD.closeDocument(doc.Name)
+            res = host.render_file(fcstd, os.path.join(d, "e.png"), thickness_map={"min_ok": 3.0, "samples": 5},
+                                   freecadcmd=mc.freecadcmd())
+            self.assertIn("no shapes: the document is empty, the image is blank", res["warnings"])

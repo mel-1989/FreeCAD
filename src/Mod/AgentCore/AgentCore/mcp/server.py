@@ -130,6 +130,10 @@ TOOLS = [
 TOOL_NAMES = [t["name"] for t in TOOLS]
 
 
+def _is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
 class ToolError(Exception):
     def __init__(self, code, message, **details):
         super().__init__(message)
@@ -467,6 +471,14 @@ class Server:
                  samples=5, path=None):
         if view not in RENDER_VIEWS:
             raise ToolError("bad_argument", f"view must be one of {list(RENDER_VIEWS)}")
+        for name, val in (("width", width), ("height", height)):
+            if not _is_int(val) or not 64 <= val <= 2048:
+                raise ToolError("bad_argument", f"{name} must be an integer from 64 to 2048")
+        if not _is_int(samples) or not 1 <= samples <= 50:
+            raise ToolError("bad_argument", "samples must be an integer from 1 to 50")
+        if isinstance(min_ok, bool) or not isinstance(min_ok, (int, float)) or not min_ok > 0 or min_ok != min_ok \
+                or min_ok == float("inf"):
+            raise ToolError("bad_argument", "min_ok must be a finite number greater than 0")
         try:
             render_host.availability(self.freecadcmd)  # unavailable is reported before any snapshot work
         except render_host.RenderUnavailable as e:

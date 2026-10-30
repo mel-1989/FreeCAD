@@ -27,6 +27,8 @@ try:
         doc.recompute()
     else:
         raise ValueError(f"unsupported file type {ext!r}")
+    result["shape_objects"] = sum(1 for o in doc.Objects if getattr(o, "Shape", None) is not None
+                                  and not o.Shape.isNull())
     view = render_gui.activate(doc)
     tm = spec.get("thickness_map")
     if tm:
