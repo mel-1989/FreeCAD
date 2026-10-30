@@ -1038,14 +1038,17 @@ static bool isTransparentContainer(const App::DocumentObject* obj)
 /// document, so the names inside the window of such a link carry the IDs of the other document,
 /// and looking them up in this one reads unrelated objects. fork/main's behaviour (no child-tag
 /// filter) is kept for the whole compound then.
-static bool dependsOnOtherDocument(const GeoFeature& geo)
+static bool dependsOnOtherDocument(const GeoFeature& geo,
+                                   std::set<const App::DocumentObject*>& seen)
 {
     // The same walk as DocumentObject::getOutListRecursive (getOutList follows XLinks and
     // subname targets), but with a visited set instead of an exception: that function throws on
     // a cyclic dependency, which a document can be in for a moment while objects are regrouped,
     // and the throw would skip the rest of the element-reference resolution.
     const App::Document* doc = geo.getDocument();
-    std::set<const App::DocumentObject*> seen {&geo};
+    // On return without a cross-document dependency, `seen` is the compound and its out-list
+    // closure: the only objects whose IDs can appear as tags in the compound's element names.
+    seen.insert(&geo);
     std::vector<const App::DocumentObject*> todo {&geo};
     while (!todo.empty()) {
         const auto* cur = todo.back();
@@ -1077,7 +1080,9 @@ static bool dependsOnOtherDocument(const GeoFeature& geo)
 /// named element by element into the container, ";:H<child>,E;:H<C1>,E" with no `:n`, and the
 /// text in front of that tag is not guaranteed to end in the child's own tag (the encoder does
 /// not force it), so it is not read.
-static long ownerTagOfElement(const App::Document* doc, const Data::MappedName& name)
+static long ownerTagOfElement(const App::Document* doc,
+                              const std::set<const App::DocumentObject*>* closure,
+                              const Data::MappedName& name)
 {
     Data::MappedName cur(name);
     for (int depth = 0; depth < 64; ++depth) {
@@ -1090,6 +1095,14 @@ static long ownerTagOfElement(const App::Document* doc, const Data::MappedName& 
         }
         const auto* obj = doc ? doc->getObjectByID(tag) : nullptr;
         if (!obj) {
+            return 0;
+        }
+        // With a closure (the current shape's names), a tag whose object is not the compound or
+        // in its out-list closure is no containment of this compound: the names of a shape copied
+        // from elsewhere without a link carry the IDs of another document. Owner unknown. A stored
+        // name has no closure: its owner or containers may have left the compound since (a dropped
+        // child or a removed wrapper still exists in the document).
+        if (closure && closure->find(obj) == closure->end()) {
             return 0;
         }
         if (!isTransparentContainer(obj)) {
@@ -1130,7 +1143,8 @@ static void filterByChildTag(const GeoFeature& geo,
     if (compoundType.isBad() || !geo.isDerivedFrom(compoundType)) {
         return;
     }
-    if (dependsOnOtherDocument(geo)) {
+    std::set<const App::DocumentObject*> closure;
+    if (dependsOnOtherDocument(geo, closure)) {
         return;
     }
     std::string mapped;
@@ -1141,7 +1155,7 @@ static void filterByChildTag(const GeoFeature& geo,
         return;
     }
     const App::Document* doc = geo.getDocument();
-    const long stored = ownerTagOfElement(doc, Data::MappedName(mapped.c_str()));
+    const long stored = ownerTagOfElement(doc, nullptr, Data::MappedName(mapped.c_str()));
     if (stored == 0) {
         return;
     }
@@ -1157,7 +1171,7 @@ static void filterByChildTag(const GeoFeature& geo,
             const int first = c.indexedName.getIndex() + c.offset;
             if (std::strcmp(c.indexedName.getType(), idx.getType()) == 0
                 && idx.getIndex() >= first && idx.getIndex() < first + c.count) {
-                const long cand = ownerTagOfElement(doc, data->getMappedName(idx));
+                const long cand = ownerTagOfElement(doc, &closure, data->getMappedName(idx));
                 other = cand != 0 && cand != stored;
                 break;
             }

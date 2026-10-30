@@ -997,6 +997,78 @@ class TestNamePathRetarget(unittest.TestCase):
     def test_content_swapped_for_a_project_keeps_the_reference(self):
         self._swap(self._arch_group_of("makeProject"), True, False)
 
+    # Round 9: a group-holding Part::Feature whose proxy copies the shape of an object in another
+    # document without a link property carries that document's object IDs in its element names, and
+    # the document has no dependency on it that getOutList could show. The IDs are made to land on
+    # a transparent object and on boxes of the host document; they are not in the compound's
+    # dependency closure and must not be read as owners.
+    def _foreign_copy(self, unwrap):
+        import FreeCAD
+
+        host = self.doc
+        other = App.newDocument("NamePathRetargetB")
+        try:
+            class Copier:
+                def __init__(self, obj, src):
+                    obj.Proxy = self
+                    obj.addProperty("App::PropertyString", "Src")
+                    obj.Src = src
+
+                def execute(self, obj):
+                    dn, on = obj.Src.split("#")
+                    obj.Shape = FreeCAD.getDocument(dn).getObject(on).Shape
+
+            start = host.addObject("App::FeaturePython", "Start").ID
+            while other.addObject("App::FeaturePython", "Pad").ID < start + 10:
+                pass
+            x = other.addObject("Part::Box", "X")
+            z = other.addObject("Part::Box", "Z")
+            z.Placement.Base = V(0, 50, 0)
+            w = other.addObject("Part::Compound", "W")
+            w.Links = [x, z]
+            w2 = other.addObject("Part::Compound", "W2")
+            if unwrap:
+                w2.Links = [x]
+                w.Links = [w2, z]
+            other.recompute()
+            while host.addObject("App::FeaturePython", "HostPad").ID < x.ID - 1:
+                pass
+            for k in (x, z, w, w2):
+                if k is w:
+                    o = host.addObject("App::FeaturePython", "AtW")
+                else:
+                    o = host.addObject("Part::Box", "At" + k.Name)
+                    o.Placement.Base = V(1000, 0, 0)
+                self.assertEqual(o.ID, k.ID)
+            p = host.addObject("Part::FeaturePython", "Pc")
+            Copier(p, other.Name + "#W")
+            p.addExtension("App::GroupExtensionPython")
+            host.recompute()
+            y = self._box("Y", 100)
+            c = host.addObject("Part::Compound", "C")
+            c.Links = [p, y]
+            host.recompute()
+            cons = self._consumer(c, self._top_edge(c.Shape))
+            if unwrap:
+                w.Links = [x, z]
+            else:
+                w2.Links = [x]
+                w.Links = [w2, z]
+            other.recompute()
+            p.touch()
+            host.recompute()
+            sub = cons.Ref[1][0]
+            self.assertFalse(sub.startswith("?"), "reference lost: %s" % sub)
+            self.assertEqual(sub, self._top_edge(c.Shape))
+        finally:
+            App.closeDocument(other.Name)
+
+    def test_foreign_shape_copy_wrapped_in_the_other_document_keeps_the_reference(self):
+        self._foreign_copy(False)
+
+    def test_foreign_shape_copy_unwrapped_in_the_other_document_keeps_the_reference(self):
+        self._foreign_copy(True)
+
     # a Link to a solid or compound passes the names through (no segment of its own)
     def test_link_to_a_box_swapped_for_the_box_keeps_the_reference(self):
         self._swap(lambda x: self._link_to(x), True, True)
