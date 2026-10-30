@@ -21,6 +21,7 @@ The tool set follows the patterns of neka-nat/freecad-mcp and
 spkane/freecad-addon-robust-mcp-server (both MIT); no code is copied from them.
 """
 
+import base64
 import json
 import os
 import shutil
@@ -29,6 +30,7 @@ import threading
 import traceback
 
 from . import apidocs, cookbook, policy
+from ..render import host as render_host
 from .bridge import BridgeError
 from .search import PartsIndex
 from .workers import AGENTCORE_PARENT, SessionWorker, WorkerStartError, find_freecadcmd, load_pool, short_tempdir
@@ -53,6 +55,7 @@ INSTRUCTIONS = (
     "Read cadfork://cookbook first; the FreeCAD API reference is under cadfork://api/index."
 )
 
+RENDER_VIEWS = ("iso", "front", "top", "right", "left", "rear", "bottom")
 _DOC = {"type": "string", "description": "Document handle from open_document; defaults to the most recent one."}
 
 
@@ -97,8 +100,19 @@ TOOLS = [
     _tool("propose_change", "Propose change",
           "Freeze the open change and return its F3 change set for human approval in the GUI. Cannot approve.",
           {"doc": _DOC, "summary": {"type": "string"}}),
-    _tool("render", "Render", "Image of the model. Unavailable until I4 (GUI rendering in a VM or CI).",
-          {"doc": _DOC, "view": {"type": "string"}}, read_only=True),
+    _tool("render", "Render",
+          "PNG of the model from the real FreeCAD GUI (the I4 runner, about 20 s per call on the Mac mini; 'unavailable' "
+          "when no GUI build or display exists). Give an open document handle (doc) or a .FCStd/.step/.stp/.brep file. "
+          "view: iso (default), front, top, right, left, rear, bottom. thickness_map=true colours every face by wall "
+          "thickness (red at or below min_ok mm, blending to blue at the thickest face, grey where nothing was measured) "
+          "and returns the numbers. Returns the PNG path and the image.",
+          {"doc": _DOC, "file": {"type": "string"}, "view": {"type": "string", "enum": list(RENDER_VIEWS)},
+           "width": {"type": "integer", "minimum": 64, "maximum": 2048},
+           "height": {"type": "integer", "minimum": 64, "maximum": 2048},
+           "thickness_map": {"type": "boolean"}, "min_ok": {"type": "number", "exclusiveMinimum": 0},
+           "samples": {"type": "integer", "minimum": 1, "maximum": 50},
+           "path": {"type": "string", "description": "where to save the PNG (default: the server's temp folder); an existing file is never replaced"}},
+          read_only=True),
     _tool("import_export", "Import or export",
           "Export the document or objects to .step/.stp, .brep or .FCStd, or import .step/.stp/.brep into the open change. "
           "Export is refused while a change is open or awaiting approval (pre_turn=true exports the state before it) "
@@ -449,10 +463,49 @@ class Server:
         h = self._handle(doc)
         return {"doc": h.id, **self._call(h, "propose", {"summary": summary})}
 
-    def t_render(self, doc=None, view=None):
-        return {"error": "unavailable", "_is_error": True,
-                "message": "render is unavailable until I4: headless FreeCADCmd has no 3D view, and GUI rendering "
-                           "runs only in a Linux VM or CI. Use get_state, describe_entity and verify instead."}
+    def t_render(self, doc=None, file=None, view="iso", width=480, height=360, thickness_map=False, min_ok=1.0,
+                 samples=5, path=None):
+        if view not in RENDER_VIEWS:
+            raise ToolError("bad_argument", f"view must be one of {list(RENDER_VIEWS)}")
+        try:
+            render_host.availability(self.freecadcmd)  # unavailable is reported before any snapshot work
+        except render_host.RenderUnavailable as e:
+            return {"error": "unavailable", "_is_error": True,
+                    "message": f"render is unavailable: {e}. Use get_state, describe_entity and verify instead."}
+        if path is not None and (os.path.exists(path) or not os.path.isdir(os.path.dirname(os.path.abspath(path)))):
+            raise ToolError("bad_argument", "path must be a new file in an existing folder")
+        self._n_render = getattr(self, "_n_render", 0) + 1
+        snap = None
+        if file is not None:
+            if doc is not None:
+                raise ToolError("bad_argument", "give doc or file, not both")
+            if not os.path.isfile(file):
+                raise ToolError("not_found", f"no such file {file!r}")
+            src, ident = file, None
+        else:
+            h = self._handle(doc)
+            snap = os.path.join(self._tmp, f"{h.id}-render-{self._n_render}.FCStd")
+            self._call(h, "snapshot", {"path": snap})
+            src, ident = snap, h.id
+        out_png = path or os.path.join(self._tmp, f"{ident or 'file'}-render-{self._n_render}.png")
+        try:
+            res = render_host.render_file(
+                src, out_png, view=view, width=width, height=height, freecadcmd=self.freecadcmd,
+                thickness_map={"min_ok": float(min_ok), "samples": int(samples)} if thickness_map else None)
+        except render_host.RenderUnavailable as e:
+            return {"error": "unavailable", "_is_error": True, "message": f"render is unavailable: {e}"}
+        except render_host.RenderFailed as e:
+            return {"error": "render_failed", "_is_error": True, "message": str(e), **e.details}
+        finally:
+            if snap:
+                try:
+                    os.unlink(snap)
+                except OSError:
+                    pass
+        out = {**res, "_image": res["path"]}
+        if ident:
+            out["doc"] = ident
+        return out
 
     def t_import_export(self, action, path, doc=None, objects=None, overwrite=False, pre_turn=False):
         h = self._handle(doc)
@@ -535,7 +588,16 @@ def _err(rid, code, message, data=None):
 def _result(payload, is_error=False):
     payload = dict(payload)
     payload.setdefault("schema", TOOL_SCHEMA)
-    return {"content": [{"type": "text", "text": json.dumps(payload, default=str, sort_keys=True)}],
+    image = payload.pop("_image", None)  # a PNG path: returned as MCP image content as well as in the payload
+    content = [{"type": "text", "text": json.dumps(payload, default=str, sort_keys=True)}]
+    if image:
+        try:
+            with open(image, "rb") as fh:
+                content.append({"type": "image", "data": base64.b64encode(fh.read()).decode("ascii"),
+                                "mimeType": "image/png"})
+        except OSError:
+            pass
+    return {"content": content,
             "structuredContent": json.loads(json.dumps(payload, default=str)), "isError": bool(is_error)}
 
 

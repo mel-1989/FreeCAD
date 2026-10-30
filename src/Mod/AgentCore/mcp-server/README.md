@@ -23,7 +23,7 @@ Without `uvx`, from a source tree: `PYTHONPATH=<freecad>/src/Mod/AgentCore pytho
 | `verify` | F2 checks on a snapshot, each in an isolated FreeCADCmd worker |
 | `begin_change` | open an F3 change (one transaction) |
 | `propose_change` | return the F3 change set for human approval |
-| `render` | unavailable until I4 |
+| `render` | PNG from the real GUI (I4 runner) of a document handle or file, optional thickness-map colouring; `unavailable` without a GUI build or display |
 | `import_export` | STEP, BREP and FCStd export; STEP and BREP import into the change |
 | `search_parts` | search the local parts corpus |
 

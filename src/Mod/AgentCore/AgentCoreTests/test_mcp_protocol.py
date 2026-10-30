@@ -83,7 +83,7 @@ class TestProtocol(unittest.TestCase):
         self.assertEqual(out["error"], "no_document")
         out, err = mc.call(self.s, "render")
         self.assertTrue(err)
-        self.assertIn("I4", out["message"])
+        self.assertIn(out["error"], ("no_document", "unavailable"))
         out, err = mc.call(self.s, "get_selection")
         self.assertFalse(err)
         self.assertEqual(out["selection"], [])

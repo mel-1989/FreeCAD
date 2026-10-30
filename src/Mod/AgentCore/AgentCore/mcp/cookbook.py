@@ -91,5 +91,5 @@ Find candidate parts first with `search_parts` (`{"query": "washer m6"}`).
 
 File, subprocess, network and dynamic-code access are flagged in the exec_code result's `policy` field (a static scan plus Python audit events). This is confinement, not a sandbox: exec_code is arbitrary Python in a worker process that holds a copy of the document, and nothing reaches the user's model until a human accepts the proposal.
 
-`render` is unavailable until the I4 GUI test harness exists; `get_selection` is empty in headless sessions.
+`render` launches the real FreeCAD GUI through the I4 runner (about 20 s a call on the Mac mini) and returns a PNG path plus the image; `thickness_map=true` colours faces by wall thickness. It answers `unavailable` when no GUI build or display exists or `CADFORK_RENDER=0`. `get_selection` is empty in headless sessions.
 """

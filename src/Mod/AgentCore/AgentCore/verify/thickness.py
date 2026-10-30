@@ -45,7 +45,7 @@ def _face_samples(face, n):
     return pts
 
 
-def _python_kernel(shape, samples=5, time_budget_s=None):
+def _python_kernel(shape, samples=5, time_budget_s=None, per_face=False):
     t0 = time.time()
     bb = shape.BoundBox
     diag = max(bb.DiagonalLength, 1.0)
@@ -57,6 +57,7 @@ def _python_kernel(shape, samples=5, time_budget_s=None):
     for gi, f in enumerate(faces, 1):
         index[f.hashCode()] = gi
     best = {"min": None, "point": None, "face": None}
+    face_min = [None] * len(faces)
     rays = 0
     complete = True
     for solid in shape.Solids:
@@ -86,6 +87,8 @@ def _python_kernel(shape, samples=5, time_budget_s=None):
                     d1 = (e.Vertexes[-1].Point - p).Length
                     if min(d0, d1) <= eps:
                         t = e.Length
+                        if gi is not None and (face_min[gi - 1] is None or t < face_min[gi - 1]):
+                            face_min[gi - 1] = t
                         if best["min"] is None or t < best["min"]:
                             best = {"min": t, "point": [p.x, p.y, p.z], "face": gi}
                         break
@@ -94,7 +97,32 @@ def _python_kernel(shape, samples=5, time_budget_s=None):
         if not complete:
             break
     best.update(rays=rays, complete=complete, kernel="python-raycast/1", elapsed_s=time.time() - t0)
+    if per_face:
+        best["faces"] = face_min
     return best
+
+
+def thickness_map(shape, samples=5, time_budget_s=None, kernel=None):
+    """Per-face thickness: ``(faces, result)`` where ``faces`` has one entry per face of ``shape.Faces``
+    (the minimum thickness measured from rays starting on that face, ``None`` when none of its rays hit)
+    and ``result`` is the usual measurement dict (``min``, ``kernel``, ``complete``, ...).
+
+    The native kernel (``Part.Shape.minWallThickness(perFace=True)``) is used when present, else the Python
+    reference kernel; ``kernel="python"`` forces the reference. A kernel installed with ``set_kernel`` that
+    does not return ``faces`` is bypassed for this call."""
+    native = getattr(shape, "minWallThickness", None)
+    if kernel != "python" and callable(native):
+        try:
+            r = native(samples, time_budget_s, True)
+        except TypeError:  # an older build without perFace
+            r = None
+        if r is not None and "faces" in r:
+            r.setdefault("kernel", "part-cpp/1")
+            return list(r["faces"]), r
+        if kernel == "native":
+            raise RuntimeError("this FreeCAD build has no Part.Shape.minWallThickness(perFace=True)")
+    r = _python_kernel(shape, samples=samples, time_budget_s=time_budget_s, per_face=True)
+    return list(r["faces"]), r
 
 
 def min_wall_thickness(shape, samples=5, time_budget_s=None, kernel=None):
