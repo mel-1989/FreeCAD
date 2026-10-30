@@ -5,7 +5,9 @@ AgentCore runs from ``src/Mod/AgentCore`` during development and from
 ``<build>/Mod/AgentCore`` once built; upstream data files (``data/tests``,
 ``data/examples``) and the ``mcp-server`` packaging dir live only in the source
 tree. Resolution order: ``$FC_SRC``, the checkout this file sits in, the build's
-``CMakeCache.txt`` (``FreeCAD_SOURCE_DIR``).
+``CMakeCache.txt`` (``FreeCAD_SOURCE_DIR``). ``$FC_SRC`` counts only when it holds
+``src/Mod/AgentCore``: the workshop's ``env.sh`` defaults it to the main clone, which tracks
+upstream and has no AgentCore, so a test run that forgot to set it used to read the wrong tree.
 """
 
 import os
@@ -36,7 +38,7 @@ def _from_cmake_cache(start):
 def source_root():
     """Absolute path of the FreeCAD source tree, or raise RuntimeError."""
     env = os.environ.get("FC_SRC")
-    if env and _is_source_root(env):
+    if env and _is_source_root(env) and os.path.isdir(os.path.join(env, "src", "Mod", "AgentCore")):
         return os.path.abspath(env)
     checkout = os.path.abspath(os.path.join(_HERE, os.pardir, os.pardir, os.pardir, os.pardir))
     if _is_source_root(checkout):
