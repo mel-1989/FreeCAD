@@ -16,7 +16,7 @@ from .authority import ApplyAuthority, ApplyToken, TokenRefused
 from .compare import differences, snapshot_dump
 from .geometry import match_faces, shape_diff
 from .snapshots import SnapshotStore
-from .turn import SCHEMA, AgentTurn, FlattenError, TurnError
+from .turn import SCHEMA, AgentTurn, FlattenError, RejectFailed, TurnError, TurnStale
 
 __all__ = ["AgentTurn", "ApplyAuthority", "ApplyToken", "TokenRefused", "SnapshotStore", "shape_diff",
-           "match_faces", "snapshot_dump", "differences", "SCHEMA", "TurnError", "FlattenError"]
+           "match_faces", "snapshot_dump", "differences", "SCHEMA", "TurnError", "TurnStale", "RejectFailed", "FlattenError"]

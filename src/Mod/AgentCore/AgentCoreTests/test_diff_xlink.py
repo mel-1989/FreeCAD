@@ -17,7 +17,7 @@ if FIX not in sys.path:
 
 import diff_builders as db  # noqa: E402
 from AgentCore.diff import AgentTurn, ApplyAuthority, SnapshotStore, differences  # noqa: E402
-from AgentCore.diff.turn import TurnError, _dump  # noqa: E402
+from AgentCore.diff.turn import TurnError, TurnStale, _dump  # noqa: E402
 
 
 def settled(doc):
@@ -196,12 +196,15 @@ class TestXLink(unittest.TestCase):
         self.src.SrcCyl.Height = 99
         self.src.commitTransaction()
         open_before = sorted(App.listDocuments())
+        with self.assertRaises(TurnStale):                               # the snapshot would discard SrcCyl.Height 99
+            t.reject()
+        self.assertEqual(self.src.SrcCyl.Height.Value, 99)
+        self.assertEqual(t.status, "proposed")
+        self.src.undo()                                                  # the human takes their edit back
         res = t.reject()
-        self.assertEqual(sorted(App.listDocuments()), open_before)  # snapshot documents closed again
-        self.assertEqual(res["methods"][self.src.Name], "snapshot")
+        self.assertEqual(sorted(App.listDocuments()), open_before)
         self.assertTrue(res["equal"], res["differences"])
         self.assert_pre()
-        self.assertEqual(self.src.SrcCyl.Height.Value, 10)              # the snapshot is the before-state
 
 
 def _gui_binary():

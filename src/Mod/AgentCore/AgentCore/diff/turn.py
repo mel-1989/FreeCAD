@@ -79,6 +79,18 @@ class TurnError(RuntimeError):
     pass
 
 
+class TurnStale(TurnError):
+    """Reject refused: a covered document no longer holds exactly the turn's after-state.
+
+    Nothing was touched and the turn is still ``proposed``. Rewinding would discard
+    a change the turn did not make."""
+
+
+class RejectFailed(TurnError):
+    """A step of reject failed after the rewind started. The after-state was
+    put back (``restored``) or could not be (the turn is then ``reject_failed``)."""
+
+
 class FlattenError(TurnError):
     pass
 
@@ -725,8 +737,101 @@ class AgentTurn:
             for rec in self._recs:
                 self._count_segments(rec)
                 self._check_history(rec)
-        methods = {rec["name"]: self._rewind(rec) for rec in self._recs}
-        return self._finish_reject(methods)
+        if self.status == "open":
+            methods = {rec["name"]: self._rewind(rec) for rec in self._recs}
+            return self._finish_reject(methods)
+        stale = self._stale_reasons()
+        if stale:  # before anything is touched: rewinding would discard work the turn did not make
+            raise TurnStale("reject refused: the document changed after this turn and rewinding would discard "
+                            "that work; undo your own edits (or use the snapshot revert, which discards "
+                            "later work on purpose) and reject again: " + "; ".join(stale[:6]))
+        saved = {rec["name"]: self._save_after(rec) for rec in self._recs}
+        methods = {}
+        try:
+            for rec in self._recs:
+                methods[rec["name"]] = self._rewind(rec)
+            return self._finish_reject(methods)
+        except Exception as exc:
+            if self.status == "rejected":  # the failure came after the decision was recorded
+                raise
+            ok, left = self._restore_after(saved)
+            if not ok:
+                self.status = "reject_failed"
+                self.result = {"decision": "reject_failed", "error": f"{type(exc).__name__}: {exc}",
+                               "differences": left}
+            raise RejectFailed(f"reject failed ({type(exc).__name__}: {exc}); "
+                               + ("the documents were put back to the turn's after-state and the turn is still "
+                                  "proposed" if ok else "the documents could not be fully put back: "
+                                  + "; ".join(left[:5]))) from exc
+
+    def _rec_differences(self, rec):
+        d = rec["doc"]
+        prefix = "" if rec is self._main() else f"[{rec['name']}]"
+        out = [prefix + x for x in compare.differences(rec["after"], _dump(d))]
+        return out + [prefix + x for x in _geo_differences(rec.get("after_geo", {}), _geo_signature(d))]
+
+    def _stale_reasons(self):
+        """Why reject would discard something the turn did not make (empty: safe).
+
+        Per covered document either the turn's entries were undone through the
+        stack and nothing but them (the human's own Undo; the rewind only drops
+        the turn's redo entries), or the document equals the reviewed
+        after-state and no foreign transaction sits on the stack."""
+        out = []
+        for rec in self._recs:
+            d, name = rec["doc"], rec["name"]
+            if "exit_undo" not in rec:
+                continue
+            count, names = rec["exit_undo"]
+            if self.undo_name in list(d.RedoNames):
+                k = count - d.UndoCount
+                if 0 < k <= max(rec["segments"], 1) and list(d.UndoNames) == names[k:] and \
+                        all(n == self.undo_name for n in list(d.RedoNames)[:k]):
+                    continue
+                out.append(f"{name}: the undo stack no longer matches the turn")
+                continue
+            if (d.UndoCount, list(d.UndoNames)) != (count, names):
+                out.append(f"{name}: another transaction was recorded after the turn "
+                           f"(undo stack now {list(d.UndoNames)[:3]})")
+            # not work to protect: a Touched flag left by the human's own Undo, and the document's
+            # own label or file name (Save As renames it while a turn waits)
+            drift = [x for x in self._rec_differences(rec)
+                     if not ("/state" in x.split(":", 1)[0] and "Touched" in x)
+                     and not x.lstrip("[").split("]", 1)[-1].startswith("/document/")]
+            if drift:
+                out.append(f"{name}: no longer equals the turn's after-state ({drift[0]})")
+        return out
+
+    def _save_after(self, rec):
+        d = rec["doc"]
+        return {"rec": rec, "cap": transplant.capture(d), "dump": _dump(d), "undo": (d.UndoCount, list(d.UndoNames)),
+                "redo": (d.RedoCount, list(d.RedoNames))}
+
+    def _restore_after(self, saved):
+        """Put every document back to what it was when reject began (redo of the undone entries, else the capture); (ok, leftover differences)."""
+        left = []
+        for name, sv in saved.items():
+            rec, d = sv["rec"], sv["rec"]["doc"]
+            try:
+                with _Active(d):
+                    if d.HasPendingTransaction or App.getActiveTransaction() is not None:
+                        d.commitTransaction()
+                    if (d.UndoCount, list(d.UndoNames)) != sv["undo"] and d.UndoCount < sv["undo"][0] \
+                            and d.RedoCount >= sv["undo"][0] - d.UndoCount:
+                        for _ in range(sv["undo"][0] - d.UndoCount):   # the entries the rewind undid come back
+                            d.redo()
+                    if compare.differences(sv["dump"], _dump(d)):
+                        transplant.apply(d, sv["cap"], recompute=False)
+                        transplant.align_touched(d, sv["dump"])
+                    if (d.UndoCount, list(d.UndoNames)) != sv["undo"]:
+                        # the turn's undo entry could not come back: a later reject uses the capture
+                        # (and the check above must accept this stack as the turn's own)
+                        rec["exit_undo"] = (d.UndoCount, list(d.UndoNames))
+                        rec["undo_complete"] = False
+            except Exception as exc:
+                left.append(f"{name}: restore raised {type(exc).__name__}: {exc}")
+            left += [f"[{name}]{x}" for x in compare.differences(sv["dump"], _dump(d))]
+        return not left, left
 
     def _rewind(self, rec):
         """Bring one document back to its before-state; returns the method."""
@@ -912,10 +1017,7 @@ class AgentTurn:
         signature). Empty means the reviewed change set is what accept keeps."""
         out = []
         for rec in self._recs:
-            d = rec["doc"]
-            prefix = "" if rec is self._main() else f"[{rec['name']}]"
-            out += [prefix + x for x in compare.differences(rec["after"], _dump(d))]
-            out += [prefix + x for x in _geo_differences(rec.get("after_geo", {}), _geo_signature(d))]
+            out += self._rec_differences(rec)
         return out
 
     def _abort_accept(self, exc):

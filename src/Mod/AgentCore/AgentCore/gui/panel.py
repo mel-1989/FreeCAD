@@ -208,6 +208,9 @@ class ChangeSetPanel:
             return
         try:
             res = self.backend.reject()
+        except REFUSALS as exc:   # nothing was rejected: the turn stays proposed and reviewable
+            self._say(f"Reject refused: {exc}", ok=False)
+            return
         except Exception as exc:
             self._say(f"Reject failed: {type(exc).__name__}: {exc}", ok=False)
             raise

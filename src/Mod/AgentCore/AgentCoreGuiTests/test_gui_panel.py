@@ -385,6 +385,35 @@ class TestPendingTurns(GuiCase):
         self.assertEqual(t.status, "rejected")
         self.assertEqual(panel.pending(), [])
 
+    def test_reject_after_the_human_edited_is_refused_in_plain_words(self):
+        t = turn_for(self.doc)
+        panel.review(t)
+        Gui.Control.closeDialog()                       # closed undecided, the human keeps working
+        pump()
+        self.doc.openTransaction("human")
+        self.doc.getObject("Block").Placement.Base = V(5, 5, 5)
+        self.doc.commitTransaction()
+        self.doc.recompute()
+        Gui.runCommand("AgentCore_ReviewPending")
+        pump()
+        p = panel.current()
+        self.assertIsNotNone(p)
+        self.click(p.reject_button)
+        self.assertEqual(t.status, "proposed")
+        self.assertIsNone(p.decision)
+        self.assertTrue(p.message.startswith("Reject refused"), p.message)
+        self.assertIn("undo your own edits", p.message)
+        self.assertEqual(self.doc.getObject("Block").Placement.Base, V(5, 5, 5))   # the human's edit survived
+        self.assertEqual(self.doc.getObject("Block").Length.Value, 55)
+        self.click(p.reject_button)                     # a second click does not claim "Rejected."
+        self.assertNotEqual(p.message, "Rejected.")
+        self.assertEqual(t.status, "proposed")
+        self.doc.undo()                                 # the human's own undo, then the retry works
+        self.doc.recompute()
+        self.click(p.reject_button)
+        self.assertEqual((t.status, p.decision), ("rejected", "rejected"))
+        self.assertEqual(differences(self.pre, self.settled()), [])
+
     def test_reopen_with_nothing_pending_says_so(self):
         self.assertIsNone(panel.review_pending())
         self.assertTrue(any("no agent change set" in w for w in self.warnings))

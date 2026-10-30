@@ -13,7 +13,7 @@ if FIX not in sys.path:
     sys.path.insert(0, FIX)
 
 import diff_builders as db  # noqa: E402
-from AgentCore.diff import AgentTurn, ApplyAuthority, SnapshotStore, differences, snapshot_dump  # noqa: E402
+from AgentCore.diff import AgentTurn, ApplyAuthority, SnapshotStore, TurnStale, differences, snapshot_dump  # noqa: E402
 
 
 def settled(doc):
@@ -367,7 +367,7 @@ class TestRedoAfterReject(_AuthCase):
         self.doc.redo()
         self.assertEqual(self.doc.Block.Length.Value, 40)
 
-    def test_snapshot_reject_keeps_the_humans_redo(self):
+    def test_snapshot_reject_refuses_while_human_edits_sit_on_the_turn(self):
         with tempfile.TemporaryDirectory() as tmp:
             with AgentTurn(self.doc, label="snap", verify=False, store=SnapshotStore(tmp)) as t:
                 self.doc.Block.Length = 55
@@ -376,10 +376,11 @@ class TestRedoAfterReject(_AuthCase):
                 setattr(self.doc.Block, prop, 21)
                 self.doc.commitTransaction()
             self.doc.undo()                                    # the human undoes B: B is on the redo stack
-            res = t.reject()
-            self.assertEqual(res["method"], "snapshot")
-            self.assertTrue(res["equal"], res["differences"])
-            self.assertEqual(self.doc.RedoNames, ["human B"])  # not the turn's to drop
+            with self.assertRaises(TurnStale):                 # A is later work the snapshot would discard
+                t.reject()
+            self.assertEqual((self.doc.Block.Length.Value, self.doc.Block.Width.Value), (55, 21))
+            self.assertEqual(self.doc.RedoNames, ["human B"])
+            self.assertEqual(t.status, "proposed")
 
     def test_human_redo_survives_an_empty_turn(self):
         self.doc.openTransaction("human")

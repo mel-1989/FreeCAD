@@ -13,7 +13,7 @@ if FIX not in sys.path:
     sys.path.insert(0, FIX)
 
 import diff_builders as db  # noqa: E402
-from AgentCore.diff import AgentTurn, ApplyAuthority, TurnError  # noqa: E402
+from AgentCore.diff import AgentTurn, ApplyAuthority, TurnError, TurnStale  # noqa: E402
 
 
 def _human(doc, name, obj, prop, value):
@@ -69,6 +69,11 @@ class TestAcceptRechecksLiveState(_Case):
         self.doc.recompute()
         with self.assertRaises(TurnError):
             t.accept(tok)
+        with self.assertRaises(TurnStale):          # Height 99 is not the turn's: reject refuses too
+            t.reject()
+        self.assertEqual(self.doc.Block.Height.Value, 99)
+        self.doc.Block.Height = 10
+        self.doc.recompute()
         res = t.reject()
         self.assertTrue(res["equal"], res["differences"])
         self.assertEqual((self.doc.Block.Length.Value, self.doc.Block.Height.Value, self.doc.Hole.Radius.Value),
@@ -117,8 +122,13 @@ class TestRejectWithoutSnapshot(_Case):
         with AgentTurn(self.doc, label="no store", verify=False) as t:
             self.doc.Block.Length = 50
         _human(self.doc, "on top", "Block", "Width", 21)   # the stack no longer ends with the turn
+        with self.assertRaises(TurnStale):                  # rewinding would discard the human's Width
+            t.reject()
+        self.assertEqual((self.doc.Block.Length.Value, self.doc.Block.Width.Value), (50, 21))
+        self.assertEqual(t.status, "proposed")
+        self.doc.undo()                                     # the human takes their own edit back
         res = t.reject()
-        self.assertEqual(res["method"], "capture")
+        self.assertEqual(res["method"], "undo")
         self.assertTrue(res["equal"], res["differences"])
         self.assertEqual(self.doc.Block.Length.Value, 40)
         self.assertEqual(t.status, "rejected")
