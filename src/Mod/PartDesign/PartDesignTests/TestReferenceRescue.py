@@ -577,7 +577,8 @@ class TestReferenceRescue(unittest.TestCase):
         thick = _add(self.doc, self.body, "PartDesign::Thickness", "Thick")
         thick.Base = (pad, [top])
         thick.Value = 1.0
-        thick.Reversed = False
+        # inward: an outward arc-join thickness of this L-plate is an OCCT no-op that now fails
+        thick.Reversed = True
         self.doc.recompute()
         self.assertNotIn("Invalid", thick.State)
         draft = _add(self.doc, self.body, "PartDesign::Draft", "Draft", pad)

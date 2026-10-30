@@ -66,7 +66,9 @@
 #include <BRepOffsetAPI_MakeFilling.hxx>
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepOffsetAPI_MakeEvolved.hxx>
+#include <BRepGProp.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepProj_Projection.hxx>
@@ -3070,6 +3072,28 @@ TopoShape& TopoShape::makeElementOffset2D(
     return makeElementCompound(shapesToReturn, op, outputPolicy);
 }
 
+// BRepOffsetAPI_MakeThickSolid can report success and hand back the input
+// unchanged, or with only the removed face missing (observed for a box with all
+// edges filleted, any thickness). A real shell always changes the volume, so an
+// unchanged volume is a failure.
+static bool isThickSolidNoOp(const TopoDS_Shape& input, const TopoDS_Shape& result)
+{
+    if (result.IsNull() || input.IsPartner(result)) {
+        return true;
+    }
+    if (input.ShapeType() != TopAbs_SOLID && input.ShapeType() != TopAbs_COMPSOLID
+        && input.ShapeType() != TopAbs_COMPOUND) {
+        return false;
+    }
+    GProp_GProps volIn, volOut;
+    BRepGProp::VolumeProperties(input, volIn);
+    BRepGProp::VolumeProperties(result, volOut);
+    // OCCT returns some outward shells of single-face solids (sphere, torus) inverted
+    double vIn = std::fabs(volIn.Mass());
+    double vOut = std::fabs(volOut.Mass());
+    return vIn != 0.0 && std::fabs(vIn - vOut) <= 1e-9 * std::max(vIn, vOut);
+}
+
 TopoShape& TopoShape::makeElementThickSolid(
     const TopoShape& shape,
     const std::vector<TopoShape>& faces,
@@ -3129,6 +3153,12 @@ TopoShape& TopoShape::makeElementThickSolid(
         selfInter ? Standard_True : Standard_False,
         GeomAbs_JoinType(join)
     );
+    if (mkThick.IsDone() && isThickSolidNoOp(shape.getShape(), mkThick.Shape())) {
+        FC_THROWM(
+            Base::CADKernelError,
+            "Thickness failed: the offset algorithm returned the shape unchanged"
+        );
+    }
     return makeElementShape(mkThick, shape, op);
 }
 
