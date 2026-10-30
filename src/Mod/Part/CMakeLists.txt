@@ -90,6 +90,7 @@ set(Part_tests
     parttests/TestLinkCycle.py
     parttests/TestThicknessNoOp.py
     parttests/TestPartMirror.py
+    parttests/TestWallThickness.py
     parttests/TestFaceMakerUnifiedPlanar.py
     parttests/TestFaceMakerUnifiedNonPlanar.py
 )

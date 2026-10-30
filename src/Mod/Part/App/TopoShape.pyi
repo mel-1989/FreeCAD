@@ -1052,6 +1052,16 @@ class TopoShape(ComplexGeoData):
         ...
 
     @constmethod
+    def minWallThickness(self, samples: int = 5, timeBudget: float = None) -> dict:
+        """
+        Minimum wall thickness by ray casting along inward face normals.
+        minWallThickness(samples=5, timeBudget=None) -> dict
+        --
+        Rays start at a samples x samples grid of points on every face of every solid and run along the inward normal; the thickness at a point is the distance to the nearest exit hit on the same solid. The result is the minimum over all samples, an upper bound of the true minimum. Keys: min (float or None), point ([x, y, z] or None), face (1-based index into Faces or None), rays, complete (False when timeBudget seconds ran out), kernel, elapsed_s. samples is clamped to 1..1000. timeBudget: None, a negative value or NaN means unlimited, 0 stops at once. Shapes without solids give min None and rays 0.
+        """
+        ...
+
+    @constmethod
     def removeSplitter(self) -> TopoShape:
         """
         Removes redundant edges from the B-REP model

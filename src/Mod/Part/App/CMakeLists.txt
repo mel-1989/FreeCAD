@@ -631,6 +631,8 @@ SET(Part_SRCS
     FT2FC.cpp
     FT2FC.h
     FaceMaker.cpp
+    WallThickness.cpp
+    WallThickness.h
     FaceMaker.h
     FaceMakerCheese.cpp
     FaceMakerCheese.h
