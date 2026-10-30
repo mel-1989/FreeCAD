@@ -1423,7 +1423,7 @@ protected:
     int _recomputeFeature(DocumentObject* Feat);
 
     /// Clear the redos.
-    void _clearRedos();
+    void _clearRedos(std::list<Transaction*>* detach = nullptr);
 
     /**
      * @brief Get the name of the transient directory for a given UUID and filename.

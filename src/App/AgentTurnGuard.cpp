@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <chrono>
 #include <format>
+#include <list>
+#include <optional>
 #include <thread>
 #include <utility>
 
@@ -47,6 +49,40 @@ AgentTurnState::~AgentTurnState()
 
 namespace
 {
+
+/// Transactions detached under the turn mutex. Destroying one can drop the last reference to a
+/// Python object and run its __del__, which may give up the GIL; that must never happen while the
+/// mutex is held. The turn lock can be nested (the property hook holds it around ensureSegment), so
+/// the detached transactions wait here until the thread releases its outermost lock, which
+/// destroys them after the mutex is out and while the GIL is still held.
+thread_local std::list<Transaction*> t_graves;
+
+void bury(std::list<Transaction*>& items)
+{
+    t_graves.splice(t_graves.end(), items);
+}
+
+void drainGraves()
+{
+    if (t_graves.empty()) {
+        return;
+    }
+    try {
+        std::optional<Base::PyGILStateLocker> gil;
+        if (Py_IsInitialized()) {
+            gil.emplace();
+        }
+        // A destructor may run Python that buries more: take them one at a time.
+        while (!t_graves.empty()) {
+            Transaction* t = t_graves.front();
+            t_graves.pop_front();
+            delete t;
+        }
+    }
+    catch (...) {
+        FC_ERR("exception while destroying detached transactions");
+    }
+}
 
 AgentTurnReport makeReport(const AgentTurnState& st)
 {
@@ -437,7 +473,9 @@ int AgentTurnGuard::ensureSegment(Document& doc)
         return NullTransaction;
     }
     Base::FlagToggler<> flag(acc.d->opentransaction);
-    Transaction::clearRedosOf(doc);
+    std::list<Transaction*> redos;
+    Transaction::clearRedosOf(doc, &redos);
+    bury(redos);  // destroyed when this thread's outermost turn lock is released
     auto* segment = new Transaction(st->tid);
     segment->Name = st->name;
     acc.undoMap[st->tid] = segment;
@@ -498,10 +536,9 @@ void AgentTurnGuard::onDocumentDestroy(Document& doc)
         // Parked segments go first (oldest first); the active one is committed and
         // deleted by clearUndos like any other.
         auto lock = AgentTurnGuard::acquire(st, false);
-        for (auto* segment : st->parked) {
-            delete segment;
-        }
+        std::list<Transaction*> parked(st->parked.begin(), st->parked.end());
         st->parked.clear();
+        bury(parked);  // destroyed when this thread's outermost turn lock is released
         st->ending = true;
         st->announceDue = false;  // the document is going away: no signal about it
         acc.d->agent.reset();
@@ -574,13 +611,20 @@ void AgentTurnLock::unlock()
 {
     Document* announce = nullptr;
     std::string name;
+    bool outermost = false;
     if (lock_.owns_lock()) {
-        if (--state_->lockDepth == 0 && state_->announceDue) {
+        outermost = --state_->lockDepth == 0;
+        if (outermost && state_->announceDue) {
             state_->announceDue = false;
             announce = state_->announceDoc;
             name = state_->name;
         }
         lock_.unlock();
+    }
+    if (outermost) {
+        // Mutex out, GIL still ours: transactions detached under the lock die here (their
+        // destructors may run Python).
+        drainGraves();
     }
     if (announce) {
         // After the mutex, before the GIL goes: observers may run Python.

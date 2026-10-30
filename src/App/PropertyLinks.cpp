@@ -5219,7 +5219,13 @@ public:
         }
         for (auto& v : parentLinks) {
             v.first->setFlag(PropertyLinkBase::LinkRestoring);
-            v.first->aboutToSetValue();
+            try {
+                v.first->aboutToSetValue();
+            }
+            catch (...) {
+                v.first->setFlag(PropertyLinkBase::LinkRestoring, false);
+                throw;
+            }
             for (auto link : v.second) {
                 auto obj = doc->getObject(link->objectName.c_str());
                 if (obj) {
@@ -5358,7 +5364,13 @@ public:
         for (auto& v : parentLinks) {
             if (v.first) {
                 v.first->setFlag(PropertyLinkBase::LinkDetached);
-                v.first->aboutToSetValue();
+                try {
+                    v.first->aboutToSetValue();
+                }
+                catch (...) {
+                    v.first->setFlag(PropertyLinkBase::LinkDetached, false);
+                    throw;
+                }
             }
             for (auto l : v.second) {
                 l->detach();

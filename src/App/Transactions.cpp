@@ -168,9 +168,9 @@ Transaction::DocumentAccess Transaction::accessDocument(Document& doc)
     return {doc.d, doc.mUndoTransactions, doc.mUndoMap, doc.mRedoTransactions, doc.mRedoMap};
 }
 
-void Transaction::clearRedosOf(Document& doc)
+void Transaction::clearRedosOf(Document& doc, std::list<Transaction*>* detach)
 {
-    doc._clearRedos();
+    doc._clearRedos(detach);
 }
 
 bool Transaction::hasObject(const TransactionalObject* Obj) const

@@ -597,7 +597,7 @@ void Document::_checkTransaction(DocumentObject* pcDelObj, const Property* What,
     }
 }
 
-void Document::_clearRedos()
+void Document::_clearRedos(std::list<Transaction*>* detach)
 {
     if (isPerformingTransaction() || d->committing) {
         FC_ERR("Cannot clear redo while transacting");
@@ -605,6 +605,11 @@ void Document::_clearRedos()
     }
 
     mRedoMap.clear();
+    if (detach) {
+        // The caller destroys them later, outside its locks (their destructors may run Python).
+        detach->splice(detach->end(), mRedoTransactions);
+        return;
+    }
     while (!mRedoTransactions.empty()) {
         delete mRedoTransactions.back();
         mRedoTransactions.pop_back();
@@ -1003,6 +1008,12 @@ void Document::onChanged(const Property* prop)
 
 void Document::onBeforeChangeProperty(const TransactionalObject* Who, const Property* What)
 {
+    if (d->agent) {
+        // Refuse before anything is touched or signalled: when another thread has the turn busy
+        // and this one holds the GIL, the lock throws, and the property is still untouched.
+        // (The lock is released at once; Python observers must not run under it.)
+        AgentTurnGuard::lockFor(*this);
+    }
     if (Who->isDerivedFrom<DocumentObject>()) {
         signalBeforeChangeObject(*static_cast<const DocumentObject*>(Who), *What);
     }

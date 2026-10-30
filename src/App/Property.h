@@ -697,7 +697,17 @@ public:
         {
             mProp.signalCounter++;
             if (markChange) {
-                aboutToChange();
+                // aboutToSetValue() may throw (a refused set during a guarded agent turn). A
+                // constructor that throws never runs its destructor, so undo the bookkeeping
+                // here: otherwise the property keeps signalCounter > 0 and hasChanged, and no
+                // later change of it is ever recorded or signalled again.
+                try {
+                    aboutToChange();
+                }
+                catch (...) {
+                    mProp.signalCounter--;
+                    throw;
+                }
             }
         }
 
@@ -711,7 +721,13 @@ public:
         {
             if (!mProp.hasChanged) {
                 mProp.hasChanged = true;
-                mProp.aboutToSetValue();
+                try {
+                    mProp.aboutToSetValue();
+                }
+                catch (...) {
+                    mProp.hasChanged = false;
+                    throw;
+                }
             }
         }
 
