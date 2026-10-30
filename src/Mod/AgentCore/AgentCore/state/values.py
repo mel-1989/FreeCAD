@@ -54,14 +54,16 @@ def placement(p):
     return {"base": vec(p.Base), "rotation": [fnum(c) for c in q]}
 
 
-def _obj_name(o):
+def _obj_name(o, removed=None):
+    """Name of a document object; a removed one has none, so ``removed`` (id() -> name) is asked."""
     try:
-        return o.Name
+        name = o.Name
     except Exception:
-        return None
+        name = None
+    return name if name is not None else (removed or {}).get(id(o))
 
 
-def link_value(v):
+def link_value(v, removed=None):
     """Normalise any App link value to JSON."""
     if v is None:
         return None
@@ -69,16 +71,16 @@ def link_value(v):
         import FreeCAD
 
         if isinstance(v, FreeCAD.DocumentObject):
-            return {"object": v.Name}
+            return {"object": _obj_name(v, removed)}
     except Exception:
         pass
     if isinstance(v, tuple) and len(v) == 2 and hasattr(v[0], "Name"):
         subs = v[1]
         if isinstance(subs, str):
             subs = [subs]
-        return {"object": v[0].Name, "subs": [str(s) for s in subs]}
+        return {"object": _obj_name(v[0], removed), "subs": [str(s) for s in subs]}
     if isinstance(v, (list, tuple)):
-        return [link_value(x) for x in v]
+        return [link_value(x, removed) for x in v]
     return to_json(v)
 
 
@@ -208,7 +210,7 @@ def to_json(v, depth=0):
     if isinstance(v, App.Units.Quantity):
         return quantity(v)
     if isinstance(v, App.DocumentObject):
-        return {"object": v.Name}
+        return {"object": _obj_name(v)}
     try:
         import Part
 
@@ -232,15 +234,15 @@ def to_json(v, depth=0):
     return {"unserialised": type(v).__name__}
 
 
-def property_value(obj, name, ptype):
-    """JSON value of one property, never raising."""
-    try:
-        v = obj.getPropertyByName(name)
-    except Exception as e:  # noqa: BLE001
-        return {"error": str(e)[:200]}
+def value_json(v, ptype, removed_names=None):
+    """JSON value of an already fetched property value, never raising.
+
+    ``removed_names`` maps ``id()`` of the Python object of a removed document object to the name
+    it had, so links to it still serialise by name.
+    """
     try:
         if "PropertyLink" in ptype:
-            return link_value(v)
+            return link_value(v, removed_names)
         if ptype == "App::PropertyFileIncluded" and isinstance(v, str):
             return os.path.basename(v)
         if ptype in ("App::PropertyFile", "App::PropertyPath") and isinstance(v, str):
@@ -248,3 +250,12 @@ def property_value(obj, name, ptype):
         return to_json(v)
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)[:200]}
+
+
+def property_value(obj, name, ptype):
+    """JSON value of one property, never raising."""
+    try:
+        v = obj.getPropertyByName(name)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)[:200]}
+    return value_json(v, ptype)

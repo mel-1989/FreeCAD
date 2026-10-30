@@ -298,6 +298,45 @@ class Document(PropertyContainer):
         """
         ...
 
+    def getAgentTurnChanges(self, json_values: bool = True, timeout: float = 60.0, /) -> dict[str, object]:
+        """
+        What the active agent turn has changed so far, read from FreeCAD's own
+        transaction records (the stored old property values), not from before
+        and after dumps. Raises RuntimeError outside a guarded turn (an empty
+        result would be indistinguishable from "the turn changed nothing").
+
+        Returns {"document", "tid", "turn", "segments", "uncomparable",
+        "objects": [{"name", "type", "label", "status", "replaced",
+        "properties": [...]}]}. status is "added", "removed" or "modified".
+        Every segment the turn parked at a nested open is walked, oldest
+        first, and the oldest record of a property supplies its value at the
+        start of the turn; a nested abort has already rolled its segment back,
+        so its changes never appear. Rules: an object added and removed inside
+        the turn is omitted; a property set and restored to its old value is
+        dropped (compared with Property.isSame), and an object left with no
+        changed property is omitted; an object removed and re-created under the
+        same name is reported as one "removed" and one "added" entry, both with
+        replaced=True; an added object lists no properties (read them from the
+        object); a dynamic property created in the turn has change "added"
+        (old None), one deleted has change "removed" (new None). Each property
+        entry has "name", "type" (property TypeId), "change" ("modified",
+        "added", "removed", "renamed" with "old_name", or "moved") and, except
+        for renamed and moved, "old" and "new". A "modified" entry also has
+        "maybe_unchanged", True when the two values serialise equal: isSame is
+        unreliable for some types (a rebuilt shape is never the same), so such
+        an entry is kept rather than dropped and flagged for the caller. Objects of a linked document
+        are reported by that document's own call.
+
+        With json_values (default) values go through AgentCore.state.values
+        (F1's JSON representation, unserialisable values become
+        {"unserialised": <type>}); without it, or when AgentCore cannot be
+        imported, they are the raw Python values of the properties.
+
+        Waits up to `timeout` seconds for the async worker to be idle on this
+        document (GIL released) and holds the turn lock while reading.
+        """
+        ...
+
     def isAgentTurnActive(self) -> bool:
         """
         True while a guarded agent turn is active on this document.
