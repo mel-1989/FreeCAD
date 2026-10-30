@@ -3,6 +3,7 @@
 
 import os
 import sys
+import tempfile
 import unittest
 
 import FreeCAD as App
@@ -134,6 +135,58 @@ class TestIntrospectApi(unittest.TestCase):
         objs = {(o["name"], o["status"]): o for o in self.doc.getAgentTurnChanges()["objects"]}
         self.assertTrue(objs[("Box", "removed")]["replaced"])
         self.assertTrue(objs[("Box", "added")]["replaced"])
+
+    def test_link_list_to_an_object_removed_in_the_turn_keeps_its_name(self):
+        a = self.doc.addObject("Part::Box", "A")
+        holder = self.doc.addObject("App::FeaturePython", "Holder")
+        for kind, prop in (("App::PropertyLinkList", "Ls"), ("App::PropertyLinkSubList", "Lsub"),
+                           ("App::PropertyLinkListChild", "Lc")):
+            holder.addProperty(kind, prop, "g", "")
+        holder.Ls = [a, self.box, a]
+        holder.Lsub = [(a, ["Edge1"]), (self.box, ["Edge2"])]
+        holder.Lc = [a, self.box]
+        self.doc.recompute()
+        self.doc.beginAgentTurn("t")
+        self.doc.removeObject("A")
+        props = {p["name"]: p for o in self.doc.getAgentTurnChanges()["objects"]
+                 if o["name"] == "Holder" for p in o["properties"]}
+        self.assertEqual(props["Ls"]["old"], [{"object": "A"}, {"object": "Box"}, {"object": "A"}])
+        self.assertEqual(props["Ls"]["new"], [{"object": "Box"}])
+        self.assertEqual(props["Lsub"]["old"], [{"object": "A", "subs": ["Edge1"]},
+                                                {"object": "Box", "subs": ["Edge2"]}])
+        self.assertEqual(props["Lc"]["old"], [{"object": "A"}, {"object": "Box"}])
+
+    def test_clearing_a_cross_document_link_is_reported_with_its_target(self):
+        other = App.newDocument("introspect_other")
+        tmp = tempfile.TemporaryDirectory()
+        other.saveAs(os.path.join(tmp.name, "other.FCStd"))
+        self.doc.saveAs(os.path.join(tmp.name, "main.FCStd"))
+        try:
+            target = other.addObject("Part::Box", "Target")
+            holder = self.doc.addObject("App::FeaturePython", "Holder")
+            holder.addProperty("App::PropertyXLink", "X", "g", "")
+            holder.addProperty("App::PropertyXLinkList", "XL", "g", "")
+            holder.X = target
+            holder.XL = [target]
+            self.doc.recompute()
+            self.doc.beginAgentTurn("t")
+            holder.X = None
+            holder.XL = []
+            ch = self.doc.getAgentTurnChanges()
+            props = {p["name"]: p for o in ch["objects"] if o["name"] == "Holder" for p in o["properties"]}
+            want = {"object": "Target", "document": "introspect_other"}
+            self.assertEqual(props["X"]["old"], want)
+            self.assertIsNone(props["X"]["new"])
+            self.assertFalse(props["X"]["maybe_unchanged"])
+            self.assertEqual(props["XL"]["old"], [want])
+            self.assertEqual(props["XL"]["new"], [])
+            self.assertIn(("Holder", "X"), summary(ch)["properties"])
+            self.assertIn(("Holder", "XL"), summary(ch)["properties"])
+        finally:
+            if self.doc.isAgentTurnActive():
+                self.doc.endAgentTurn(False)
+            App.closeDocument("introspect_other")
+            tmp.cleanup()
 
 
 if __name__ == "__main__":

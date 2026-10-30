@@ -30,6 +30,7 @@
 #include "Document.h"
 #include "DocumentObject.h"
 #include "Property.h"
+#include "PropertyLinks.h"
 #include "PropertyStandard.h"
 #include "PropertyUnits.h"
 #include "Transactions.h"
@@ -76,12 +77,17 @@ struct NameTag
 {
     friend auto steal(NameTag);
 };
+struct XDocNameTag
+{
+    friend auto steal(XDocNameTag);
+};
 
 template struct Steal<ObjectsTag, &Transaction::_Objects>;
 template struct Steal<EarlierTag, &Transaction::_Earlier>;
 template struct Steal<StatusTag, &TransactionObject::status>;
 template struct Steal<PropMapTag, &TransactionObject::_PropChangeMap>;
 template struct Steal<NameTag, &TransactionObject::_NameInDocument>;
+template struct Steal<XDocNameTag, &PropertyXLink::docName>;
 
 }  // namespace
 
@@ -377,6 +383,69 @@ const char* changeName(PropKind k)
     }
 }
 
+/// One cross-document link as JSON: its target's object name and document (name, or path when the
+/// document is not open), which Property::getPyObject cannot give for a copy kept by a transaction.
+Py::Object xlinkJson(const PropertyXLink& l, bool withSubs)
+{
+    std::string obj;
+    std::string doc;
+    const DocumentObject* o = l.getValue();
+    if (o && o->isAttachedToDocument()) {
+        obj = o->getNameInDocument();
+        doc = o->getDocument()->getName();
+    }
+    else {
+        if (const char* n = l.getObjectName()) {
+            obj = n;
+        }
+        // A transaction's copy keeps the target document's name (empty for a link by file path).
+        doc = l.*steal(XDocNameTag {});
+        if (doc.empty()) {
+            if (const char* path = l.getDocumentPath()) {
+                doc = path;
+            }
+        }
+    }
+    if (obj.empty()) {
+        return Py::None();
+    }
+    Py::Dict d;
+    d.setItem("object", Py::String(obj));
+    d.setItem("document", Py::String(doc));
+    const auto subs = l.getSubValues(false);
+    if (withSubs || !subs.empty()) {
+        Py::List sl;
+        for (const auto& sub : subs) {
+            sl.append(Py::String(sub));
+        }
+        d.setItem("subs", sl);
+    }
+    return d;
+}
+
+/// JSON for the XLink family; null when @p prop is not one.
+bool xlinkFamilyJson(const Property* prop, const std::string& typeName, Py::Object& out)
+{
+    if (!prop) {
+        return false;
+    }
+    if (const auto* x = freecad_cast<const PropertyXLink*>(prop)) {
+        out = xlinkJson(*x, false);
+        return true;
+    }
+    if (const auto* xl = freecad_cast<const PropertyXLinkSubList*>(prop)) {
+        // The transaction copies an XLinkList as an XLinkSubList, so the live type name decides.
+        const bool plain = typeName.find("XLinkList") != std::string::npos;
+        Py::List list;
+        for (const auto& link : xl->getSubListValues()) {
+            list.append(xlinkJson(link, !plain));
+        }
+        out = list;
+        return true;
+    }
+    return false;
+}
+
 /// Value of a property as a Python object; None when the property cannot express one.
 Py::Object rawValue(const Property* prop, const Property* unitFrom)
 {
@@ -384,6 +453,15 @@ Py::Object rawValue(const Property* prop, const Property* unitFrom)
         return Py::None();
     }
     try {
+        // PropertyLinkList::getPyObject turns an object that is no longer attached (removed in the
+        // turn) into None; keep the object so that its name can still be looked up.
+        if (const auto* ll = freecad_cast<const PropertyLinkList*>(prop)) {
+            Py::List list;
+            for (const auto* o : ll->getValues()) {
+                list.append(o ? Py::asObject(const_cast<DocumentObject*>(o)->getPyObject()) : Py::None());
+            }
+            return list;
+        }
         // Restore the unit that the transaction's float copy of a quantity lost.
         const auto* q = unitFrom ? freecad_cast<const PropertyQuantity*>(unitFrom) : nullptr;
         const auto* f = freecad_cast<const PropertyFloat*>(prop);
@@ -413,6 +491,10 @@ Py::Object jsonValue(
 {
     if (!prop) {
         return Py::None();
+    }
+    Py::Object xl;
+    if (!converter.isNone() && xlinkFamilyJson(prop, typeName, xl)) {
+        return xl;
     }
     Py::Object raw = rawValue(prop, unitFrom);
     if (converter.isNone()) {

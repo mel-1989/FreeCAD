@@ -54,20 +54,16 @@ def placement(p):
     return {"base": vec(p.Base), "rotation": [fnum(c) for c in q]}
 
 
-# Names of objects removed inside an agent turn, by id() of their Python object: a removed
-# object has no Name any more, but old property values (transaction records) still link to it.
-_REMOVED_NAMES = {}
-
-
-def _obj_name(o):
+def _obj_name(o, removed=None):
+    """Name of a document object; a removed one has none, so ``removed`` (id() -> name) is asked."""
     try:
         name = o.Name
     except Exception:
         name = None
-    return name if name is not None else _REMOVED_NAMES.get(id(o))
+    return name if name is not None else (removed or {}).get(id(o))
 
 
-def link_value(v):
+def link_value(v, removed=None):
     """Normalise any App link value to JSON."""
     if v is None:
         return None
@@ -75,16 +71,16 @@ def link_value(v):
         import FreeCAD
 
         if isinstance(v, FreeCAD.DocumentObject):
-            return {"object": _obj_name(v)}
+            return {"object": _obj_name(v, removed)}
     except Exception:
         pass
     if isinstance(v, tuple) and len(v) == 2 and hasattr(v[0], "Name"):
         subs = v[1]
         if isinstance(subs, str):
             subs = [subs]
-        return {"object": _obj_name(v[0]), "subs": [str(s) for s in subs]}
+        return {"object": _obj_name(v[0], removed), "subs": [str(s) for s in subs]}
     if isinstance(v, (list, tuple)):
-        return [link_value(x) for x in v]
+        return [link_value(x, removed) for x in v]
     return to_json(v)
 
 
@@ -244,18 +240,9 @@ def value_json(v, ptype, removed_names=None):
     ``removed_names`` maps ``id()`` of the Python object of a removed document object to the name
     it had, so links to it still serialise by name.
     """
-    global _REMOVED_NAMES
-    saved, _REMOVED_NAMES = _REMOVED_NAMES, removed_names or {}
-    try:
-        return _value_json(v, ptype)
-    finally:
-        _REMOVED_NAMES = saved
-
-
-def _value_json(v, ptype):
     try:
         if "PropertyLink" in ptype:
-            return link_value(v)
+            return link_value(v, removed_names)
         if ptype == "App::PropertyFileIncluded" and isinstance(v, str):
             return os.path.basename(v)
         if ptype in ("App::PropertyFile", "App::PropertyPath") and isinstance(v, str):
