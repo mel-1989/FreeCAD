@@ -89,6 +89,7 @@ set(Part_tests
     parttests/TestLinkArrayPoint.py
     parttests/TestLinkCycle.py
     parttests/TestPartMirror.py
+    parttests/TestWallThickness.py
     parttests/TestFaceMakerUnifiedPlanar.py
     parttests/TestFaceMakerUnifiedNonPlanar.py
 )

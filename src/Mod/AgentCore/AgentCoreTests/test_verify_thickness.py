@@ -2,6 +2,10 @@
 """Minimum wall thickness against analytic plates, tubes and shells (tolerance in tolerances.json)."""
 
 import unittest
+import time
+
+import FreeCAD
+import Part
 
 from AgentCore import verify
 from AgentCore.verify import thickness, tolerances
@@ -53,3 +57,48 @@ class TestThickness(unittest.TestCase):
         with Fixture("shell") as doc:
             r = verify.run_checks(doc, [{"check": "thickness", "time_budget_s": 0.0}])["results"][0]
             self.assertFalse(r["details"]["complete"])
+
+
+@unittest.skipUnless(hasattr(Part.Shape, "minWallThickness"), "build has no C++ thickness kernel")
+class TestThicknessCppKernel(unittest.TestCase):
+    """The C++ kernel (Part/App/WallThickness.cpp) must agree with the Python reference."""
+
+    timings = {}
+
+    def _shape(self, doc):
+        from AgentCore.verify.checks import bodies
+
+        return [o.Shape for o in bodies(doc, None)][0]
+
+    def test_cpp_matches_python_on_every_fixture(self):
+        tol = tolerances.load()
+        for name in CASES:
+            with Fixture(name) as doc:
+                shp = self._shape(doc)
+                t = time.time()
+                c = thickness.min_wall_thickness(shp, 5, kernel="native")
+                tc = time.time() - t
+                t = time.time()
+                p = thickness.min_wall_thickness(shp, 5, kernel="python")
+                tp = time.time() - t
+                self.assertEqual(c["kernel"], "part-cpp/1")
+                self.assertEqual(p["kernel"], "python-raycast/1")
+                truth = TRUTHS[name]["thickness_min"]
+                allowed = max(tol["thickness_abs_mm"], tol["thickness_rel"] * truth)
+                self.assertLessEqual(abs(c["min"] - p["min"]), allowed, name)
+                self.assertLessEqual(abs(c["min"] - truth), allowed, name)
+                self.assertEqual(c["rays"], p["rays"], name)
+                self.assertTrue(c["complete"])
+                print(f"THICKNESS_TIMING {name}: truth={truth} cpp={c['min']!r} py={p['min']!r} "
+                      f"cpp_s={tc:.4f} py_s={tp:.4f} rays={c['rays']}")
+
+    def test_default_path_uses_cpp_and_python_is_forceable(self):
+        with Fixture("plate") as doc:
+            shp = self._shape(doc)
+            self.assertEqual(thickness.min_wall_thickness(shp)["kernel"], "part-cpp/1")
+            self.assertEqual(thickness.min_wall_thickness(shp, kernel="python")["kernel"], "python-raycast/1")
+
+    def test_time_budget_reaches_cpp(self):
+        with Fixture("shell") as doc:
+            r = thickness.min_wall_thickness(self._shape(doc), 9, time_budget_s=0.0)
+            self.assertFalse(r["complete"])

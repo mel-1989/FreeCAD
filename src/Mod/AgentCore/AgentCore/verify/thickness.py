@@ -97,12 +97,21 @@ def _python_kernel(shape, samples=5, time_budget_s=None):
     return best
 
 
-def min_wall_thickness(shape, samples=5, time_budget_s=None):
-    if _kernel is not None:
+def min_wall_thickness(shape, samples=5, time_budget_s=None, kernel=None):
+    """Measure the minimum wall thickness.
+
+    ``kernel="python"`` forces the pure-Python reference path (used to compare
+    against the C++ kernel); ``kernel="native"`` requires ``shape.minWallThickness``.
+    """
+    if kernel == "python":
+        return _python_kernel(shape, samples=samples, time_budget_s=time_budget_s)
+    if _kernel is not None and kernel != "native":
         return _kernel(shape, samples=samples, time_budget_s=time_budget_s)
     native = getattr(shape, "minWallThickness", None)
-    if callable(native):  # future C++ kernel
-        r = native(samples)
-        r.setdefault("kernel", "part-cpp")
+    if callable(native):  # C++ kernel, Part/App/WallThickness.cpp
+        r = native(samples, time_budget_s)
+        r.setdefault("kernel", "part-cpp/1")
         return r
+    if kernel == "native":
+        raise RuntimeError("this FreeCAD build has no Part.Shape.minWallThickness")
     return _python_kernel(shape, samples=samples, time_budget_s=time_budget_s)

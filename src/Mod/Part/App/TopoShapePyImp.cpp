@@ -22,6 +22,7 @@
  *                                                                         *
  ***************************************************************************/
 
+#include <chrono>
 #include <limits>
 #include <sstream>
 #include <boost/regex.hpp>
@@ -99,6 +100,7 @@
 #include "PartPyCXX.h"
 #include "ShapeMapHasher.h"
 #include "TopoShapeMapper.h"
+#include "WallThickness.h"
 
 
 using namespace Part;
@@ -2086,6 +2088,61 @@ PyObject* TopoShapePy::isInside(PyObject* args) const
             }
             return Py_BuildValue("O", (test ? Py_True : Py_False));
         }
+    }
+    catch (Standard_Failure& e) {
+        PyErr_SetString(PartExceptionOCCError, e.GetMessageString());
+        return nullptr;
+    }
+    catch (const std::exception& e) {
+        PyErr_SetString(PartExceptionOCCError, e.what());
+        return nullptr;
+    }
+}
+
+PyObject* TopoShapePy::minWallThickness(PyObject* args, PyObject* keywds) const
+{
+    int samples = 5;
+    PyObject* pyBudget = Py_None;
+    static const std::array<const char*, 3> kwd_list {"samples", "timeBudget", nullptr};
+    if (!Base::Wrapped_ParseTupleAndKeywords(args, keywds, "|iO", kwd_list, &samples, &pyBudget)) {
+        return nullptr;
+    }
+    double budget = -1.0;
+    if (pyBudget != Py_None) {
+        budget = PyFloat_AsDouble(pyBudget);
+        if (PyErr_Occurred()) {
+            return nullptr;
+        }
+    }
+    try {
+        const TopoDS_Shape& shape = getTopoShapePtr()->getShape();
+        if (shape.IsNull()) {
+            PyErr_SetString(PartExceptionOCCError, "Cannot handle null shape");
+            return nullptr;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        Part::WallThicknessResult r = Part::minWallThickness(shape, samples, budget);
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        Py::Dict d;
+        if (r.found) {
+            d.setItem("min", Py::Float(r.minimum));
+            Py::List pt;
+            pt.append(Py::Float(r.point.X()));
+            pt.append(Py::Float(r.point.Y()));
+            pt.append(Py::Float(r.point.Z()));
+            d.setItem("point", pt);
+            d.setItem("face", Py::Long(r.faceIndex));
+        }
+        else {
+            d.setItem("min", Py::None());
+            d.setItem("point", Py::None());
+            d.setItem("face", Py::None());
+        }
+        d.setItem("rays", Py::Long(r.rays));
+        d.setItem("complete", Py::Boolean(r.complete));
+        d.setItem("kernel", Py::String("part-cpp/1"));
+        d.setItem("elapsed_s", Py::Float(elapsed));
+        return Py::new_reference_to(d);
     }
     catch (Standard_Failure& e) {
         PyErr_SetString(PartExceptionOCCError, e.GetMessageString());
