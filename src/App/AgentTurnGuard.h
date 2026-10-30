@@ -161,6 +161,14 @@ public:
 
     /// Wait until the async worker is not recomputing @p doc (false on timeout). Callers that hold the Python GIL release it around this.
     static bool waitForWorker(Document& doc, std::chrono::milliseconds wait);
+    /**
+     * @brief waitForWorker() for callers that hold the GIL: gives it up for the wait.
+     *
+     * The document may be closed by another Python thread meanwhile, so nothing of @p doc is read
+     * during the wait, and the document is looked up again afterwards.
+     * @throw Base::RuntimeError when the document no longer exists.
+     */
+    static bool waitForWorkerReleasingGil(Document& doc, std::chrono::milliseconds wait);
 
     /// The turn's counters and tampering so far, without ending it (default report when no turn is active).
     static AgentTurnReport peek(Document& doc);

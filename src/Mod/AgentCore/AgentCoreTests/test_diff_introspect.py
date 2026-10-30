@@ -4,6 +4,8 @@
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 import FreeCAD as App
@@ -187,6 +189,111 @@ class TestIntrospectApi(unittest.TestCase):
                 self.doc.endAgentTurn(False)
             App.closeDocument("introspect_other")
             tmp.cleanup()
+
+    def test_keyword_arguments_and_bad_timeouts(self):
+        self.doc.beginAgentTurn("t")
+        self.box.Length = 25
+        self.assertEqual(turn_changes(self.doc, json_values=False)["objects"][0]["name"], "Box")
+        self.doc.getAgentTurnChanges(timeout=5.0)
+        for bad in (float("nan"), -1.0, 1e300, float("inf")):
+            with self.assertRaises(ValueError):
+                self.doc.getAgentTurnChanges(True, bad)
+
+    def test_equal_json_is_flagged_only_for_shapes(self):
+        # A Length change below JSON's 1e-6 rounding, and one element of a long list, are real changes.
+        holder = self.doc.addObject("App::FeaturePython", "Holder")
+        holder.addProperty("App::PropertyFloatList", "Big", "g", "")
+        holder.Big = [0.0] * 3000
+        self.doc.recompute()
+        self.doc.beginAgentTurn("t")
+        self.box.Length = 10.0000001
+        holder.Big = [0.0] * 2999 + [1.0]
+        ch = self.doc.getAgentTurnChanges()
+        props = summary(ch)["properties"]
+        self.assertIn(("Box", "Length"), props)
+        self.assertIn(("Holder", "Big"), props)
+        for o in ch["objects"]:
+            for p in o["properties"]:
+                if p["name"] in ("Length", "Big"):
+                    self.assertFalse(p["maybe_unchanged"], p["name"])
+
+    def test_no_deadlock_when_another_thread_sets_properties_during_a_big_report(self):
+        objs = []
+        for i in range(300):
+            o = self.doc.addObject("App::FeaturePython", "O%d" % i)
+            o.addProperty("App::PropertyLength", "L")
+            o.addProperty("App::PropertyPlacement", "P")
+            objs.append(o)
+        self.doc.recompute()
+        self.doc.beginAgentTurn("t")
+        for i, o in enumerate(objs):
+            o.L = i + 1
+            o.P = App.Placement(App.Vector(i, 1, 2), App.Rotation(10, 20, 30))
+        done = threading.Event()
+        # A hang would stop the whole run: the watchdog ends the process loudly instead.
+        watchdog = threading.Timer(90, lambda: (print("DEADLOCK in introspection test", flush=True), os._exit(3)))
+        watchdog.start()
+        old = sys.getswitchinterval()
+        sys.setswitchinterval(1e-5)
+        calls = [0]
+
+        def reader():
+            while not done.is_set():
+                self.doc.getAgentTurnChanges()
+                calls[0] += 1
+
+        t = threading.Thread(target=reader)
+        t.start()
+        try:
+            end = time.time() + 3
+            k = 0
+            while time.time() < end:
+                objs[k % 300].L = 1000 + k
+                if k % 50 == 0:
+                    self.doc.getAgentTurnChanges()
+                k += 1
+        finally:
+            done.set()
+            t.join()
+            sys.setswitchinterval(old)
+            watchdog.cancel()
+        self.assertGreater(calls[0], 0)
+        self.assertEqual(len(self.doc.getAgentTurnChanges()["objects"]), 300)
+
+    def test_closing_the_document_during_the_call_is_an_error_not_a_crash(self):
+        errors = {}
+        old = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        watchdog = threading.Timer(90, lambda: (print("HANG in close test", flush=True), os._exit(3)))
+        watchdog.start()
+        try:
+            for rnd in range(15):
+                d = App.newDocument("introspect_close%d" % rnd)
+                o = d.addObject("App::FeaturePython", "O")
+                o.addProperty("App::PropertyLength", "L")
+                d.recompute()
+                d.beginAgentTurn("t")
+                o.L = 3
+                go = [True]
+
+                def worker():
+                    while go[0]:
+                        try:
+                            d.getAgentTurnChanges(False)
+                        except (RuntimeError, ReferenceError) as e:
+                            errors[type(e).__name__] = errors.get(type(e).__name__, 0) + 1
+                            if isinstance(e, ReferenceError):
+                                return
+
+                t = threading.Thread(target=worker)
+                t.start()
+                time.sleep(0.01)
+                App.closeDocument(d.Name)
+                go[0] = False
+                t.join()
+        finally:
+            sys.setswitchinterval(old)
+            watchdog.cancel()
 
 
 if __name__ == "__main__":
