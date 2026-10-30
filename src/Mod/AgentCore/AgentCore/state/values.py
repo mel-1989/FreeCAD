@@ -232,12 +232,8 @@ def to_json(v, depth=0):
     return {"unserialised": type(v).__name__}
 
 
-def property_value(obj, name, ptype):
-    """JSON value of one property, never raising."""
-    try:
-        v = obj.getPropertyByName(name)
-    except Exception as e:  # noqa: BLE001
-        return {"error": str(e)[:200]}
+def value_json(v, ptype):
+    """JSON value of an already fetched property value, never raising."""
     try:
         if "PropertyLink" in ptype:
             return link_value(v)
@@ -248,3 +244,12 @@ def property_value(obj, name, ptype):
         return to_json(v)
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)[:200]}
+
+
+def property_value(obj, name, ptype):
+    """JSON value of one property, never raising."""
+    try:
+        v = obj.getPropertyByName(name)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)[:200]}
+    return value_json(v, ptype)

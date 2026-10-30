@@ -27,6 +27,7 @@
 #include <Base/Stream.h>
 
 #include "AgentTurnGuard.h"
+#include "AgentTurnIntrospect.h"
 #include "Document.h"
 #include "DocumentObject.h"
 #include "DocumentObjectPy.h"
@@ -800,6 +801,20 @@ PyObject* DocumentPy::canEndAgentTurn(PyObject* args)
     result.setItem(0, Py::Boolean(ok));
     result.setItem(1, Py::String(reason));
     return Py::new_reference_to(result);
+}
+
+PyObject* DocumentPy::getAgentTurnChanges(PyObject* args)
+{
+    PyObject* jsonValues = Py_True;
+    double timeout = 60.0;
+    if (!PyArg_ParseTuple(args, "|Od", &jsonValues, &timeout)) {
+        return nullptr;
+    }
+    return AgentTurnIntrospect::asPython(
+        *getDocumentPtr(),
+        Base::asBoolean(jsonValues),
+        std::chrono::milliseconds(static_cast<long long>(timeout * 1000.0))
+    );
 }
 
 PyObject* DocumentPy::isAgentTurnActive(PyObject* args)
