@@ -198,6 +198,10 @@ PyObject* DocumentPy::getElementReferenceEvents(PyObject* args, PyObject* kwd)
     long long since = 0;
     static const std::array<const char*, 2> kwlist {"since", nullptr};
     if (!Base::Wrapped_ParseTupleAndKeywords(args, kwd, "|L", kwlist, &since)) {
+        if (PyErr_ExceptionMatches(PyExc_OverflowError)) {
+            PyErr_Clear();
+            PyErr_SetString(PyExc_ValueError, "since is out of range");
+        }
         return nullptr;
     }
     if (since < 0) {
@@ -215,6 +219,7 @@ PyObject* DocumentPy::getElementReferenceEvents(PyObject* args, PyObject* kwd)
             d.setItem("property", Py::String(e.property));
             d.setItem("target", Py::String(e.target));
             d.setItem("targetDocument", Py::String(e.targetDocument));
+            d.setItem("subIndex", Py::Long(static_cast<long>(e.subIndex)));
             d.setItem("oldSub", Py::String(e.oldSub));
             d.setItem("newSub", Py::String(e.newSub));
             d.setItem("oldMapped", Py::String(e.oldMapped));

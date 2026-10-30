@@ -14,7 +14,7 @@ from FreeCAD import Vector as V
 
 from AgentCore import state
 from AgentCore.state.refs import _sub_element
-from PartDesignTests.TestReferenceRescue import H, L, W, _add, _circle, _rect, _sketch
+from PartDesignTests.TestReferenceRescue import H, L, W, _add, _circle, _line_edges, _rect, _sketch
 
 
 def _pad_doc(name):
@@ -36,6 +36,30 @@ def _split_bottom(sk):
     sk.delGeometry(i)
     sk.addGeometry(Part.LineSegment(a, m))
     sk.addGeometry(Part.LineSegment(m, b))
+
+
+def _split_top(sk):
+    i = next(i for i, g in enumerate(sk.Geometry) if abs(g.StartPoint.y - H / 2) < 1e-6 and abs(g.EndPoint.y - H / 2) < 1e-6)
+    a, b = sk.Geometry[i].StartPoint, sk.Geometry[i].EndPoint
+    m = (a + b) * 0.5
+    sk.delGeometry(i)
+    sk.addGeometry(Part.LineSegment(a, m))
+    sk.addGeometry(Part.LineSegment(m, b))
+
+
+def _check_chains(case, tr):
+    """Every record's events start at its own snapshot sub, follow one another, and (unless the
+    chain ends in a loss) end on the sub the property holds now."""
+    for rec in tr.records:
+        chain = rec["cpp_chain"]
+        if not chain:
+            continue
+        case.assertEqual(chain[0]["oldSub"], rec["sub"], rec)
+        for a, b in zip(chain, chain[1:]):
+            case.assertEqual(b["oldSub"], a["newSub"], (rec["owner"], rec["property"], rec["index"], chain))
+        now, _why = tr._current(rec)
+        if chain[-1]["kind"] != "lost":
+            case.assertEqual(_sub_element(chain[-1]["newSub"]), _sub_element(now[1]), (rec["owner"], rec["index"], chain))
 
 
 class TestJournalMatching(unittest.TestCase):
@@ -76,12 +100,12 @@ class TestJournalMatching(unittest.TestCase):
             doc.recompute()
             tr = state.track_references(doc)
 
-            def mk(seq, o, n, k):
+            def mk(seq, o, n, k, idx):
                 return {"seq": seq, "document": doc.Name, "owner": "Hold", "property": "Ref", "target": "Pad",
-                        "targetDocument": doc.Name, "oldSub": o, "newSub": n, "oldMapped": "", "newMapped": "",
+                        "targetDocument": doc.Name, "subIndex": idx, "oldSub": o, "newSub": n, "oldMapped": "", "newMapped": "",
                         "kind": k, "basis": "element_map"}
 
-            fake = [mk(10**9 + 1, "Edge1", "Edge8", "remapped"), mk(10**9 + 2, "Edge8", "?Edge8", "lost")]
+            fake = [mk(10**9 + 1, "Edge1", "Edge8", "remapped", 0), mk(10**9 + 2, "Edge8", "?Edge8", "lost", 1)]
             tr._read_journal = lambda: fake
             evs = tr.classify()
             a, b = evs
@@ -157,5 +181,120 @@ class TestJournalMatching(unittest.TestCase):
             self.assertTrue(lost, [e.get("freecad_event") for e in evs])
             for e in lost:
                 self.assertTrue(e["property_marked_missing"])
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_two_edits_in_one_window_do_not_swap_hops(self):
+        doc, body, sk, pad = _pad_doc("JM.two")
+        try:
+            hold = doc.addObject("App::FeaturePython", "Hold")
+            hold.addProperty("App::PropertyLinkSub", "Ref")
+            hold.Ref = (pad, ["Edge%d" % i for i in range(1, 13)])
+            doc.recompute()
+            stages = [list(hold.Ref[1])]
+            tr = state.track_references(doc)
+            _split_bottom(sk)
+            doc.recompute()
+            stages.append(list(hold.Ref[1]))
+            _split_top(sk)
+            doc.recompute()
+            stages.append(list(hold.Ref[1]))
+            evs = tr.classify()
+            moved = 0
+            for ev, rec in zip(evs, tr.records):
+                truth = [st[rec["index"]] for st in stages]
+                fe = ev.get("freecad_event")
+                if truth[0] == truth[-1] and not fe:
+                    continue
+                moved += 1
+                self.assertIsNotNone(fe, truth)
+                hops = ev.get("freecad_events") or [fe]
+                self.assertEqual(_sub_element(hops[-1]["newSub"]), truth[-1], (truth, hops))
+            self.assertGreaterEqual(moved, 4)
+            self.assertEqual(tr.untracked_events, [])
+            _check_chains(self, tr)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_three_owners_two_lists_two_edits(self):
+        doc, body, sk, pad = _pad_doc("JM.x02")
+        try:
+            edges = ["Edge%d" % i for i in range(1, 13)]
+            for n in range(3):
+                h = doc.addObject("App::FeaturePython", "H%d" % n)
+                h.addProperty("App::PropertyLinkSubList", "A")
+                h.addProperty("App::PropertyLinkSubList", "B")
+                h.A = [(pad, edges[n:] + edges[:n])]
+                h.B = [(pad, list(reversed(edges)))]
+            doc.recompute()
+            tr = state.track_references(doc)
+            _split_bottom(sk)
+            doc.recompute()
+            _split_top(sk)
+            doc.recompute()
+            tr.classify()
+            self.assertEqual(len(tr.records), 72)
+            self.assertEqual(tr.untracked_events, [])
+            self.assertGreater(sum(1 for r in tr.records if r["cpp_chain"]), 20)
+            _check_chains(self, tr)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_split_then_hole_on_a_dressed_pad(self):
+        doc, body, sk, pad = _pad_doc("JM.x03")
+        try:
+            f = _add(doc, body, "PartDesign::Fillet", "Fillet")
+            f.Base = (pad, ["Edge%d" % i for i in range(1, 13)])
+            f.Radius = 0.5
+            ch = _add(doc, body, "PartDesign::Chamfer", "Chamfer")
+            ch.Base = (f, ["Edge1", "Edge2", "Edge3"])
+            ch.Size = 0.2
+            doc.recompute()
+            tr = state.track_references(doc)
+            _split_bottom(sk)
+            hs = _sketch(doc, body, "HoleSketch", z=L, after=pad)
+            hs.addGeometry(Part.Circle(V(-10, 0, 0), V(0, 0, 1), 2.0))
+            hp = _add(doc, body, "PartDesign::Pocket", "HolePocket", hs)
+            hp.Profile = hs
+            hp.Length = 2 * L
+            doc.recompute()
+            tr.classify()
+            _check_chains(self, tr)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_insert_then_delete_before_classify_keeps_every_event(self):
+        doc, body, sk, pad = _pad_doc("JM.lr")
+        try:
+            tops = _line_edges(pad.Shape, V(0, 0, 1), (W / 2, -W / 2), (H / 2, -H / 2))
+            f = _add(doc, body, "PartDesign::Fillet", "Fillet")
+            f.Base = (pad, tops)
+            f.Radius = 1.0
+            doc.recompute()
+            before = list(f.Base[1])
+            tr = state.track_references(doc)
+            ch = _add(doc, body, "PartDesign::Chamfer", "Chamfer", pad)
+            ch.Base = (pad, [tops[0]])
+            ch.Size = 3.0
+            doc.recompute()
+            body.removeObject(ch)
+            doc.removeObject("Chamfer")
+            doc.recompute()
+            self.assertEqual(list(f.Base[1]), before)
+            tr.classify()
+            self.assertGreaterEqual(len(tr.cpp_events), 6)
+            self.assertEqual(tr.untracked_events, [])
+            _check_chains(self, tr)
+            for rec in tr.records:
+                if rec["cpp_chain"]:
+                    self.assertNotEqual(rec["cpp_chain"][-1]["kind"], "lost", rec["cpp_chain"])
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_since_out_of_range_is_a_value_error(self):
+        doc = App.newDocument("JM.since")
+        try:
+            with self.assertRaises(ValueError):
+                doc.getElementReferenceEvents(2**64)
         finally:
             App.closeDocument(doc.Name)

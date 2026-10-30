@@ -119,10 +119,10 @@ class Document(PropertyContainer):
         Return the journal of element-reference updates of this document, oldest first.
 
         Each event is a dict with the keys seq, document, owner, property, target,
-        targetDocument, oldSub, newSub, oldMapped, newMapped, kind ("remapped", "lost" or "restored")
+        targetDocument, subIndex (position of the sub in the property, -1 if unknown), oldSub, newSub, oldMapped, newMapped, kind ("remapped", "lost" or "restored")
         and basis ("element_map", "geometry", "anchored", "history" or "record").
-        Only events with seq greater than `since` are returned (a negative `since`
-        raises ValueError). The journal is observational, bounded, and empty after a
+        Only events with seq greater than `since` are returned (a negative or
+        out-of-range `since` raises ValueError). The journal is observational, bounded, and empty after a
         document is loaded. It is an incremental log of what FreeCAD's reference
         update rewrote, not a replayable history: undo, redo, relinking and user
         assignments change properties without events, so read the property for its

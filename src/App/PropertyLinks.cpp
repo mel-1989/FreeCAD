@@ -1507,6 +1507,21 @@ static bool restoreByRescueRecord(const PropertyLinkBase* prop,
 
 namespace
 {
+// Position of the sub being updated within its property; set by the callers that loop over subs.
+thread_local int g_elementRefSubIndex = -1;
+
+struct SubIndexScope
+{
+    explicit SubIndexScope(int i)
+    {
+        g_elementRefSubIndex = i;
+    }
+    ~SubIndexScope()
+    {
+        g_elementRefSubIndex = -1;
+    }
+};
+
 /**
  * Observational recorder for PropertyLinkBase::_updateElementReference. It is constructed once
  * the function is past its "nothing changed" early returns, reads the state the function ends
@@ -1532,6 +1547,7 @@ struct ElementReferenceRecorder
     std::string oldSub;
     std::string oldMapped;
     std::string oldShort;
+    int subIndex {-1};
 
     static std::string shortName(const std::string& indexed, const std::string& fallbackSub)
     {
@@ -1548,8 +1564,9 @@ struct ElementReferenceRecorder
     }
 
     // The child links inside a PropertyXLinkSubList have no name of their own: report the list.
-    std::string propertyNameOf(const App::DocumentObject* owner) const
+    std::string propertyNameOf(const App::DocumentObject* owner, int& offset) const
     {
+        offset = 0;
         if (prop->getName() && prop->getName()[0]) {
             return prop->getName();
         }
@@ -1557,10 +1574,13 @@ struct ElementReferenceRecorder
         owner->getPropertyList(props);
         for (auto* p : props) {
             if (auto* list = freecad_cast<App::PropertyXLinkSubList*>(p)) {
+                int before = 0;
                 for (const auto& child : list->getSubListValues()) {
                     if (&child == prop) {
+                        offset = before;
                         return list->getName() ? list->getName() : "";
                     }
+                    before += std::max<int>(1, static_cast<int>(child.getSubValues().size()));
                 }
             }
         }
@@ -1590,6 +1610,7 @@ struct ElementReferenceRecorder
         , oldSub(s)
         , oldMapped(sh.newName)
         , oldShort(shortName(sh.oldName, s))
+        , subIndex(g_elementRefSubIndex)
     {}
 
     ElementReferenceRecorder(const ElementReferenceRecorder&) = delete;
@@ -1651,7 +1672,9 @@ struct ElementReferenceRecorder
         }
         ev.document = doc->getName();
         ev.owner = owner->getNameInDocument();
-        ev.property = propertyNameOf(owner);
+        int offset = 0;
+        ev.property = propertyNameOf(owner, offset);
+        ev.subIndex = subIndex >= 0 ? subIndex + offset : -1;
         ev.target = target && target->getNameInDocument() ? target->getNameInDocument() : "";
         if (target && target->getDocument()) {
             ev.targetDocument = target->getDocument()->getName();
@@ -3023,6 +3046,7 @@ static bool updateLinkReference(App::PropertyLinkBase* prop,
     int i = 0;
     bool touched = false;
     for (auto& sub : subs) {
+        SubIndexScope subIndexScope(i);
         if (prop->_updateElementReference(feature,
                                           link,
                                           sub,
@@ -4398,6 +4422,7 @@ void PropertyLinkSubList::updateElementReference(DocumentObject* feature, bool r
     bool touched = false;
     for (auto& sub : _lSubList) {
         auto obj = _lValueList[i];
+        SubIndexScope subIndexScope(i);
         if (_updateElementReference(feature,
                                     obj,
                                     sub,

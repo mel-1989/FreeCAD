@@ -38,6 +38,7 @@ struct AppExport ElementReferenceEvent
     std::string property;    ///< name of the link property
     std::string target;      ///< name of the linked object (after the update)
     std::string targetDocument;  ///< name of the document of the linked object
+    int subIndex {-1};       ///< position of the sub in the property (see below), -1 if unknown
     std::string oldSub;      ///< sub-element string before the update
     std::string newSub;      ///< sub-element string after the update
     std::string oldMapped;   ///< mapped (shadow) name before, may be empty
@@ -66,6 +67,12 @@ struct AppExport ElementReferenceEvent
  * - `restored` is also used when a reference recovers from the missing mark (`?Edge5` to
  *   `Edge5`), and a `restored` event may have an unchanged short sub (only the mapped name
  *   changed).
+ * - `subIndex` is the flattened position of the sub within its property: the index in the sub
+ *   list for PropertyLinkSub and PropertyLinkSubList, and for PropertyXLinkSubList the number of
+ *   subs (an empty sub list counts as one) of the earlier children plus the index within the
+ *   child. It matches the order in which Python flattens the property value, and it is the same
+ *   for every event of one update pass, so (owner, property, subIndex, oldSub) identifies the
+ *   reference an event belongs to.
  * - A reference may leave and return within one edit (`Edge8`, `?Edge8`, `Edge8`); every step
  *   is logged.
  * - The journal keeps at most MaxEventsPerDocument events. lastDroppedSeq() tells a reader

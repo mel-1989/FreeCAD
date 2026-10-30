@@ -320,6 +320,7 @@ class ReferenceTracker:
                         "owner": obj.Name, "property": prop, "index": index,
                         "linked": linked.Name, "path": path, "element_owner": owner.Name,
                         "element": element, "mapped": mapped, "sub": sub,
+                        "linked_doc": getattr(getattr(linked, "Document", None), "Name", None),
                         "sig": signature(shape, element) if shape is not None else None,
                         "carrier": carrier(shape, element) if shape is not None else None,
                         "valid_before": not sub.startswith("?") and shape is not None and signature(shape, element) is not None,
@@ -538,50 +539,50 @@ class ReferenceTracker:
     def _match_journal(self, cpp_events):
         """Attach the C++ events to the records and return the set of event seqs used.
 
-        The journal has no sub index, so a record is matched by identity of its snapshot sub:
-        1. each record claims the earliest unclaimed event of its owner and property whose
-           ``oldSub`` is exactly the record's snapshot sub and whose target is the record's
-           linked object or the object the property links to now (a G01 insertion moves the
-           link to the inserted feature). A second pass accepts the same short element name
-           when no exact event exists;
-        2. a record then extends its chain with events that no record claimed in step 1,
-           each starting where the previous one ended (a reference that moves in several
-           recomputes), stopping at a ``lost`` event.
-        Because step 1 completes for every record before any chain grows, one sub's event is
-        never taken as the next hop of another sub (A: Edge1 to Edge8 while B: Edge8 to Edge5)."""
+        The events of one (owner, property) are replayed in seq order. Every record sits at a
+        position (its ``index`` in the flattened property, the event's ``subIndex``) and holds a
+        current sub, starting at its snapshot sub. An event belongs to the record at its position
+        whose current sub equals the event's ``oldSub``; the record then moves to ``newSub``. So
+        one sub's hop can never be taken as another sub's, however many edits the window spans,
+        and the target is not compared (an inserted feature that was deleted again leaves events
+        whose target is neither the snapshot's nor today's), except that a cross-document
+        ``targetDocument`` must be a document the reference could point into.
+        Events without a position (``subIndex`` -1, or an older build) and events whose position
+        holds a different sub (the list changed length) fall back to the unique record of that
+        property whose current sub equals ``oldSub``."""
         used = set()
         by_prop = {}
-        for ce in cpp_events:
+        for ce in sorted(cpp_events, key=lambda c: c["seq"]):
             by_prop.setdefault((ce["owner"], ce["property"]), []).append(ce)
-        now_linked = {}
-        for i, rec in enumerate(self.records):
-            cur, _why = self._current(rec)
-            now_linked[i] = {rec["linked"]} | ({cur[0].Name} if cur is not None and hasattr(cur[0], "Name") else set())
+        for rec in self.records:
             rec["cpp_chain"] = []
-
-        def candidates(rec, i):
-            return [ce for ce in by_prop.get((rec["owner"], rec["property"]), []) if ce["seq"] not in used
-                    and ce["target"] in now_linked[i]]
-
-        for exact in (True, False):
-            for i, rec in enumerate(self.records):
-                if rec["cpp_chain"]:
+        recs = {}
+        for rec in self.records:
+            recs.setdefault((rec["owner"], rec["property"]), []).append(rec)
+        for key, events in by_prop.items():
+            group = recs.get(key, [])
+            if not group:
+                continue
+            cur = {id(r): r["sub"] for r in group}
+            at = {r["index"]: r for r in group}
+            docs = {}
+            for r in group:
+                now, _why = self._current(r)
+                d = {r.get("linked_doc"), getattr(getattr(now[0], "Document", None), "Name", None) if now else None,
+                     self.doc.Name}
+                docs[id(r)] = d - {None}
+            for ce in events:
+                rec = at.get(ce.get("subIndex", -1))
+                if rec is None or cur[id(rec)] != ce["oldSub"]:
+                    same = [r for r in group if cur[id(r)] == ce["oldSub"]]
+                    rec = same[0] if len(same) == 1 else None
+                if rec is None:
                     continue
-                for ce in candidates(rec, i):
-                    hit = ce["oldSub"] == rec["sub"] if exact else _sub_element(ce["oldSub"]) == rec["element"]
-                    if hit:
-                        rec["cpp_chain"].append(ce)
-                        used.add(ce["seq"])
-                        break
-        for i, rec in enumerate(self.records):
-            chain = rec["cpp_chain"]
-            while chain and chain[-1]["kind"] != "lost":
-                cur = _sub_element(chain[-1]["newSub"])
-                nxt = [ce for ce in candidates(rec, i) if ce["seq"] > chain[-1]["seq"] and _sub_element(ce["oldSub"]) == cur]
-                if not nxt:
-                    break
-                chain.append(nxt[0])
-                used.add(nxt[0]["seq"])
+                if ce.get("targetDocument") and ce["targetDocument"] not in docs[id(rec)]:
+                    continue
+                rec["cpp_chain"].append(ce)
+                cur[id(rec)] = ce["newSub"]
+                used.add(ce["seq"])
         return used
 
     def _apply_journal(self, ev, rec):
