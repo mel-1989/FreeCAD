@@ -125,6 +125,9 @@ class Document(PropertyContainer):
         "rollback": one per flattened reference whose target, sub or mapped name differs before and after the
         step, compared position by position. "added" (empty oldSub) and "removed" (empty newSub) cover lists that
         grow or shrink and objects that the step creates or deletes.
+        Only the document being undone is compared: an undo in document A that deletes an object an XLink in
+        document B points at changes B's property without an event in B. A "removed" event has an empty target
+        (oldTarget holds the old one), and a mapped-name-only change is "remapped" under these bases.
         Only events with seq greater than `since` are returned (a negative or
         out-of-range `since` raises ValueError). The journal is observational, bounded, and empty after a
         document is loaded. It is an incremental log of what FreeCAD's reference

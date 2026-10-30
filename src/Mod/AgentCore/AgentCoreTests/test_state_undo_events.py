@@ -211,5 +211,60 @@ class TestStateUndoEvents(unittest.TestCase):
         self.assertGreater(tally.events.get("rollback", 0), 0)
 
 
+class _Recomputer:
+    """Document observer: recompute `other` once, when a property of `doc` changes (during A's undo apply)."""
+
+    def __init__(self, doc, other):
+        self.doc, self.other, self.armed, self.fired = doc, other, False, 0
+
+    def slotChangedObject(self, obj, prop):
+        if self.armed and obj.Document is not None and obj.Document.Name == self.doc.Name:
+            self.armed = False
+            self.fired += 1
+            self.other.recompute()
+
+
+class TestOtherDocumentNotMuted(unittest.TestCase):
+    """A recompute of document B while A's undo is applying keeps its reference events in B's journal."""
+
+    def run_trial(self, inside):
+        edit_b = dict((sc[0], sc[2]) for sc in topo_scenarios.SCENARIOS)["attach_split_bottom_line"]
+        a, _ = topo_scenarios.build_attach(w=41)
+        b, _ = topo_scenarios.build_attach(w=42)
+        obs = _Recomputer(a, b)
+        App.addDocumentObserver(obs)
+        try:
+            a.clearUndos()
+            a.openTransaction("t")
+            a.getObject("Pad").Length = 9
+            a.recompute()
+            a.commitTransaction()
+            edit_b(b)  # silent edit in B, not yet recomputed
+            model = model_of(b)
+            seq = b.lastElementReferenceEventSeq()
+            if inside:
+                obs.armed = True
+                a.undo()
+                obs.armed = False
+                self.assertEqual(obs.fired, 1)
+            else:
+                b.recompute()
+                a.undo()
+            events = list(b.getElementReferenceEvents(seq))
+            return events, replay(model, events), model_of(b)
+        finally:
+            App.removeDocumentObserver(obs)
+            App.closeDocument(a.Name)
+            App.closeDocument(b.Name)
+
+    def test_recompute_of_other_document_during_undo_is_journaled(self):
+        control, _, _ = self.run_trial(False)
+        events, predicted, actual = self.run_trial(True)
+        self.assertGreater(len(control), 0, "the control edit must remap something")
+        self.assertEqual(len(events), len(control))
+        self.assertEqual(diff(predicted, actual), {})
+        self.assertTrue(all(e["basis"] not in HISTORY for e in events))
+
+
 if __name__ == "__main__":
     unittest.main()

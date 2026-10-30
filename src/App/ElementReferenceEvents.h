@@ -112,9 +112,10 @@ public:
     /// Highest seq discarded from doc's journal by the size cap (0 if none, reset by clear).
     static std::uint64_t lastDroppedSeq(const Document* doc);
     static void clear(const Document* doc);
-    /// True while the calling thread is inside an ElementReferenceHistoryScope; the per-update
-    /// recorder stays quiet then, because the scope reports the net change itself.
-    static bool suppressed();
+    /// True while the calling thread is inside an ElementReferenceHistoryScope of `doc`; the
+    /// per-update recorder stays quiet for that document then, because the scope reports the net
+    /// change itself. Scopes of other documents do not mute it.
+    static bool suppressed(const Document* doc);
 
     /// Emitted after each recorded event, on the thread that recorded it.
     static fastsignals::signal<void(const ElementReferenceEvent&)> signalEvent;
@@ -135,11 +136,12 @@ public:
     ElementReferenceHistoryScope(const ElementReferenceHistoryScope&) = delete;
     ElementReferenceHistoryScope& operator=(const ElementReferenceHistoryScope&) = delete;
 
-    /// Compare and record now (idempotent); the destructor calls it if you did not.
+    /// Compare and record now (idempotent, never throws); the destructor calls it if you did not.
     void finish();
 
 private:
     void release();
+    void compareAndRecord();
     struct Impl;
     std::unique_ptr<Impl> impl;
 };

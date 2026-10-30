@@ -145,7 +145,8 @@ std::uint64_t ElementReferenceJournal::lastDroppedSeq(const Document* doc)
 
 namespace
 {
-thread_local int g_historyDepth = 0;
+// Documents with a live history scope on this thread (a document may appear more than once).
+thread_local std::vector<const Document*> g_historyDocs;
 
 // One flattened element reference, as the Python side flattens a link property: a link with no
 // subs counts as one reference with an empty sub.
@@ -257,9 +258,9 @@ std::string shortOf(const std::string& sub)
 }
 }  // namespace
 
-bool ElementReferenceJournal::suppressed()
+bool ElementReferenceJournal::suppressed(const Document* doc)
 {
-    return g_historyDepth > 0;
+    return std::find(g_historyDocs.begin(), g_historyDocs.end(), doc) != g_historyDocs.end();
 }
 
 struct ElementReferenceHistoryScope::Impl
@@ -277,7 +278,7 @@ ElementReferenceHistoryScope::ElementReferenceHistoryScope(const Document& doc,
 {
     impl->doc = &doc;
     impl->basis = basis;
-    ++g_historyDepth;
+    g_historyDocs.push_back(&doc);
     impl->suppressing = true;
     try {
         impl->before = takeSnapshot(doc);
@@ -301,11 +302,26 @@ void ElementReferenceHistoryScope::release()
 {
     if (impl->suppressing) {
         impl->suppressing = false;
-        --g_historyDepth;
+        auto it = std::find(g_historyDocs.rbegin(), g_historyDocs.rend(), impl->doc);
+        if (it != g_historyDocs.rend()) {
+            g_historyDocs.erase(std::next(it).base());
+        }
     }
 }
 
 void ElementReferenceHistoryScope::finish()
+{
+    // observational only: a failure here (bad_alloc) must not turn a successful history step
+    // into an exception
+    try {
+        compareAndRecord();
+    }
+    catch (...) {
+        release();
+    }
+}
+
+void ElementReferenceHistoryScope::compareAndRecord()
 {
     using Event = ElementReferenceEvent;
     if (impl->done) {

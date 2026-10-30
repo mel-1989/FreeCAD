@@ -257,5 +257,33 @@ TEST_F(ElementReferenceUndoTest, SubscribersSeeTheEventsAndAfterwardsRecordingRe
         [&seen](const ElementReferenceEvent& e) { seen += e.basis == Basis::Undo ? 1 : 0; });
     ASSERT_TRUE(_doc->undo());
     EXPECT_EQ(seen, 1);
-    EXPECT_FALSE(ElementReferenceJournal::suppressed());
+    EXPECT_FALSE(ElementReferenceJournal::suppressed(_doc));
+}
+
+TEST_F(ElementReferenceUndoTest, OtherDocumentIsNotMutedWhileThisOneUndoes)
+{
+    // The recorder mute is per document: while A's history scope is live, a reference
+    // rewrite journaled for document B must still be recorded. The scope's own document is muted,
+    // and nested scopes (re-entrant, two documents) release in any order.
+    auto* other = App::GetApplication().newDocument("ref_events_other", "testUser");
+    {
+        App::ElementReferenceHistoryScope outer(*_doc, Basis::Undo);
+        EXPECT_TRUE(ElementReferenceJournal::suppressed(_doc));
+        EXPECT_FALSE(ElementReferenceJournal::suppressed(other));
+        {
+            App::ElementReferenceHistoryScope inner(*other, Basis::Undo);
+            EXPECT_TRUE(ElementReferenceJournal::suppressed(other));
+            EXPECT_TRUE(ElementReferenceJournal::suppressed(_doc));
+        }
+        EXPECT_FALSE(ElementReferenceJournal::suppressed(other));
+        EXPECT_TRUE(ElementReferenceJournal::suppressed(_doc));
+        {
+            App::ElementReferenceHistoryScope again(*_doc, Basis::Undo);
+            again.finish();
+            EXPECT_TRUE(ElementReferenceJournal::suppressed(_doc)) << "outer scope still live";
+        }
+        EXPECT_TRUE(ElementReferenceJournal::suppressed(_doc));
+    }
+    EXPECT_FALSE(ElementReferenceJournal::suppressed(_doc));
+    App::GetApplication().closeDocument("ref_events_other");
 }
