@@ -76,6 +76,29 @@ The token is bound to the change set's digest (everything except `verify`), so a
 - The flatten tolerates drift in derived, non-property data only, and only on objects the turn added or modified: their `state` flags (features a turn left broken) and, on TechDraw objects, F1 `detail` caches (views orphaned by a page delete). Drift on any object the turn did not change is a hard failure. It is reported in `accept()["detail_drift"]`.
 - Snapshot revert loses Sketcher `dependent_parameters` solver history for an over-constrained sketch, exactly as a plain save and reopen does. Snapshots store the turn's before-dump beside the `.FCStd`; a restore recomputes only when the replayed state falls short of it, so Assembly placements are not re-solved (a re-solve from a restored state could land on another solution).
 - Headless, a cross-document accepted turn needs one `doc.undo()` per document; the shared transaction id is what lets the GUI undo them in one step.
-- The GUI task panel, pivy overlay (needs I4) and C++ transaction introspection are not built yet.
+- The remote (F4 worker) review has no 3D overlay: the shapes stay in the worker, and shipping them to the GUI is not built. C++ transaction introspection is not built yet.
 
-Tests: `AgentCoreTests/test_diff_*.py`, run with `harness/agentcore_test.sh <worktree>`.
+## Change-set panel and overlay (`AgentCore/gui/`, GUI only)
+
+`AgentCore.gui` is imported only from `InitGui.py` (never from `AgentCore/__init__.py`), so `FreeCADCmd` and the headless suites never load `FreeCADGui`, PySide or pivy.
+
+```python
+from AgentCore import gui
+gui.review(turn)                                   # a proposed AgentTurn in this process
+gui.review_remote(turn_id, fetch_change_set)       # a turn in an F4 worker; fetch_change_set() returns its current change set
+```
+
+| file | role |
+|---|---|
+| `panel.py` | PySide task dialog (`Gui.Control.showDialog`): a tree of the change set in groups (features added, removed, modified, properties before to after, expressions, geometry per object, verification regressions and fixes, transactions) and Accept and Reject buttons. Selecting a row selects that object in the document. The standard Close button decides nothing: the turn stays `proposed` and the overlay goes |
+| `overlay.py` | pivy overlay under the active view's scene graph: added material translucent green, removed material translucent red, flat shaded with a polygon offset and opaque edges, so `saveImage` renders it. Removed on accept, reject and close |
+| `backends.py` | `LocalTurnBackend` (in-process turn) and `RemoteTurnBackend` (F4 worker) behind one interface |
+| `session.py` | the GUI process's one `Approver`, created on the first press and never handed to the panel or the backends |
+| `model.py` | rows of the panel from a change set (no Qt) |
+
+- **Overlay pieces** come from `AgentTurn.overlay_pieces()`: the local-boolean added and removed material of `geometry.shape_diff(..., keep=...)` for a modified object, the whole after shape for an added one, the whole before shape for a removed one. An object another changed object consumes (a Pad in its Body, the Base of a Cut) is not drawn, so a result appears once. No whole-solid boolean is run for the overlay.
+- **Local accept**: `Approver.approve(turn_id, shown_digest)` returns the token fields, `turn.accept` verifies them. The token is bound to the digest the human was shown, not to the turn's current one: a change set altered after the panel opened is refused (`StaleChangeSet` before any token exists, `TokenRefused` if one did), and a live document that moved is refused by `accept` before the token is spent. A refusal shows in the panel, which stays open and reviewable, and leaves nothing approved at the approver.
+- **Remote accept**: Accept refetches the worker's change set, refuses if its digest differs, then calls `Approver.approve(turn_id, digest)`, which the worker polls. Reject calls `Approver.deny`. The panel never touches the worker's document.
+- **Who can mint**: tokens exist only inside `Approver.approve`, called from a backend's `accept`, called from the Accept button's slot. Neither the panel nor a backend holds an `ApplyAuthority` or a token. As `SECURITY.md` says, inside the GUI process this is convention, not a boundary: agent code must run in a sealed worker, never in the GUI process.
+
+Tests: `AgentCoreTests/test_diff_*.py`, run with `harness/agentcore_test.sh <worktree>`; the GUI suite is `FreeCAD -t TestAgentCoreGui` (`AgentCoreGuiTests/`, registered from `InitGui.py`, mini only), and its screenshot baselines are the `f3_*` scenes of `fixtures/gui/scenes.json` (`harness/gui/run.sh snap`).

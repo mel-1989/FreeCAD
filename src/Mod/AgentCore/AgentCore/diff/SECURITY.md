@@ -10,7 +10,7 @@ An agent turn reaches the user's model only through `AgentTurn.accept(token)`, a
 
 | Process | Runs agent code | Holds the apply key | Approve path |
 |---|---|---|---|
-| Approver (`approver.py` headless, later the GUI change-set panel) | no | yes, the only `ApplyAuthority` | `Approver.approve(turn_id, digest)`, called from the human's own channel (stdin or the GUI); never on the socket |
+| Approver (`approver.py` headless, or the GUI change-set panel, `AgentCore/gui/`) | no | yes, the only `ApplyAuthority` | `Approver.approve(turn_id, digest)`, called from the human's own channel (stdin or the GUI); never on the socket |
 | Session worker (`mcp/session_worker.py`, FreeCADCmd) | yes, `exec_code` | no | none; it polls the approver for a token the human released and the approver verifies it again on accept |
 | MCP server (`mcp/server.py`, plain Python) | no | no | none; it never imports `AgentCore.diff`, refuses every approve-like tool, and passes the approver socket path to workers |
 
@@ -28,7 +28,7 @@ Python in one process is not a sandbox, so the worker is not a sandbox either. A
 
 The worker can also write files directly (`open`, `doc.saveAs`, FreeCAD's C++ exporters) without going through `import_export`. The policy scan and the runtime audit hook flag such access, but they are advisory: a determined agent can hide it (string building, `exec` of runtime strings, C extensions). The real confinement is that the worker holds a copy of the document and the user's model changes only through the approver.
 
-In the GUI, if `exec_code` runs inside the GUI process (`Bridge.start_in_gui`), the agent shares an interpreter with the GUI's authority and can read the key. The GUI must therefore run agent code in a sealed worker and keep only the approver in-process; until that wiring exists (I4 VM work), the GUI bridge is not a trust boundary.
+In the GUI, if `exec_code` runs inside the GUI process (`Bridge.start_in_gui`), the agent shares an interpreter with the GUI's authority and can read the key. The GUI must therefore run agent code in a sealed worker and keep only the approver in-process; until that wiring exists, the GUI bridge is not a trust boundary. The change-set panel (`AgentCore/gui/`) keeps its `Approver` in `gui/session.py`'s closure and mints only from the Accept button's slot, bound to the digest the human was shown; that stops a stale or altered change set from being accepted, but it does not make the GUI process a boundary against agent code running inside it.
 
 clearUndos inside a turn cannot be prevented from Python (no observer slot fires, and the C++ method cannot be wrapped). It is detected afterwards, the turn is aborted and the document is restored to its pre-turn state from the before capture, but the human's pre-turn undo entries are gone.
 

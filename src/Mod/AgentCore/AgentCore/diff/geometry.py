@@ -186,8 +186,13 @@ def _shape_ok(s):
         return False
 
 
-def shape_diff(before, after, tol=DEFAULT_TOL, samples=4, booleans=True):
-    """Face-level diff of two shapes (either may be None for added/removed)."""
+def shape_diff(before, after, tol=DEFAULT_TOL, samples=4, booleans=True, keep=None):
+    """Face-level diff of two shapes (either may be None for added/removed).
+
+    ``keep``: an optional dict that receives the local-boolean pieces as shapes
+    (``keep["added"]``, ``keep["removed"]``) for the 3D overlay; the returned
+    diff is the same with or without it.
+    """
     if not _shape_ok(before) and not _shape_ok(after):
         return {"status": "none"}
     if not _shape_ok(before) or not _shape_ok(after):
@@ -219,7 +224,7 @@ def shape_diff(before, after, tol=DEFAULT_TOL, samples=4, booleans=True):
         "volume_after": _r(after.Volume) if after.Solids else 0.0,
     }
     if out["status"] == "modified" and booleans and before.Solids and after.Solids:
-        out["region"] = _local_booleans(before, after, fb, fa, far, ub, ua, tol, diag)
+        out["region"] = _local_booleans(before, after, fb, fa, far, ub, ua, tol, diag, keep)
     return out
 
 
@@ -231,7 +236,7 @@ def _r(x):
     return round(float(x), 6)
 
 
-def _local_booleans(before, after, fb, fa, far, ub, ua, tol, diag):
+def _local_booleans(before, after, fb, fa, far, ub, ua, tol, diag, keep=None):
     import Part
     boxes = [fb[i].BoundBox for i in ub] + [fa[j].BoundBox for j in ua]
     boxes += far
@@ -254,6 +259,9 @@ def _local_booleans(before, after, fb, fa, far, ub, ua, tol, diag):
         out["removed_volume"] = _r(rem.Volume) if rem.Solids else 0.0
         out["added_bbox"] = list(_bbox6(add.BoundBox)) if add.Solids else None
         out["removed_bbox"] = list(_bbox6(rem.BoundBox)) if rem.Solids else None
+        if keep is not None:
+            keep["added"] = add if add.Solids else None
+            keep["removed"] = rem if rem.Solids else None
     except Exception as exc:
         out["error"] = f"{type(exc).__name__}: {exc}"
     return out

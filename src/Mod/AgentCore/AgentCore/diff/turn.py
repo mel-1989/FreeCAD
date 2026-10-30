@@ -600,7 +600,9 @@ class AgentTurn:
             if b is None and a is None:
                 continue
             try:
-                geo[n] = geometry.shape_diff(b, a, tol=self.tol)
+                keep = {}
+                geo[n] = geometry.shape_diff(b, a, tol=self.tol, keep=keep)
+                rec.setdefault("pieces", {})[n] = keep
             except Exception as exc:
                 geo[n] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
         return geo
@@ -643,6 +645,41 @@ class AgentTurn:
         if self._cs is None:
             raise TurnError(f"no change set while the turn is {self.status}")
         return self._cs
+
+    def overlay_pieces(self):
+        """Shapes the GUI overlay draws for the main document: ``[(object, "added"|"removed", shape)]``.
+
+        Added material is green, removed material red. A feature added or removed whole contributes
+        its own shape; a modified one the local-boolean pieces of ``geometry.shape_diff``. An object
+        that another changed object consumes (a Pad inside its Body, the Base of a Cut) is left
+        out, so a result is drawn once.
+        """
+        main, cs = self._main(), self.change_set()
+        geo = cs["geometry"]
+        consumed = set()
+        for dump in (main["before"], main["after"]):
+            for o in dump.get("objects", []):
+                if o["name"] in geo:
+                    consumed |= {n for n in o.get("out_list", []) if n != o["name"]}
+        out = []
+        for name in sorted(geo):
+            g = geo[name]
+            if name in consumed or g.get("status") in (None, "none", "error", "unchanged"):
+                continue
+            if g["status"] == "added":
+                s = main["after_shapes"].get(name)
+                if s is not None and s.Faces:
+                    out.append((name, "added", s))
+            elif g["status"] == "removed":
+                s = main["before_shapes"].get(name)
+                if s is not None and s.Faces:
+                    out.append((name, "removed", s))
+            else:
+                pieces = main.get("pieces", {}).get(name, {})
+                for kind in ("added", "removed"):
+                    if pieces.get(kind) is not None:
+                        out.append((name, kind, pieces[kind]))
+        return out
 
     def digest(self):
         cs = dict(self.change_set())
