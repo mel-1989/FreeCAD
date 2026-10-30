@@ -694,6 +694,403 @@ class TestNamePathRetarget(unittest.TestCase):
         self.assertFalse(sub.startswith("?"), "reference lost on reopen: %s" % sub)
         self.assertEqual(_solids_of(c2.Shape, sub), [0])
 
+    # ------------------------------------------------ round 6: one case per kind of container
+    # The classification (isTransparentContainer in src/App/PropertyLinks.cpp), probed with
+    # the element names FreeCAD's own element map gives each kind, is: a Part::Compound (and
+    # Compound2), App::Part (and Assembly), App::LinkGroup and a plain App::Link are transparent
+    # (swapping one for its content keeps the reference); everything else that has a shape of its
+    # own is an owner (a PartDesign::Body or Boolean, a link array, a wrapper that computes a
+    # shape), so swapping it for its content is another element and is reported (D6).
+    def _top_edge(self, shape):
+        """The top +Y edge (5, 10, 10) of the 10 mm box X, wherever its solid is in `shape`."""
+        for i, e in enumerate(shape.Edges):
+            m = e.CenterOfMass
+            if abs(m.x - 5) < 1e-6 and abs(m.y - 10) < 1e-6 and abs(m.z - 10) < 1e-6:
+                return "Edge%d" % (i + 1)
+        self.fail("no top edge of X")
+
+    def _swap(self, make, kept, unwrap):
+        """C = [W(X), Y] (unwrap) or [X, Y], a reference on X's top edge, then the other way."""
+        d = self.doc
+        x = d.addObject("Part::Box", "X")
+        y = self._box("Y", 100)
+        w = make(x)
+        c = d.addObject("Part::Compound", "C")
+        c.Links = [w, y] if unwrap else [x, y]
+        d.recompute()
+        cons = self._consumer(c, self._top_edge(c.Shape))
+        c.Links = [x, y] if unwrap else [w, y]
+        d.recompute()
+        sub = cons.Ref[1][0]
+        if kept:
+            self.assertFalse(sub.startswith("?"), "reference lost on the swap: %s" % sub)
+            self.assertEqual(sub, self._top_edge(c.Shape))
+        else:
+            self._assert_reported(cons)
+
+    def _link_to(self, target, count=0):
+        lk = self.doc.addObject("App::Link", "L")
+        lk.LinkedObject = target
+        if count:
+            lk.ElementCount = count
+        return lk
+
+    def _part_of(self, x):
+        w = self.doc.addObject("App::Part", "W")
+        w.addObject(x)
+        return w
+
+    def _assembly_of(self, x):
+        try:
+            import UtilsAssembly  # noqa: F401
+            w = self.doc.addObject("Assembly::AssemblyObject", "W")
+        except Exception as ex:
+            self.skipTest("no Assembly module: %s" % ex)
+        w.addObject(x)
+        return w
+
+    def _link_group_of(self, x):
+        w = self.doc.addObject("App::LinkGroup", "W")
+        w.ElementList = [x]
+        return w
+
+    # a Link to a group adds its own tag and a window; looking through it keeps X
+    def test_link_to_an_app_part_swapped_for_its_content_keeps_the_reference(self):
+        self._swap(lambda x: self._link_to(self._part_of(x)), True, True)
+
+    def test_content_swapped_for_a_link_to_an_app_part_keeps_the_reference(self):
+        self._swap(lambda x: self._link_to(self._part_of(x)), True, False)
+
+    def test_link_to_a_link_group_swapped_for_its_content_keeps_the_reference(self):
+        self._swap(lambda x: self._link_to(self._link_group_of(x)), True, True)
+
+    def test_link_to_an_assembly_swapped_for_its_content_keeps_the_reference(self):
+        self._swap(lambda x: self._link_to(self._assembly_of(x)), True, True)
+
+    def test_link_to_a_link_to_an_app_part_keeps_the_reference(self):
+        self._swap(lambda x: self._link_to(self._link_to(self._part_of(x))), True, True)
+
+    # a plain group (App::DocumentObjectGroup) has no shape of its own: it adds its tag and a window
+    def _group_of(self, x):
+        g = self.doc.addObject("App::DocumentObjectGroup", "Grp")
+        g.addObject(x)
+        return g
+
+    def test_document_object_group_swapped_for_its_content_keeps_the_reference(self):
+        self._swap(self._group_of, True, True)
+
+    def test_content_swapped_for_a_document_object_group_keeps_the_reference(self):
+        self._swap(self._group_of, True, False)
+
+    def test_link_to_a_document_object_group_swapped_for_its_content_keeps_the_reference(self):
+        self._swap(lambda x: self._link_to(self._group_of(x)), True, True)
+
+    # a Link to a solid or compound passes the names through (no segment of its own)
+    def test_link_to_a_box_swapped_for_the_box_keeps_the_reference(self):
+        self._swap(lambda x: self._link_to(x), True, True)
+
+    def test_link_to_a_compound_swapped_for_the_box_keeps_the_reference(self):
+        self._swap(lambda x: self._link_to(self._nest(x, 1)), True, True)
+
+    def test_assembly_swapped_for_its_content_keeps_the_reference(self):
+        self._swap(self._assembly_of, True, True)
+
+    def test_assembly_link_swapped_for_its_content_keeps_the_reference(self):
+        def make(x):
+            try:
+                w = self.doc.addObject("Assembly::AssemblyLink", "W")
+            except Exception as ex:
+                self.skipTest("no AssemblyLink: %s" % ex)
+            w.addObject(x)
+            return w
+
+        self._swap(make, True, True)
+
+    def test_compound2_swapped_for_its_content_keeps_the_reference(self):
+        def make(x):
+            w = self.doc.addObject("Part::Compound2", "W")
+            w.Links = [x]
+            return w
+
+        self._swap(make, True, True)
+
+    # a link array makes every copy a different element (D6, run 008)
+    def test_link_array_swapped_for_its_content_is_reported(self):
+        self._swap(lambda x: self._link_to(x, 1), False, True)
+
+    def test_content_swapped_for_a_link_array_is_reported(self):
+        self._swap(lambda x: self._link_to(x, 1), False, False)
+
+    def test_link_array_of_an_app_part_swapped_for_its_content_is_reported(self):
+        self._swap(lambda x: self._link_to(self._part_of(x), 2), False, True)
+
+    # a wrapper that computes a shape is a new object (D6: opaque)
+    def test_refine_swapped_for_its_source_is_reported(self):
+        def make(x):
+            r = self.doc.addObject("Part::Refine", "R")
+            r.Source = x
+            return r
+
+        self._swap(make, False, True)
+
+    def test_python_compound_swapped_for_its_source_is_reported(self):
+        class Proxy:
+            def __init__(self, obj):
+                obj.Proxy = self
+
+            def execute(self, obj):
+                obj.Shape = Part.makeCompound([obj.Src.Shape])
+
+        def make(x):
+            f = self.doc.addObject("Part::FeaturePython", "FP")
+            f.addProperty("App::PropertyLink", "Src")
+            Proxy(f)
+            f.Src = x
+            return f
+
+        self._swap(make, False, True)
+
+    def test_shape_copy_swapped_for_its_source_is_reported(self):
+        def make(x):
+            self.doc.recompute()
+            s = self.doc.addObject("Part::Feature", "Copy")
+            s.Shape = x.Shape
+            return s
+
+        self._swap(make, False, True)
+
+    def test_multi_fuse_swapped_for_its_source_is_reported(self):
+        def make(x):
+            q = self.doc.addObject("Part::Box", "Q")
+            q.Placement.Base = V(500, 0, 0)
+            m = self.doc.addObject("Part::MultiFuse", "MF")
+            m.Shapes = [x, q]
+            return m
+
+        self._swap(make, False, True)
+
+    def test_mirror_swapped_for_its_source_is_reported(self):
+        def make(x):
+            m = self.doc.addObject("Part::Mirroring", "M")
+            m.Source = x
+            m.Normal = V(1, 0, 0)
+            m.Base = V(5, 0, 0)  # a copy of X exactly on X
+            return m
+
+        self._swap(make, False, True)
+
+    def test_compound_filter_swapped_for_its_source_is_reported(self):
+        try:
+            import CompoundTools.CompoundFilter as CF
+        except ImportError as ex:
+            self.skipTest("no CompoundFilter: %s" % ex)
+
+        def make(x):
+            k = self._nest(x, 1)
+            q = self.doc.addObject("Part::Box", "Q")
+            q.Placement.Base = V(500, 0, 0)
+            k.Links = [x, q]
+            f = CF.makeCompoundFilter("CF")
+            f.Base = k
+            f.FilterType = "bypass"
+            return f
+
+        self._swap(make, False, True)
+
+    def test_cut_swapped_for_its_base_is_reported(self):
+        def make(x):
+            q = self.doc.addObject("Part::Box", "Q")
+            q.Placement.Base = V(500, 0, 0)
+            c = self.doc.addObject("Part::Cut", "Cut")
+            c.Base = x
+            c.Tool = q
+            return c
+
+        self._swap(make, False, True)
+
+    def test_sub_shape_binder_swapped_for_its_source_is_reported(self):
+        def make(x):
+            b = self.doc.addObject("PartDesign::SubShapeBinder", "Binder")
+            b.Support = [(x, "")]
+            return b
+
+        self._swap(make, False, True)
+
+    def test_boolean_fragments_swapped_for_its_source_is_reported(self):
+        try:
+            import BOPTools.SplitFeatures as SF
+        except ImportError as ex:
+            self.skipTest("no BOPTools: %s" % ex)
+
+        def make(x):
+            q = self.doc.addObject("Part::Box", "Q")
+            q.Placement.Base = V(500, 0, 0)
+            f = SF.makeBooleanFragments(name="BF")
+            f.Objects = [x, q]
+            return f
+
+        self._swap(make, False, True)
+
+    def test_draft_array_of_links_swapped_for_its_source_is_reported(self):
+        try:
+            import Draft
+        except ImportError as ex:
+            self.skipTest("no Draft: %s" % ex)
+
+        def make(x):
+            return Draft.make_ortho_array(x, V(0, 0, 0), V(0, 100, 0), V(0, 0, 100), 1, 1, 1, use_link=True)
+
+        self._swap(make, False, True)
+
+    def test_draft_array_swapped_for_its_source_is_reported(self):
+        try:
+            import Draft
+        except ImportError as ex:
+            self.skipTest("no Draft: %s" % ex)
+
+        def make(x):
+            return Draft.make_ortho_array(x, V(0, 0, 0), V(0, 100, 0), V(0, 0, 100), 1, 1, 1, use_link=False)
+
+        self._swap(make, False, True)
+
+    def test_draft_clone_swapped_for_its_source_is_reported(self):
+        try:
+            import Draft
+        except ImportError as ex:
+            self.skipTest("no Draft: %s" % ex)
+        self._swap(lambda x: Draft.make_clone(x), False, True)
+
+    # ---------------------------------------- PartDesign bodies and booleans as compound children
+    def _pd_rect(self, body, name, y):
+        sk = body.newObject("Sketcher::SketchObject", name)
+        pts = [V(0, y, 0), V(40, y, 0), V(40, y + 20, 0), V(0, y + 20, 0)]
+        for i in range(4):
+            sk.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 4]))
+        return sk
+
+    def _pd_body(self, name, y, pad_name):
+        b = self.doc.addObject("PartDesign::Body", name)
+        pad = b.newObject("PartDesign::Pad", pad_name)
+        pad.Profile = self._pd_rect(b, name + "S", y)
+        pad.Length = 10
+        return b
+
+    def _pd_pocket(self, body, name):
+        sk = body.newObject("Sketcher::SketchObject", name + "S")
+        sk.AttachmentSupport = [(body.Origin.OriginFeatures[3], "")]
+        sk.MapMode = "FlatFace"
+        sk.addGeometry(Part.Circle(V(30, 210, 0), V(0, 0, 1), 3))
+        pk = body.newObject("PartDesign::Pocket", name)
+        pk.Profile = sk
+        pk.Reversed = True
+        pk.Type = 1
+        return pk
+
+    def _pd_edge(self, shape):
+        """The top +Y line of the 40 mm pad at y = 200 (the edge at y = 220, z = 10)."""
+        for i, e in enumerate(shape.Edges):
+            if (
+                isinstance(e.Curve, Part.Line)
+                and abs(e.Length - 40) < 1e-6
+                and abs(e.CenterOfMass.y - 220) < 1e-6
+                and abs(e.CenterOfMass.z - 10) < 1e-6
+            ):
+                return "Edge%d" % (i + 1)
+        self.fail("no pad edge")
+
+    def _pd_boolean_child(self, change):
+        """C = [Boolean, Y] with the Boolean (Fuse of body B2) at the tip of body B1, a reference
+        on the pad edge of B1; then `change` edits the features beneath the Boolean."""
+        d = self.doc
+        b1 = self._pd_body("B1", 200, "Pad1")
+        y = self._box("Y", 100)
+        b2 = self._pd_body("B2", 300, "Pad2")
+        d.recompute()
+        bo = b1.newObject("PartDesign::Boolean", "Bool")
+        bo.addObjects([b2])
+        bo.Type = "Fuse"
+        d.recompute()
+        b1.Tip = bo
+        c = d.addObject("Part::Compound", "C")
+        c.Links = [bo, y]
+        d.recompute()
+        cons = self._consumer(c, self._pd_edge(c.Shape))
+        change(b1, b2, bo, d)
+        d.recompute()
+        return c, cons
+
+    def test_pocket_inserted_before_a_boolean_child_keeps_the_reference(self):
+        """The Boolean's window holds the tag of the feature beneath it, so it is an owner."""
+
+        def change(b1, b2, bo, d):
+            b1.Tip = d.getObject("Pad1")
+            pk = self._pd_pocket(b1, "Pk")
+            bo.BaseFeature = pk
+            b1.Tip = bo
+
+        c, cons = self._pd_boolean_child(change)
+        sub = cons.Ref[1][0]
+        self.assertFalse(sub.startswith("?"), "reference lost on insert: %s" % sub)
+        self.assertEqual(sub, self._pd_edge(c.Shape))
+
+    def test_pocket_in_the_tool_body_of_a_boolean_child_keeps_the_reference(self):
+        def change(b1, b2, bo, d):
+            self._pd_pocket(b2, "Pk2")
+
+        c, cons = self._pd_boolean_child(change)
+        self.assertFalse(cons.Ref[1][0].startswith("?"))
+
+    def test_pocket_added_to_a_body_child_keeps_the_reference(self):
+        d = self.doc
+        b1 = self._pd_body("B1", 200, "Pad1")
+        y = self._box("Y", 100)
+        c = d.addObject("Part::Compound", "C")
+        c.Links = [b1, y]
+        d.recompute()
+        cons = self._consumer(c, self._pd_edge(c.Shape))
+        self._pd_pocket(b1, "Pk")
+        d.recompute()
+        sub = cons.Ref[1][0]
+        self.assertFalse(sub.startswith("?"), "reference lost: %s" % sub)
+        self.assertEqual(sub, self._pd_edge(c.Shape))
+
+    def test_boolean_child_wrapped_in_a_sub_compound_keeps_the_reference(self):
+        def change(b1, b2, bo, d):
+            pass
+
+        d = self.doc
+        c, cons = self._pd_boolean_child(change)
+        k = d.addObject("Part::Compound", "K")
+        k.Links = [d.getObject("Bool")]
+        c.Links = [k, d.getObject("Y")]
+        d.recompute()
+        sub = cons.Ref[1][0]
+        self.assertFalse(sub.startswith("?"), "reference lost: %s" % sub)
+
+    # a twin that sits inside a Link to a group: the unwrapped reference must not move to it
+    def test_dropped_child_twin_behind_a_link_to_an_app_part_is_not_taken(self):
+        d = self.doc
+        x = d.addObject("Part::Box", "X")
+        q = d.addObject("Part::Box", "Q")
+        p = self._part_of(q)
+        lk = self._link_to(p)
+        c = d.addObject("Part::Compound", "C")
+        c.Links = [lk, x]
+        d.recompute()
+        cons = self._consumer(c, self._top_edge_of_solid(c.Shape, 1))
+        c.Links = [lk]
+        d.recompute()
+        self.assertEqual(len(c.Shape.Solids), 1)
+        self._assert_reported(cons)
+
+    def _top_edge_of_solid(self, shape, solid):
+        for i, e in enumerate(shape.Edges):
+            m = e.CenterOfMass
+            if abs(m.x - 5) < 1e-6 and abs(m.y - 10) < 1e-6 and abs(m.z - 10) < 1e-6:
+                if any(e.isSame(s) for s in shape.Solids[solid].Edges):
+                    return "Edge%d" % (i + 1)
+        self.fail("no top edge")
+
 
 class TestNamePathBodyControl(unittest.TestCase):
     """A PartDesign body split by a pocket and rejoined by a pad: an unchanged edge keeps its

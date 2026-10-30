@@ -52,6 +52,8 @@
 #include "ComplexGeoData.h"
 #include "GeoFeatureGroupExtension.h"
 #include "Link.h"
+#include "DocumentObjectGroup.h"
+#include "Part.h"
 
 
 FC_LOG_LEVEL_INIT("PropertyLinks", true, true)
@@ -986,27 +988,39 @@ static void parseOwnerSegment(const Data::MappedName& name, long& tag, int& pos,
     tag = std::labs(tag);
 }
 
-/// Whether an object only groups children and has no geometry of its own, so that the name of an
-/// element of a child carries the container's tag after a `:n` window that holds the child's
-/// chain: a Part::Compound, an App::LinkGroup, or an App::Part and any other holder of the
-/// GeoFeatureGroupExtension. A PartDesign body (Part::BodyBase) is the exception: it has the
-/// extension but shapes of its own, its window holds the tag of its tip feature, which changes
-/// with every feature added, so it is an owner and never looked through. A plain App::Link is not
-/// listed because it passes the names of its target through unchanged. A wrapper that computes a
-/// shape (CompoundFilter, a Python compound, Refine) is a new object with a shape of its own and
-/// stays opaque: D6 treats an element it produces as another element.
+/// Whether the name of an element of a child carries this object's tag after a `:n` window that
+/// holds the child's chain, and the object has no element of its own to add: the walk of
+/// ownerTagOfElement looks through it to the child. An explicit whitelist, so that a new kind of
+/// container is an owner (the old reading, fork/main's result) until it is listed here:
+/// - Part::Compound and its subclasses (Part::Compound2): the child maps are its links;
+/// - App::Part and its subclasses (Assembly::AssemblyObject and AssemblyLink derive from it);
+/// - App::LinkGroup;
+/// - App::DocumentObjectGroup (a plain group with no shape of its own, probed: it adds its tag and
+///   a window like an App::Part; this is not a Body, whose GroupExtension holds shapes);
+/// - a plain App::Link (no ElementCount): when its target is a group the Link adds its own tag
+///   and a window, when its target is a solid or a compound it passes the names through; either
+///   way it is the same element as the target's, FreeCAD's own element map of Link.cpp.
+/// Everything else is an owner: PartDesign::Body (Part::BodyBase) and PartDesign::Boolean carry
+/// the tag of their tip or base feature in the window, which changes with every feature added;
+/// a link array (ElementCount > 0) makes every copy a different element (D6 run 008); a wrapper
+/// that computes a shape (CompoundFilter, BooleanFragments, a Python compound, Refine, Mirror,
+/// a Draft array) is a new object: D6 treats an element it produces as another element.
 static bool isTransparentContainer(const App::DocumentObject* obj)
 {
     static const Base::Type compoundType = Base::Type::fromName("Part::Compound");
-    static const Base::Type bodyType = Base::Type::fromName("Part::BodyBase");
     if (!compoundType.isBad() && obj->isDerivedFrom(compoundType)) {
         return true;
     }
-    if (obj->isDerivedFrom<App::LinkGroup>()) {
+    if (obj->isDerivedFrom<App::Part>() || obj->isDerivedFrom<App::LinkGroup>()
+        || obj->isDerivedFrom<App::DocumentObjectGroup>()) {
         return true;
     }
-    return obj->hasExtension(App::GeoFeatureGroupExtension::getExtensionClassTypeId())
-        && (bodyType.isBad() || !obj->isDerivedFrom(bodyType));
+    if (obj->isDerivedFrom<App::Link>()) {
+        const auto* count = dynamic_cast<const App::PropertyInteger*>(
+            obj->getPropertyByName("ElementCount"));
+        return count && count->getValue() == 0;
+    }
+    return false;
 }
 
 /// The object that owns an element: the tag the element's name ends with, looked through any
