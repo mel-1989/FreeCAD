@@ -85,7 +85,8 @@ class TestAcceptRechecksLiveState(_Case):
             t.accept(tok)
 
     def test_failed_flatten_rolls_back_to_the_before_state(self):
-        with AgentTurn(self.doc, label="flatten fails", verify=False) as t:
+        # use_guard=False: the Python fallback is the path that flattens
+        with AgentTurn(self.doc, label="flatten fails", verify=False, use_guard=False) as t:
             self.doc.Block.Length = 77
             self.doc.openTransaction("nested")
             self.doc.Hole.Radius = 4

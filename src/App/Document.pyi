@@ -242,6 +242,68 @@ class Document(PropertyContainer):
         """
         ...
 
+    def beginAgentTurn(self, name: str = ..., timeout: float = 60.0, /) -> int:
+        """
+        Begin a guarded agent turn and return the turn's transaction id.
+
+        The turn is one transaction on this document. While it is active, every
+        nested open, commit or abort (Document.openTransaction,
+        commitTransaction, abortTransaction, App.setActiveTransaction,
+        App.closeActiveTransaction, AutoTransaction, GUI commands) is a
+        savepoint inside it: a nested commit keeps its changes in the turn, a
+        nested abort rolls back only the changes since its own open, and an
+        empty close is absorbed. undo(), redo() and clearUndos() are refused
+        and reported as tampering. A transaction the document still has
+        pending is committed first as its own undo entry.
+
+        Waits up to `timeout` seconds for a recompute of this document on the
+        async worker. Raises RuntimeError if a turn is already active, the
+        document is transacting or locked, or the worker does not finish.
+        """
+        ...
+
+    def endAgentTurn(self, commit: bool = True, timeout: float = 60.0, /) -> dict[str, object]:
+        """
+        End the guarded agent turn.
+
+        With commit=True the whole turn becomes exactly one undo entry (none if
+        it recorded nothing); with commit=False it is aborted and the document
+        is restored. Waits up to `timeout` seconds for a recompute of this
+        document on the async worker, so it never commits halfway through one;
+        when the worker is still busy, or the transactions are locked, the turn
+        stays open and the result has refused=True with a reason.
+
+        Returns a dict with: tid, name, refused, reason, committed, aborted,
+        recorded, undo_entries, segments, nested_opens, nested_commits,
+        nested_aborts, stray_closes, empty_closes, locked_opens, undo_refused,
+        redo_refused, clear_undos_refused, worker_refusals, nested_names, tampering (list of
+        str) and tampered (bool).
+        """
+        ...
+
+    def canEndAgentTurn(self, timeout: float = 60.0, /) -> tuple[bool, str]:
+        """
+        Check that endAgentTurn would not refuse: no undo/redo in progress,
+        transactions not locked, and the async worker idle for this document
+        within `timeout` seconds. Returns (ok, reason). Lets a caller covering
+        several documents check them all before ending any.
+        """
+        ...
+
+    def agentTurnStatus(self) -> dict[str, object]:
+        """
+        The active agent turn's counters and tampering so far, without ending
+        it. Same keys as endAgentTurn's result; all zero or empty when no turn
+        is active.
+        """
+        ...
+
+    def isAgentTurnActive(self) -> bool:
+        """
+        True while a guarded agent turn is active on this document.
+        """
+        ...
+
     def addObject(
         self,
         type: str,

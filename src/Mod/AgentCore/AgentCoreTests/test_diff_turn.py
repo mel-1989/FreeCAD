@@ -45,19 +45,33 @@ class _AuthCase(unittest.TestCase):
         cls.auth.uninstall()
 
 
+# The C++ guard keeps a turn at one segment; the Python fallback splits and flattens. Both paths are
+# exercised on builds that have the guard, so the fallback stays covered.
+GUARD_MODES = [True, False] if hasattr(App.Document, "beginAgentTurn") else [False]
+
+
 class TestRejectCorpus(_AuthCase):
     """Scripted add/edit/delete turns on every F1 fixture, then reject."""
 
     def test_reject_restores_pre_turn_dump_on_every_f1_fixture(self):
+        for use_guard in GUARD_MODES:
+            with self.subTest(use_guard=use_guard):
+                self._reject_corpus(use_guard)
+
+    def _reject_corpus(self, use_guard):
         report, exact = {}, {}
         for key in db.F1_FIXTURES:
             doc = db.open_f1_fixture(key)
             try:
-                with AgentTurn(doc, label=f"scripted {key}", verify=False) as t:
+                with AgentTurn(doc, label=f"scripted {key}", verify=False, use_guard=use_guard) as t:
                     done = db.scripted_turn(doc)
                 cs = t.change_set()
                 self.assertTrue(cs["features"]["added"], key)
-                self.assertGreaterEqual(cs["transactions"]["segments"], 2, key)  # the nested split happened
+                if use_guard:
+                    self.assertEqual(cs["transactions"]["segments"], 1, key)  # nested opens are savepoints
+                    self.assertGreaterEqual(len(cs["transactions"]["nested_opened"]), 1, key)
+                else:
+                    self.assertGreaterEqual(cs["transactions"]["segments"], 2, key)  # the nested split happened
                 base = (t.base_undo, list(t.base_names))
                 res = t.reject()
                 report[key] = res
@@ -80,18 +94,26 @@ class TestRejectCorpus(_AuthCase):
         # the Assembly example re-solves differently on a recompute: reject must not recompute it
         self.assertEqual(exact["upstream_assembly_example"], (True, False))
         self.assertEqual(sum(1 for e, s in exact.values() if not s), len(exact) - 1, exact)
-        print(f"F3 reject corpus: (exact, settled) {exact}")
+        print(f"F3 reject corpus (guard={use_guard}): (exact, settled) {exact}")
 
     def test_accept_then_undo_equals_reject_on_every_f1_fixture(self):
+        for use_guard in GUARD_MODES:
+            with self.subTest(use_guard=use_guard):
+                self._accept_corpus(use_guard)
+
+    def _accept_corpus(self, use_guard):
         drift = {}
         for key in db.F1_FIXTURES:
             doc = db.open_f1_fixture(key)
             try:
-                with AgentTurn(doc, label=f"accept {key}", verify=False) as t:
+                with AgentTurn(doc, label=f"accept {key}", verify=False, use_guard=use_guard) as t:
                     db.scripted_turn(doc)
                 base = t.base_undo
                 res = t.accept(self.auth.mint(t))
-                self.assertTrue(res["flattened"], key)
+                if use_guard and not t.change_set()["linked_documents"]:
+                    self.assertIs(res["flattened"], False, key)   # one segment already: nothing to flatten
+                elif not use_guard:
+                    self.assertTrue(res["flattened"], key)
                 self.assertEqual(doc.UndoCount, base + 1, key)  # exactly one undo entry for the turn
                 self.assertEqual(doc.UndoNames[0], t.undo_name, key)
                 after = snapshot_dump(doc)  # no extra recompute: broken fixtures are not fixed points
@@ -145,7 +167,10 @@ class TestNested(_AuthCase):
             self._nested_body()
         cs = t.change_set()
         self.assertIn("GUI command 1", cs["transactions"]["nested_opened"])
-        self.assertGreaterEqual(cs["transactions"]["segments"], 3)
+        if hasattr(self.doc, "beginAgentTurn"):   # C++ guard: nested opens are savepoints, never splits
+            self.assertEqual(cs["transactions"]["segments"], 1)
+        else:
+            self.assertGreaterEqual(cs["transactions"]["segments"], 3)
         t.accept(self.auth.mint(t))
         self.assertEqual(self.doc.UndoCount, 1)
         self.assertEqual(self.doc.UndoNames, [t.undo_name])
@@ -155,6 +180,66 @@ class TestNested(_AuthCase):
         self.assertEqual(differences(t.before, settled(self.doc)), [])
         self.assertEqual(self.doc.Block.Width.Value, 30)
         self.assertIsNone(self.doc.getObject("Ball"))
+
+    @unittest.skipUnless(hasattr(App.Document, "beginAgentTurn"), "needs the C++ agent turn guard")
+    def test_guarded_nested_turn_has_one_segment_and_no_flatten(self):
+        with AgentTurn(self.doc, label="nested guarded", verify=False) as t:
+            self._nested_body()
+            self.assertTrue(self.doc.isAgentTurnActive())
+            self.assertEqual(self.doc.UndoCount, 1)          # only the turn's own pending transaction
+        cs = t.change_set()
+        self.assertEqual(cs["transactions"]["segments"], 1)
+        self.assertIn("GUI command 1", cs["transactions"]["nested_opened"])
+        self.assertIn("GUI command 2", cs["transactions"]["nested_opened"])
+        self.assertEqual(cs["transactions"]["nested_aborts"], 0)
+        self.assertEqual(self.doc.UndoCount, 1)               # one entry already, before accept
+        self.assertEqual(self.doc.UndoNames, [t.undo_name])
+        res = t.accept(self.auth.mint(t))
+        self.assertIs(res["flattened"], False)
+        self.assertEqual(self.doc.UndoCount, 1)
+        self.assertEqual((self.doc.Block.Length.Value, self.doc.Block.Width.Value, self.doc.Block.Height.Value),
+                         (41, 31, 12))
+        self.doc.undo()
+        self.assertEqual(differences(t.before, settled(self.doc)), [])
+        self.assertIsNone(self.doc.getObject("Ball"))
+
+    @unittest.skipUnless(hasattr(App.Document, "beginAgentTurn"), "needs the C++ agent turn guard")
+    def test_guarded_do_command_equivalent_is_one_transaction_entry(self):
+        with AgentTurn(self.doc, label="do command", verify=False) as t:
+            tid = App.setActiveTransaction("Gui doCommand")       # what openCommand does
+            self.doc.Block.Length = 44
+            self.doc.Hole.Radius = 4
+            App.closeActiveTransaction(False, tid)                # commitCommand
+            tid = App.setActiveTransaction("second command")
+            self.doc.Block.Width = 33
+            App.closeActiveTransaction(False, tid)
+        self.assertEqual(self.doc.UndoCount, 1)
+        self.assertEqual(self.doc.UndoNames, [t.undo_name])
+        self.assertEqual(t.change_set()["transactions"]["segments"], 1)
+        self.assertIs(t.accept(self.auth.mint(t))["flattened"], False)
+        self.assertEqual(self.doc.UndoCount, 1)
+
+    @unittest.skipUnless(hasattr(App.Document, "beginAgentTurn"), "needs the C++ agent turn guard")
+    def test_guarded_nested_abort_counts_and_rolls_back_only_its_part(self):
+        with AgentTurn(self.doc, label="guarded abort", verify=False) as t:
+            self.doc.Block.Length = 45
+            self.doc.openTransaction("GUI command that fails")
+            self.doc.Hole.Radius = 5
+            self.doc.abortTransaction()
+            self.doc.Block.Height = 11
+        self.assertEqual(self.doc.Hole.Radius.Value, 3)
+        cs = t.change_set()
+        self.assertEqual((cs["transactions"]["segments"], cs["transactions"]["nested_aborts"]), (1, 1))
+        self.assertEqual(self.doc.UndoCount, 1)
+        self.assertTrue(t.reject()["equal"])
+
+    def test_python_fallback_still_flattens(self):
+        with AgentTurn(self.doc, label="fallback", verify=False, use_guard=False) as t:
+            self._nested_body()
+        self.assertGreaterEqual(t.change_set()["transactions"]["segments"], 3)
+        res = t.accept(self.auth.mint(t))
+        self.assertIs(res["flattened"], True)
+        self.assertEqual(self.doc.UndoCount, 1)
 
     def test_nested_reject_records_every_change(self):
         with AgentTurn(self.doc, label="nested reject", verify=False) as t:
@@ -210,10 +295,25 @@ class TestNested(_AuthCase):
         self.assertIsNone(App.getActiveTransaction())
         self.assertEqual(self.doc.UndoCount, n + 1)
 
+    @unittest.skipUnless(hasattr(App.Document, "beginAgentTurn"), "needs the C++ agent turn guard")
+    def test_guarded_turn_cannot_overflow_the_undo_stack(self):
+        with AgentTurn(self.doc, label="many commands", verify=False) as t:
+            for i in range(25):                          # the Python fallback overflows UndoMaxStackSize (20) here
+                self.doc.openTransaction(f"cmd {i}")
+                self.doc.Block.Length = 41 + i
+                self.doc.commitTransaction()
+        self.assertTrue(t.change_set()["transactions"]["undo_complete"])
+        self.assertEqual((t.change_set()["transactions"]["segments"], self.doc.UndoCount), (1, 1))
+        res = t.reject()
+        self.assertEqual(res["method"], "undo")
+        self.assertTrue(res["equal"], res["differences"])
+        self.assertEqual(self.doc.Block.Length.Value, 40)
+
     def test_undo_stack_overflow_falls_back_to_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SnapshotStore(tmp)
-            with AgentTurn(self.doc, label="many commands", verify=False, store=store) as t:
+            # use_guard=False: only the Python fallback splits into more than UndoMaxStackSize entries
+            with AgentTurn(self.doc, label="many commands", verify=False, store=store, use_guard=False) as t:
                 for i in range(25):                      # more segments than UndoMaxStackSize (20)
                     self.doc.openTransaction(f"cmd {i}")
                     self.doc.Block.Length = 41 + i
@@ -245,7 +345,7 @@ class TestRedoAfterReject(_AuthCase):
             self.doc.Hole.Radius = 4
             self.doc.commitTransaction()
             self.doc.Block.Height = 15
-        self.assertGreaterEqual(t.change_set()["transactions"]["segments"], 2)
+        self.assertGreaterEqual(t.change_set()["transactions"]["segments"], 1 if hasattr(self.doc, "beginAgentTurn") else 2)
         res = t.reject()
         self.assertTrue(res["exact"], res)
         self.assertEqual(self.doc.RedoCount, 0)

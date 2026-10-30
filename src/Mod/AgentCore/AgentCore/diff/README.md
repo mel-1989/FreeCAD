@@ -31,6 +31,10 @@ store.revert(doc, turn.turn_id)                # later: back to the state before
 
 ## How one turn stays one transaction
 
+With the C++ guard (`doc.beginAgentTurn(name)` / `doc.endAgentTurn(commit)` / `doc.isAgentTurnActive()` / `doc.agentTurnStatus()`, `src/App/AgentTurnGuard.*`, used automatically when the build has it) the split never happens: the turn is one transaction on each covered document, every nested route (`doc.openTransaction`, `App.setActiveTransaction`, `AutoTransaction`, GUI `doCommand`) is a savepoint inside it, a nested commit keeps its changes, a nested abort rolls back only the changes since its own open, empty closes are absorbed, and `undo`/`redo`/`clearUndos` are refused and reported as tampering. `endAgentTurn` waits for a recompute of the document on the async worker and folds the savepoint segments into one composite undo entry. The change set then has `transactions.segments == 1` and `accept` needs no flatten for a single-document turn. `AgentTurn(..., use_guard=False)`, or a build without the guard, uses the Python fallback described next.
+
+### Python fallback (no C++ guard)
+
 - On entry each covered document is settled (one `recompute()` outside any transaction), F2 checks run, the F1 dump is taken, shapes are kept for the geometry diff, an optional snapshot is written, and the turn transaction is booked with `FreeCAD.setActiveTransaction`.
 - Nested GUI-style code (`doc.openTransaction`/`commitTransaction`, `App.setActiveTransaction`/`closeActiveTransaction`, `doc.abortTransaction`) splits FreeCAD's transaction. These C++ methods cannot be intercepted from Python, so a document observer (`slotCommitTransaction`, `slotAbortTransaction`, `slotCloseTransaction`, `slotBeforeChangeObject`) detects every split and re-books at once; no change goes unrecorded. The turn's changes then sit in K consecutive undo entries (segments). A nested abort rolls back only its own segment.
 - `accept` flattens K segments into exactly one undo entry: it captures the after-state with `dumpPropertyContent`, undoes the K segments, opens one transaction, replays the capture with `restorePropertyContent` (no recompute, outputs are replayed too) and checks the F1 dump against the after-state dump.
@@ -67,7 +71,7 @@ The token is bound to the change set's digest (everything except `verify`), so a
 
 ## Known limits
 
-- There is no C++ transaction guard yet (class D, out of this wave), so nested splits are detected and flattened after the fact rather than prevented.
+- The C++ guard prevents the split on one document. A transaction group that spans several XLinked documents is still re-recorded on `accept` so the documents share one transaction id; that flatten is unchanged.
 - Token secrecy is process-level, and the boundary is the approver process, not this module. In a process that holds an `ApplyAuthority` the key is readable through closures or `gc` (a test forges a token that way), so agent code never runs in one: the F4 session worker is sealed with `authority.prepare_agent_process()`, which refuses `install()` and forwards every token check to the approver (`approver.py`), whose key the worker never receives. See `SECURITY.md` for the residual in-process limits.
 - The flatten tolerates drift in derived, non-property data only, and only on objects the turn added or modified: their `state` flags (features a turn left broken) and, on TechDraw objects, F1 `detail` caches (views orphaned by a page delete). Drift on any object the turn did not change is a hard failure. It is reported in `accept()["detail_drift"]`.
 - Snapshot revert loses Sketcher `dependent_parameters` solver history for an over-constrained sketch, exactly as a plain save and reopen does. Snapshots store the turn's before-dump beside the `.FCStd`; a restore recomputes only when the replayed state falls short of it, so Assembly placements are not re-solved (a re-solve from a restored state could land on another solution).

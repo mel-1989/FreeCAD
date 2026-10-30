@@ -313,6 +313,7 @@ SET(FreeCADApp_CPP_SRCS
     ApplicationDirectoriesPyImp.cpp
     ApplicationPy.cpp
     ${FreeCAD_MODULE_GENERATED_SRCS}
+    AgentTurnGuard.cpp
     AutoTransaction.cpp
     Branding.cpp
     ByteArray.cpp
@@ -347,6 +348,7 @@ SET(FreeCADApp_HPP_SRCS
     ${Properties_HPP_SRCS}
     Application.h
     ApplicationDirectories.h
+    AgentTurnGuard.h
     AutoTransaction.h
     Branding.h
     ByteArray.h
