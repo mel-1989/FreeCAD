@@ -3248,6 +3248,27 @@ TopoDS_Shape TopoShape::makeOffset2D(
     }
 }
 
+// BRepOffsetAPI_MakeThickSolid can report success and hand back the input
+// unchanged, or with only the removed face missing (observed for a box with all
+// edges filleted, any thickness). A real shell always changes the volume, so an
+// unchanged volume is a failure.
+static bool isThickSolidNoOp(const TopoDS_Shape& input, const TopoDS_Shape& result)
+{
+    if (result.IsNull() || input.IsPartner(result)) {
+        return true;
+    }
+    if (input.ShapeType() != TopAbs_SOLID && input.ShapeType() != TopAbs_COMPSOLID
+        && input.ShapeType() != TopAbs_COMPOUND) {
+        return false;
+    }
+    GProp_GProps volIn, volOut;
+    BRepGProp::VolumeProperties(input, volIn);
+    BRepGProp::VolumeProperties(result, volOut);
+    double vIn = volIn.Mass();
+    double vOut = volOut.Mass();
+    return vIn != 0.0 && std::fabs(vIn - vOut) <= 1e-9 * std::max(std::fabs(vIn), std::fabs(vOut));
+}
+
 TopoDS_Shape TopoShape::makeThickSolid(
     const TopTools_ListOfShape& remFace,
     double offset,
@@ -3269,6 +3290,12 @@ TopoDS_Shape TopoShape::makeThickSolid(
         selfInter ? Standard_True : Standard_False,
         GeomAbs_JoinType(join)
     );
+    if (mkThick.IsDone() && isThickSolidNoOp(this->_Shape, mkThick.Shape())) {
+        FC_THROWM(
+            Base::CADKernelError,
+            "Thickness failed: the offset algorithm returned the shape unchanged"
+        );
+    }
     return mkThick.Shape();
 }
 
