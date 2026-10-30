@@ -44,6 +44,16 @@ true. The C++ side cannot see an element map that keeps a name on the wrong
 element, so the geometry checks above stay the oracle for that case. C++ events
 that match no tracked reference are listed under ``untracked_events`` in the
 report. Without the journal everything works as before.
+
+The journal is an incremental log of what FreeCAD's ``_updateElementReference`` rewrote, not a
+replayable history. Undo, redo, Body relinking, deleting a feature and user assignments change
+properties without an event, so the property is always read for its current value and the events
+only say what FreeCAD did. A ``lost`` event means the reference's mapped name is gone; the visible
+sub may still show the old index because FreeCAD writes the mapped name back over the "?" mark.
+``restored`` also covers a recovery from the missing mark and may carry an unchanged short sub;
+a reference can leave and return within one edit, and every step is logged. ``freecad_event`` is
+trusted for ``property_updated`` only when it ends on the sub the property has now. The report's
+``journal_truncated`` is true when the size cap discarded events newer than the snapshot.
 """
 
 import re
@@ -277,6 +287,7 @@ class ReferenceTracker:
         self.cpp_events = []
         self.untracked_events = []
         self.journal_seq = None
+        self.journal_truncated = False
         self.snapshot()
 
     # -- snapshot ---------------------------------------------------------
@@ -308,7 +319,7 @@ class ReferenceTracker:
                     self.records.append({
                         "owner": obj.Name, "property": prop, "index": index,
                         "linked": linked.Name, "path": path, "element_owner": owner.Name,
-                        "element": element, "mapped": mapped,
+                        "element": element, "mapped": mapped, "sub": sub,
                         "sig": signature(shape, element) if shape is not None else None,
                         "carrier": carrier(shape, element) if shape is not None else None,
                         "valid_before": not sub.startswith("?") and shape is not None and signature(shape, element) is not None,
@@ -525,24 +536,52 @@ class ReferenceTracker:
         return list(self.doc.getElementReferenceEvents(self.journal_seq))
 
     def _match_journal(self, cpp_events):
-        """Attach the C++ events to the records. A reference may move several times in
-        one edit, so the events of a record form a chain: each starts at the element
-        the previous one ended on. Returns the set of event seqs that were matched."""
+        """Attach the C++ events to the records and return the set of event seqs used.
+
+        The journal has no sub index, so a record is matched by identity of its snapshot sub:
+        1. each record claims the earliest unclaimed event of its owner and property whose
+           ``oldSub`` is exactly the record's snapshot sub and whose target is the record's
+           linked object or the object the property links to now (a G01 insertion moves the
+           link to the inserted feature). A second pass accepts the same short element name
+           when no exact event exists;
+        2. a record then extends its chain with events that no record claimed in step 1,
+           each starting where the previous one ended (a reference that moves in several
+           recomputes), stopping at a ``lost`` event.
+        Because step 1 completes for every record before any chain grows, one sub's event is
+        never taken as the next hop of another sub (A: Edge1 to Edge8 while B: Edge8 to Edge5)."""
         used = set()
-        for rec in self.records:
-            cur = rec["element"]
-            chain = []
-            for ce in cpp_events:
-                if ce["seq"] in used or ce["owner"] != rec["owner"] or ce["property"] != rec["property"]:
+        by_prop = {}
+        for ce in cpp_events:
+            by_prop.setdefault((ce["owner"], ce["property"]), []).append(ce)
+        now_linked = {}
+        for i, rec in enumerate(self.records):
+            cur, _why = self._current(rec)
+            now_linked[i] = {rec["linked"]} | ({cur[0].Name} if cur is not None and hasattr(cur[0], "Name") else set())
+            rec["cpp_chain"] = []
+
+        def candidates(rec, i):
+            return [ce for ce in by_prop.get((rec["owner"], rec["property"]), []) if ce["seq"] not in used
+                    and ce["target"] in now_linked[i]]
+
+        for exact in (True, False):
+            for i, rec in enumerate(self.records):
+                if rec["cpp_chain"]:
                     continue
-                if ce["target"] != rec["linked"] or _sub_element(ce["oldSub"]) != cur:
-                    continue
-                chain.append(ce)
-                used.add(ce["seq"])
-                if ce["kind"] == "lost":
+                for ce in candidates(rec, i):
+                    hit = ce["oldSub"] == rec["sub"] if exact else _sub_element(ce["oldSub"]) == rec["element"]
+                    if hit:
+                        rec["cpp_chain"].append(ce)
+                        used.add(ce["seq"])
+                        break
+        for i, rec in enumerate(self.records):
+            chain = rec["cpp_chain"]
+            while chain and chain[-1]["kind"] != "lost":
+                cur = _sub_element(chain[-1]["newSub"])
+                nxt = [ce for ce in candidates(rec, i) if ce["seq"] > chain[-1]["seq"] and _sub_element(ce["oldSub"]) == cur]
+                if not nxt:
                     break
-                cur = _sub_element(ce["newSub"]) or cur
-            rec["cpp_chain"] = chain
+                chain.append(nxt[0])
+                used.add(nxt[0]["seq"])
         return used
 
     def _apply_journal(self, ev, rec):
@@ -556,12 +595,17 @@ class ReferenceTracker:
         if last["kind"] == "lost":
             ev["property_marked_missing"] = True
         elif ev["outcome"] == "remapped" and last["kind"] in ("remapped", "restored"):
-            # FreeCAD rewrote the property itself: the event is the authority
-            ev["property_updated"] = True
-            ev["stale"] = False
+            # FreeCAD rewrote the property itself, provided the event ends where the property
+            # stands now; an event that ends elsewhere is attached but not trusted
+            if _sub_element(last["newSub"]) == ev.get("now_points_to") == ev.get("new_element"):
+                ev["property_updated"] = True
+                ev["stale"] = False
 
     def classify(self):
         cpp_events = self._read_journal()
+        self.journal_truncated = bool(
+            self.journal_seq is not None and hasattr(self.doc, "lastDroppedElementReferenceEventSeq")
+            and self.doc.lastDroppedElementReferenceEventSeq() > self.journal_seq)
         self.cpp_events = cpp_events
         used = self._match_journal(cpp_events)
         self.untracked_events = [dict(c) for c in cpp_events if c["seq"] not in used]
@@ -581,6 +625,7 @@ class ReferenceTracker:
         out = {"references": len(self.records), "counts": counts, "events": self.events}
         if self.journal_seq is not None:
             out["untracked_events"] = self.untracked_events
+            out["journal_truncated"] = self.journal_truncated
         return out
 
     @property

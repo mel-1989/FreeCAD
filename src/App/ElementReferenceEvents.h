@@ -36,7 +36,8 @@ struct AppExport ElementReferenceEvent
     std::string document;    ///< name of the owning document
     std::string owner;       ///< name of the object holding the link property
     std::string property;    ///< name of the link property
-    std::string target;      ///< name of the linked object
+    std::string target;      ///< name of the linked object (after the update)
+    std::string targetDocument;  ///< name of the document of the linked object
     std::string oldSub;      ///< sub-element string before the update
     std::string newSub;      ///< sub-element string after the update
     std::string oldMapped;   ///< mapped (shadow) name before, may be empty
@@ -54,6 +55,21 @@ struct AppExport ElementReferenceEvent
  * Purely observational: PropertyLinkBase::_updateElementReference records into it and
  * nothing in FreeCAD reads it back. A journal is dropped when its document is deleted.
  * All functions are thread-safe.
+ *
+ * What the journal is, and is not. It is an incremental log of the rewrites that
+ * _updateElementReference performed, in order. It is not a replayable history of the property:
+ * undo and redo, Body relinking, deleting a feature and user assignments rewrite properties
+ * without an event, so a consumer must read the property for its current value and use the
+ * events only to learn what FreeCAD did and why. Further caveats:
+ * - `lost` means the reference's mapped name is gone. The visible sub may still show the old
+ *   index, because updateLinkReference writes the mapped name back over the "?" mark.
+ * - `restored` is also used when a reference recovers from the missing mark (`?Edge5` to
+ *   `Edge5`), and a `restored` event may have an unchanged short sub (only the mapped name
+ *   changed).
+ * - A reference may leave and return within one edit (`Edge8`, `?Edge8`, `Edge8`); every step
+ *   is logged.
+ * - The journal keeps at most MaxEventsPerDocument events. lastDroppedSeq() tells a reader
+ *   whether events older than its `since` were discarded (truncated when since < that value).
  */
 class AppExport ElementReferenceJournal
 {
@@ -67,6 +83,8 @@ public:
     static std::vector<ElementReferenceEvent> events(const Document* doc, std::uint64_t since = 0);
     /// The highest seq handed out so far in this process (0 if none); a valid `since` for later reads.
     static std::uint64_t lastSeq();
+    /// Highest seq discarded from doc's journal by the size cap (0 if none, reset by clear).
+    static std::uint64_t lastDroppedSeq(const Document* doc);
     static void clear(const Document* doc);
 
     /// Emitted after each recorded event, on the thread that recorded it.

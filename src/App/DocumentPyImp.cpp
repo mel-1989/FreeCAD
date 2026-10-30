@@ -193,22 +193,28 @@ PyObject* DocumentPy::canWriteRecoverySnapshot(PyObject* args)
     return Py::new_reference_to(Py::Boolean(getDocumentPtr()->canWriteRecoverySnapshot()));
 }
 
-PyObject* DocumentPy::getElementReferenceEvents(PyObject* args)
+PyObject* DocumentPy::getElementReferenceEvents(PyObject* args, PyObject* kwd)
 {
-    unsigned long long since = 0;
-    if (!PyArg_ParseTuple(args, "|K", &since)) {
+    long long since = 0;
+    static const std::array<const char*, 2> kwlist {"since", nullptr};
+    if (!Base::Wrapped_ParseTupleAndKeywords(args, kwd, "|L", kwlist, &since)) {
+        return nullptr;
+    }
+    if (since < 0) {
+        PyErr_SetString(PyExc_ValueError, "since must not be negative");
         return nullptr;
     }
     PY_TRY
     {
         Py::List result;
-        for (const auto& e : ElementReferenceJournal::events(getDocumentPtr(), since)) {
+        for (const auto& e : ElementReferenceJournal::events(getDocumentPtr(), static_cast<std::uint64_t>(since))) {
             Py::Dict d;
             d.setItem("seq", Py::Long(static_cast<unsigned long long>(e.seq)));
             d.setItem("document", Py::String(e.document));
             d.setItem("owner", Py::String(e.owner));
             d.setItem("property", Py::String(e.property));
             d.setItem("target", Py::String(e.target));
+            d.setItem("targetDocument", Py::String(e.targetDocument));
             d.setItem("oldSub", Py::String(e.oldSub));
             d.setItem("newSub", Py::String(e.newSub));
             d.setItem("oldMapped", Py::String(e.oldMapped));
@@ -229,6 +235,15 @@ PyObject* DocumentPy::clearElementReferenceEvents(PyObject* args)
     }
     ElementReferenceJournal::clear(getDocumentPtr());
     Py_Return;
+}
+
+PyObject* DocumentPy::lastDroppedElementReferenceEventSeq(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    return Py::new_reference_to(
+        Py::Long(static_cast<unsigned long long>(ElementReferenceJournal::lastDroppedSeq(getDocumentPtr()))));
 }
 
 PyObject* DocumentPy::lastElementReferenceEventSeq(PyObject* args)

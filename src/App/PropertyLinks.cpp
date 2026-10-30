@@ -1547,6 +1547,26 @@ struct ElementReferenceRecorder
         return {};
     }
 
+    // The child links inside a PropertyXLinkSubList have no name of their own: report the list.
+    std::string propertyNameOf(const App::DocumentObject* owner) const
+    {
+        if (prop->getName() && prop->getName()[0]) {
+            return prop->getName();
+        }
+        std::vector<App::Property*> props;
+        owner->getPropertyList(props);
+        for (auto* p : props) {
+            if (auto* list = freecad_cast<App::PropertyXLinkSubList*>(p)) {
+                for (const auto& child : list->getSubListValues()) {
+                    if (&child == prop) {
+                        return list->getName() ? list->getName() : "";
+                    }
+                }
+            }
+        }
+        return "?unnamed";
+    }
+
     ElementReferenceRecorder(const PropertyLinkBase* p,
                              const App::DocumentObject* t,
                              const std::string& s,
@@ -1614,7 +1634,8 @@ struct ElementReferenceRecorder
             if (oldShort.empty() || newShort.empty() || oldShort == newShort) {
                 return;
             }
-            ev.kind = Event::Kind::Remapped;
+            // a reference coming back from the missing mark (?Edge5 -> Edge5) is a recovery
+            ev.kind = oldShort.rfind('?', 0) == 0 ? Event::Kind::Restored : Event::Kind::Remapped;
             if (anchored) {
                 ev.basis = Event::Basis::Anchored;
             }
@@ -1630,8 +1651,11 @@ struct ElementReferenceRecorder
         }
         ev.document = doc->getName();
         ev.owner = owner->getNameInDocument();
-        ev.property = prop->getName() ? prop->getName() : "";
+        ev.property = propertyNameOf(owner);
         ev.target = target && target->getNameInDocument() ? target->getNameInDocument() : "";
+        if (target && target->getDocument()) {
+            ev.targetDocument = target->getDocument()->getName();
+        }
         ev.oldSub = oldSub;
         ev.newSub = sub;
         ev.oldMapped = oldMapped;

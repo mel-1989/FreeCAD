@@ -193,15 +193,16 @@ class TestElementReferenceEvents(unittest.TestCase):
         self.doc.recompute()
         self.assertIs(b0.Base[0], pad)
         self.assertEqual(list(b0.Base[1]), original)
-        restored = [e for e in self._events(seq0, owner="Fillet") if e["kind"] == "restored"]
+        restored = [e for e in self._events(seq0, owner="Fillet") if e["kind"] == "restored" and e["basis"] == "record"]
         self.assertEqual(len(restored), 1, self._events(seq0))
-        self.assertEqual(restored[0]["basis"], "record")
         self.assertEqual(restored[0]["target"], "Pad")
         self.assertEqual([e for e in self._events(seq0) if e["kind"] == "lost"], [])
 
     def test_undo_of_an_insertion_does_not_claim_a_loss(self):
-        """Undo puts the property back directly, not through the element-reference update, so
-        the journal has nothing to say about it; in particular it never reports a loss."""
+        """The journal is an incremental log of _updateElementReference rewrites, not a replayable
+        history: undo restores the property without an event of its own (the recompute that
+        follows may log renumbering rewrites), so a reader takes the current value from the
+        property. Undoing an insertion never reports a loss."""
         pad, fil = self._pad_with_fillet()
         original = list(fil.Base[1])
         self.doc.openTransaction("insert hole")
@@ -273,3 +274,67 @@ class TestElementReferenceEvents(unittest.TestCase):
             self.assertEqual(again.getElementReferenceEvents(), [])
         finally:
             App.closeDocument(again.Name)
+
+    # -------------------------------------------------------------- API details
+    def test_since_keyword_and_negative_since(self):
+        pad, fil = self._pad_with_fillet()
+        self._insert_hole(pad)
+        self.doc.recompute()
+        allev = self.doc.getElementReferenceEvents(since=0)
+        self.assertTrue(allev)
+        self.assertEqual(self.doc.getElementReferenceEvents(since=allev[0]["seq"]), allev[1:])
+        with self.assertRaises(ValueError):
+            self.doc.getElementReferenceEvents(-1)
+        with self.assertRaises(ValueError):
+            self.doc.getElementReferenceEvents(since=-5)
+
+    def test_target_document_and_dropped_seq(self):
+        pad, fil = self._pad_with_fillet()
+        self._insert_hole(pad)
+        self.doc.recompute()
+        evs = self.doc.getElementReferenceEvents()
+        self.assertTrue(evs)
+        for e in evs:
+            self.assertEqual(e["targetDocument"], self.doc.Name)
+            self.assertEqual(e["document"], self.doc.Name)
+        self.assertEqual(self.doc.lastDroppedElementReferenceEventSeq(), 0)
+
+    def test_recovery_from_the_missing_mark_is_restored(self):
+        pad = self._pad()
+        edge = _line_edges(pad.Shape, V(0, 0, 1), (W / 2,), (H / 2,))[0]
+        fil = self._fillet(pad, [edge], 1.0)
+        self.doc.recompute()
+        ch = _add(self.doc, self.body, "PartDesign::Chamfer", "Chamfer", pad)
+        ch.Base = (pad, [edge])
+        ch.Size = 3.0
+        self.doc.recompute()
+        self.assertTrue(any(s.startswith("?") for s in fil.Base[1]))
+        seq0 = self.doc.lastElementReferenceEventSeq()
+        self.body.removeObject(ch)
+        self.doc.removeObject(ch.Name)
+        self.doc.recompute()
+        back = [e for e in self._events(seq0, owner="Fillet") if e["oldSub"].startswith("?")]
+        self.assertTrue(back, self._events(seq0))
+        for e in back:
+            self.assertEqual(e["kind"], "restored", e)
+            self.assertFalse(e["newSub"].startswith("?"), e)
+
+    def test_subshapebinder_events_name_the_list_property(self):
+        pad = self._pad()
+        top = next("Face%d" % (i + 1) for i, f in enumerate(pad.Shape.Faces) if abs(f.CenterOfMass.z - L) < 1e-6)
+        binder = self.body.newObject("PartDesign::SubShapeBinder", "Binder")
+        binder.Support = [(pad, [top])]
+        self.doc.recompute()
+        seq0 = self.doc.lastElementReferenceEventSeq()
+        sk = self.doc.getObject("Sketch")
+        i = next(i for i, g in enumerate(sk.Geometry) if abs(g.StartPoint.y + H / 2) < 1e-6 and abs(g.EndPoint.y + H / 2) < 1e-6)
+        a, b = sk.Geometry[i].StartPoint, sk.Geometry[i].EndPoint
+        m = (a + b) * 0.5
+        sk.delGeometry(i)
+        sk.addGeometry(Part.LineSegment(a, m))
+        sk.addGeometry(Part.LineSegment(m, b))
+        self.doc.recompute()
+        evs = self._events(seq0, owner="Binder")
+        for e in evs:
+            self.assertEqual(e["property"], "Support", e)
+        self.assertNotIn("", [e["property"] for e in self.doc.getElementReferenceEvents()])

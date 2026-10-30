@@ -17,6 +17,7 @@ struct JournalState
 {
     std::mutex mutex;
     std::unordered_map<const Document*, std::deque<ElementReferenceEvent>> journals;
+    std::unordered_map<const Document*, std::uint64_t> droppedThrough;
     std::atomic<std::uint64_t> seq {0};
     fastsignals::scoped_connection deleteConnection;
     bool connected {false};
@@ -79,6 +80,7 @@ void ElementReferenceJournal::record(const Document* doc, ElementReferenceEvent 
         auto& journal = s.journals[doc];
         journal.push_back(event);
         while (journal.size() > MaxEventsPerDocument) {
+            s.droppedThrough[doc] = journal.front().seq;
             journal.pop_front();
         }
     }
@@ -113,4 +115,13 @@ void ElementReferenceJournal::clear(const Document* doc)
     auto& s = state();
     std::lock_guard<std::mutex> lock(s.mutex);
     s.journals.erase(doc);
+    s.droppedThrough.erase(doc);
+}
+
+std::uint64_t ElementReferenceJournal::lastDroppedSeq(const Document* doc)
+{
+    auto& s = state();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    auto it = s.droppedThrough.find(doc);
+    return it == s.droppedThrough.end() ? 0 : it->second;
 }
