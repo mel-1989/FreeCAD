@@ -296,5 +296,112 @@ class TestIntrospectApi(unittest.TestCase):
             watchdog.cancel()
 
 
+class _Proxy:
+    """A FeaturePython proxy whose onChanged runs Python, as real ones do."""
+
+    def __init__(self, obj):
+        obj.Proxy = self
+
+    def onChanged(self, obj, prop):
+        sum(range(100))
+
+    def execute(self, obj):
+        pass
+
+    def dumps(self):
+        return {"n": 0}
+
+    def loads(self, state):
+        pass
+
+
+@unittest.skipUnless(HAVE_API, "built without doc.getAgentTurnChanges")
+class TestIntrospectThreads(unittest.TestCase):
+    """The GIL must never be held while waiting for the turn mutex (watchdog ends a hang loudly)."""
+
+    def setUp(self):
+        self.doc = App.newDocument("introspect_threads")
+        self.old_interval = sys.getswitchinterval()
+        sys.setswitchinterval(1e-5)
+        self.watchdog = threading.Timer(120, lambda: (print("DEADLOCK in thread test", flush=True), os._exit(3)))
+        self.watchdog.start()
+
+    def tearDown(self):
+        self.watchdog.cancel()
+        sys.setswitchinterval(self.old_interval)
+        if self.doc.isAgentTurnActive():
+            self.doc.endAgentTurn(False)
+        App.closeDocument(self.doc.Name)
+
+    def _objects(self, n, python_objects):
+        objs = []
+        for i in range(n):
+            o = self.doc.addObject("App::FeaturePython", "O%d" % i)
+            _Proxy(o)
+            o.addProperty("App::PropertyLength", "L")
+            if python_objects:
+                o.addProperty("App::PropertyPythonObject", "PO")
+                o.PO = {"i": i}
+            objs.append(o)
+        self.doc.recompute()
+        return objs
+
+    def _hammer(self, reader, writer, seconds=3):
+        done = threading.Event()
+        calls = [0]
+
+        def run():
+            while not done.is_set():
+                reader()
+                calls[0] += 1
+
+        t = threading.Thread(target=run)
+        t.start()
+        try:
+            end = time.time() + seconds
+            k = 0
+            while time.time() < end:
+                writer(k)
+                k += 1
+        finally:
+            done.set()
+            t.join()
+        self.assertGreater(calls[0], 0)
+
+    def test_python_object_properties_do_not_deadlock_a_concurrent_setter(self):
+        objs = self._objects(300, True)
+        self.doc.beginAgentTurn("t")
+        for i, o in enumerate(objs):
+            o.PO = {"i": i, "big": list(range(50))}
+            o.L = i + 1
+
+        def writer(k):
+            o = objs[k % 300]
+            o.L = 1000 + k
+            o.PO = {"k": k}
+
+        self._hammer(lambda: self.doc.getAgentTurnChanges(), writer)
+        self._hammer(lambda: self.doc.getAgentTurnChanges(False), writer, 1)
+
+    def test_nested_aborts_do_not_deadlock_readers_or_setters(self):
+        objs = self._objects(100, False)
+        self.doc.beginAgentTurn("t")
+        objs[0].L = 5
+        for mode in ("json", "raw", "set"):
+            def reader(mode=mode):
+                if mode == "set":
+                    objs[1].L = 7
+                else:
+                    self.doc.getAgentTurnChanges(mode == "json")
+
+            def writer(k):
+                self.doc.openTransaction("n")
+                for o in objs[2:]:
+                    o.L = 100 + k
+                self.doc.abortTransaction()
+
+            self._hammer(reader, writer, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -105,7 +105,7 @@ bool settleWorker(Document& doc, AgentTurnState& st, const char* what)
     if (idle) {
         return true;
     }
-    std::lock_guard<std::recursive_mutex> lock(st.mutex);
+    auto lock = AgentTurnGuard::acquire(st.mutex);
     ++st.workerRefusals;
     st.tampering.push_back(
         std::format("{} skipped: the document was still recomputing on the async worker", what)
@@ -201,7 +201,7 @@ AgentTurnReport AgentTurnGuard::end(Document& doc, bool commit, std::chrono::mil
         return refuse("the document is still recomputing on the async worker");
     }
 
-    std::unique_lock<std::recursive_mutex> lock(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st->mutex);
     st->ending = true;
     if (commit && !st->tampering.empty()) {
         // A tampered turn (undo/redo/clearUndos refused, or a savepoint operation skipped because
@@ -289,7 +289,7 @@ AgentTurnReport AgentTurnGuard::peek(Document& doc)
     if (!st) {
         return {};
     }
-    std::lock_guard<std::recursive_mutex> lock(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st->mutex);
     return makeReport(*st);
 }
 
@@ -322,7 +322,7 @@ int AgentTurnGuard::nestedOpen(Document& doc, const std::string& name, int viaGl
     if (!settleWorker(doc, *st, "nested open")) {
         return st->tid;
     }
-    std::lock_guard<std::recursive_mutex> lock(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st->mutex);
     if (doc.isTransactionLocked()) {
         // Same as Document::openTransaction: an open while locked is ignored.
         ++st->lockedOpens;
@@ -346,7 +346,7 @@ bool AgentTurnGuard::nestedCommit(Document& doc)
     if (!settleWorker(doc, *st, "nested commit")) {
         return true;
     }
-    std::lock_guard<std::recursive_mutex> lock(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st->mutex);
     if (st->savepointOpen) {
         st->savepointOpen = false;
         st->viaGlobalId = 0;
@@ -370,7 +370,7 @@ Transaction* AgentTurnGuard::beginNestedAbort(Document& doc, std::unique_lock<st
     if (!settleWorker(doc, *st, "nested abort")) {
         return nullptr;
     }
-    lock = std::unique_lock<std::recursive_mutex>(st->mutex);
+    lock = AgentTurnGuard::acquire(st->mutex);
     if (!st->savepointOpen) {
         // An abort with no open savepoint has nothing of its own to roll back; the
         // turn itself ends only through end().
@@ -396,7 +396,7 @@ int AgentTurnGuard::ensureSegment(Document& doc)
     if (!st) {
         return NullTransaction;
     }
-    std::lock_guard<std::recursive_mutex> lock(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st->mutex);
     auto acc = Transaction::accessDocument(doc);
     if (acc.d->activeUndoTransaction) {
         return st->tid;
@@ -421,7 +421,7 @@ void AgentTurnGuard::deferClose(Document& doc, bool abort)
 {
     auto st = hooked(doc);
     if (st) {
-        std::lock_guard<std::recursive_mutex> lock(st->mutex);
+        auto lock = AgentTurnGuard::acquire(st->mutex);
         st->pendingClose = std::max(st->pendingClose, abort ? 2 : 1);
     }
 }
@@ -432,7 +432,7 @@ int AgentTurnGuard::takeDeferredClose(Document& doc)
     if (!st || st->pendingClose == 0) {
         return 0;
     }
-    std::lock_guard<std::recursive_mutex> lock(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st->mutex);
     return std::exchange(st->pendingClose, 0);
 }
 
@@ -442,7 +442,7 @@ bool AgentTurnGuard::refuseHistory(Document& doc, const char* what)
     if (!st) {
         return false;
     }
-    std::lock_guard<std::recursive_mutex> lock(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st->mutex);
     const std::string call = what;
     if (call == "undo") {
         ++st->undoRefused;
@@ -463,7 +463,7 @@ void AgentTurnGuard::onDocumentDestroy(Document& doc)
     if (auto st = acc.d->agent) {
         // Parked segments go first (oldest first); the active one is committed and
         // deleted by clearUndos like any other.
-        std::lock_guard<std::recursive_mutex> lock(st->mutex);
+        auto lock = AgentTurnGuard::acquire(st->mutex);
         for (auto* segment : st->parked) {
             delete segment;
         }
@@ -480,5 +480,23 @@ std::unique_lock<std::recursive_mutex> AgentTurnGuard::lockFor(Document& doc)
     if (!st) {
         return {};
     }
-    return std::unique_lock<std::recursive_mutex>(st->mutex);
+    return AgentTurnGuard::acquire(st->mutex);
+}
+
+std::unique_lock<std::recursive_mutex> AgentTurnGuard::acquire(std::recursive_mutex& mutex)
+{
+    std::unique_lock<std::recursive_mutex> lock(mutex, std::try_to_lock);
+    if (lock.owns_lock()) {
+        return lock;
+    }
+    if (Py_IsInitialized() && PyGILState_Check()) {
+        // Never block on the mutex while holding the GIL: its holder may need the GIL (a nested
+        // abort runs Python while it holds the mutex). Wait without it, then take it back.
+        Base::PyGILStateRelease release;
+        lock.lock();
+    }
+    else {
+        lock.lock();
+    }
+    return lock;
 }

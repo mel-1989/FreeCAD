@@ -31,6 +31,7 @@
 #include "DocumentObject.h"
 #include "Property.h"
 #include "PropertyLinks.h"
+#include "PropertyPythonObject.h"
 #include "PropertyStandard.h"
 #include "PropertyUnits.h"
 #include "Transactions.h"
@@ -133,6 +134,24 @@ bool sameFloat(const Property& old, const Property& current)
     const auto* o = freecad_cast<const PropertyFloat*>(&old);
     const auto* c = freecad_cast<const PropertyFloat*>(&current);
     return o && c && o->getTypeId() == PropertyFloat::getClassTypeId() && o->getValue() == c->getValue();
+}
+
+/// Python-object properties are compared as Python objects (identity, then ==). Property::isSame
+/// would pickle both through Python, giving up the GIL in the middle of reading the live property,
+/// which another thread may be replacing: a use-after-free.
+bool samePython(const Property& old, const Property& current)
+{
+    Base::PyGILStateLocker lock;
+    Py::Object a(const_cast<Property&>(old).getPyObject(), true);
+    Py::Object b(const_cast<Property&>(current).getPyObject(), true);
+    if (a.ptr() == b.ptr()) {
+        return true;
+    }
+    const int eq = PyObject_RichCompareBool(a.ptr(), b.ptr(), Py_EQ);
+    if (eq < 0) {
+        PyErr_Clear();
+    }
+    return eq == 1;
 }
 
 void collectSegments(const Transaction* t, std::vector<const Transaction*>& out)
@@ -278,7 +297,9 @@ AgentTurnChangeSet buildChangeSet(Document& doc, AgentTurnState& st, const std::
                     else {
                         bool same = false;
                         try {
-                            same = p.old->isSame(*e.current) || sameFloat(*p.old, *e.current);
+                            same = freecad_cast<const PropertyPythonObject*>(p.old)
+                                ? samePython(*p.old, *e.current)
+                                : (p.old->isSame(*e.current) || sameFloat(*p.old, *e.current));
                         }
                         catch (...) {
                             ++cs.uncomparable;
@@ -331,7 +352,7 @@ void AgentTurnIntrospect::collectWith(Document& doc, std::chrono::milliseconds w
         throw Base::RuntimeError("the agent turn ended while waiting for the async worker");
     }
     // Keeps the worker from recording while the segments are read.
-    std::lock_guard<std::recursive_mutex> lock(st->mutex);
+    auto lock = AgentTurnGuard::acquire(st->mutex);
     std::vector<const Transaction*> segs(st->parked.begin(), st->parked.end());
     if (acc.d->activeUndoTransaction) {
         segs.push_back(acc.d->activeUndoTransaction);
@@ -543,8 +564,9 @@ _object* AgentTurnIntrospect::asPython(Document& doc, bool jsonValues, std::chro
     Py::Dict out;
     Py::Dict removedNames;
     std::vector<Pending> pending;
-    // Phase 1, under the turn mutex: everything is read into Python objects, but no Python code
-    // runs, so the interpreter cannot hand the GIL to a thread that then waits for the mutex.
+    // Phase 1, under the turn mutex: everything is read into Python objects. (Comparing
+    // Python-object properties can still run Python; that is safe because no thread ever blocks
+    // on the turn mutex while holding the GIL, see AgentTurnGuard::acquire.)
     collect(doc, wait, [&](const AgentTurnChangeSet& cs) {
         // Removed objects have lost their Name, but old link values still point at them.
         for (const auto& oc : cs.objects) {

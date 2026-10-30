@@ -204,6 +204,17 @@ public:
     static void onDocumentDestroy(Document& doc);
     /// Lock that serialises the recompute worker against turn bookkeeping (empty when no turn).
     static std::unique_lock<std::recursive_mutex> lockFor(Document& doc);
+
+    /**
+     * @brief Lock a turn's mutex without ever blocking while holding the GIL.
+     *
+     * Lock ordering rule for this file, the property-change hook and the Python bindings: a thread
+     * may take the GIL while holding a turn mutex (a nested abort runs Python features' onChanged
+     * under it), but must never wait for a turn mutex while holding the GIL. Every acquisition
+     * therefore goes through here: try_lock first, and when that fails with the GIL held, give the
+     * GIL up for the wait and take it back (mutex then GIL) afterwards.
+     */
+    static std::unique_lock<std::recursive_mutex> acquire(std::recursive_mutex& mutex);
 };
 
 }  // namespace App
