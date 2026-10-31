@@ -104,6 +104,10 @@ def parse_label(label):
     return idx - 1, int(m.group(2))
 
 
+def _is_url(text):
+    return isinstance(text, str) and re.match(r"^https?://", text) is not None
+
+
 def _check_name(name):
     if not isinstance(name, str) or not _NAME_RE.match(name):
         raise DocumentError(f"document name {name!r} must match {_NAME_RE.pattern}")
@@ -148,7 +152,7 @@ def _fault(point):
 class Vault:
     """A client's handle on a vault: ``Vault.create`` makes the bare repo, ``Vault.clone`` a working copy."""
 
-    def __init__(self, workdir, user, vault_path=None):
+    def __init__(self, workdir, user, vault_path=None, git_env=None):
         self.workdir = os.path.abspath(workdir)
         self.user = user
         if not re.fullmatch(r"[A-Za-z0-9_.@-]{1,64}", user or ""):
@@ -157,6 +161,7 @@ class Vault:
             "GIT_AUTHOR_NAME": user, "GIT_AUTHOR_EMAIL": f"{user}@pdm.local",
             "GIT_COMMITTER_NAME": user, "GIT_COMMITTER_EMAIL": f"{user}@pdm.local",
         }
+        self._env.update(git_env or {})  # e.g. an HTTP auth header for a remote backend (never written to .git/config)
         self.vault_path = vault_path or self._git(["config", "--get", "remote.origin.url"]).stdout.decode().strip()
 
     # ---- construction -------------------------------------------------------------------------
@@ -181,16 +186,29 @@ class Vault:
         return vault_path
 
     @classmethod
-    def clone(cls, vault_path, workdir, user):
-        """Clone the vault into a new working copy for ``user``."""
-        vault_path = os.path.abspath(vault_path)
+    def clone(cls, vault_path, workdir, user, git_env=None):
+        """Clone the vault into a new working copy for ``user``.
+
+        ``vault_path`` that is an ``http(s)://`` URL names a PDM server (slice 4) and gives a ``RemoteVault``
+        (credentials from ``PDM_TOKEN``); a path gives the local git-backed vault."""
+        if cls is Vault and _is_url(vault_path):
+            from PDM.remote import RemoteVault
+            return RemoteVault.clone(vault_path, workdir, user)
+        if not _is_url(vault_path):  # a service-side mirror clones the vault host's http(s) URL as it is
+            vault_path = os.path.abspath(vault_path)
         workdir = os.path.abspath(workdir)
-        _git(["clone", "-q", "--no-checkout", vault_path, workdir])
+        _git(["clone", "-q", "--no-checkout", vault_path, workdir], env=git_env)
         os.makedirs(os.path.join(workdir, ".git", "pdm", "base"), exist_ok=True)
-        return cls(workdir, user, vault_path)
+        return cls(workdir, user, vault_path, git_env=git_env)
 
     @classmethod
     def open(cls, workdir, user):
+        """Open an existing working copy; a working copy cloned from a PDM server (or with ``PDM_SERVER_URL`` set)
+        opens as a ``RemoteVault``, anything else as the local vault, exactly as before slice 4."""
+        if cls is Vault and (os.environ.get("PDM_SERVER_URL")
+                             or os.path.isfile(os.path.join(workdir, ".git", "pdm", "server"))):
+            from PDM.remote import RemoteVault
+            return RemoteVault(workdir, user)
         return cls(workdir, user)
 
     # ---- plumbing helpers ---------------------------------------------------------------------
@@ -200,9 +218,12 @@ class Vault:
         env.update(kw.pop("env", {}) or {})
         return _git(args, cwd=self.workdir, env=env, **kw)
 
+    def _fetch_specs(self):
+        """Refspecs of a fetch; a backend that keeps locks outside git drops the lock mirror."""
+        return [f"+refs/heads/{BRANCH}:refs/remotes/origin/{BRANCH}", f"+{LOCK_NS}*:{LOCK_MIRROR}*"]
+
     def _fetch(self):
-        self._git(["fetch", "-q", "--no-tags", "origin", f"+refs/heads/{BRANCH}:refs/remotes/origin/{BRANCH}",
-                   f"+{LOCK_NS}*:{LOCK_MIRROR}*", "--prune"])
+        self._git(["fetch", "-q", "--no-tags", "origin"] + self._fetch_specs() + ["--prune"])
 
     def client_id(self):
         """Random id of this working copy (``.git/pdm/client-id``); with the user it identifies a lock owner."""
@@ -377,6 +398,9 @@ class Vault:
         _check_name(name)
         if refresh:
             self._fetch()
+        return self._lock_get(name)
+
+    def _lock_get(self, name):
         p = self._git(["rev-parse", "--verify", "-q", f"{LOCK_MIRROR}{name}"], check=False)
         if p.returncode != 0:
             return None
@@ -414,17 +438,22 @@ class Vault:
                               "workdir": self.workdir, "client": self.client_id(),
                               "time": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
                               "new_revision": bool(new_revision), "nonce": uuid.uuid4().hex}, sort_keys=True)
+        failure = self._lock_create(name, payload)
+        if failure is not None:
+            cur = self.lock_info(name)
+            if cur is None:
+                raise GitError(f"lock for {name} failed: {failure}")
+            raise LockError(self._held_by_other_msg(name, cur), cur["holder"])
+        return self.lock_info(name)
+
+    def _lock_create(self, name, payload):
+        """Create the lock atomically; None on success, else the failure text. ``payload`` is the lock's JSON."""
         tree = self._git(["mktree"], input=b"").stdout.decode().strip()
         sha = self._git(["commit-tree", tree, "-m", f"lock {name}\n\n{payload}"]).stdout.decode().strip()
         # Without --force git refuses to update an existing ref to an unrelated commit, and creation is
         # decided by the vault's own ref transaction: one of two racing pushes fails.
         p = self._git(["push", "-q", "origin", f"{sha}:{LOCK_NS}{name}"], check=False)
-        if p.returncode != 0:
-            cur = self.lock_info(name)
-            if cur is None:
-                raise GitError(f"lock push for {name} failed: {p.stderr.decode(errors='replace').strip()}")
-            raise LockError(self._held_by_other_msg(name, cur), cur["holder"])
-        return self.lock_info(name)
+        return None if p.returncode == 0 else p.stderr.decode(errors="replace").strip()
 
     def release_lock(self, name):
         """Release this client's lock on ``name`` (the working files stay as they are)."""

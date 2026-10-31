@@ -175,4 +175,5 @@ def main():
     sys.stdout.flush()
 
 
-main()
+if __name__ == "__main__":  # exec'd by the tests (so __main__); imported by PDMServerTests/server_worker.py
+    main()

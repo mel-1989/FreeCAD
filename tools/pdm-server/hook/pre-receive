@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+"""Pre-receive hook of the vault repository on Forgejo: asks the PDM server whether a push may land.
+
+Installed by ``install_hook.py`` as ``<repo>.git/hooks/pre-receive.d/pdm`` (Forgejo runs everything in that
+directory); ``<repo>.git/pdm-hook.json`` holds the server URL and the shared secret. Standard library only. Fails
+closed: if the server cannot be reached the push is refused, so a service outage can never let an unlocked
+change into the vault.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+ZERO = "0" * 40
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def git(*args):
+    return subprocess.run(["git"] + list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                          errors="replace")
+
+
+def commit_info(sha):
+    body = git("log", "-1", "--format=%B", sha).stdout
+    lines = body.rstrip("\n").split("\n")
+    i = len(lines)
+    while i > 0 and lines[i - 1].strip() != "":
+        i -= 1
+    meta = {}
+    for ln in lines[i:]:
+        if ln.startswith("PDM-"):
+            k, _, v = ln[4:].partition(": ")
+            meta[k] = v
+    # Top-level paths this commit changes against its first parent (all of them for a root commit).
+    ch = git("diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", "--first-parent", sha).stdout
+    changed = sorted({p.split("/", 1)[0] for p in ch.split("\0") if p})
+    return {"sha": sha, "meta": meta, "changed": changed}
+
+
+def main():
+    with open(os.path.join(HERE, "..", "..", "pdm-hook.json")) as f:  # <repo>.git/pdm-hook.json
+        cfg = json.load(f)
+    pusher = (os.environ.get("GITEA_PUSHER_NAME") or os.environ.get("FORGEJO_PUSHER_NAME")
+              or os.environ.get("GITEA_PUSHER_USERNAME") or "")
+    updates = []
+    for line in sys.stdin.read().splitlines():
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        old, new, ref = parts
+        commits, ff = [], True
+        if new != ZERO:
+            if old != ZERO:
+                ff = git("merge-base", "--is-ancestor", old, new).returncode == 0
+            rng = new if old == ZERO else f"{old}..{new}"
+            shas = (git("rev-list", "--reverse", new, "--not", "--all") if old == ZERO
+                    else git("rev-list", "--reverse", rng)).stdout.split()
+            commits = [commit_info(s) for s in shas]
+        updates.append({"ref": ref, "old": old, "new": new, "fast_forward": ff, "commits": commits})
+    req = urllib.request.Request(cfg["url"].rstrip("/") + "/internal/pre-receive", method="POST",
+                                 data=json.dumps({"pusher": pusher, "updates": updates}).encode(),
+                                 headers={"Content-Type": "application/json", "X-PDM-Hook-Secret": cfg["secret"]})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            answer = json.loads(r.read())
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        sys.stderr.write(f"PDM: push refused, the PDM server could not be asked ({e}); nothing was changed\n")
+        return 1
+    if not answer.get("allow"):
+        sys.stderr.write(f"PDM: push refused: {answer.get('reason')}\n")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
