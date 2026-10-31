@@ -112,7 +112,10 @@ def _git(args, cwd=None, env=None, input=None, check=True):
 
 
 def _check_message(text):
-    """Refuse a user message with a line starting ``PDM-``: those lines are the vault's own trailers."""
+    """Refuse a user message with a line starting ``PDM-`` (the vault's own trailers) or with control
+    characters other than newline and tab (they could pose as record separators in ``git log`` output)."""
+    if re.search(r"[\x00-\x08\x0b-\x1f\x7f\x85\u2028\u2029]", str(text)):
+        raise DocumentError("message must not contain control characters")
     for line in str(text).splitlines():
         if line.strip().startswith(_TRAILER):
             raise DocumentError(f"message lines must not start with {_TRAILER!r} (reserved for vault trailers)")
@@ -237,14 +240,19 @@ class Vault:
     def _records(self, name, ref=None):
         """All commits of one document, newest first, as dicts."""
         ref = ref or f"refs/remotes/origin/{BRANCH}"
-        out = self._git(["log", "--format=%H%x1f%an%x1f%aI%x1f%B%x1e", "-E", f"--grep=^{_TRAILER}Document: {name}$", ref],
+        # -z ends each commit with NUL, which a commit message cannot contain; sha, author and date are
+        # one line each (user names are restricted), and the body is everything after them.
+        out = self._git(["log", "-z", "--format=%H%n%an%n%aI%n%B", "-E", f"--grep=^{_TRAILER}Document: {name}$", ref],
                         check=False)
         recs = []
-        for chunk in out.stdout.decode().split("\x1e"):
+        for chunk in out.stdout.decode().split("\x00"):
             chunk = chunk.strip("\n")
             if not chunk:
                 continue
-            sha, author, when, body = chunk.split("\x1f", 3)
+            parts = chunk.split("\n", 3)
+            if len(parts) < 4 or not re.fullmatch(r"[0-9a-f]{40}", parts[0]):
+                continue
+            sha, author, when, body = parts
             lines = body.rstrip("\n").split("\n")
             # Trailers only from the last paragraph (the block _commit writes); a PDM- line elsewhere in a
             # message, or a message naming another document, never counts.

@@ -336,6 +336,26 @@ class TestRepairs(VaultCase):
         self.assertEqual([x["state"] for x in r[0]["value"]], ["WIP"])
         self.assertEqual(r[1]["value"][0]["state"], "Released")
 
+    def test_record_separator_in_message_cannot_forge_a_record(self):
+        """V4 (run 022): a message carrying git-log separator bytes could pose as another record."""
+        self.seed("bracket")
+        old = self.client("alice", [call("history", "bracket")])[0]["value"][0]["sha"]
+        self.client("alice", [call("checkout", "bracket")])
+        fake = "legit\x1e" + old + "\x1fbob\x1f2020-01-01T00:00:00+00:00\x1ffake"
+        r = self.client("alice", [{"op": "set_pad", "name": "bracket", "length": 12}, call("checkin", "bracket", fake)])
+        self.assertEqual(r[1]["error"], "DocumentError", r)
+        # a commit already in the vault with such bytes (raw git) still parses as one record with its own sha
+        head = self.git("rev-parse", "refs/heads/main").strip()
+        tree = self.git("rev-parse", head + "^{tree}").strip()
+        msg = fake + "\n\nPDM-Document: bracket\nPDM-Revision: A.2\nPDM-State: WIP\nPDM-Event: checkin\n"
+        env = dict(os.environ, GIT_AUTHOR_NAME="m", GIT_AUTHOR_EMAIL="m@x", GIT_COMMITTER_NAME="m", GIT_COMMITTER_EMAIL="m@x")
+        forged = subprocess.run(["git", "--git-dir", self.vault, "commit-tree", tree, "-p", head, "-m", msg], env=env,
+                                check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+        self.git("update-ref", "refs/heads/main", forged)
+        hist = self.client("alice", [call("history", "bracket")])[0]["value"]
+        self.assertEqual([h["sha"] for h in hist], [forged, old])
+        self.assertEqual(hist[0]["author"], "m")
+
     def test_h2_checkout_never_overwrites_unlocked_edits(self):
         self.seed("bracket")
         r = self.client("alice", [call("checkout", "bracket"), call("release_lock", "bracket"),
