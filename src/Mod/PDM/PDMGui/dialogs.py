@@ -52,3 +52,22 @@ def report(title, exc):
     if holder and holder not in text:
         text += f"\n\nChecked out by: {holder}"
     return error(title, text)
+
+
+def confirm(title, text, on_yes):
+    """Ask a yes/no question without blocking: ``on_yes()`` runs only if the user answers Yes. A test handler
+    returning True counts as Yes; without a handler a non-modal box with Yes and No buttons is put up."""
+    shown.append(("confirm", title, text))
+    if handler is not None:
+        if handler("confirm", title, text):
+            on_yes()
+        return None
+    B = QtWidgets.QMessageBox
+    box = B(B.Question, title, text, B.Yes | B.No, Gui.getMainWindow())
+    box.setObjectName("PDMMessage")
+    box.setModal(False)
+    box.button(B.Yes).clicked.connect(on_yes)
+    box.finished.connect(lambda *_: boxes.remove(box) if box in boxes else None)
+    boxes.append(box)
+    box.show()
+    return box

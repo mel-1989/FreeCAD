@@ -78,6 +78,13 @@ class TestLinkLogic(unittest.TestCase):
         return subprocess.run(["git", "--git-dir", self.vpath, "for-each-ref", "--format=%(refname)", "refs/locks/"],
                               check=True, stdout=subprocess.PIPE, text=True).stdout.split()
 
+    def test_owns_lock(self):
+        self.add("base")
+        self.assertFalse(self.a.owns_lock(None))
+        self.a.lock("base")
+        self.assertTrue(self.a.owns_lock(self.a.lock_info("base")))
+        self.assertFalse(self.b.owns_lock(self.b.lock_info("base")))   # another user's lock
+
     def test_scan_forms(self):
         self.add("base")
         self.add("other")

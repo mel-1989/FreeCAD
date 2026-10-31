@@ -161,11 +161,14 @@ class DocumentsPanel(Panel):
         self.layout_.addWidget(self.next_rev)
         row = QtWidgets.QHBoxLayout()
         self.btn_refresh = QtWidgets.QPushButton("Refresh")
-        self.btn_open = QtWidgets.QPushButton("Open (no lock)")
+        self.btn_open = QtWidgets.QPushButton("Open read-only (no lock)")
         self.btn_open.setObjectName("open")
         self.btn_checkout = QtWidgets.QPushButton("Check out")
         self.btn_checkout.setObjectName("checkout")
-        for b in (self.btn_refresh, self.btn_open, self.btn_checkout):
+        self.btn_discard = QtWidgets.QPushButton("Discard local edits and check out")
+        self.btn_discard.setObjectName("discard")
+        self.btn_discard.clicked.connect(self.do_discard)
+        for b in (self.btn_refresh, self.btn_open, self.btn_checkout, self.btn_discard):
             row.addWidget(b)
         row.addStretch(1)
         self.layout_.addLayout(row)
@@ -208,12 +211,25 @@ class DocumentsPanel(Panel):
         if n:
             run_checkout(n, self.next_rev.isChecked(), self)
 
+    def do_discard(self):
+        n = self.selected()
+        if n:
+            ask_discard_checkout(n, self.next_rev.isChecked(), self)
 
-def run_checkout(name, new_revision, panel):
+
+def run_checkout(name, new_revision, panel, discard_local=False):
     """Check out through the library; show the library's refusal (naming the holder) and leave nothing open."""
-    doc = panel.guarded(lambda: state.checkout(name, new_revision=new_revision), "Check out")
+    doc = panel.guarded(lambda: state.checkout(name, new_revision=new_revision, discard_local=discard_local),
+                        "Check out")
     panel.changed()
     return doc
+
+
+def ask_discard_checkout(name, new_revision, panel):
+    """Confirm, then check out with the library's ``discard_local``: local edits in the working copy are lost."""
+    dialogs.confirm("Discard local edits", f"Replace the local edits to {name} in your working copy with the "
+                    "current vault revision and check it out? The local edits cannot be recovered.",
+                    lambda: run_checkout(name, new_revision, panel, discard_local=True))
 
 
 class CheckInPanel(Panel):
@@ -260,7 +276,8 @@ class CheckInPanel(Panel):
         rec = self.guarded(lambda: state.checkin(self.name, text, keep_lock=self.keep.isChecked()), "Check in")
         if rec is not None:
             self.msg.clear()
-            dialogs.info("Check in", f"{self.name} is now revision {rec['revision']}.")
+            note = " The open document was saved first." if rec.get("saved") else ""
+            dialogs.info("Check in", f"{self.name} is now revision {rec['revision']}.{note}")
             self.changed()
         return rec
 
@@ -281,10 +298,15 @@ class RevisionsPanel(Panel):
         row = QtWidgets.QHBoxLayout()
         self.btn_open = QtWidgets.QPushButton("Open read-only")
         self.btn_open.setObjectName("open")
-        self.btn_checkout = QtWidgets.QPushButton("Check out")
+        self.btn_checkout = QtWidgets.QPushButton("Check out latest")
         self.btn_checkout.setObjectName("checkout")
+        self.btn_checkout.setToolTip("Always checks out the newest revision, whichever row is selected")
+        self.btn_discard = QtWidgets.QPushButton("Discard local edits and check out")
+        self.btn_discard.setObjectName("discard")
+        self.btn_discard.clicked.connect(lambda: ask_discard_checkout(self.name, self.next_rev.isChecked(), self))
         row.addWidget(self.btn_open)
         row.addWidget(self.btn_checkout)
+        row.addWidget(self.btn_discard)
         row.addStretch(1)
         self.layout_.addLayout(row)
         self.btn_open.clicked.connect(self.do_open)
@@ -374,9 +396,13 @@ class LifecyclePanel(Panel):
         self.refresh()
 
     def refresh(self):
-        for b in self.buttons.values():
-            self.buttons_box.removeWidget(b)
-            b.deleteLater()
+        while self.buttons_box.count():   # buttons and the stretch: nothing from the last refresh survives
+            item = self.buttons_box.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
         self.buttons = {}
         v = state.current_vault()
         if v is None:

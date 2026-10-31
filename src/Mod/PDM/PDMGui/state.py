@@ -116,15 +116,26 @@ def open_doc_for(name, v=None):
 
 
 def is_modified(doc):
-    """True when the document has unsaved changes (the GUI document's flag, or touched objects)."""
+    """True when the document has unsaved changes: the GUI document's Modified flag (cleared by a GUI save),
+    or, with no GUI document, the touched state."""
     try:
         import FreeCADGui
         gd = FreeCADGui.getDocument(doc.Name)
-        if gd is not None and gd.Modified:
-            return True
-    except Exception:  # noqa: BLE001  (no GUI document: fall back to the touched state)
-        pass
-    return bool(doc.isTouched())
+    except Exception:  # noqa: BLE001
+        gd = None
+    return bool(gd.Modified) if gd is not None else bool(doc.isTouched())
+
+
+def save_document(doc):
+    """Save through the GUI document so its Modified flag clears (an App-level save leaves it set)."""
+    import FreeCADGui
+    gd = FreeCADGui.getDocument(doc.Name)
+    if gd is not None and hasattr(gd, "save"):
+        gd.save()
+    else:
+        doc.save()
+        if gd is not None:
+            gd.Modified = False
 
 
 def lock_state(name, refresh=False):
@@ -139,7 +150,7 @@ def lock_state(name, refresh=False):
         info = v.lock_info(name, refresh=refresh)
     except Exception:
         info = None
-    mine = bool(info) and info.get("holder") == v.user and info.get("client") == v.client_id()
+    mine = v.owns_lock(info)
     st = {"info": info, "holder": info["holder"] if info else None, "mine": mine}
     _lock_cache[name] = (now, st)
     return st
@@ -151,16 +162,18 @@ def forget_locks():
 
 # ---- actions ---------------------------------------------------------------------------------------
 
-def checkout(name, new_revision=False):
-    """Check ``name`` out (library call) and open it from the working copy. Raises the library's errors."""
+def checkout(name, new_revision=False, discard_local=False):
+    """Check ``name`` out (library call) and open it from the working copy. Raises the library's errors.
+
+    ``discard_local`` replaces local edits in the working copy by the current revision (the library's flag)."""
     v = require_vault()
     opened = open_doc_for(name, v)
-    if opened is not None and is_modified(opened) and not lock_state(name, refresh=True)["mine"]:
-        raise V.DocumentError(f"{name} is open with unsaved changes; close or save it first")
     was_mine = lock_state(name, refresh=True)["mine"]
-    path = v.checkout(name, new_revision=new_revision)
+    if opened is not None and not discard_local and not was_mine and is_modified(opened):
+        raise V.DocumentError(f"{name} is open with unsaved changes; close or save it first")
+    path = v.checkout(name, new_revision=new_revision, discard_local=discard_local)
     forget_locks()
-    if opened is not None and was_mine:
+    if opened is not None and was_mine and not discard_local:
         return opened  # idempotent re-checkout: keep the open document and its edits
     if opened is not None:
         App.closeDocument(opened.Name)
@@ -168,12 +181,19 @@ def checkout(name, new_revision=False):
 
 
 def checkin(name, message, keep_lock=False):
-    """Save the open document (when modified) and check it in with ``message``."""
+    """Save the open document when it has unsaved changes, then check it in with ``message``.
+
+    A document that was not modified is not saved: re-saving would only rewrite view state (the camera in
+    GuiDocument.xml) and the vault would get a revision with no model change. The returned record has
+    ``saved`` set to True when this call saved the document."""
     v = require_vault()
     doc = open_doc_for(name, v)
+    saved = False
     if doc is not None and is_modified(doc):
-        doc.save()
-    rec = v.checkin(name, message, keep_lock=keep_lock)
+        save_document(doc)
+        saved = True
+    rec = dict(v.checkin(name, message, keep_lock=keep_lock))
+    rec["saved"] = saved
     forget_locks()
     return rec
 
@@ -194,14 +214,13 @@ def open_revision(name, revision):
 
 
 def open_head(name):
-    """Open ``name`` without locking it: the working copy's folder when it exists, else the head revision
-    read-only."""
+    """Open the vault's newest revision of ``name`` read-only, without locking it. The working copy is never
+    used for this (it can be behind the vault); a document this client has checked out and open is returned
+    as it is."""
     v = require_vault()
     opened = open_doc_for(name, v)
-    if opened is not None:
+    if opened is not None and lock_state(name, refresh=True)["mine"]:
         return opened
-    if os.path.isfile(os.path.join(v.doc_path(name), "Document.xml")):
-        return App.openDocument(v.doc_path(name))
     return open_revision(name, v.history(name)[0]["revision"])
 
 

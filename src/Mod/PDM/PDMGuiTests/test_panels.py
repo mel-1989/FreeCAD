@@ -96,7 +96,7 @@ class TestCommands(PanelCase):
         other = App.newDocument("scratch")
         self.assertFalse(any(active(n) for n in ALL[2:]))
         App.closeDocument(other.Name)
-        doc = state.open_head("plate")
+        doc = App.openDocument(self.va.doc_path("plate"))
         App.setActiveDocument(doc.Name)
         self.assertTrue(active("PDM_CheckOut") and active("PDM_Revisions") and active("PDM_WhereUsed")
                         and active("PDM_Lifecycle"))
@@ -228,6 +228,127 @@ class TestCheckInOut(PanelCase):
         self.assertEqual(dialogs.boxes, [])
 
 
+class TestRepairRound(PanelCase):
+    """Verifier findings M1 to M4 and the low ones of run 023."""
+
+    def length(self, doc):
+        return doc.getObject("Box").Length.Value
+
+    def bob_revises(self, name, length, message):
+        fixture.revise(self.vb, name, length, message)
+
+    def test_m1_open_shows_the_vault_head_not_the_stale_working_copy(self):
+        self.bob_revises("plate", 99, "Bob: 99 mm")          # vault head A.2; alice's working copy still A.1
+        self.assertAlmostEqual(self.length(App.openDocument(self.va.doc_path("plate"))), 60)
+        for d in list(App.listDocuments().values()):
+            App.closeDocument(d.Name)
+        docs = panels.show_panel("documents")
+        select(docs.table, "plate")
+        docs.btn_open.click()
+        self.assertEqual(self.errors(), [], dialogs.shown)
+        doc = [d for d in App.listDocuments().values()][0]
+        self.assertAlmostEqual(self.length(doc), 99, msg="the head revision, not the working copy")
+        self.assertNotEqual(os.path.realpath(doc.FileName.rstrip("/")), os.path.realpath(self.va.doc_path("plate")))
+
+    def test_m2_unlocked_open_is_read_only_and_leaves_no_dead_end(self):
+        doc = state.open_head("plate")
+        self.assertFalse(os.access(os.path.join(doc.FileName, "Document.xml"), os.W_OK))
+        self.assertFalse(self.va.has_changes("plate"))
+        App.closeDocument(doc.Name)
+        state.checkout("plate")                                # still checks out cleanly afterwards
+        self.assertEqual(self.vault_state("plate")["lock"]["holder"], "alice")
+
+    def test_m2_discard_local_edits_and_check_out_is_confirmed(self):
+        self.va.checkout("plate")
+        fixture.edit_box(self.va, "plate", 70)                 # local edits in the working copy
+        self.va.release_lock("plate")
+        docs = panels.show_panel("documents")
+        select(docs.table, "plate")
+        docs.btn_checkout.click()
+        self.assertEqual(len(self.errors()), 1)
+        self.assertIn("discard_local", self.errors()[0][2], "the library names the way out")
+        dialogs.clear()
+        dialogs.handler = lambda kind, title, text: False      # the user answers No
+        try:
+            docs.btn_discard.click()
+            self.assertEqual([m[0] for m in dialogs.shown], ["confirm"])
+            self.assertIsNone(self.vault_state("plate")["lock"])
+            self.assertTrue(self.va.has_changes("plate"))
+            dialogs.handler = lambda kind, title, text: True   # the user answers Yes
+            docs.btn_discard.click()
+        finally:
+            dialogs.handler = None
+        self.assertEqual(self.errors(), [], dialogs.shown)
+        self.assertEqual(self.vault_state("plate")["lock"]["holder"], "alice")
+        self.assertFalse(self.va.has_changes("plate"))
+        self.assertAlmostEqual(self.length(state.open_doc_for("plate")), 60)
+
+    def test_m2_confirmation_box_without_handler_is_non_modal_and_runs_on_yes(self):
+        self.va.checkout("plate")
+        fixture.edit_box(self.va, "plate", 70)
+        self.va.release_lock("plate")
+        docs = panels.show_panel("documents")
+        select(docs.table, "plate")
+        docs.btn_discard.click()
+        self.assertEqual(len(dialogs.boxes), 1)
+        box = dialogs.boxes[0]
+        self.assertFalse(box.isModal())
+        self.assertTrue(self.va.has_changes("plate"), "nothing happens before the answer")
+        box.button(QtWidgets.QMessageBox.Yes).click()
+        self.assertFalse(self.va.has_changes("plate"))
+
+    def test_m3_checkin_clears_modified_so_a_second_checkout_works(self):
+        doc = state.checkout("plate")
+        doc.getObject("Box").Length = 71
+        doc.recompute()
+        self.assertTrue(state.is_modified(doc))
+        rec = state.checkin("plate", "71 mm")
+        self.assertTrue(rec["saved"])
+        self.assertFalse(state.is_modified(doc), "the GUI document's Modified flag is clear after a check-in")
+        again = state.checkout("plate")                         # no 'unsaved changes' refusal
+        self.assertIsNotNone(again)
+        self.assertEqual(self.vault_state("plate")["lock"]["holder"], "alice")
+
+    def test_m4_checkin_without_edits_makes_no_revision_and_edits_say_they_saved(self):
+        doc = state.checkout("plate")
+        ci = panels.show_panel("checkin", "plate")
+        ci.msg.setPlainText("nothing changed")
+        ci.btn.click()
+        self.assertEqual(len(self.errors()), 1, dialogs.shown)
+        self.assertEqual(self.vault_state("plate")["revision"], "A.1")
+        self.assertFalse(state.is_modified(doc), "the check-in did not save an unmodified document")
+        dialogs.clear()
+        doc.getObject("Box").Length = 72
+        doc.recompute()
+        ci.btn.click()
+        self.assertEqual(self.errors(), [], dialogs.shown)
+        info = [m for m in dialogs.shown if m[0] == "info"][0][2]
+        self.assertIn("A.2", info)
+        self.assertIn("saved", info)
+        # a second round with no edits: still no new revision
+        dialogs.clear()
+        state.checkout("plate")
+        ci.msg.setPlainText("again, no edits")
+        ci.btn.click()
+        self.assertEqual(len(self.errors()), 1)
+        self.assertEqual(self.vault_state("plate")["revision"], "A.2")
+        self.assertEqual(len(self.va.history("plate")), 2)
+
+    def test_l6_lifecycle_refresh_leaves_no_stale_buttons_or_stretches(self):
+        lp = panels.show_panel("lifecycle", "plate")
+        for _ in range(3):
+            lp.refresh()
+        lp.buttons["InReview"].click()
+        pump()
+        self.assertEqual(lp.buttons_box.count(), len(lp.buttons) + 1, "buttons plus one stretch")
+        shown = [b for b in lp.findChildren(QtWidgets.QPushButton)]
+        self.assertEqual(sorted(b.text() for b in shown), sorted(b.text() for b in lp.buttons.values()))
+
+    def test_l7_revisions_checkout_is_labelled_as_the_latest(self):
+        rv = panels.show_panel("revisions", "plate")
+        self.assertIn("latest", rv.btn_checkout.text())
+
+
 class TestRevisions(PanelCase):
     def test_history_table_open_readonly_and_released_checkout(self):
         fixture.revise(self.va, "plate", 61, "Plate: 61 mm")
@@ -270,11 +391,11 @@ class TestWhereUsedAndLifecycle(PanelCase):
         self.assertEqual(column(w.table, 0), ["assembly"])
         self.assertEqual(w.table.item(0, 2).text(), "LinkedObject")
         self.assertEqual(self.va.where_used("bracket")[0]["document"], "assembly")
-        self.assertIsNone(state.open_doc_for("assembly"))
         w.table.setCurrentCell(0, 0)
+        n_before = len(App.listDocuments())
         w.table.itemDoubleClicked.emit(w.table.item(0, 0))
-        doc = state.open_doc_for("assembly")
-        self.assertIsNotNone(doc, "double-click opens the linking document")
+        self.assertGreater(len(App.listDocuments()), n_before, "double-click opens the linking document")
+        doc = [d for d in App.listDocuments().values() if d.FileName.rstrip("/").endswith("assembly.FCStd.d")][0]
         pw = panels.show_panel("whereused", "assembly")
         self.assertIn("No document links", pw.status.text())
 

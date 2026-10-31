@@ -218,8 +218,12 @@ class Vault:
             f.write(cid + "\n")
         return cid
 
-    def _mine(self, info):
+    def owns_lock(self, info):
+        """True when ``info`` (a ``lock_info`` dict) is a lock held by this client: same user and same working copy."""
         return info is not None and info["holder"] == self.user and info.get("client") == self.client_id()
+
+    def _mine(self, info):
+        return self.owns_lock(info)
 
     def _held_by_other_msg(self, name, cur):
         if cur["holder"] == self.user:
