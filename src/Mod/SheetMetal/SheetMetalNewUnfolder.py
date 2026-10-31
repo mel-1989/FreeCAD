@@ -1515,6 +1515,23 @@ def check_sheet_consistency(shape: Part.Shape, root_index: int, thickness: float
         if joins_a_sheet_face_along_the_axis(face):
             has_bend_cylinders = True
             if not has_partner(thickness):
+                near = [
+                    (abs(other.Surface.Radius - surf.Radius) - thickness, j)
+                    for j, other in cylinders
+                    if j != idx
+                    and abs(abs(other.Surface.Radius - surf.Radius) - thickness) <= 0.1 * thickness
+                    and other.Surface.Axis.cross(surf.Axis).Length < 1e-5
+                    and (other.Surface.Center - surf.Center).cross(surf.Axis).Length <= 0.2 * thickness
+                ]
+                if near:
+                    # Imported (STEP) bends whose radii are a little off: V1 flattens these exactly.
+                    miss, j = min(near, key=lambda m: abs(m[0]))
+                    raise SheetNeedsV1Error(
+                        f"the bend Face{idx + 1} (radius {surf.Radius:.9g} mm) and its partner "
+                        f"Face{j + 1} differ in radius by {thickness + miss:.9g} mm, which is "
+                        f"{miss:+.3g} mm from the sheet thickness {thickness:.9g} mm ({how}), "
+                        f"beyond the {tol:g} mm tolerance of the new unfolder"
+                    )
                 raise SheetConsistencyError(
                     f"Cannot unfold: the sheet thickness {thickness:.9g} mm ({how}) does not match "
                     f"the bend Face{idx + 1} (radius {surf.Radius:.9g} mm), which has no concentric "

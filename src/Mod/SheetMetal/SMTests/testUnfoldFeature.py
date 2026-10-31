@@ -227,17 +227,27 @@ class TestSheetValidation(unittest.TestCase):
                     self.assertFalse(refused(feat), "offset %g refused" % offset)
                     self.assertAlmostEqual(feat.Shape.Volume / shape.Volume, 1.0, delta=1e-3)
 
-    def test_radius_offset_beyond_tolerance_is_refused_and_named(self):
-        shape = l_profile(2.0, inner=3.0)
-        outer_edge = [e for e in shape.Edges if abs(e.Length - WIDTH) < 1e-6
-                      and abs(e.Vertexes[0].Point.x) < 1e-9 and abs(e.Vertexes[0].Point.y) < 1e-9][0]
-        shape = shape.makeFillet(5.0 + 1e-3, [outer_edge])
-        root = sheet_faces(shape, 2.0)[0]
-        t = NU.EstimateThickness.using_best_method(shape, root)
-        with self.assertRaises(NU.SheetConsistencyError) as cm:
-            NU.check_sheet_consistency(shape, root, t, "measured through the root face")
-        self.assertIn("measured through the root face", str(cm.exception))
-        self.assertIn("radius", str(cm.exception))
+    def test_radius_offset_beyond_tolerance_falls_back_to_the_old_unfolder(self):
+        """An outer radius off by more than 1e-4 (imported STEP) is flattened by V1, exactly."""
+        for offset in (1e-3, 5e-3):
+            with self.subTest(offset=offset):
+                shape = l_profile(2.0, inner=3.0)
+                outer_edge = [e for e in shape.Edges if abs(e.Length - WIDTH) < 1e-6
+                              and abs(e.Vertexes[0].Point.x) < 1e-9 and abs(e.Vertexes[0].Point.y) < 1e-9][0]
+                shape = shape.makeFillet(5.0 + offset, [outer_edge])
+                root = sheet_faces(shape, 2.0)[0]
+                t = NU.EstimateThickness.using_best_method(shape, root)
+                with self.assertRaises(NU.SheetNeedsV1Error) as cm:
+                    NU.check_sheet_consistency(shape, root, t, "measured through the root face")
+                msg = str(cm.exception)
+                self.assertIn("measured through the root face", msg)
+                self.assertIn("radius", msg)
+                self.assertIn("Face", msg)
+                obj = self._add("Loff%g" % offset, shape)
+                for i in sheet_faces(shape, 2.0):
+                    feat = feature_unfold(self.doc, obj, "Face%d" % (i + 1), k=0.5)
+                    self.assertFalse(refused(feat), "offset %g refused" % offset)
+                    self.assertAlmostEqual(feat.Shape.Volume / shape.Volume, 1.0, delta=1e-3)
 
     def test_all_sharp_bend_falls_back_to_the_old_unfolder(self):
         shape = l_profile(2.0)

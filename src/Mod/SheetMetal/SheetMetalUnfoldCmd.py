@@ -401,7 +401,7 @@ class SMUnfold:
             )
         except SheetMetalNewUnfolder.SheetNeedsV1Error as exc:
             # The V1 unfolder was the default before the new one and flattens parts whose bends
-            # are all sharp. Say so rather than return a wrong flat.
+            # are all sharp, or whose bend radii are slightly off (imported STEP). Say so.
             FreeCAD.Console.PrintWarning(
                 "Falling back to the V1 unfolder for %s: %s\n" % (obj.Label, exc))
             return self.oldUnfolder(obj, baseObject, baseFace)
