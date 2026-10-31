@@ -372,6 +372,10 @@ class TestCornerRelief(Doc):
         msg = CR.relief_k_mismatch(diff)
         self.assertIn("0.42", msg)
         self.assertIn("0.3", msg)
+        # the mismatch is a flat-pattern problem, so the DXF export refuses it
+        self.assertIn("K-factor", FP.bends_and_problem_from_json(diff.BendData)[2])
+        with self.assertRaises(ValueError):
+            UC.export_flat_dxf(diff, os.path.join(tempfile.gettempdir(), "r027_kmismatch.dxf"))
         # a relief that takes K from the flanges' K and an unfold with another K
         rel2 = CR.make_corner_relief(self.doc, tray, edge, name="R2", size=3.0)
         self.assertIsNone(CR.relief_k_mismatch(feature_unfold(self.doc, rel2, unfold_target_face(rel2.Shape), k=0.42, old=None)))

@@ -126,6 +126,11 @@ def _store_bends(obj, bend_records, norm, shape=None, source=None, thickness=Non
             shape, norm, bends, thickness,
             SheetMetalFlatPattern.source_bend_count(source.Shape, thickness),
             source.Shape.Volume, SheetMetalFlatPattern.forming_features(source))
+    if not problem:
+        # A corner relief cut with another K than the flat's would sit in the wrong place.
+        import SheetMetalBendCornerRelief
+
+        problem = SheetMetalBendCornerRelief.relief_k_mismatch(obj) or ""
     if problem:
         FreeCAD.Console.PrintWarning("%s: %s\n" % (getattr(obj, "Label", "Unfold"), problem))
     obj.BendData = SheetMetalFlatPattern.bends_to_json(bends, norm, problem)
