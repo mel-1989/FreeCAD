@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # SheetMetal: LGPL subset of shaise/FreeCAD_SheetMetal (cad-fork G07 slice 1). Python, data and
-# resources only. Every .py, .md, .csv, .ui and .svg file under this directory is copied, so
+# resources only. Every .py, .md, .csv, .ui, .svg and .dxf file under this directory is copied, so
 # sub-packages can add files without editing this list.
 
 file(GLOB_RECURSE SHEETMETAL_SRCS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" CONFIGURE_DEPENDS
@@ -8,6 +8,7 @@ file(GLOB_RECURSE SHEETMETAL_SRCS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" CONFIGU
     "${CMAKE_CURRENT_SOURCE_DIR}/*.csv"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.ui"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.dxf"
 )
 SOURCE_GROUP("" FILES ${SHEETMETAL_SRCS})
 

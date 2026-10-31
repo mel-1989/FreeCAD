@@ -34,6 +34,7 @@ import SheetMetalLookup
 
 import SheetMetalBendCuts
 import SheetMetalBendTable
+import SheetMetalFlatPattern
 import SheetMetalKfactor
 import SheetMetalTools
 import SheetMetalUnfolder
@@ -107,6 +108,50 @@ KFACTOR = 0.40
 ###################################################################################################
 # Helper functions
 ###################################################################################################
+
+def _store_bends(obj, bend_records, norm):
+    """Keep the flat pattern's bend lines on the Unfold feature (BendData, BendNotes)."""
+    if not hasattr(obj, "BendData"):
+        return
+    bends = [SheetMetalFlatPattern.FlatBend.from_record(r) for r in bend_records]
+    obj.BendData = SheetMetalFlatPattern.bends_to_json(bends, norm)
+    obj.BendNotes = [b.note for b in bends]
+
+
+def get_bend_lines(unfold_obj):
+    """The bends of a flat pattern (an Unfold feature), root side first, as FlatBend objects.
+
+    Each has direction ("UP" or "DOWN"), angle (degrees), inside_radius, allowance (BA used),
+    k_factor, thickness, segments (the bend centreline on the flat, in the coordinates of the
+    feature's Shape) and note (for example "UP 90\u00b0 R2 BA 3.456"). Empty when the feature has
+    not been recomputed or the opt-in new unfolder produced it (it keeps no per-bend data
+    in this form).
+    """
+    bends, _normal = SheetMetalFlatPattern.bends_from_json(getattr(unfold_obj, "BendData", ""))
+    placement = unfold_obj.Placement
+    if not placement.isIdentity():
+        bends = [b.transformed(placement) for b in bends]
+    return bends
+
+
+def export_flat_dxf(unfold_obj, path, text_height=2.5, notes=True):
+    """Write the flat pattern of an Unfold feature to a DXF R12 file, headlessly.
+
+    Layers OUTLINE, INNER, BEND_UP, BEND_DOWN and NOTES (see SheetMetalFlatPattern). Returns
+    the bends that were drawn. Raises ValueError when the feature has no V1 bend data.
+    """
+    bends, normal = SheetMetalFlatPattern.bends_from_json(getattr(unfold_obj, "BendData", ""))
+    if normal is None:
+        raise ValueError("%s has no bend data: recompute it with the default (V1) unfolder."
+                         % unfold_obj.Label)
+    placement = unfold_obj.Placement
+    if not placement.isIdentity():
+        bends = [b.transformed(placement) for b in bends]
+        normal = placement.Rotation.multVec(normal)
+    SheetMetalFlatPattern.write_flat_dxf(
+        path, unfold_obj.Shape, normal, bends, text_height=text_height, notes=notes)
+    return bends
+
 
 def smUnfoldExportSketches(obj, useDialog=True):
     if getattr(obj, "GenerateBendCuts", False) and obj.BendCutShapeMode == "wave":
@@ -260,6 +305,23 @@ class SMUnfold:
             translate("SheetMetal", "Generated sketches"),
             None,
             "Hidden",
+            attribs=8,  # Output only - no recompute if changed
+        )
+        SheetMetalTools.smAddProperty(obj,
+            "App::PropertyString",
+            "BendData",
+            translate("SheetMetal", "Bend lines of the flat pattern (JSON, output only)"),
+            None,
+            "Hidden",
+            attribs=8,  # Output only - no recompute if changed
+        )
+        SheetMetalTools.smAddProperty(obj,
+            "App::PropertyStringList",
+            "BendNotes",
+            translate("SheetMetal", "One note per bend, for example UP 90 deg R2 BA 3.456"),
+            None,
+            "Base",
+            readOnly=True,
             attribs=8,  # Output only - no recompute if changed
         )
         SheetMetalTools.smAddBoolProperty(obj,
@@ -554,8 +616,11 @@ class SMUnfold:
             lookupTable = SheetMetalKfactor.KFactorLookupTable(obj.MaterialSheet)
             kFactorTable = lookupTable.k_factor_lookup
 
+        bend_records = []
         shape, foldComp, norm, _thename, _err_cd, _fSel, _obN = SheetMetalUnfolder.getUnfold(
-                kFactorTable, baseObject, baseFace, obj.KFactorStandard)
+                kFactorTable, baseObject, baseFace, obj.KFactorStandard, bend_out=bend_records)
+        if shape is not None:
+            _store_bends(obj, bend_records, norm)
 
         sketches = []
         if obj.GenerateSketch and shape is not None:
@@ -583,6 +648,8 @@ class SMUnfold:
         baseObj, baseFace = SheetMetalTools.smGetSubElementName(fp.baseObject[1][0])
         if baseObj is None:
             baseObj = fp.baseObject[0]
+        fp.BendData = ""  # only the V1 unfolder fills the bend lines (oldUnfolder)
+        fp.BendNotes = []
         if not NewUnfolderAvailable or SheetMetalTools.use_old_unfolder():
             shape, sketches = self.oldUnfolder(fp, baseObj, baseFace)
         else:
