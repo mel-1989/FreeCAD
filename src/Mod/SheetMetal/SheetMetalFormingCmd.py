@@ -70,6 +70,28 @@ def transform_tool(tool, base_face, tool_face, point=FreeCAD.Vector(0, 0, 0), an
     return tool
 
 
+def face_frame(face):
+    """Local frame (u, v, n) of a planar face, n its outward normal: u is the global X axis
+    projected into the face (global Y when X is normal to it) and v = n x u, so for a face normal
+    to +z the frame is the global (x, y) and a view from the normal side is not mirrored. The
+    OffsetX and OffsetY of a forming feature move the tool along u and v (cad-fork run 027)."""
+    uv = face.Surface.parameter(face.CenterOfMass)
+    n = face.normalAt(uv[0], uv[1])
+    n.normalize()
+    u = FreeCAD.Vector(1, 0, 0)
+    if abs(u.dot(n)) > 1.0 - 1e-6:
+        u = FreeCAD.Vector(0, 1, 0)
+    u = u - n * u.dot(n)
+    u.normalize()
+    return u, n.cross(u), n
+
+
+def face_offset(face, x, y):
+    """The vector (x along u, y along v) of the face frame, as a global vector."""
+    u, v, _n = face_frame(face)
+    return u * x + v * y
+
+
 def combine_solids(base, cut_tool, form_tool):
     form_tool = form_tool.cut(base)
     base = base.cut(cut_tool)
@@ -104,6 +126,20 @@ def makeforming(tool, base, base_face, thk, tool_faces=None,
         base = combine_solids(base, cutSolid_tran, offsetshell_tran)
     # Part.show(base, "base")
     return base
+
+
+def run_library_check(stage, spec, *args):
+    """Checks for features made by the forming-tool library (SheetMetalFormingTools); `spec` is
+    the JSON the library stored in the feature's LibraryTool property. Plain forming features of
+    the add-on have no such property and are not checked."""
+    import SheetMetalFormingTools as FT
+    try:
+        if stage == "placement":
+            FT.check_placement_json(spec, *args)
+        else:
+            FT.check_result_json(spec, *args)
+    except FT.FormingToolError as exc:
+        raise SMException(str(exc))
 
 
 class SMBendWall:
@@ -142,11 +178,18 @@ class SMBendWall:
 
         SheetMetalTools.smAddDistanceProperty(obj,
             "OffsetX",
-            translate("App::Property", "X Offset from Center of Face"),
+            translate("App::Property", "Offset from the face centre along the face's u axis "
+                                       "(global X projected into the face)"),
             0.0)
         SheetMetalTools.smAddDistanceProperty(obj,
             "OffsetY",
-            translate("App::Property", "Y Offset from Center of Face"),
+            translate("App::Property", "Offset from the face centre along the face's v axis "
+                                       "(face normal x u)"),
+            0.0)
+        SheetMetalTools.smAddDistanceProperty(obj,
+            "MinEdgeDistance",
+            translate("App::Property", "Library forming tools: minimum distance of the tool "
+                                       "footprint from the face boundary (0 = only inside)"),
             0.0)
         if hasattr(obj, "offset"):
             obj.OffsetX = obj.offset.x
@@ -203,11 +246,18 @@ class SMBendWall:
                                   "No points/circles found in sketch to place forming feature.")
                 raise SMException(error)
         else:
-            offsetlist.append(FreeCAD.Vector(fp.OffsetX, fp.OffsetY, 0))
+            offsetlist.append(face_offset(base_face, fp.OffsetX.Value, fp.OffsetY.Value))
 
+        library = getattr(fp, "LibraryTool", "")
         if not fp.SuppressFeature:
             for offset in offsetlist:
+                before = base
+                if library:
+                    run_library_check("placement", library, before, base_face, tool_faces[0],
+                                      thk, offset, fp.angle.Value, fp.MinEdgeDistance.Value)
                 a = makeforming(tool, base, base_face, thk, tool_faces, offset, fp.angle.Value)
+                if library:
+                    run_library_check("result", library, before, a, thk)
                 # Part.show(a)
                 base = a
         else:

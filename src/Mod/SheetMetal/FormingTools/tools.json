@@ -1,72 +1,168 @@
 {
-  "_comment": "Forming-tool library (cad-fork G07 slice 4a). Each tool is a punch solid standing on the sheet face: its top face lies in the sheet face, the body goes into the sheet. 'depth' is how far the punch goes below the sheet face and must be at least the sheet thickness T for the formed wall to be T thick. Proportions are rule-of-thumb defaults from public fabrication design guides (see each source); they are starting points and must be checked against the fabricator's tooling. Lengths in mm, angles in degrees.",
+  "_comment": "Forming-tool library (cad-fork G07 slice 4a). Each tool is a punch solid standing on the sheet face: its top face lies in the sheet face, the body goes into the sheet. 'depth' is how far the punch goes below the sheet face and must be at least the sheet thickness T for the formed wall to be T thick. Proportions are rule-of-thumb defaults; unless a source field names a reachable page they are not checked against a published source; they are starting points and must be checked against the fabricator's tooling. Lengths in mm, angles in degrees.",
   "tools": [
     {
       "name": "dimple",
       "kind": "dimple",
       "description": "Conical dimple (pressed-in cone frustum, closed bottom), for stiffening or locating a fastener head.",
       "parameters": {
-        "top_diameter": {"default": 10.0, "unit": "mm", "min": 0.1, "doc": "Diameter of the dimple at the sheet face"},
-        "bottom_diameter": {"default": 6.0, "unit": "mm", "min": 0.1, "doc": "Diameter of the dimple floor (smaller than the top)"},
-        "depth": {"default": 5.0, "unit": "mm", "min": 0.1, "doc": "Depth of the punch below the sheet face (at least T)"}
+        "top_diameter": {
+          "default": 10.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Diameter of the dimple at the sheet face"
+        },
+        "bottom_diameter": {
+          "default": 6.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Diameter of the dimple floor (smaller than the top)"
+        },
+        "depth": {
+          "default": 5.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Depth of the punch below the sheet face (at least T)"
+        }
       },
-      "source": "Fabricator DFM guides for dimples (for example fabcon.com sheet-metal DFM guide: keep a cut-out edge at least 4T plus the dimple inner radius away from a dimple); cone-frustum geometry and 1T wall are the design choices here."
+      "source": "Rule of thumb, not checked against a published source (a published dimple-to-cutout rule, 4T plus the dimple inner radius, could not be located online in run 027). Cone-frustum geometry and a wall of the sheet's thickness are the design choices here."
     },
     {
       "name": "extruded_hole",
       "kind": "extruded_hole",
       "description": "Extruded (flanged) through hole: a round hole with a collar of the sheet's own thickness drawn out below the sheet.",
       "parameters": {
-        "hole_diameter": {"default": 6.0, "unit": "mm", "min": 0.1, "doc": "Inside diameter of the collar (the hole)"},
-        "depth": {"default": 5.0, "unit": "mm", "min": 0.1, "doc": "Punch depth below the sheet face; the collar sticks out depth minus T below the sheet"}
+        "hole_diameter": {
+          "default": 6.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Inside diameter of the collar (the hole)"
+        },
+        "depth": {
+          "default": 5.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Punch depth below the sheet face; the collar sticks out depth minus T below the sheet"
+        }
       },
-      "source": "Extruded-hole (collar) practice in sheet-metal design guides: collar wall about T, hole diameter at least about 2T; geometry here is the cylinder punch with an open end."
+      "source": "Rule of thumb, not checked against a published source: collar wall about T, hole diameter at least about 2T. Geometry is a cylinder punch with an open end."
     },
     {
       "name": "countersunk_hole",
       "kind": "countersunk_hole",
-      "description": "Countersunk through hole formed by a 90 degree cone punch with a short cylindrical stub.",
+      "description": "Countersunk through hole formed by a cone punch (90 degrees by default) with a cylindrical stub.",
       "parameters": {
-        "hole_diameter": {"default": 4.0, "unit": "mm", "min": 0.1, "doc": "Diameter of the through hole"},
-        "countersink_diameter": {"default": 8.0, "unit": "mm", "min": 0.2, "doc": "Diameter of the countersink at the sheet face"},
-        "angle": {"default": 90.0, "unit": "deg", "min": 30.0, "doc": "Included angle of the countersink cone (ISO and ASME flat-head screws use 90 degrees; some inch screws use 82)"},
-        "stub": {"default": 1.5, "unit": "mm", "min": 0.0, "doc": "Length of the cylindrical stub below the cone"}
+        "hole_diameter": {
+          "default": 4.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Diameter of the through hole"
+        },
+        "countersink_diameter": {
+          "default": 8.0,
+          "unit": "mm",
+          "min": 0.2,
+          "doc": "Diameter of the countersink at the sheet face"
+        },
+        "angle": {
+          "default": 90.0,
+          "unit": "deg",
+          "min": 60.0,
+          "max": 120.0,
+          "doc": "Included angle of the countersink cone: 90 for metric flat-head screws (DIN 7991, ISO 10642), 82 for inch flat-head screws (ASME); range 60 to 120"
+        },
+        "stub": {
+          "default": 1.5,
+          "unit": "mm",
+          "min": 0.0,
+          "doc": "Length of the cylindrical stub below the cone; must be at least T * tan(angle / 4) (about 0.41 T at 90 degrees, 0.37 T at 82), which apply_tool checks for the actual sheet thickness"
+        }
       },
-      "source": "ISO 10642 / ASME B18.6.3 flat countersunk head screws (90 degree head); countersink diameter and wall conventions from fabricator guides."
+      "source": "Countersink angles: inch flat-head screws (ASME B18.3 socket screws) 82 degrees, metric flat-head screws (DIN 7991 / ISO 10642) 90 degrees, per https://www.eugenefast.com/Home/Page/resources/flat-head-socket-screw-countersink-guide ; ASME B18.6.3 and ISO 15065 were not checked here. Other proportions are rule of thumb. Hole-to-edge 1.5t to 2t and hole-to-bend at least 2.5t + r are the published values of https://fabcon.com/articles/?p=534 ."
     },
     {
       "name": "rib",
       "kind": "rib",
       "description": "Embossed stiffening rib (bead): a slot-shaped pressed-in channel with closed ends.",
       "parameters": {
-        "width": {"default": 6.0, "unit": "mm", "min": 0.1, "doc": "Rib width at the sheet face"},
-        "length": {"default": 30.0, "unit": "mm", "min": 0.2, "doc": "Overall rib length (at least the width)"},
-        "depth": {"default": 4.0, "unit": "mm", "min": 0.1, "doc": "Punch depth below the sheet face (at least T)"}
+        "width": {
+          "default": 6.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Rib width at the sheet face"
+        },
+        "length": {
+          "default": 30.0,
+          "unit": "mm",
+          "min": 0.2,
+          "doc": "Overall rib length (at least the width)"
+        },
+        "depth": {
+          "default": 4.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Punch depth below the sheet face (at least T)"
+        }
       },
-      "source": "Stiffening-rib (bead) practice in sheet-metal design guides: depth about 2T to 3T, width several times T; slot-shaped plan with vertical walls is the simplification used here."
+      "source": "Rule of thumb, not checked against a published source: depth about 2T to 3T, width several times T; a slot-shaped plan with vertical walls is the simplification used here."
     },
     {
       "name": "louver",
       "kind": "louver",
       "description": "Louver: a sloped, trapezoid-section flap lanced free at both ends and pushed below the sheet to let air through.",
       "parameters": {
-        "length": {"default": 20.0, "unit": "mm", "min": 0.2, "doc": "Louver length across the opening (x)"},
-        "width": {"default": 12.0, "unit": "mm", "min": 0.1, "doc": "Louver extent along the sheared ends (y)"},
-        "depth": {"default": 5.0, "unit": "mm", "min": 0.1, "doc": "Punch depth below the sheet face (at least T)"},
-        "slope_inset": {"default": 3.0, "unit": "mm", "min": 0.0, "doc": "Horizontal run of each sloped side"}
+        "length": {
+          "default": 20.0,
+          "unit": "mm",
+          "min": 0.2,
+          "doc": "Louver length across the opening (x)"
+        },
+        "width": {
+          "default": 12.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Louver extent along the sheared ends (y)"
+        },
+        "depth": {
+          "default": 5.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Punch depth below the sheet face (at least T)"
+        },
+        "slope_inset": {
+          "default": 3.0,
+          "unit": "mm",
+          "min": 0.0,
+          "doc": "Horizontal run of each sloped side"
+        }
       },
-      "source": "Louver practice in sheet-metal design guides: a louver is a partly sheared, formed slit whose height is limited to a few T; the open (sheared) ends are modelled as open faces of the punch."
+      "source": "Rule of thumb, not checked against a published source: height limited to a few T; the open (sheared) ends are modelled as open faces of the punch."
     },
     {
       "name": "lance",
       "kind": "lance",
       "description": "Lance (tab): a flap sheared on three sides and bent below the sheet along a ramp.",
       "parameters": {
-        "length": {"default": 15.0, "unit": "mm", "min": 0.2, "doc": "Ramp length (x)"},
-        "width": {"default": 10.0, "unit": "mm", "min": 0.1, "doc": "Tab width (y)"},
-        "depth": {"default": 4.0, "unit": "mm", "min": 0.1, "doc": "Punch depth below the sheet face at the high end (at least T)"}
+        "length": {
+          "default": 15.0,
+          "unit": "mm",
+          "min": 0.2,
+          "doc": "Ramp length (x)"
+        },
+        "width": {
+          "default": 10.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Tab width (y)"
+        },
+        "depth": {
+          "default": 4.0,
+          "unit": "mm",
+          "min": 0.1,
+          "doc": "Punch depth below the sheet face at the high end (at least T)"
+        }
       },
-      "source": "Lance/tab forming in sheet-metal design guides (partial shear and bend; height limited to a few T); modelled as a single sloped face with the three sheared sides open."
+      "source": "Rule of thumb, not checked against a published source: partial shear and bend, height limited to a few T; modelled as a single sloped face with the three sheared sides open."
     }
   ]
 }
