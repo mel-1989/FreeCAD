@@ -89,6 +89,31 @@ def make_flange_solid(origin, along, width, out, up, radius, thickness, angle_de
     return face.extrude(along * width)
 
 
+def sheet_thickness_of(shape):
+    """Sheet thickness of a sheet-metal solid: the smallest distance between two antiparallel planar
+    faces that overlap when projected on each other (the two sides of a wall). None if there is no
+    such pair."""
+    planes = [f for f in shape.Faces if isinstance(f.Surface, Part.Plane)]
+    best = None
+    for i, fa in enumerate(planes):
+        na = fa.normalAt(*fa.Surface.parameter(fa.CenterOfMass))
+        for fb in planes[i + 1:]:
+            nb = fb.normalAt(*fb.Surface.parameter(fb.CenterOfMass))
+            if na.dot(nb) > -1.0 + 1e-9:
+                continue
+            dist = abs((fb.CenterOfMass - fa.CenterOfMass).dot(na))
+            if dist < 1e-9 or (best is not None and dist >= best):
+                continue
+            # the faces face away from each other (outer sides of a wall): their projections along na
+            # must overlap, which rules out the far side of a channel or box
+            if (fb.CenterOfMass - fa.CenterOfMass).dot(na) > 0.0:
+                continue
+            if fa.distToShape(fb)[0] > dist + 1e-6:
+                continue
+            best = dist
+    return best
+
+
 def _edge_frame(base, edge, thickness_hint=None):
     """(point0, along, length, out, up_top, thickness) for a straight edge between a sheet face
     and the end face of the sheet."""
@@ -107,6 +132,11 @@ def _edge_frame(base, edge, thickness_hint=None):
 
     end_face, sheet_face = sorted(faces, key=extent)
     thickness = extent(end_face)
+    sheet_thickness = sheet_thickness_of(base)
+    if sheet_thickness is not None and abs(thickness - sheet_thickness) > 1e-6 * max(1.0, sheet_thickness):
+        raise EdgeFlangeError("the selected edge is not an edge of a sheet face: it does not lie on an "
+                              "end face of the sheet (thickness %g); pick an edge along the end of the "
+                              "sheet" % sheet_thickness)
     n_end = end_face.normalAt(*end_face.Surface.parameter(v0))
     n_sheet = sheet_face.normalAt(*sheet_face.Surface.parameter(v0))
     if abs(n_end.dot(n_sheet)) > 1e-6:
