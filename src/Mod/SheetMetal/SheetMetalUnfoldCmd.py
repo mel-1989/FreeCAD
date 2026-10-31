@@ -124,7 +124,7 @@ def _store_bends(obj, bend_records, norm, shape=None, source=None, thickness=Non
         problem = SheetMetalFlatPattern.flat_problem(
             shape, norm, bends, thickness,
             SheetMetalFlatPattern.source_bend_count(source.Shape, thickness),
-            source.Shape.Volume)
+            source.Shape.Volume, SheetMetalFlatPattern.forming_features(source))
     if problem:
         FreeCAD.Console.PrintWarning("%s: %s\n" % (getattr(obj, "Label", "Unfold"), problem))
     obj.BendData = SheetMetalFlatPattern.bends_to_json(bends, norm, problem)

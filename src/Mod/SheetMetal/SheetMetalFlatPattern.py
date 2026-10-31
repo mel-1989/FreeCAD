@@ -206,16 +206,57 @@ def source_bend_count(shape, thickness):
     return count
 
 
-def flat_problem(shape, normal, bends, thickness, source_bends, source_volume=None):
+FORMING_PROBLEM = ("The part has forming feature(s) %s that are not suppressed, and the unfolder "
+                   "cannot flatten a formed region. Suppress the forming features before "
+                   "unfolding.")
+
+# Residual allowed between the flat's volume change and the sum of the bends' expected changes,
+# relative to the part's volume. Measured on 87 bent parts (goldens, base flanges, edge flanges,
+# hems, convert-from-solid, jogs, folds, cutouts): the largest residual is 6e-11 (also asserted
+# in SMTests/testFormingTools.py); corner-relief flats differ from area x T by up to about 1e-5,
+# so the bound keeps a margin of ten over that.
+VOLUME_RESIDUAL = 1e-4
+
+
+def forming_features(source_obj):
+    """Labels of the forming features (SMBendWall, which every tool of the forming-tool library is
+    applied through) that are not suppressed anywhere in the dependency chain of `source_obj`."""
+    seen, stack, found = set(), [source_obj], []
+    while stack:
+        obj = stack.pop()
+        if obj is None or obj.Name in seen:
+            continue
+        seen.add(obj.Name)
+        if type(getattr(obj, "Proxy", None)).__name__ == "SMBendWall" \
+                and not getattr(obj, "SuppressFeature", False):
+            found.append(obj.Label)
+        stack.extend(obj.OutList)
+    return sorted(found)
+
+
+def expected_bend_volume_change(bends):
+    """Expected flat-minus-part volume change from the bends alone, mm3. A bend of angle theta,
+    inside radius r, sheet thickness T and width W has part volume theta*W*T*(r + T/2) and
+    flat volume BA*W*T, so the flat is larger by W*T*(BA - theta*(r + T/2)), which equals
+    theta*T^2*W*(K - 0.5) for BA = theta*(r + K*T) (positive for K above 0.5)."""
+    return sum(b.length * b.thickness * (b.allowance - math.radians(b.angle)
+                                         * (b.inside_radius + 0.5 * b.thickness)) for b in bends)
+
+
+def flat_problem(shape, normal, bends, thickness, source_bends, source_volume=None,
+                 forming=()):
     """A readable reason why `shape` is not a complete flat pattern, or "" when it is.
 
-    With `source_volume` (the folded part's volume) the flat's volume is also checked: unfolding
-    changes the volume only through the bends, by theta * (K - 0.5) * T^2 * width each, which is at
-    most 0.5 * theta * T^2 * width for K between 0 and 0.5. A larger difference (more than 0.5 %
-    of the part on top of that) means something that is not sheet metal bends, such as a formed
-    dimple, louver, lance or rib, was dropped or distorted by the unfolder (cad-fork run 027)."""
+    `forming` lists unsuppressed forming features of the source (see `forming_features`); any of
+    them is a problem. With `source_volume` (the folded part's volume) the flat's volume is also
+    checked: unfolding changes the volume only through the bends, by exactly
+    ``expected_bend_volume_change``; a residual above ``VOLUME_RESIDUAL`` of the part means
+    something that is not sheet-metal bends, such as a formed dimple, louver, lance or rib, was
+    dropped or distorted by the unfolder (cad-fork run 027)."""
     n = Vector(normal)
     n.normalize()
+    if forming:
+        return FORMING_PROBLEM % ", ".join(forming)
     if thickness:
         heights = [v.Point.dot(n) for v in shape.Vertexes]
         extent = max(heights) - min(heights)
@@ -226,14 +267,14 @@ def flat_problem(shape, normal, bends, thickness, source_bends, source_volume=No
         return ("The unfold recorded %d of the part's %d bends, so it is only partly flattened."
                 % (len(bends), source_bends))
     if source_volume and thickness:
-        allowed = 0.005 * source_volume + sum(
-            0.5 * math.radians(b.angle) * thickness * thickness * b.length for b in bends)
-        diff = abs(shape.Volume - source_volume)
-        if diff > allowed:
-            return ("The flat's volume differs from the part's by %.1f mm3, more than its bends "
-                    "explain (%.1f mm3), so a formed feature (dimple, louver, lance, rib, extruded "
-                    "hole) or another non-sheet-metal feature was not unfolded correctly. Suppress "
-                    "the forming features before unfolding." % (diff, allowed))
+        expected = expected_bend_volume_change(bends)
+        residual = abs((shape.Volume - source_volume) - expected)
+        if residual > VOLUME_RESIDUAL * source_volume:
+            return ("The flat's volume differs from the part's by %.2f mm3 where its bends explain "
+                    "%.2f mm3 (residual %.2f mm3), so a formed feature (dimple, louver, lance, "
+                    "rib, extruded hole) or another non-sheet-metal feature was not unfolded "
+                    "correctly. Suppress the forming features before unfolding."
+                    % (shape.Volume - source_volume, expected, residual))
     return ""
 
 

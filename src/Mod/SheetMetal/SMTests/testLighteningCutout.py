@@ -283,6 +283,41 @@ class TestCutoutRefusals(Doc):
         sk = make_sketch(self.doc, face, circle_geo(0, 0, 6.0)[0], du=sign * (d0 - 2.0))
         self.assertRefused("reaches beyond", base, face_name(base.Shape, face), sk)
 
+    def test_profile_overlapping_the_bend_by_a_sliver_is_refused_at_the_cutout(self):
+        """A circle overlapping the bend tangent line by 1e-5 mm passed the old 1e-6 relative area
+        test, was cut, and the unfolder then crashed (run 027): the cutout now refuses it, while
+        the exactly tangent circle (distance 0) and one clear by 1e-5 mm are still cut."""
+        base = build_base(self.doc, Case("Lh", 2.0, 1.0, 0.42, [60.0, 30.0], [90.0]))
+        face = planar_big(base.Shape)
+        origin, u, w, n = face_frame(face)
+        e = tangent_edges(base.Shape, face)[0]
+        d0 = line_dist(origin, e.Vertexes[0].Point, e.Vertexes[-1].Point)
+        sign = 1.0 if (e.CenterOfMass - origin).dot(u) > 0 else -1.0
+        name = face_name(base.Shape, face)
+        for gap in (1e-5, 0.0):  # circle r5 whose edge is `gap` clear of the tangent line
+            sk = make_sketch(self.doc, face, circle_geo(0, 0, 5.0)[0], du=sign * (d0 - (5.0 + gap)))
+            LC.build_cutout(base.Shape, name, sk.Shape)
+        sk = make_sketch(self.doc, face, circle_geo(0, 0, 5.0)[0], du=sign * (d0 - (5.0 - 1e-5)))
+        self.assertRefused("reaches beyond", base, name, sk)
+        self.assertRefused("mm2 outside", base, name, sk)
+
+    def test_profile_centre_off_the_face_names_the_cause(self):
+        base, face, name = self.plate()
+        sk = make_sketch(self.doc, face, circle_geo(0, 0, 3.0)[0], du=60.0)
+        self.assertRefused("reaches beyond the face or an existing opening", base, name, sk)
+
+    def test_bspline_profile_is_checked_against_its_own_volume(self):
+        base, face, name = self.plate()
+        pts = [V(10 * (1 + 0.3 * math.cos(3 * t)) * math.cos(t), 10 * (1 + 0.3 * math.cos(3 * t)) * math.sin(t), 0)
+               for t in [2 * math.pi * k / 12 for k in range(12)]]
+        bs = Part.BSplineCurve()
+        bs.interpolate(pts, PeriodicFlag=True)
+        sk = make_sketch(self.doc, face, [bs])
+        solid, info = LC.build_cutout(base.Shape, name, sk.Shape)
+        self.assertAlmostEqual(base.Shape.Volume - solid.Volume, info["removed"], places=9)
+        # the shape is cut with the extrusion's own volume, which is within 0.5 % of area x T
+        self.assertLess(abs(info["removed"] - info["area"] * info["thickness"]) / info["removed"], 5e-3)
+
     def test_profile_on_a_bend_face_is_refused(self):
         base = build_base(self.doc, Case("Ly", 2.0, 1.0, 0.42, [60.0, 30.0], [90.0]))
         cyl = [f for f in base.Shape.Faces if f.Surface.TypeId == "Part::GeomCylinder"][0]

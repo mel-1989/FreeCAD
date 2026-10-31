@@ -11,7 +11,8 @@ from SMTests.testEdgeFlange import TestEdgeFlange  # noqa: F401
 from SMTests.testFlatDxf import TestBendLines, TestDefaultUntouched, TestFlatDxf  # noqa: F401
 from SMTests.testFolder import TestFolder  # noqa: F401
 from SMTests.testFormingTools import (  # noqa: F401
-    TestFormedPartUnfold, TestFormingToolLibrary, TestFormingTools)
+    TestFormedPartUnfold, TestFormedUnfoldRepairs, TestFormingToolLibrary, TestFormingTools,
+    TestRepairs027)
 from SMTests.testHem import TestHem  # noqa: F401
 from SMTests.testJog import TestJog  # noqa: F401
 from SMTests.testKfactor import TestKFactor  # noqa: F401

@@ -23,10 +23,21 @@ from the tool's 2D section: the wall is the path of the tool surface offset by T
 intersection joins (plain 2D line intersections), clipped to the part below the sheet bottom,
 and revolved (Pappus) or extruded; the ribbed stadium has a closed form.
 
-Public references: fabrication design guides for the feature families (louver, lance, dimple,
-stiffening rib or bead, extruded hole, countersunk hole), for example the fabcon.com
-sheet-metal DFM guide (dimple, hole and bend distances); ISO 10642 and ASME B18.6.3 for the
-90 degree countersink. Default proportions are rule-of-thumb starting points, not normative.
+Frames: ``offset`` (OffsetX, OffsetY) moves the tool in the plane of the face along the face's
+own axes ``u`` (global X projected into the face, global Y if X is normal to it) and ``v`` = n x u
+(n the outward face normal): for a face normal to +z these are the global x and y. The tool's own
+orientation about the normal is the minimal rotation of the vendored path, plus ``angle``.
+
+Checks that stop a silently wrong result: the tool footprint must lie inside the face with at
+least ``min_edge_distance`` to its boundary; the stub of a countersunk hole must reach the
+corner of the offset cone (``min_countersink_stub``), below which the vendored path falls back to
+an alternate way that returns a wrong solid; and the volume change must equal
+``expected_volume_change`` within 1e-6 relative, or the forming is refused.
+
+Sources: see the ``source`` field of each tool in ``FormingTools/tools.json``. The default
+proportions are rule-of-thumb starting points, not checked against a published source; only the
+countersink angles are tied to standards (82 degrees for inch flat-head machine screws, ASME
+B18.6.3; 90 degrees for ISO 10642 and ISO 15065).
 """
 
 import json
@@ -85,6 +96,9 @@ def _params(name, given):
         if val < rec["min"] - EPS:
             raise FormingToolError("%s of tool %r must be at least %g %s, got %g"
                                    % (key, name, rec["min"], rec["unit"], val))
+        if "max" in rec and val > rec["max"] + EPS:
+            raise FormingToolError("%s of tool %r must be at most %g %s, got %g"
+                                   % (key, name, rec["max"], rec["unit"], val))
         out[key] = val
     return out
 
@@ -117,16 +131,28 @@ def _clip(poly, keep_below, level):
     return out
 
 
-def _offset_path(path, inside_pt, thk):
-    """Offset an open polyline outwards (away from inside_pt) by thk, intersection joins,
-    flush (perpendicular) ends. Returns the offset points."""
+def _inside(poly, pt):
+    """Even-odd point in polygon test."""
+    x, z = pt
+    hit = False
+    for (x0, z0), (x1, z1) in zip(poly, poly[1:] + poly[:1]):
+        if (z0 > z) != (z1 > z) and x < x0 + (z - z0) * (x1 - x0) / (z1 - z0):
+            hit = not hit
+    return hit
+
+
+def _offset_path(path, section, thk):
+    """Offset an open polyline that is part of the boundary of the closed polygon `section`
+    outwards (away from the polygon) by thk, intersection joins, flush (perpendicular) ends.
+    Returns the offset points."""
+    eps = 1e-7 * max(1.0, max(abs(c) for p in section for c in p))
     lines = []
     for p, q in zip(path, path[1:]):
         dx, dz = q[0] - p[0], q[1] - p[1]
         ln = math.hypot(dx, dz)
         n = (dz / ln, -dx / ln)
-        mid = ((p[0] + q[0]) / 2.0 - inside_pt[0], (p[1] + q[1]) / 2.0 - inside_pt[1])
-        if n[0] * mid[0] + n[1] * mid[1] < 0:
+        mid = ((p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0)
+        if _inside(section, (mid[0] + eps * n[0], mid[1] + eps * n[1])):
             n = (-n[0], -n[1])
         lines.append((p, (dx / ln, dz / ln), n))
     pts = [(path[0][0] + thk * lines[0][2][0], path[0][1] + thk * lines[0][2][1])]
@@ -173,6 +199,13 @@ class FormingTool:
         self._path, self._section, self._revolved, self._width = path, section, revolved, width
 
     @property
+    def spec(self):
+        """JSON of the tool (name and its library parameters), stored on a forming feature."""
+        keys = tool_info(self.name)["parameters"]
+        return json.dumps({"name": self.name, "params": {k: self.params[k] for k in keys}},
+                          sort_keys=True)
+
+    @property
     def volume(self):
         """Volume of the punch solid, as OCCT measures it."""
         return self.shape.Volume
@@ -194,9 +227,7 @@ class FormingTool:
             w, ln = self.params["width"], self.params["length"]
             wall = _stadium_area(w + 2 * t, ln + 2 * t) * h - _stadium_area(w, ln) * (h - t)
             return wall - _stadium_area(w, ln) * t
-        cen = _area_centroid(self._section)
-        inside = (cen[1], sum(p[1] for p in self._section) / len(self._section))
-        off = _offset_path(self._path, inside, t)
+        off = _offset_path(self._path, self._section, t)
         wall_poly = _clip(self._path + off[::-1], True, -t)
         pocket_poly = _clip(self._section, False, -t)
         if self._revolved:
@@ -320,6 +351,19 @@ def make_tool(name, **params):
 
 
 # --- applying a tool -----------------------------------------------------------------------
+VOLUME_TOL = 1e-6  # relative, formed volume change against expected_volume_change
+
+
+def min_countersink_stub(angle, thickness):
+    """Shortest stub of a countersunk hole that the vendored forming path handles in sheet of
+    thickness T. The shell of the cone is offset outwards by T; its intersection with the offset
+    of the cylinder lies T * tan(angle / 4) below the cone-to-stub corner (half angle a/2: the
+    offset cone is T / cos(a/2) away radially, the corner (T / cos(a/2) - T) / tan(a/2) lower).
+    A shorter stub ends above that corner, the offset fails and the vendored code falls back
+    to an alternate way that returns a valid but wrong solid (measured in run 027)."""
+    return thickness * math.tan(math.radians(angle) / 4.0)
+
+
 def _single_solid(shape):
     if not shape.Solids:
         raise FormingToolError("forming produced no solid")
@@ -331,38 +375,112 @@ def _single_solid(shape):
     return out
 
 
-def apply_tool(base_shape, face_name, tool, offset=(0.0, 0.0), angle=0.0):
+def check_tool_fits_sheet(tool, thickness):
+    """Refusals that depend on the sheet thickness alone."""
+    if tool.depth < thickness - EPS:
+        raise FormingToolError("tool depth %g is smaller than the sheet thickness %g: the formed "
+                               "wall would be thinner than the sheet" % (tool.depth, thickness))
+    if tool.kind == "countersunk_hole":
+        need = min_countersink_stub(tool.params["angle"], thickness)
+        if tool.params["stub"] < need - EPS:
+            raise FormingToolError(
+                "countersunk_hole stub %g is shorter than %.4g (sheet thickness %g x tan(angle/4)): "
+                "the vendored forming path would fall back and return a wrong solid; lengthen "
+                "the stub" % (tool.params["stub"], need, thickness))
+
+
+def check_placement(tool, base_face, thickness, point, angle, min_edge_distance=0.0):
+    """Refuse when the tool footprint (its top face, placed like the vendored path places it) is
+    not wholly inside `base_face`, or is closer to the face boundary than `min_edge_distance`
+    (the same rule as the lightening cutout's MinEdgeDistance). The formed wall reaches up to
+    about T beyond the footprint at the sheet bottom; an overreach shows as a volume mismatch."""
+    check_tool_fits_sheet(tool, thickness)
+    top = tool.shape.getElement(tool.top_face)
+    foot = top.copy()
+    FC.transform_tool(foot, base_face, top, point, angle)
+    inside = base_face.common(foot).Area
+    if abs(inside - foot.Area) > 1e-6 * foot.Area:
+        raise FormingToolError(
+            "the %s footprint is not inside the selected face (%.4g of %.4g mm2 inside): move it "
+            "with OffsetX and OffsetY so it lies on the flat wall, clear of the sheet edge, a "
+            "bend and any opening" % (tool.name, inside, foot.Area))
+    if min_edge_distance > 0:
+        dist = foot.OuterWire.distToShape(Part.Compound(list(base_face.Wires)))[0]
+        if dist < min_edge_distance - 1e-9:
+            raise FormingToolError("the %s footprint is %.4g mm from the face boundary (edge, bend "
+                                   "or opening), below the minimum of %.4g mm"
+                                   % (tool.name, dist, min_edge_distance))
+
+
+def check_result(tool, before, after, thickness):
+    """Refuse unless `after` is one valid solid whose volume change against `before` is the
+    expected one within VOLUME_TOL relative to the larger of the expected change and the tool
+    volume (so that a change near zero is not judged against rounding noise)."""
+    solid = _single_solid(after)
+    want = tool.expected_volume_change(thickness)
+    got = solid.Volume - before.Volume
+    if abs(got - want) > VOLUME_TOL * max(abs(want), tool.volume):
+        raise FormingToolError(
+            "forming with %s changed the volume by %.6g mm3 instead of the expected %.6g: the "
+            "formed wall probably reaches the sheet edge, a bend or an opening, or the vendored "
+            "forming path failed; move the tool or change its parameters" % (tool.name, got, want))
+    return solid
+
+
+def _tool_from_json(spec):
+    data = json.loads(spec)
+    return make_tool(data["name"], **data["params"])
+
+
+def check_placement_json(spec, base, base_face, tool_face, thickness, point, angle,
+                         min_edge_distance=0.0):
+    """check_placement for the LibraryTool property of a forming feature."""
+    check_placement(_tool_from_json(spec), base_face, thickness, point, angle, min_edge_distance)
+
+
+def check_result_json(spec, before, after, thickness):
+    check_result(_tool_from_json(spec), before, after, thickness)
+
+
+def apply_tool(base_shape, face_name, tool, offset=(0.0, 0.0), angle=0.0, min_edge_distance=0.0):
     """Form `tool` into the planar sheet face `face_name` of `base_shape` through the vendored
-    makeforming. offset is the (x, y) shift of the tool from the face centre in global axes
-    (for a face normal to z), angle the rotation about the face normal in degrees. Returns one
-    valid solid. Refuses a tool shallower than the sheet thickness or a non-planar face."""
+    makeforming. offset is the (u, v) shift of the tool from the face centre along the face's own
+    axes (see the module docstring; for a face normal to +z the global x and y), angle the
+    rotation about the face normal in degrees. Returns one valid solid. Refuses a non-planar
+    face, a tool shallower than the sheet thickness, a footprint not inside the face (or closer
+    than min_edge_distance to its boundary), a countersink stub that is too short, and any
+    result whose volume change is not the expected one."""
     face = base_shape.getElement(SheetMetalTools.getElementFromTNP(face_name))
     if face.Surface.TypeId != "Part::GeomPlane":
         raise FormingToolError("the forming face must be planar")
     thk = SheetMetalTools.smGetThickness(base_shape, face)
     if thk <= 0:
         raise FormingToolError("cannot read the sheet thickness at the selected face")
-    if tool.depth < thk - EPS:
-        raise FormingToolError("tool depth %g is smaller than the sheet thickness %g: the formed "
-                               "wall would be thinner than the sheet" % (tool.depth, thk))
+    point = FC.face_offset(face, offset[0], offset[1])
+    check_placement(tool, face, thk, point, angle, min_edge_distance)
     faces = [tool.shape.getElement(n) for n in [tool.top_face] + list(tool.shear_faces)]
-    point = V(offset[0], offset[1], 0)
     try:
         formed = FC.makeforming(tool.shape, base_shape, face, thk, faces, point, angle)
     except Exception as exc:  # OCCT or makeforming failure: say so readably
         raise FormingToolError("forming with %s failed: %s" % (tool.name, exc))
-    return _single_solid(formed)
+    return check_result(tool, base_shape, formed, thk)
 
 
-def make_forming_feature(doc, base, face_name, tool, offset=(0.0, 0.0), angle=0.0):
+def make_forming_feature(doc, base, face_name, tool, offset=(0.0, 0.0), angle=0.0,
+                         min_edge_distance=0.0):
     """Document feature: a Part::Feature holding the punch plus a vendored SMBendWall
-    (``Part::FeaturePython``) that forms it into `face_name` of `base`. Returns the feature."""
+    (``Part::FeaturePython``) that forms it into `face_name` of `base`; the feature carries the
+    library tool in its LibraryTool property, so recompute applies the same checks as
+    ``apply_tool`` (a refusal fails the recompute with the message). Returns the feature."""
     tool_obj = doc.addObject("Part::Feature", "FormTool_" + tool.name)
     tool_obj.Shape = tool.shape
     feat = doc.addObject("Part::FeaturePython", "WallForming")
     FC.SMBendWall(feat, base, [face_name], tool_obj, [tool.top_face] + list(tool.shear_faces))
+    feat.addProperty("App::PropertyString", "LibraryTool", "Parameters",
+                     "Forming-tool library tool (name and parameters)").LibraryTool = tool.spec
     feat.OffsetX = offset[0]
     feat.OffsetY = offset[1]
     feat.angle = angle
+    feat.MinEdgeDistance = min_edge_distance
     doc.recompute()
     return feat

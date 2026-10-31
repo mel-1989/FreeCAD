@@ -14,12 +14,20 @@ must be closed, not self-intersecting, in the plane of the face and wholly insid
 across the bend), copies must not overlap, and the removed volume must come out as
 (profile area) x T x (number of copies) within 1e-6 relative, or the cut is refused.
 
-Public references: fabrication design guides for hole-to-edge and hole-to-bend distance, for
-example the fabcon.com sheet-metal DFM guide: a hole or slot at least 2T from a sheared edge, and
-at least 2T + R from a bend (2.5T + R for round holes and short slots and 4T + R for long slots
-in stricter guides, R the inside bend radius). ``design_guide_clearance`` returns these values;
-``MinEdgeDistance`` (default 0, no rule) makes the feature refuse a profile closer to the face
-boundary than the number given.
+Published guidance (values differ between sources, check them against the fabricator): a hole
+at least 1.5t to 2t from a sheared edge and at least 2.5t + r from a bend, t the sheet thickness
+and r the inside bend radius (https://fabcon.com/articles/?p=534, read in run 027). Other
+guides give 2T + R for round holes, 2.5T + R for short slots and 4T + R for long slots; those
+were not checked against a reachable source. ``design_guide_clearance`` returns the rule-of-thumb
+numbers below and ``MinEdgeDistance`` (default 0, no rule) makes the feature refuse a profile
+closer to the face boundary than the number given.
+
+Two refusals keep a cutout from reaching a bend: a profile that has any area outside the face (more
+than OVERREACH_AREA = 1e-10 mm2: a profile that overlaps the bend tangent line by 1e-5 mm used to
+pass the 1e-6 relative area test, was cut, and the unfolder then crashed on the sliver, run 027),
+and the ``MinEdgeDistance`` rule. A profile exactly tangent to the boundary is accepted.
+A B-spline profile is checked against its extruded solid's own volume to 5e-3 relative (BSPLINE_VOL_TOL), because OCCT's B-spline volumes are
+only that accurate (the cut and the extrusion disagree by 1e-4, area x T by up to 0.4 %).
 """
 
 import FreeCAD
@@ -31,6 +39,8 @@ import SheetMetalTools
 EPS = 1e-9
 PLANE_TOL = 1e-6  # mm: how far the profile may sit off the face plane
 VOL_TOL = 1e-6  # relative
+BSPLINE_VOL_TOL = 5e-3  # relative: OCCT's accuracy for B-spline volumes
+OVERREACH_AREA = 1e-10  # mm2: area of a profile outside the face above which it is refused
 smElementMapVersion = "sm1."
 
 
@@ -39,9 +49,9 @@ class CutoutError(Exception):
 
 
 def design_guide_clearance(thickness, radius=0.0):
-    """Minimum distances from a hole or slot, from published sheet-metal design guides:
-    to a sheared edge 2T; to a bend 2T + R (round hole), 2.5T + R (stricter guides), 4T + R
-    (long slot)."""
+    """Rule-of-thumb minimum distances from a hole or slot: to a sheared edge 2T; to a bend 2T + R
+    (round hole), 2.5T + R (stricter guides), 4T + R (long slot). Published values differ (see the
+    module docstring); only 1.5t to 2t and 2.5t + r were confirmed against a reachable page."""
     t = thickness
     return {"edge": 2.0 * t, "bend": 2.0 * t + radius, "bend_strict": 2.5 * t + radius,
             "bend_slot": 4.0 * t + radius}
@@ -135,7 +145,12 @@ def build_cutout(base_shape, face_name, profile, pattern="None", count_x=1, coun
             raise CutoutError("the profile is not in the plane of the selected face (it must lie "
                               "within %g mm of it and be parallel to it)" % PLANE_TOL)
     offsets = pattern_offsets(pattern, count_x, count_y, pitch_x, pitch_y, normal, direction)
-    thickness = _thickness(base_shape, faces[0].CenterOfMass, normal)
+    centre = faces[0].CenterOfMass
+    if not face.isInside(centre, 1e-6, True):
+        raise CutoutError("cannot measure the sheet thickness below the profile: the profile "
+                          "reaches beyond the face or an existing opening (its centre is not on "
+                          "the selected face)")
+    thickness = _thickness(base_shape, centre, normal)
     if thickness < 1e-6:
         raise CutoutError("the sheet thickness under the profile is zero")
     copies = []  # (label, face)
@@ -147,13 +162,16 @@ def build_cutout(base_shape, face_name, profile, pattern="None", count_x=1, coun
     boundary = Part.Compound(list(face.Wires))
     for label, cf in copies:
         common = face.common(cf)
-        if abs(common.Area - cf.Area) > 1e-6 * cf.Area:
+        outside = cf.cut(face)
+        outside_area = outside.Area if outside.Faces else 0.0
+        if abs(common.Area - cf.Area) > 1e-6 * cf.Area or outside_area > OVERREACH_AREA:
             raise CutoutError(
                 "%s reaches beyond the selected face (a bend, the sheet edge or an existing opening, "
-                "%.4g of %.4g mm2 inside): cutting across a bend is not supported, move or shrink the "
-                "profile so it lies inside the flat wall" % (label, common.Area, cf.Area))
+                "%.4g of %.4g mm2 inside, %.3g mm2 outside): cutting across a bend is not supported, "
+                "move or shrink the profile so it lies inside the flat wall"
+                % (label, common.Area, cf.Area, outside_area))
+        dist = cf.OuterWire.distToShape(boundary)[0]
         if min_edge_distance > 0:
-            dist = cf.OuterWire.distToShape(boundary)[0]
             if dist < min_edge_distance - 1e-9:
                 raise CutoutError("%s is %.4g mm from the face boundary (bend, edge or opening), "
                                   "below the minimum of %.4g mm" % (label, dist, min_edge_distance))
@@ -167,9 +185,19 @@ def build_cutout(base_shape, face_name, profile, pattern="None", count_x=1, coun
     cut = base_shape.cut(Part.Compound(tools))
     removed = base_shape.Volume - cut.Volume
     want = area * thickness
-    if abs(removed - want) > VOL_TOL * want:
-        raise CutoutError("the cut removed %.6g mm3 instead of %.6g (area x thickness): the profile "
-                          "does not cut cleanly through the sheet here" % (removed, want))
+    what = "area x thickness"
+    tol = VOL_TOL
+    if any(e.Curve.TypeId in ("Part::GeomBSplineCurve", "Part::GeomBezierCurve")
+           for _l, cf in copies for e in cf.Edges):
+        # OCCT integrates B-spline areas and volumes only to about 0.4 %: compare with the
+        # extruded solids' own volume instead of area x thickness
+        want = sum(t.Volume for t in tools)
+        what = ("the extruded profile's own volume, to %g relative because OCCT integrates "
+                "B-spline volumes only that accurately" % BSPLINE_VOL_TOL)
+        tol = BSPLINE_VOL_TOL
+    if abs(removed - want) > tol * want:
+        raise CutoutError("the cut removed %.6g mm3 instead of %.6g (%s): the profile does not cut "
+                          "cleanly through the sheet here" % (removed, want, what))
     if not cut.Solids or len(cut.Solids) != 1 or not cut.isValid():
         raise CutoutError("the cut does not give one valid solid")
     return cut.Solids[0], dict(copies=len(copies), area=area, thickness=thickness, removed=removed)
