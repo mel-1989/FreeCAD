@@ -224,6 +224,106 @@ class TestLinkLogic(unittest.TestCase):
         self.assertEqual(self.head(), head)
         self.assertEqual(self.locks(), [])
 
+    def tree_names(self):
+        return subprocess.run(["git", "--git-dir", self.vpath, "ls-tree", "--name-only", "refs/heads/main"], check=True,
+                              stdout=subprocess.PIPE, text=True).stdout.split()
+
+    def add_raw(self, name, xml):
+        d = self.a.doc_path(name)
+        os.makedirs(d)
+        with open(os.path.join(d, "Document.xml"), "w", encoding="utf-8") as f:
+            f.write(xml)
+        return self.a.add_document(name)
+
+    def test_unreadable_documents_are_skipped_and_reported(self):
+        # MEDIUM 3 and 4: one bad document must not break where_used or move vault-wide
+        bomb = ('<?xml version="1.0"?><!DOCTYPE d [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;">]>'
+                '<Document>&b;</Document>')
+        self.add("base")
+        self.add("asm", [("L", "base.FCStd.d")])
+        self.add_raw("bomb", bomb)
+        self.add_raw("broken", "<Document><unclosed>")
+        used = self.a.where_used("base")
+        self.assertEqual([u["document"] for u in used], ["asm"])
+        self.assertEqual(sorted(u["document"] for u in used.unreadable), ["bomb", "broken"])
+        r = self.a.move("base", "base2")  # neither bad document mentions base: the move proceeds
+        self.assertEqual(sorted(r["unreadable"]), ["bomb", "broken"])
+        self.assertEqual([x["document"] for x in r["relinked"]], ["asm"])
+        self.assertIn("base2.FCStd.d", self.blob("asm"))
+        # an unreadable document that mentions the moved name might link to it: refuse, change nothing
+        self.add_raw("hostile", bomb.replace("<Document>", "<Document><!-- base2.FCStd.d -->"))
+        head = self.head()
+        with self.assertRaises(V.DocumentError) as cm:
+            self.a.move("base2", "base3")
+        self.assertIn("hostile", str(cm.exception))
+        self.assertEqual(self.head(), head)
+        self.assertEqual(self.locks(), [])
+
+    def test_self_link_is_rewritten(self):
+        # MEDIUM 5
+        self.add("selfy", [("L", "selfy.FCStd.d")])
+        self.add("asm", [("L", "selfy.FCStd.d")])
+        self.a.move("selfy", "selfy2")
+        self.assertIn('file="selfy2.FCStd.d"', self.blob("selfy2"))
+        self.assertNotIn('"selfy.FCStd.d"', self.blob("selfy2"))
+        self.assertEqual(self.a._where_used_at(self.a._head(), "selfy"), [])
+
+    def test_odd_link_spellings_refuse_clearly(self):
+        # LOW 6: numeric character reference or single-quoted attribute
+        for tag, xml, expect in (
+                ("ref", synth_xml([("L", "base&#46;FCStd.d")]), "numeric character reference"),
+                ("quote", synth_xml([("L", "base.FCStd.d")]).replace('file="base.FCStd.d"', "file='base.FCStd.d'"),
+                 "single-quoted")):
+            self.add("base" + tag)
+            self.add_raw(tag, xml.replace("base", "base" + tag))
+            head = self.head()
+            with self.assertRaises(V.DocumentError) as cm:
+                self.a.move("base" + tag, "moved" + tag)
+            self.assertIn(expect, str(cm.exception))
+            self.assertEqual(self.head(), head)
+            self.assertEqual(self.locks(), [])
+
+    def test_old_names_are_refused_after_move(self):
+        # HIGH 1 (single process); the multi-client version is in TestMoveWithFreeCAD
+        self.add("old")
+        self.a.move("old", "mid")
+        self.a.move("mid", "new")
+        head = self.head()
+        for gone, to in (("old", "mid"), ("mid", "new"), ("never", None)):
+            for fn in (lambda n: self.b.lock(n), lambda n: self.b.checkout(n), lambda n: self.b.checkin(n, "x"),
+                       lambda n: self.b.transition(n, "InReview")):
+                with self.assertRaises(V.DocumentError) as cm:
+                    fn(gone)
+                if to:
+                    self.assertIn(f"moved to {to!r}" if gone == "mid" else "moved to", str(cm.exception))
+        with self.assertRaises(V.DocumentError) as cm:
+            self.b.lock("old")
+        self.assertIn("'new'", str(cm.exception))  # the chain old -> mid -> new ends at the document that exists
+        self.assertEqual(self.head(), head)
+        self.assertEqual(self.locks(), [])
+        self.assertEqual(self.tree_names(), ["new.FCStd.d"])
+        self.assertEqual(sorted(self.b.documents()), ["new"])
+        with self.assertRaises(V.DocumentError):
+            self.b.where_used("old")
+
+    def test_untracked_old_folder_survives_move(self):
+        # LOW 10: a local folder named like the old document that is not a clean checkout is not deleted
+        self.add("old")
+        mine = self.b.doc_path("old")
+        os.makedirs(mine)
+        with open(os.path.join(mine, "notes.txt"), "w") as f:
+            f.write("keep me\n")
+        r = self.b.move("old", "new")
+        self.assertTrue(os.path.isfile(os.path.join(mine, "notes.txt")))
+        self.assertTrue(any("untracked" in w for w in r["warnings"]), r)
+        # a clean checkout is dropped as before
+        self.add("old2")
+        self.b.checkout("old2")
+        self.b.release_lock("old2")
+        r = self.b.move("old2", "new2")
+        self.assertFalse(os.path.exists(self.b.doc_path("old2")))
+        self.assertEqual(r["warnings"], [])
+
 
 class TestMoveWithFreeCAD(TV.VaultCase):
     """Acceptance checks 1 and 2 with real FreeCAD documents and separate client processes."""
@@ -306,6 +406,33 @@ class TestMoveWithFreeCAD(TV.VaultCase):
         self.assertEqual(r[6]["used"]["base2"], ["asm1", "asm2"])
         self.assertEqual(sorted(u["document"] for u in V.Vault.open(self.wc("carol"), "carol").where_used("base2")),
                          ["asm1", "asm2"])
+
+    def test_old_names_dead_after_move_across_clients(self):
+        """HIGH 1 and MEDIUM 2 with separate client processes: bob holds a stale clone of the pre-move vault."""
+        r = self.client("alice", [{"op": "build_pad", "name": "old", "length": 10}, call("add_document", "old")],
+                        fresh=True)
+        self.assertTrue(all(x.get("ok") for x in r), r)
+        old_metrics = r[0]["metrics"]
+        r = self.client("bob", [call("checkout", "old"), {"op": "set_pad", "name": "old", "length": 12},
+                                call("checkin", "old", "bob edit")], fresh=True)
+        self.assertTrue(all(x.get("ok") for x in r), r)
+        r = self.client("alice", [call("move", "old", "mid"), call("move", "mid", "new")])
+        self.assertTrue(all(x.get("ok") for x in r), r)
+        head = self.git("rev-parse", "refs/heads/main").strip()
+        r = self.client("bob", [call("lock", "old"), call("checkout", "old", discard_local=True),
+                                call("checkin", "old", "fork it"), call("transition", "old", "InReview"),
+                                call("lock", "mid"), call("checkout", "mid"), call("checkin", "mid", "x")])
+        self.assertEqual([x.get("error") for x in r], ["DocumentError"] * 7, r)
+        self.assertIn("'new'", r[0]["message"])
+        self.assertEqual(self.git("rev-parse", "refs/heads/main").strip(), head)
+        self.assertEqual(self.git("ls-tree", "--name-only", "refs/heads/main").split(), ["new.FCStd.d"])
+        self.assertEqual(self.git("for-each-ref", "refs/locks/").strip(), "")
+        # MEDIUM 2: a pre-move revision of the moved document opens (its folder carries the name it had then)
+        r = self.client("bob", [{"op": "revision_metrics", "name": "new", "revision": "A.1"}])
+        self.assertTrue(r[0].get("ok"), r)
+        for k in ("volume", "area"):
+            self.assertAlmostEqual(r[0]["metrics"][k], old_metrics[k], delta=abs(old_metrics[k]) * TV.REL)
+        self.assertTrue(r[0]["metrics"]["filename"].rstrip("/").endswith("old.FCStd.d"), r)
 
 
 if __name__ == "__main__":

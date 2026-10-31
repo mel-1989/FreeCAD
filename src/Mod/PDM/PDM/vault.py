@@ -78,6 +78,11 @@ class DocumentError(PDMError):
     pass
 
 
+class UsedList(list):
+    """Result of ``Vault.where_used``; ``unreadable`` lists the documents that could not be scanned."""
+    unreadable = ()
+
+
 def revision_label(letter_index, number):
     """Letter index 0 is A, 25 is Z, 26 is AA ... The label is ``<letters>.<number>``."""
     letters = ""
@@ -283,6 +288,50 @@ class Vault:
     def _head(self):
         return self._git(["rev-parse", "--verify", f"refs/remotes/origin/{BRANCH}"]).stdout.decode().strip()
 
+    @staticmethod
+    def _trailer_meta(chunk):
+        lines = chunk.strip("\n").split("\n")
+        i = len(lines)
+        while i > 0 and lines[i - 1].strip() != "":
+            i -= 1
+        meta = {}
+        for ln in lines[i:]:
+            if ln.startswith(_TRAILER):
+                k, _, v = ln[len(_TRAILER):].partition(": ")
+                meta[k] = v
+        return meta
+
+    def _moved_to(self, name, head, present):
+        """Where a document that is no longer in the head tree went (following a chain A -> B -> C), or None."""
+        cur = name
+        seen = {name}
+        while True:
+            out = self._git(["log", "-z", "--format=%B", "-E", f"--grep=^{_TRAILER}Moved-From: {cur}$", head],
+                            check=False).stdout.decode()
+            nxt = None
+            for chunk in out.split("\x00"):
+                meta = self._trailer_meta(chunk)
+                if meta.get("Event") == "move" and meta.get("Moved-From") == cur and meta.get("Document"):
+                    nxt = meta["Document"]
+                    break
+            if not nxt or nxt in seen:
+                return cur if cur != name else None
+            if nxt in present:
+                return nxt
+            seen.add(nxt)
+            cur = nxt
+
+    def _require_present(self, name):
+        """Refuse a name that is not in the head tree (moved away, or never added). Callers have just fetched."""
+        head = self._head()
+        present = self._doc_names_at(head)
+        if name in present:
+            return
+        to = self._moved_to(name, head, present)
+        if to:
+            raise DocumentError(f"{name!r} was moved to {to!r} and no longer exists in the vault; use {to!r}")
+        raise DocumentError(f"no document {name!r} in the vault")
+
     def _commit(self, parent, name, subject, revision, state, event, released, doc_dir, edit=None, extra=()):
         """Build a commit on top of ``parent`` with the working copy's folder for ``name`` (plumbing, temp index).
 
@@ -348,6 +397,7 @@ class Vault:
         """
         _check_name(name)
         self._fetch()
+        self._require_present(name)
         for other in self._lock_names():
             if other != name and other.lower() == name.lower():
                 raise DocumentError(f"{name!r} differs only by case from the locked name {other!r}")
@@ -480,6 +530,7 @@ class Vault:
         """
         _check_name(name)
         self._fetch()
+        self._require_present(name)
         recs = self._records(name)
         if not recs:
             raise DocumentError(f"no document {name!r} in the vault")
@@ -492,6 +543,7 @@ class Vault:
                 return self.doc_path(name)  # idempotent re-checkout of my own up-to-date copy
             # Re-read after the lock: a check-in may have landed between the first fetch and the lock.
             self._fetch()
+            self._require_present(name)
             recs = self._records(name)
             self._check_checkout_allowed(name, recs[0], new_revision or bool(info.get("new_revision")))
             dest = self.doc_path(name)
@@ -546,6 +598,8 @@ class Vault:
         """
         _check_name(name)
         _check_message(message)
+        self._fetch()
+        self._require_present(name)
         lock = self._require_lock(name)
         dest = self.doc_path(name)
         if not os.path.isfile(os.path.join(dest, "Document.xml")):
@@ -554,6 +608,7 @@ class Vault:
             raise DocumentError(f"{name} has no changes to check in")
         for _ in range(8):
             self._fetch()
+            self._require_present(name)
             recs = self._records(name)
             if not recs:
                 raise DocumentError(f"no document {name!r} in the vault")
@@ -598,6 +653,7 @@ class Vault:
         _check_message(message or "")
         for _ in range(8):
             self._fetch()
+            self._require_present(name)
             recs = self._records(name)
             if not recs:
                 raise DocumentError(f"no document {name!r} in the vault")
@@ -653,6 +709,13 @@ class Vault:
         element without ``file`` names an object in the same export and is not a path."""
         found = []
         try:
+            text = xml_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            raise DocumentError("Document.xml is not UTF-8")
+        if "<!DOCTYPE" in text or "<!ENTITY" in text:
+            # FreeCAD never writes either; refusing them before parsing rules out entity-expansion bombs.
+            raise DocumentError("Document.xml declares a DOCTYPE or ENTITY, which FreeCAD never writes")
+        try:
             root = ET.fromstring(xml_bytes)
         except ET.ParseError as e:
             raise DocumentError(f"Document.xml is not well-formed: {e}")
@@ -670,10 +733,13 @@ class Vault:
         walk(root, "(document)")
         return found
 
-    def _where_used_at(self, commit, name, suspects=None):
+    def _where_used_at(self, commit, name, suspects=None, unreadable=None):
         """Links to ``name`` at ``commit``. A link whose last component is ``name``'s folder but whose path is not a
         plain root-level one (``../x/name.FCStd.d``, an absolute path) cannot be proven to be this document, so it is
-        appended to ``suspects`` when a list is given (``move`` refuses rather than leave it behind)."""
+        appended to ``suspects`` when a list is given (``move`` refuses rather than leave it behind). A document whose
+        ``Document.xml`` cannot be read safely (malformed, DOCTYPE/ENTITY, not UTF-8) is skipped and appended to
+        ``unreadable`` as ``{document, reason, mentions}`` when a list is given (``mentions``: its raw text contains
+        ``name``, so it might link to it); without the list it raises ``DocumentError``."""
         used = []
         for other in self._doc_names_at(commit):
             if other == name:
@@ -681,7 +747,15 @@ class Vault:
             xml = self._document_xml(commit, other)
             if xml is None:
                 continue
-            for obj, prop, f in self._scan_xlinks(xml):
+            try:
+                links = self._scan_xlinks(xml)
+            except DocumentError as e:
+                if unreadable is None:
+                    raise
+                unreadable.append({"document": other, "reason": str(e),
+                                   "mentions": name.lower() in xml.decode("utf-8", "replace").lower()})
+                continue
+            for obj, prop, f in links:
                 tgt = self._link_target(f)
                 if tgt is not None and tgt.lower() == name.lower():
                     used.append({"document": other, "object": obj, "property": prop, "file": f})
@@ -693,15 +767,19 @@ class Vault:
     def where_used(self, name):
         """Documents at the vault head that link to ``name``: a list of ``{document, object, property, file}``.
 
-        Read from the committed ``Document.xml`` files with git only; no FreeCAD document is opened. Covers every
+        The list has an ``unreadable`` attribute: documents skipped because their ``Document.xml`` is malformed or
+        declares a DOCTYPE/ENTITY (one bad file never fails the query). Read from the committed ``Document.xml`` files with git only; no FreeCAD document is opened. Covers every
         property type that stores a file path (``App::Link``, ``PropertyXLink`` and its Sub/List variants, and
         expression links), because they all use the one ``<XLink file=..>`` element."""
         _check_name(name)
         self._fetch()
-        head = self._head()
-        if name not in self._doc_names_at(head):
-            raise DocumentError(f"no document {name!r} in the vault")
-        return self._where_used_at(head, name)
+        self._require_present(name)
+        unreadable = []
+        used = UsedList(self._where_used_at(self._head(), name, unreadable=unreadable))
+        used.unreadable = unreadable
+        for u in unreadable:
+            _warn(f"where_used({name}): skipped unreadable {u['document']}: {u['reason']}")
+        return used
 
     def _rewrite_links(self, xml_bytes, old, new):
         """Replace, in the ``file`` attribute of every ``<XLink>`` that resolves to ``old``, the path by ``new``'s.
@@ -754,7 +832,13 @@ class Vault:
                 if self._records(new):
                     raise DocumentError(f"cannot move to {new!r}: that name has history in the vault")
                 suspects = []
-                refs = sorted({u["document"] for u in self._where_used_at(head, old, suspects)})
+                unreadable = []
+                refs = sorted({u["document"] for u in self._where_used_at(head, old, suspects, unreadable)})
+                risky = [u for u in unreadable if u["mentions"] and u["document"] != old]
+                if risky:
+                    raise DocumentError(
+                        f"{risky[0]['document']} cannot be read ({risky[0]['reason']}) and its text mentions {old!r}, so it "
+                        f"might link to it; repair or remove that document before moving {old}")
                 if suspects:
                     s0 = suspects[0]
                     raise DocumentError(
@@ -796,13 +880,17 @@ class Vault:
                 if not self._push_main(parent):
                     continue  # vault moved; recompute everything under the locks we hold
                 self._fetch()
-                self._after_move(old, new, refs, parent)
+                warnings = [f"skipped unreadable {u['document']}: {u['reason']}" for u in unreadable]
+                warnings += self._after_move(old, new, refs, parent)
+                for w in warnings:
+                    _warn(w)
                 for n, mine in held.items():
                     if n == old or mine:
                         with contextlib.suppress(PDMError):
                             self._delete_lock_if_mine(n)
                 held.clear()
-                return {"new": new, "revision": mv_rec["revision"], "sha": parent, "relinked": relinked}
+                return {"new": new, "revision": mv_rec["revision"], "sha": parent, "relinked": relinked,
+                        "warnings": warnings, "unreadable": [u["document"] for u in unreadable]}
             raise GitError("vault kept moving; move gave up after 8 attempts (nothing changed)")
         except BaseException:
             for n, mine in held.items():
@@ -831,15 +919,37 @@ class Vault:
             lines.append(f"{mode} {sha}\t{new}{DOC_SUFFIX}{rel}\0")
         self._git(["update-index", "-z", "--index-info"], env=env,
                   input="".join(lines).encode("utf-8", "surrogateescape"))
+        # A link from the document to itself names the old folder; re-point it in the same commit.
+        xml = self._document_xml(head, old)
+        if xml is not None:
+            try:
+                self._scan_xlinks(xml)
+            except DocumentError:
+                return  # unreadable: left as it is (move reports it)
+            out, count = self._rewrite_links(xml, old, new)
+            if count:
+                path = f"{new}{DOC_SUFFIX}/Document.xml"
+                if self._where_used_at_bytes(out, old):
+                    raise DocumentError(self._odd_link_msg(old, old))
+                sha = self._git(["hash-object", "-w", "--stdin"], input=out).stdout.decode().strip()
+                mode = self._git(["ls-tree", head, "--", f"{old}{DOC_SUFFIX}/Document.xml"]).stdout.decode().split()[0]
+                self._git(["update-index", "--add", "--cacheinfo", f"{mode},{sha},{path}"], env=env)
+            elif self._where_used_at_bytes(xml, old):
+                raise DocumentError(self._odd_link_msg(old, old))
+
+    @staticmethod
+    def _odd_link_msg(name, old):
+        return (f"{name}: a link to {old} is written with a numeric character reference or a single-quoted attribute, "
+                f"which move does not rewrite; re-save {name} with FreeCAD (it writes plain double-quoted paths) and retry")
 
     def _edit_relink(self, env, head, name, old, new):
         path = f"{name}{DOC_SUFFIX}/Document.xml"
         xml = self._document_xml(head, name)
         out, count = self._rewrite_links(xml, old, new)
+        if self._where_used_at_bytes(out, old):
+            raise DocumentError(self._odd_link_msg(name, old))
         if count == 0:
             raise DocumentError(f"{name}: no link to {old} found to rewrite (the document changed under the lock?)")
-        if self._where_used_at_bytes(out, old):
-            raise DocumentError(f"{name}: a link to {old} survived the rewrite")
         sha = self._git(["hash-object", "-w", "--stdin"], input=out).stdout.decode().strip()
         mode = self._git(["ls-tree", head, "--", path]).stdout.decode().split()[0]
         self._git(["update-index", "--add", "--cacheinfo", f"{mode},{sha},{path}"], env=env)
@@ -851,6 +961,7 @@ class Vault:
     def _after_move(self, old, new, refs, sha):
         """Bring this working copy in line: clean folders of relinked documents are refreshed to the new
         revision, the old folder is dropped, the new one is not materialised (check it out when needed)."""
+        warnings = []
         for n in refs:
             dest = self.doc_path(n)
             if os.path.isdir(dest) and self._base(n) is not None:
@@ -858,9 +969,16 @@ class Vault:
                 self._git(["checkout", "-q", sha, "--", os.path.basename(dest)])
                 self._set_base(n, sha)
         if os.path.isdir(self.doc_path(old)):
-            shutil.rmtree(self.doc_path(old), ignore_errors=True)
-        with contextlib.suppress(FileNotFoundError):
-            os.remove(self._base_file(old))
+            if self._base(old) is None:
+                warnings.append(f"left the untracked local folder {self.doc_path(old)} in place (it is not a checkout of {old})")
+            elif self._dirty(old):
+                warnings.append(f"left {self.doc_path(old)} in place: it has local edits")
+            else:
+                shutil.rmtree(self.doc_path(old), ignore_errors=True)
+        if not os.path.isdir(self.doc_path(old)):
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(self._base_file(old))
+        return warnings
 
     # ---- reading old revisions ----------------------------------------------------------------
 
@@ -877,9 +995,10 @@ class Vault:
         rec = self.find_revision(name, revision)
         base = dest or tempfile.mkdtemp(prefix="pdm-rev-")
         os.makedirs(base, exist_ok=True)
-        arch = _git(["archive", "--format=tar", rec["sha"], "--", name + DOC_SUFFIX], cwd=self.workdir)
+        folder = (rec.get("document") or name) + DOC_SUFFIX  # the name at that commit (before a move: the old one)
+        arch = _git(["archive", "--format=tar", rec["sha"], "--", folder], cwd=self.workdir)
         subprocess.run(["tar", "-x", "-C", base], input=arch.stdout, check=True)
-        path = os.path.join(base, name + DOC_SUFFIX)
+        path = os.path.join(base, folder)
         subprocess.run(["chmod", "-R", "a-w", path], check=True)
         return path
 
