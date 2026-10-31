@@ -395,9 +395,16 @@ class SMUnfold:
             if sheet is None:
                 sheet = FreeCAD.ActiveDocument.getObjectsByLabel(obj.MaterialSheet)[0]
             bac = BendAllowanceCalculator.from_spreadsheet(sheet)
-        sel_face, unfolded_shape, bend_lines, root_normal, bend_infodata = SheetMetalNewUnfolder.getUnfold(
-            bac, baseObject, baseFace
-        )
+        try:
+            sel_face, unfolded_shape, bend_lines, root_normal, bend_infodata = SheetMetalNewUnfolder.getUnfold(
+                bac, baseObject, baseFace
+            )
+        except SheetMetalNewUnfolder.SheetNeedsV1Error as exc:
+            # The V1 unfolder was the default before the new one and flattens parts whose bends
+            # are all sharp. Say so rather than return a wrong flat.
+            FreeCAD.Console.PrintWarning(
+                "Falling back to the V1 unfolder for %s: %s\n" % (obj.Label, exc))
+            return self.oldUnfolder(obj, baseObject, baseFace)
 
         sketches = []
         if obj.GenerateSketch and unfolded_shape is not None:
