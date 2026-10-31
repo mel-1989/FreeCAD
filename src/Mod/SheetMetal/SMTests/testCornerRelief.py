@@ -465,23 +465,40 @@ class TestCornerRelief(Doc):
         self.assertNotIn("not one thickness apart", str(cm.exception))
 
     def test_flat_plate_volume_is_exact_where_the_walls_are_malformed(self):
-        """Run 028: a flat plate's volume is its planar face area times T, so the malformed
-        B-spline hole walls of the old unfolder cannot make a correct flat look short; anything
-        that is not a plain plate keeps the solid's own volume, and real losses stay refused."""
+        """Run 028: the area-times-T measure applies only to a provable prism with curved side
+        walls; everything else keeps the solid's own volume, so real losses stay refused."""
+        N = (0, 0, 1)
         plate = Part.makeBox(30, 20, 2)
-        self.assertAlmostEqual(FP.flat_plate_volume(plate, (0, 0, 1), 2.0), 1200.0, 9)
-        # not a plate for this thickness (deeper than T): the solid's own volume
-        self.assertAlmostEqual(FP.flat_plate_volume(plate, (0, 0, 1), 1.0), 1200.0, 9)
-        thick = Part.makeBox(30, 20, 5)
-        self.assertAlmostEqual(FP.flat_plate_volume(thick, (0, 0, 1), 2.0), thick.Volume, 9)
-        # a face area that disagrees with the volume by more than the guard: the solid's volume
-        holed = plate.cut(Part.makeBox(10, 10, 1, V(5, 5, 0)))  # a blind pocket, half deep
-        self.assertAlmostEqual(FP.flat_plate_volume(holed, (0, 0, 1), 2.0), holed.Volume, 9)
-        # a flat that lost 5 percent of its volume to something other than bends is still refused
-        part = 1200.0 / 0.95
-        self.assertIn("does not match the part's bends",
-                      FP.flat_problem(plate, (0, 0, 1), [], 2.0, 0, part))
-        self.assertEqual(FP.flat_problem(plate, (0, 0, 1), [], 2.0, 0, 1200.0), "")
+        # a plain box has no curved wall: the solid's own volume
+        self.assertAlmostEqual(FP.flat_plate_volume(plate, N, 2.0), 1200.0, 9)
+        self.assertAlmostEqual(FP.flat_plate_volume(plate, N, 1.0), 1200.0, 9)
+        # a round hole: curved wall, equal top and bottom areas, thickness T: area x T
+        holed = plate.cut(Part.makeCylinder(3, 2, V(15, 10, 0)))
+        self.assertAlmostEqual(FP.flat_plate_volume(holed, N, 2.0), holed.Volume, 6)
+        self.assertAlmostEqual(FP.flat_plate_volume(holed, N, 2.0), (600.0 - math.pi * 9) * 2.0, 6)
+        # a blind pocket (verifier MEDIUM-2): top and bottom areas differ -> solid's volume
+        for z in (1, 0):
+            pocket = holed.cut(Part.makeBox(4, 4, 1, V(2, 2, z)))
+            self.assertAlmostEqual(FP.flat_plate_volume(pocket, N, 2.0), pocket.Volume, 9)
+        # a stray island and an internal void -> solid's volume
+        island = Part.Compound([holed, Part.makeBox(5, 5, 2, V(100, 0, 0))])
+        self.assertAlmostEqual(FP.flat_plate_volume(island, N, 2.0), island.Volume, 9)
+        void = holed.cut(Part.makeBox(4, 4, 1, V(2, 2, 0.5)))
+        self.assertEqual(len(void.Shells), 2)
+        self.assertAlmostEqual(FP.flat_plate_volume(void, N, 2.0), void.Volume, 9)
+        # a half-thickness strip -> solid's volume
+        strip = holed.fuse(Part.makeBox(1, 20, 1, V(30, 0, 0))).removeSplitter()
+        self.assertAlmostEqual(FP.flat_plate_volume(strip, N, 2.0), strip.Volume, 9)
+        # losses of 5e-3 (blind pocket), 2.5e-3 (island) and 5e-3 (void) are still refused
+        for shape in (holed.cut(Part.makeBox(4, 4, 1, V(2, 2, 1))), island, void):
+            src = holed.Volume
+            self.assertIn("does not match the part's bends", FP.flat_problem(shape, N, [], 2.0, 0, src))
+        # a flat that keeps a pocket the source also has passes, as before run 028
+        pk = holed.cut(Part.makeBox(4, 4, 1, V(2, 2, 1)))
+        self.assertEqual(FP.flat_problem(pk, N, [], 2.0, 0, pk.Volume), "")
+        # a flat that lost 5 percent of its volume to something other than bends is refused
+        self.assertIn("does not match the part's bends", FP.flat_problem(plate, N, [], 2.0, 0, 1200.0 / 0.95))
+        self.assertEqual(FP.flat_problem(plate, N, [], 2.0, 0, 1200.0), "")
 
     def test_oblique_obround_reliefs_are_not_falsely_refused(self):
         """Run 028 (verifier D): obround reliefs at rotations 120 to 150 degrees left the old
