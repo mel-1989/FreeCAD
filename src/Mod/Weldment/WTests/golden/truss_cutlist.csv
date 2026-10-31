@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+item,quantity,family,size,material,cut_length_mm,start_angle_deg,end_angle_deg,start_end,end_end,mass_per_m_kg,mass_each_kg,mass_total_kg
+1,1,EN SHS,125x125x9,Structural steel,8649.073,79.099,79.099,mitre,mitre,30.6000,264.6616,264.6616
+2,2,EN SHS,125x125x9,Structural steel,4657.668,79.099,21.801,mitre,mitre,30.6000,142.5246,285.0493
+3,2,EN SHS,75x75x6.3,Structural steel,1524.154,61.928,40.126,butt,butt,12.5000,19.0519,38.1038
+4,2,EN SHS,75x75x6.3,Structural steel,685.185,0.000,21.801,butt,butt,12.5000,8.5648,17.1296

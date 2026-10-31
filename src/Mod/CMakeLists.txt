@@ -10,6 +10,10 @@ if(BUILD_SHEETMETAL)
   add_subdirectory(SheetMetal)
 endif(BUILD_SHEETMETAL)
 
+if(BUILD_WELDMENT)
+  add_subdirectory(Weldment)
+endif(BUILD_WELDMENT)
+
 if(BUILD_ADDONMGR)
   if( NOT EXISTS "${CMAKE_SOURCE_DIR}/src/Mod/AddonManager/CMakeLists.txt" )
     message(FATAL_ERROR "The Addon Manager has been moved into a git submodule. Please run
