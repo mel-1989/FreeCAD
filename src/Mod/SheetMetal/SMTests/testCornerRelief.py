@@ -447,6 +447,13 @@ class TestCornerRelief(Doc):
                                old=None)
         self.assertEqual(FP.bends_and_problem_from_json(feat2.BendData)[2], "")
         self.assertIsNone(CR.relief_k_mismatch(feat2, FP.bends_and_problem_from_json(feat2.BendData)[0]))
+        # the table's listed K (0.43), given by hand, matches its back-computed K within K_TOLERANCE
+        rel3 = CR.make_corner_relief(self.doc, tray, edge, name="R3", size=3.0, kfromPart=False,
+                                     kfactor=0.43)
+        feat3 = feature_unfold(self.doc, rel3, unfold_target_face(rel3.Shape), material=DC.TABLE_REF,
+                               old=None)
+        self.assertEqual(FP.bends_and_problem_from_json(feat3.BendData)[2], "")
+        UC.export_flat_dxf(feat3, os.path.join(tempfile.gettempdir(), "r027_table_kmatch.dxf"))
 
     def test_over_90_degree_corner_refusal_names_the_cause(self):
         tray = raw_tray(self.doc, 1.0, 1.0, 135.0, 135.0)
