@@ -200,7 +200,8 @@ class TestCorpusRoundTrip(unittest.TestCase):
         differ from the first save only in those two ways, and the second reload must change
         nothing at all."""
         load = {i: self.results["load"][i] for i in self.usable()}
-        strict = [i for i, r in load.items() if r["reopen_saveCopy_identical"] and r["reopen_save_identical"]]
+        # in place: the folder keeps the text of unchanged shapes, so reopen and save is a fixed point
+        strict = [i for i, r in load.items() if r["reopen_save_identical"]]
         print(f"\nG03 save after reopen: {len(strict)}/{len(load)} corpus documents byte-identical on the "
               f"first reopen; the rest differ only in Touched bits / 1e-12 Location noise; ")
         bad = [(i, r["reopen_differs"]) for i, r in load.items() if not r["reopen_status_only"]]
@@ -278,6 +279,35 @@ class TestFolderBehaviour(unittest.TestCase):
         doc.save()
         self.assertEqual(tree_text(self.p("b.FCStd.d")), before)
         self.assertTrue(doc.getObject("Fillet").Shape.isValid())
+
+    def test_reopened_unmodified_document_saves_identically(self):
+        """Reopen and save is a fixed point from the first cycle: no Touched status bits, no
+        BREP location noise."""
+        self.doc.saveAsFolder(self.p("fp.FCStd.d"))
+        App.closeDocument(self.doc.Name)
+        # a document built in memory differs from its reloaded form once (element-map order);
+        # a reloaded document is the case that matters
+        doc = App.openDocument(self.p("fp.FCStd.d"))
+        doc.save()
+        App.closeDocument(doc.Name)
+        before = tree_text(self.p("fp.FCStd.d"))
+        for _ in range(2):
+            doc = App.openDocument(self.p("fp.FCStd.d"))
+            doc.save()
+            App.closeDocument(doc.Name)
+            self.assertEqual(tree_text(self.p("fp.FCStd.d")), before)
+        # the simplest case from the verifier: one Box with an expression engine property
+        box = App.newDocument("one")
+        box.addObject("Part::Box", "Box")
+        box.recompute()
+        box.saveAsFolder(self.p("one.FCStd.d"))
+        App.closeDocument(box.Name)
+        first = tree_text(self.p("one.FCStd.d"))
+        doc = App.openDocument(self.p("one.FCStd.d"))
+        doc.save()
+        App.closeDocument(doc.Name)
+        self.assertEqual(tree_text(self.p("one.FCStd.d")), first)
+        self.assertNotIn(b'status="67108865"', first["Document.xml"])
 
     def test_diff_of_one_pad_length(self):
         """Check 3: one Pad length changes only that parameter and the shapes recomputed from it."""
@@ -358,7 +388,9 @@ class TestFolderBehaviour(unittest.TestCase):
         folder = tree_text(self.p("z.FCStd.d"))
         self.assertEqual(names, set(folder) - {MANIFEST})
         # identical apart from negative zeros, which the folder writer writes as zero
-        self.assertEqual(re.sub(rb'(?<=")-(0\.0+)(?=")', rb"\1", zxml), folder["Document.xml"])
+        # (and the runtime bits of the property status attributes, which folder mode masks)
+        strip = lambda b: re.sub(rb' status="\d+"', b"", re.sub(rb'(?<=")-(0\.0+)(?=")', rb"\1", b))  # noqa: E731
+        self.assertEqual(strip(zxml), strip(folder["Document.xml"]))
         doc = App.openDocument(self.p("z.FCStd"))
         self.assertFalse(os.path.isdir(doc.FileName))
         doc.save()

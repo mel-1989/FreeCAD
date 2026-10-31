@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <iterator>
 #include <map>
@@ -27,6 +28,7 @@
 #include <Base/Writer.h>
 
 #include "Application.h"
+#include "Property.h"
 #include "PropertyFile.h"
 #include "Document.h"
 
@@ -188,6 +190,41 @@ bool normaliseBrepText(std::string& text)
     return changed;
 }
 
+// Property status bits that describe the runtime state, not the model: Touched (0) is set by
+// restore itself and by edits, Busy (15) only while a signal is being delivered. Persisting them
+// makes the first reopen of a saved folder change Document.xml (a restored property is touched).
+// A Property element omits status when it is 0, a _Property element always writes it.
+// Replaces the text of the status attribute in [from, close); returns whether it changed.
+bool maskTransientStatus(std::string& text, std::size_t from, std::size_t& close, bool omitZero)
+{
+    const std::size_t at = text.find(" status=\"", from);
+    if (at == std::string::npos || at >= close) {
+        return false;
+    }
+    const std::size_t valueStart = at + 9;
+    const std::size_t valueEnd = text.find('"', valueStart);
+    if (valueEnd == std::string::npos || valueEnd > close) {
+        return false;
+    }
+    unsigned long status = 0;
+    try {
+        status = std::stoul(text.substr(valueStart, valueEnd - valueStart));
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+    const unsigned long masked = status & ~((1UL << App::Property::Touched) | (1UL << App::Property::Busy));
+    if (masked == status) {
+        return false;
+    }
+    const std::size_t oldLen = valueEnd + 1 - at;
+    const std::string replacement =
+        (masked == 0 && omitZero) ? std::string() : " status=\"" + std::to_string(masked) + "\"";
+    text.replace(at, oldLen, replacement);
+    close = close + replacement.size() - oldLen;
+    return true;
+}
+
 bool normaliseDocumentXml(std::string& text)
 {
     static const char* const numericTags[] = {"PropertyPlacement", "PropertyVector", "Float"};
@@ -200,9 +237,12 @@ bool normaliseDocumentXml(std::string& text)
             ++nameEnd;
         }
         const std::string name = text.substr(pos + 1, nameEnd - pos - 1);
-        const std::size_t close = text.find('>', nameEnd);
+        std::size_t close = text.find('>', nameEnd);
         if (close == std::string::npos) {
             break;
+        }
+        if (name == "Property" || name == "_Property") {
+            changed |= maskTransientStatus(text, nameEnd, close, name == "Property");
         }
         if (std::find(std::begin(numericTags), std::end(numericTags), name)
             != std::end(numericTags)) {
@@ -255,7 +295,136 @@ std::set<std::string> shapeFiles(const std::string& xml)
     return names;
 }
 
-void normaliseStaging(const fs::path& staging, const std::vector<std::string>& files)
+// True when two BREP texts have the same tokens and every numeric token differs by at most tol
+bool brepTextClose(const std::string& a, const std::string& b, double tol)
+{
+    std::size_t i = 0;
+    std::size_t j = 0;
+    auto next = [](const std::string& t, std::size_t& pos, std::string& tok) {
+        while (pos < t.size() && std::isspace(static_cast<unsigned char>(t[pos]))) {
+            ++pos;
+        }
+        const std::size_t start = pos;
+        while (pos < t.size() && !std::isspace(static_cast<unsigned char>(t[pos]))) {
+            ++pos;
+        }
+        tok.assign(t, start, pos - start);
+        return start != pos;
+    };
+    std::string x;
+    std::string y;
+    while (true) {
+        const bool hx = next(a, i, x);
+        const bool hy = next(b, j, y);
+        if (hx != hy) {
+            return false;
+        }
+        if (!hx) {
+            return true;
+        }
+        if (x == y) {
+            continue;
+        }
+        // TShape flag words (free, modified, checked, ...) are OCCT bookkeeping, not geometry
+        auto isFlags = [](const std::string& t) {
+            return t.size() == 7 && t.find_first_not_of("01") == std::string::npos;
+        };
+        if (isFlags(x) && isFlags(y)) {
+            continue;
+        }
+        char* endX = nullptr;
+        char* endY = nullptr;
+        const double dx = std::strtod(x.c_str(), &endX);
+        const double dy = std::strtod(y.c_str(), &endY);
+        if (*endX != '\0' || *endY != '\0' || std::fabs(dx - dy) > tol) {
+            return false;
+        }
+    }
+}
+
+// Splits text into its non-numeric segments and its decimal numbers ("-0.7071067811865476")
+void splitNumbers(const std::string& t, std::vector<std::string>& segments, std::vector<double>& nums)
+{
+    std::string seg;
+    std::size_t i = 0;
+    while (i < t.size()) {
+        std::size_t j = i;
+        if (t[j] == '-') {
+            ++j;
+        }
+        const std::size_t digits = j;
+        while (j < t.size() && std::isdigit(static_cast<unsigned char>(t[j]))) {
+            ++j;
+        }
+        if (j > digits && j + 1 < t.size() && t[j] == '.' && std::isdigit(static_cast<unsigned char>(t[j + 1]))) {
+            ++j;
+            while (j < t.size() && std::isdigit(static_cast<unsigned char>(t[j]))) {
+                ++j;
+            }
+            segments.push_back(seg);
+            seg.clear();
+            nums.push_back(std::strtod(t.substr(i, j - i).c_str(), nullptr));
+            i = j;
+        }
+        else {
+            // not a decimal number: copy the run of digits or the single character
+            const std::size_t end = std::max(j, i + 1);
+            seg.append(t, i, end - i);
+            i = end;
+        }
+    }
+    segments.push_back(seg);
+}
+
+// Same text apart from decimal numbers that differ by at most tol
+bool textClose(const std::string& a, const std::string& b, double tol)
+{
+    std::vector<std::string> sa;
+    std::vector<std::string> sb;
+    std::vector<double> na;
+    std::vector<double> nb;
+    splitNumbers(a, sa, na);
+    splitNumbers(b, sb, nb);
+    if (sa != sb || na.size() != nb.size()) {
+        return false;
+    }
+    for (std::size_t k = 0; k < na.size(); ++k) {
+        if (std::fabs(na[k] - nb[k]) > tol) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// OCCT rebuilds rotation matrices (TopLoc locations) on every read, so a shape that was just
+// loaded and is saved again differs from its file in the last digits. If the file already in the
+// folder holds the same shape to within 1e-12 (far below any modelling tolerance, OCCT's
+// Precision::Confusion is 1e-7), keep its text: reopen and save then reaches a fixed point.
+void reuseUnchangedShapes(const fs::path& staging,
+                          const fs::path& target,
+                          const std::vector<std::string>& files,
+                          const std::set<std::string>& shapes)
+{
+    for (const auto& f : files) {
+        if (!shapes.contains(f) || !pathHasNoSymlink(target, f, true)) {
+            continue;
+        }
+        std::error_code ec;
+        const fs::path old = target / toPath(f);
+        if (!fs::is_regular_file(old, ec)) {
+            continue;
+        }
+        const std::string before = readAll(old);
+        const std::string now = readAll(staging / toPath(f));
+        if (before != now && brepTextClose(before, now, 1e-12)) {
+            rewrite(staging / toPath(f), before);
+        }
+    }
+}
+
+void normaliseStaging(const fs::path& staging,
+                      const fs::path& target,
+                      const std::vector<std::string>& files)
 {
     std::string xml = readAll(staging / "Document.xml");
     const std::set<std::string> shapes = shapeFiles(xml);
@@ -267,8 +436,20 @@ void normaliseStaging(const fs::path& staging, const std::vector<std::string>& f
             }
         }
     }
+    reuseUnchangedShapes(staging, target, files, shapes);
     if (normaliseDocumentXml(xml)) {
         rewrite(staging / "Document.xml", xml);
+    }
+    // A document just reloaded renormalises its placement quaternions, which moves their last
+    // digits; the same 1e-12 rule keeps the stored text when nothing else changed.
+    std::error_code ec;
+    const fs::path oldXml = target / "Document.xml";
+    if (pathHasNoSymlink(target, "Document.xml", true) && fs::is_regular_file(oldXml, ec)) {
+        const std::string before = readAll(oldXml);
+        const std::string now = readAll(staging / "Document.xml");
+        if (before != now && textClose(before, now, 1e-12)) {
+            rewrite(staging / "Document.xml", before);
+        }
     }
 }
 
@@ -587,7 +768,7 @@ bool Document::saveToFolder(const char* dirname) const
             }
         }
 
-        normaliseStaging(staging, files);
+        normaliseStaging(staging, target, files);
         files.emplace_back(manifestName);
         {
             std::ofstream manifest(staging / manifestName, std::ios::binary);
