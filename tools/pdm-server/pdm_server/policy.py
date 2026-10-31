@@ -8,7 +8,6 @@ unlocked change to a document, edit a different document than it names, or force
 table does not allow."""
 
 ZERO = "0" * 40
-SUFFIX = ".FCStd.d"
 
 
 def check_push(V, db, mirror_vault, pusher, role, updates):
@@ -45,6 +44,7 @@ def check_push(V, db, mirror_vault, pusher, role, updates):
                 V._check_name(doc)
             except Exception:
                 return f"commit {short}: missing or invalid PDM-Document trailer"
+            SUFFIX = V.DOC_SUFFIX
             folder = doc + SUFFIX
             changed = set(c["changed"])
             allowed = {folder}

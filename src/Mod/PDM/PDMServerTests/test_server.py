@@ -2,7 +2,7 @@
 """G03 slice 4 acceptance checks: the PDM server, driven by separate FreeCADCmd client processes.
 
 One local test stack (PostgreSQL, Forgejo, the PDM service; all on 127.0.0.1, non-default ports, in a temp
-directory, torn down afterwards) serves the whole module. Every client is its own ``FreeCADCmd`` process running
+directory, torn down afterwards) serves each test class (three classes, three stacks, one per setUpClass). Every client is its own ``FreeCADCmd`` process running
 ``server_worker.py`` with its own working copy and its own Forgejo token; no test lets two clients share an
 interpreter. The suite skips when PostgreSQL, Forgejo or the service venv is missing (see tools/pdm-server/README.md).
 
