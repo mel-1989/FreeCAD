@@ -127,6 +127,7 @@
 #include "DocumentObjectGroupPy.h"
 #include "DocumentObserver.h"
 #include "DocumentPy.h"
+#include "private/DocumentP.h"
 #include "DocumentSettingsPy.h"
 #include "ExpressionParser.h"
 #include "FeatureTest.h"
@@ -684,11 +685,32 @@ bool Application::closeDocument(const char* name)
         return false;
 
     // An operation mid-way on the document (another thread's abort, a __del__ run by a redo
-    // clear ...) would be freed under its feet.
-    if (const std::string why = pos->second->closeRefusal(); !why.empty()) {
+    // clear ...) would be freed under its feet, and one that starts after this check would write
+    // into a DocumentP about to be freed. Publish the closing flag first and read the counters
+    // second (DocumentP::beginClose); operations count first and read the flag second
+    // (DocumentP::OpScope). This runs after cancelRecomputeRequestsForDocument above on purpose:
+    // the async worker is idle for this document by now, so the flag never refuses a recompute
+    // the worker had already started. A request queued meanwhile is refused by the flag instead:
+    // Document::recompute throws before it touches anything, the worker's catch reports it, and
+    // no state is half applied.
+    DocumentP& closingState = *pos->second->d;
+    if (const std::string why = closingState.beginClose(); !why.empty()) {
         FC_WARN("Cannot close document '" << documentName << "': " << why);
         return false;
     }
+    // From here on every way out that does not free the document must lift the flag again, or a
+    // throwing observer would leave a document that refuses all further work.
+    struct ClosingGuard
+    {
+        DocumentP& state;
+        bool freed {false};
+        ~ClosingGuard()
+        {
+            if (!freed) {
+                state.abortClose();
+            }
+        }
+    } closingGuard {closingState};
 
     Base::ConsoleRefreshDisabler disabler;
 
@@ -701,6 +723,7 @@ bool Application::closeDocument(const char* name)
         setActiveDocument(static_cast<Document*>(nullptr));
     }
     const std::unique_ptr<Document> delDoc (pos->second);
+    closingGuard.freed = true;
     DocMap.erase( pos );
     DocFileMap.erase(Base::FileInfo(delDoc->FileName.getValue()).filePath());
 
@@ -737,7 +760,9 @@ void Application::closeAllDocuments()
         names.push_back(entry.first);
     }
     for (const auto& name : names) {
-        closeDocument(name.c_str());
+        if (!closeDocument(name.c_str()) && DocMap.contains(name)) {
+            FC_WARN("Document '" << name << "' stays open: " << closeRefusal(name.c_str()));
+        }
     }
 }
 

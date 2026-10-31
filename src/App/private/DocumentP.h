@@ -33,6 +33,7 @@
 #include <map>
 #include <string>
 #include <memory>
+#include <thread>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -42,6 +43,8 @@
 #include <boost/graph/adjacency_list.hpp>
 
 #include <CXX/Objects.hxx>
+
+#include <Base/Exception.h>
 
 #include <App/DocumentObject.h>
 #include <App/DocumentObserver.h>
@@ -86,6 +89,11 @@ struct DocumentP
 {
     /// How many threads are inside each DocOp right now. Atomic: read by the thread that closes.
     std::array<std::atomic<int>, static_cast<std::size_t>(DocOp::Count)> activeOps {};
+    /// Set by the thread that closes the document (beginClose) until the document is freed, or
+    /// until the close is refused. Operations that find it set back out (see OpScope).
+    std::atomic<bool> closing {false};
+    /// The thread that set @c closing; it alone may still count itself into OnClosing::CloserMay scopes.
+    std::atomic<std::thread::id> closer {};
     // Array to preserve the creation order of created objects
     std::vector<DocumentObject*> objectArray;
     std::unordered_set<App::DocumentObject*> touchedObjs;
@@ -126,24 +134,139 @@ struct DocumentP
 
     DocumentP();
 
-    /// Marks an operation on the document for the lifetime of the object (re-entrant, any thread).
+    /// The operation that is in progress on the document, or an empty string when none is.
+    std::string activeOpReason() const
+    {
+        const auto active = [this](DocOp op) {
+            return activeOps[static_cast<std::size_t>(op)].load() > 0;
+        };
+        if (active(DocOp::Transaction)) {
+            return "a transaction (open, commit, abort, undo or redo) is in progress on it";
+        }
+        if (active(DocOp::Recompute)) {
+            return "a recompute is in progress on it";
+        }
+        if (active(DocOp::TurnBusy)) {
+            return "an agent turn is busy on it";
+        }
+        if (active(DocOp::PropertyHook)) {
+            return "a thread is changing a property of it (parked on the agent turn)";
+        }
+        return {};
+    }
+
+    /**
+     * The closing thread's half of the handshake with OpScope (Dekker): publish @c closing, then
+     * read the counters. OpScope does the reverse (count, then read @c closing), so at least one
+     * side sees the other and an operation can never start unseen under a close. Both sides use
+     * the default sequentially consistent atomic operations; relaxed or acquire/release ones
+     * would let both loads miss the other store.
+     *
+     * Returns an empty string when the close may go on (@c closing stays set until the document
+     * is freed), else the reason, with @c closing cleared again so a refused close leaves the
+     * document fully usable.
+     */
+    std::string beginClose()
+    {
+        bool expected = false;
+        if (!closing.compare_exchange_strong(expected, true)) {
+            return "it is already being closed (a re-entrant close, for instance from an observer)";
+        }
+        closer.store(std::this_thread::get_id());
+        std::string why = activeOpReason();
+        if (!why.empty()) {
+            abortClose();
+        }
+        return why;
+    }
+
+    /// Undo beginClose after the close was given up.
+    void abortClose()
+    {
+        closer.store(std::thread::id {});
+        closing.store(false);
+    }
+
+    /// What an OpScope does when the document is being closed.
+    enum class OnClosing
+    {
+        Throw,     ///< throw Base::RuntimeError (becomes a Python RuntimeError)
+        Refuse,    ///< no throw: the scope reports refused() and the caller returns without acting
+        CloserMay  ///< same as Refuse for other threads (kept to mark sites the destructor itself reaches)
+    };
+
+    /**
+     * Marks an operation on the document for the lifetime of the object (re-entrant, any thread)
+     * and refuses it when the document is being closed.
+     *
+     * The closing thread itself is never refused, whatever the policy; only other threads are,
+     * so Refuse and CloserMay differ only in name now, and Throw differs from them only for
+     * other threads (it throws rather than returning).
+     *
+     * Order matters: increment the counter, then read @c closing, and back out of the counter
+     * when it is set. A throwing policy is only safe where the caller may throw (a Python-facing
+     * entry point); a destructor, an observer or a redo clear running in a destructor would
+     * std::terminate on it, so those use Refuse and test refused().
+     *
+     * Every construction site and its policy (the table is in the run 023 note):
+     *
+     * | site | policy |
+     * |---|---|
+     * | Document::openTransaction (public), commitTransaction, abortTransaction | Throw |
+     * | Document::undo, redo | Throw |
+     * | Document::recompute | Throw (the async worker catches it and reports it) |
+     * | AgentTurnGuard::begin, end | Throw |
+     * | Document::_openTransaction | Refuse (returns 0) |
+     * | Document::_commitTransaction | CloserMay (returns false; the destructor's clearUndos reaches it) |
+     * | Document::_abortTransaction | Refuse (returns) |
+     * | Document::_clearRedos | CloserMay (returns, nothing cleared; the destructor's clearUndos reaches it) |
+     * | Document::clearUndos | CloserMay (the destructor's own call must run) |
+     * | Document::onBeforeChangeProperty | CloserMay (object destructors set properties; others skip the hook) |
+     */
     class OpScope
     {
     public:
-        OpScope(DocumentP& dp, DocOp op)
+        OpScope(DocumentP& dp, DocOp op, OnClosing policy)
             : counter(dp.activeOps[static_cast<std::size_t>(op)])
         {
             ++counter;
+            if (!dp.closing.load()) {
+                return;
+            }
+            // The closing thread runs the destructor, the observers and the __del__ code of the
+            // close; it is let through every scope (it only counts itself in). The double free is
+            // prevented by beginClose's compare-exchange, not by the scopes.
+            // An empty closer means the closing thread has set the flag but not yet recorded its
+            // id: it has not read the counters yet either (it stores the id first), so letting
+            // this operation through is safe, because its counter increment is already visible to
+            // that read. Refusing it instead could refuse the closing thread itself.
+            const std::thread::id closerId = dp.closer.load();
+            if (closerId == std::this_thread::get_id() || closerId == std::thread::id {}) {
+                return;
+            }
+            --counter;
+            held = false;
+            if (policy == OnClosing::Throw) {
+                throw Base::RuntimeError("the document is being closed");
+            }
         }
         OpScope(const OpScope&) = delete;
         OpScope& operator=(const OpScope&) = delete;
         ~OpScope()
         {
-            --counter;
+            if (held) {
+                --counter;
+            }
+        }
+        /// True when the document is being closed and the operation must not go on (not thrown).
+        bool refused() const
+        {
+            return !held;
         }
 
     private:
         std::atomic<int>& counter;
+        bool held {true};
     };
 
     void addRecomputeLog(const char* why, App::DocumentObject* obj)

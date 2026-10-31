@@ -270,8 +270,108 @@ assert "in progress" in str(errs[0]) or "busy" in str(errs[0]), errs
 assert App.getDocument("CL") is not None
 if MODE == "nested":
     d.endAgentTurn(False)
+# A refused close must not brick the document: the closing flag is lifted again.
+d.openTransaction("after"); objs[1].L = 3; d.commitTransaction(); d.recompute()
+d.beginAgentTurn("u"); objs[1].L = 4; d.endAgentTurn(False)
+assert objs[1].L == 3, objs[1].L
 App.closeDocument("CL")
+assert "CL" not in App.listDocuments()
 print("OK", errs[0])
+'''
+
+# Run 023, the reverse race: thread A closes (a __del__ run while the document is destroyed
+# sleeps); thread B starts an operation meanwhile. B must get a RuntimeError, not write into the
+# freed DocumentP. A wrapper that outlives the close must give a ReferenceError.
+CLOSE_TOCTOU = PRELUDE + '''
+indel = threading.Event(); res = {}
+class Dying:
+    def __del__(self):
+        indel.set(); time.sleep(0.5)
+d = App.newDocument("TC")
+o = d.addObject("App::FeaturePython", "O"); Prox(o)
+o.addProperty("App::PropertyPythonObject", "PO"); o.PO = Dying()
+o.addProperty("App::PropertyLength", "L")
+d.recompute()
+bound = d.recompute          # a bound method captured before the close
+del o
+OPS = {
+    "openTransaction": lambda: d.openTransaction("x"),
+    "commitTransaction": lambda: d.commitTransaction(),
+    "abortTransaction": lambda: d.abortTransaction(),
+    "recompute": lambda: d.recompute(),
+    "beginAgentTurn": lambda: d.beginAgentTurn("t"),
+}
+def worker():
+    indel.wait(10)
+    for name, op in OPS.items():
+        try: op(); res[name] = "ok"
+        except Exception as e: res[name] = type(e).__name__ + ":" + str(e)
+t = threading.Thread(target=worker); t.start()
+App.closeDocument("TC")
+t.join()
+assert "TC" not in App.listDocuments()
+for name in OPS:
+    assert res[name].startswith(("RuntimeError:", "ReferenceError:")), (name, res[name])
+    assert "closed" in res[name] or "deleted" in res[name], (name, res[name])
+# After the close finished: the wrapper is invalid, every route gives a Python error.
+for name, op in list(OPS.items()) + [("bound", bound)]:
+    try: op(); raise SystemExit("no error from %s after the close" % name)
+    except ReferenceError: pass
+late = []
+def late_worker():
+    try: d.openTransaction("late")
+    except ReferenceError as e: late.append("ReferenceError")
+t = threading.Thread(target=late_worker); t.start(); t.join()
+assert late == ["ReferenceError"], late
+print("OK", res)
+'''
+
+# Closing a document must free its redo stack: an undone object whose expression points into another
+# document used to stay registered and crash the next property rename there (run 023 verifier).
+CLOSE_REDO = PRELUDE + '''
+import gc
+dels = []
+class Tracker:
+    def __del__(self): dels.append("freed")
+import tempfile, os
+tmp = tempfile.mkdtemp()
+a = App.newDocument("RA"); b = App.newDocument("RB")
+a.saveAs(os.path.join(tmp, "ra.FCStd")); b.saveAs(os.path.join(tmp, "rb.FCStd"))
+vb = b.addObject("App::VarSet", "VB"); vb.addProperty("App::PropertyInteger", "P"); vb.P = 1
+a.UndoMode = 1
+a.openTransaction("add")
+x = a.addObject("App::FeaturePython", "X"); Prox(x)
+x.addProperty("App::PropertyInteger", "Q"); x.addProperty("App::PropertyPythonObject", "T"); x.T = Tracker()
+x.setExpression("Q", "RB#VB.P + 1")
+a.commitTransaction(); a.recompute()
+a.undo()
+del x; gc.collect()
+App.closeDocument("RA"); gc.collect()
+assert dels == ["freed"], dels
+vb.renameProperty("P", "P2")
+b.Label = "Bee"
+App.closeDocument("RB")
+print("OK", dels)
+'''
+
+# A close from inside signalDeleteDocument (slotDeletedDocument in Python) is refused: it used to
+# free the document twice.
+CLOSE_DOUBLE = PRELUDE + '''
+res = []
+d = App.newDocument("DC")
+o = d.addObject("App::FeaturePython", "O"); Prox(o)
+class Obs:
+    def slotDeletedDocument(self, doc):
+        try: App.closeDocument(doc.Name); res.append("inner closed")
+        except Exception as e: res.append("inner refused:%s" % e)
+        try: App.closeDocument(doc); res.append("inner closed")
+        except Exception as e: res.append("inner refused:%s" % e)
+obs = Obs(); App.addDocumentObserver(obs)
+App.closeDocument("DC")
+App.removeDocumentObserver(obs)
+assert "DC" not in App.listDocuments()
+assert len(res) == 2 and all(r.startswith("inner refused:") and "being closed" in r for r in res), res
+print("OK", res)
 '''
 
 # A proxy __del__ that closes its own document while the redo stack is cleared (also crashes upstream).
@@ -366,6 +466,16 @@ class TestTurnMutexLockOrder(unittest.TestCase):
 
     def test_del_that_closes_its_document_during_a_redo_clear_is_refused(self):
         self.assertIn("OK", self._run(CLOSE_IN_DEL, scribble=True))
+
+    def test_operation_that_starts_during_a_close_is_refused_and_a_late_wrapper_errors(self):
+        for _ in range(3):
+            self.assertIn("OK", self._run(CLOSE_TOCTOU, scribble=True))
+
+    def test_closing_frees_the_redo_stack_and_a_later_rename_elsewhere_is_safe(self):
+        self.assertIn("OK", self._run(CLOSE_REDO, scribble=True))
+
+    def test_close_from_inside_the_delete_observer_is_refused(self):
+        self.assertIn("OK", self._run(CLOSE_DOUBLE, scribble=True))
 
 
 if __name__ == "__main__":

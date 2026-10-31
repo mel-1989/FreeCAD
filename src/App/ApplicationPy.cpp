@@ -220,7 +220,19 @@ PyObject* ApplicationPy::sSetActiveDocument(PyObject* /*self*/, PyObject* args)
     Py_Return;
 }
 
+static PyObject* closeDocumentBody(PyObject* args);
+
 PyObject* ApplicationPy::sCloseDocument(PyObject* /*self*/, PyObject* args)
+{
+    // Observers run by the close can throw C++ exceptions; none may unwind through CPython.
+    PY_TRY
+    {
+        return closeDocumentBody(args);
+    }
+    PY_CATCH;
+}
+
+static PyObject* closeDocumentBody(PyObject* args)
 {
     char* pstr = nullptr;
     if (PyArg_ParseTuple(args, "s", &pstr)) {
@@ -240,7 +252,14 @@ PyObject* ApplicationPy::sCloseDocument(PyObject* /*self*/, PyObject* args)
         }
 
         if (!GetApplication().closeDocument(pstr)) {
-            PyErr_Format(PyExc_RuntimeError, "Closing the document '%s' failed", pstr);
+            // closeDocument refuses on its own too: an operation can start between the check
+            // above and the close, and the close sets the closing flag first.
+            const std::string why = GetApplication().closeRefusal(pstr);
+            PyErr_Format(PyExc_RuntimeError,
+                         "Closing the document '%s' failed%s%s",
+                         pstr,
+                         why.empty() ? "" : ": ",
+                         why.c_str());
             return nullptr;
         }
 
@@ -269,8 +288,14 @@ PyObject* ApplicationPy::sCloseDocument(PyObject* /*self*/, PyObject* args)
             return nullptr;
         }
 
+        const std::string docName = doc->getName();
         if (!GetApplication().closeDocument(doc)) {
-            PyErr_Format(PyExc_RuntimeError, "Closing the document '%s' failed", doc->getName());
+            const std::string why = GetApplication().closeRefusal(docName.c_str());
+            PyErr_Format(PyExc_RuntimeError,
+                         "Closing the document '%s' failed%s%s",
+                         docName.c_str(),
+                         why.empty() ? "" : ": ",
+                         why.c_str());
             return nullptr;
         }
 
