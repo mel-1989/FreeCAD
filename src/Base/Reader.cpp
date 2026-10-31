@@ -505,6 +505,43 @@ void Base::XMLReader::readFiles(zipios::ZipInputStream& zipstream) const
     }
 }
 
+void Base::XMLReader::readFilesFromDirectory(const std::string& dirName) const
+{
+    // Same contract as readFiles(zipstream): entries that were registered but are not present
+    // in the source are skipped, a failing entry is reported and reading continues.
+    Base::SequencerLauncher seq("Importing project files...", FileList.size());
+    for (const auto& entry : FileList) {
+        seq.next();
+        // Names come from the document itself; never leave the folder.
+        if (entry.FileName.empty() || entry.FileName.front() == '/'
+            || entry.FileName.find("..") != std::string::npos
+            || entry.FileName.find('\\') != std::string::npos) {
+            Base::Console().error("Skipped unsafe embedded file name: {}\n", entry.FileName);
+            FailedFiles.push_back(entry.FileName);
+            continue;
+        }
+        Base::FileInfo fi(dirName + "/" + entry.FileName);
+        if (!fi.exists() || fi.isDir()) {
+            continue;
+        }
+        try {
+            Base::ifstream file(fi, std::ios::in | std::ios::binary);
+            if (!file.is_open()) {
+                throw Base::FileException("Failed to open file", fi);
+            }
+            Base::Reader reader(file, entry.FileName, FileVersion);
+            entry.Object->RestoreDocFile(reader);
+            if (reader.getLocalReader()) {
+                reader.getLocalReader()->readFilesFromDirectory(dirName);
+            }
+        }
+        catch (...) {
+            Base::Console().error("Reading failed from embedded file: {}\n", entry.FileName);
+            FailedFiles.push_back(entry.FileName);
+        }
+    }
+}
+
 const char* Base::XMLReader::addFile(const char* Name, Base::Persistence* Object)
 {
     FileEntry temp;

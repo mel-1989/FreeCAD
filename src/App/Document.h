@@ -310,6 +310,24 @@ public:
     bool saveCopy(const char* file) const;
 
     /**
+     * @brief Save the document as a folder of text files ("FCStd as folder").
+     *
+     * The folder holds Document.xml, one file per shape and data file, and the manifest
+     * FCStdFolder.txt. The document is then bound to the folder: FileName is the folder and
+     * save() writes back to it. The output is deterministic (LastModifiedDate is not touched
+     * once set), so that it diffs cleanly under version control.
+     *
+     * @param[in] dir: The folder to save to (created if missing).
+     */
+    bool saveAsFolder(const char* dir);
+
+    /**
+     * @brief Whether a path names a folder document: it ends in ".FCStd.d", or it is an
+     * existing directory that holds Document.xml or the folder manifest.
+     */
+    static bool isFolderPath(const char* file);
+
+    /**
      * @brief Return whether App-side document state allows a recovery write.
      *
      * This intentionally does not account for GUI-only concerns such as an
@@ -1387,6 +1405,10 @@ protected:
      * @throw Base::FileException if the file could not be written.
      */
     bool saveToFile(const char* filename) const;
+
+    /// Write the folder form of the document, see saveAsFolder(). Implemented in
+    /// DocumentFolder.cpp.
+    bool saveToFolder(const char* dirname) const;
 
     /**
      * @brief Count the object of a given type.

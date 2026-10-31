@@ -278,6 +278,9 @@ public:
     const char* addFile(const char* Name, Base::Persistence* Object);
     /// process the requested file writes
     void readFiles(zipios::ZipInputStream& zipstream) const;
+    /// process the requested file reads from a directory holding one file per entry
+    /// (the "FCStd as folder" layout); files missing from the directory are skipped
+    void readFilesFromDirectory(const std::string& dirName) const;
     /// Returns whether reader has any registered filenames
     bool hasFilenames() const;
     /// returns true if reading the file \a filename has failed

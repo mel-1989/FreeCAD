@@ -1235,6 +1235,13 @@ Document* Application::openDocumentPrivate(const char * FileName,
     }else
         name = File.fileNamePure();
 
+    // A folder document "model.FCStd.d" is called "model", as saveAsFolder() labels it
+    if (Document::isFolderPath(FileName) && !name.empty()) {
+        if (boost::iends_with(name, ".fcstd")) {
+            name.erase(name.size() - 6);
+        }
+    }
+
     // Use the same name for the internal and user name.
     // The file name is UTF-8 encoded which means that the internal name will be modified
     // to only contain valid ASCII characters but the user name will be kept.

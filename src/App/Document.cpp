@@ -2000,6 +2000,9 @@ static std::string checkFileName(const char* file)
 
 bool Document::saveAs(const char* _file)
 {
+    if (isFolderPath(_file)) {
+        return saveAsFolder(_file);
+    }
     const std::string file = checkFileName(_file);
     const Base::FileInfo fi(file.c_str());
     if (this->FileName.getStrValue() != file) {
@@ -2013,6 +2016,9 @@ bool Document::saveAs(const char* _file)
 
 bool Document::saveCopy(const char* file) const
 {
+    if (isFolderPath(file)) {
+        return FileName.getStrValue() != file ? saveToFolder(file) : false;
+    }
     const std::string checked = checkFileName(file);
     return this->FileName.getStrValue() != checked ? saveToFile(checked.c_str()) : false;
 }
@@ -2041,8 +2047,13 @@ bool Document::save()
             TipName.setValue(Tip.getValue()->getNameInDocument());
         }
 
-        const std::string LastModifiedDateString = Base::Tools::currentDateTimeString();
-        LastModifiedDate.setValue(LastModifiedDateString.c_str());
+        // Folder documents keep the date they have once set: a volatile timestamp would change
+        // Document.xml on every save and defeat diffing; the revision store records the time.
+        const bool folder = isFolderPath(FileName.getValue());
+        if (!folder || *LastModifiedDate.getValue() == '\0') {
+            const std::string LastModifiedDateString = Base::Tools::currentDateTimeString();
+            LastModifiedDate.setValue(LastModifiedDateString.c_str());
+        }
         // set author if needed
         const bool saveAuthor =
             GetApplication()
@@ -2056,7 +2067,8 @@ bool Document::save()
             LastModifiedBy.setValue(Author.c_str());
         }
 
-        bool result = saveToFile(FileName.getValue());
+        bool result =
+            folder ? saveToFolder(FileName.getValue()) : saveToFile(FileName.getValue());
         if (result) {
             d->programVersion = Application::Config()["BuildVersionMajor"] + "."
                 + Application::Config()["BuildVersionMinor"] + "R"
@@ -2281,20 +2293,41 @@ void Document::restore(const char* filename,
         filename = FileName.getValue();
     }
     Base::FileInfo fi(filename);
-    Base::ifstream file(fi, std::ios::in | std::ios::binary);
-    std::streambuf* buf = file.rdbuf();
-    std::streamoff size = buf->pubseekoff(0, std::ios::end, std::ios::in);
-    buf->pubseekoff(0, std::ios::beg, std::ios::in);
-    if (size < 22) {  // an empty zip archive has 22 bytes
-        throw Base::FileException("Invalid project file", filename);
+    // A directory holding Document.xml is the "FCStd as folder" form, see saveAsFolder()
+    const bool folder = fi.isDir();
+    Base::ifstream file;
+    std::unique_ptr<zipios::ZipInputStream> zipstreamPtr;
+    std::unique_ptr<Base::XMLReader> readerPtr;
+    if (folder) {
+        const std::string xmlName = fi.filePath() + "/Document.xml";
+        Base::FileInfo xmlInfo(xmlName);
+        if (!xmlInfo.exists()) {
+            throw Base::FileException("Invalid folder document: Document.xml is missing",
+                                      filename);
+        }
+        file.open(xmlInfo, std::ios::in | std::ios::binary);
+        readerPtr = std::make_unique<Base::XMLReader>(xmlName.c_str(), file);
+        if (!readerPtr->isValid()) {
+            throw Base::FileException("Error reading folder document", filename);
+        }
     }
+    else {
+        file.open(fi, std::ios::in | std::ios::binary);
+        std::streambuf* buf = file.rdbuf();
+        std::streamoff size = buf->pubseekoff(0, std::ios::end, std::ios::in);
+        buf->pubseekoff(0, std::ios::beg, std::ios::in);
+        if (size < 22) {  // an empty zip archive has 22 bytes
+            throw Base::FileException("Invalid project file", filename);
+        }
 
-    zipios::ZipInputStream zipstream(file);
-    Base::XMLReader reader(filename, zipstream);
+        zipstreamPtr = std::make_unique<zipios::ZipInputStream>(file);
+        readerPtr = std::make_unique<Base::XMLReader>(filename, *zipstreamPtr);
 
-    if (!reader.isValid()) {
-        throw Base::FileException("Error reading compression file", filename);
+        if (!readerPtr->isValid()) {
+            throw Base::FileException("Error reading compression file", filename);
+        }
     }
+    Base::XMLReader& reader = *readerPtr;
 
     GetApplication().signalStartRestoreDocument(*this);
     setStatus(Document::Restoring, true);
@@ -2319,7 +2352,12 @@ void Document::restore(const char* filename,
     // Note: This file doesn't need to be available if the document has been created
     // without GUI. But if available then follow after all data files of the App document.
     signalRestoreDocument(reader);
-    reader.readFiles(zipstream);
+    if (folder) {
+        reader.readFilesFromDirectory(fi.filePath());
+    }
+    else {
+        reader.readFiles(*zipstreamPtr);
+    }
 
     DocumentP::checkStringHasher(reader);
 
