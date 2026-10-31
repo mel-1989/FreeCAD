@@ -17,6 +17,8 @@ from SMTests.testHem import TestHem  # noqa: F401
 from SMTests.testJog import TestJog  # noqa: F401
 from SMTests.testKfactor import TestKFactor  # noqa: F401
 from SMTests.testLighteningCutout import TestCutoutRefusals, TestLighteningCutout  # noqa: F401
+from SMTests.testLoftedBend import (  # noqa: F401
+    TestLoftedFlat, TestLoftedGoldens, TestLoftedRefusals, TestLoftedVolume)
 from SMTests.testLicence import TestSheetMetalLicence  # noqa: F401
 from SMTests.testNewUnfolderK import TestGetKFactor, TestRootFaceIndependence  # noqa: F401
 from SMTests.testOracle import TestFlatPatternOracle  # noqa: F401

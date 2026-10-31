@@ -38,6 +38,7 @@ import SheetMetalBendCuts
 import SheetMetalBendTable
 import SheetMetalFlatPattern
 import SheetMetalKfactor
+import SheetMetalLoftedBend
 import SheetMetalTools
 import SheetMetalUnfolder
 from engineering_mode import engineering_mode_enabled
@@ -662,6 +663,17 @@ class SMUnfold:
             )
         return shape, sketches
 
+    def loftedUnfolder(self, obj, lofted):
+        """The lofted bend's own flat pattern (SheetMetalLoftedBend): its triangles developed
+        about their hinges, with one bend line per hinge; the flat check uses the feature's
+        exact volume term."""
+        shape, bends, norm, problem = SheetMetalLoftedBend.lofted_flat(lofted)
+        if problem:
+            FreeCAD.Console.PrintWarning("%s: %s\n" % (getattr(obj, "Label", "Unfold"), problem))
+        obj.BendData = SheetMetalFlatPattern.bends_to_json(bends, norm, problem)
+        obj.BendNotes = [b.note for b in bends]
+        return shape
+
     def execute(self, fp):
         """Print a short message when doing a recomputation.
 
@@ -670,6 +682,23 @@ class SMUnfold:
 
         """
         self.addVerifyProperties(fp)
+        lofted = SheetMetalLoftedBend.lofted_source(fp.baseObject[0])
+        if lofted is not None:
+            # A faceted lofted bend has no cylindrical bends; it develops its own flat pattern.
+            fp.BendData = ""
+            fp.BendNotes = []
+            fp.Shape = self.loftedUnfolder(fp, lofted)
+            for prop in fp.UnfoldSketches:
+                item = fp.Document.getObject(prop)
+                if item is not None:
+                    fp.Document.removeObject(item.Name)
+            fp.UnfoldSketches = []
+            SheetMetalTools.smRemoveFromRecompute(fp)
+            return
+        if SheetMetalLoftedBend.in_chain(fp.baseObject[0]):
+            raise FreeCAD.Base.FreeCADError(
+                "A lofted bend can only be unfolded as it is; features applied after it "
+                "(cutouts, flanges) cannot be developed.")
         baseObj, baseFace = SheetMetalTools.smGetSubElementName(fp.baseObject[1][0])
         if baseObj is None:
             baseObj = fp.baseObject[0]
