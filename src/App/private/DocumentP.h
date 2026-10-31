@@ -236,7 +236,12 @@ struct DocumentP
             // The closing thread runs the destructor, the observers and the __del__ code of the
             // close; it is let through every scope (it only counts itself in). The double free is
             // prevented by beginClose's compare-exchange, not by the scopes.
-            if (dp.closer.load() == std::this_thread::get_id()) {
+            // An empty closer means the closing thread has set the flag but not yet recorded its
+            // id: it has not read the counters yet either (it stores the id first), so letting
+            // this operation through is safe, because its counter increment is already visible to
+            // that read. Refusing it instead could refuse the closing thread itself.
+            const std::thread::id closerId = dp.closer.load();
+            if (closerId == std::this_thread::get_id() || closerId == std::thread::id {}) {
                 return;
             }
             --counter;
