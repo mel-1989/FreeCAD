@@ -176,7 +176,12 @@ class EstimateThickness:
 
     @staticmethod
     def using_best_method(shape: Part.Shape, selected_face: int) -> float:
-        thickness = EstimateThickness.from_normal_edges(shape, selected_face)
+        # The concentric bend cylinders give the thickness exactly. The normal-edge and
+        # opposite-face estimates can be fooled (a symmetric U unfolded from an outer leg face
+        # measured the web width), so they only serve parts without bends.
+        thickness = EstimateThickness.from_cylinders(shape)
+        if not thickness:
+            thickness = EstimateThickness.from_normal_edges(shape, selected_face)
         if not thickness:
             thickness = EstimateThickness.from_face(shape, selected_face)
         if not thickness:
@@ -1369,6 +1374,36 @@ def compute_unbend_transform(
     overall_transform.transform(Vector(), alignment_transform)
     return alignment_transform, overall_transform, uvref
 
+def check_thickness_against_bends(faces, graph, thickness: float, tol: float = 1e-4) -> None:
+    """Refuse to unfold when the thickness disagrees with the bend cylinders.
+
+    Every bend face reached by the unfold has a concentric partner whose radius differs by
+    exactly the sheet thickness (outer radius minus inner radius). If none exists the
+    thickness estimate is wrong and the flat pattern would be wrong without any message.
+    """
+    for idx in graph.nodes:
+        face = faces[idx]
+        if face.Surface.TypeId != "Part::GeomCylinder":
+            continue
+        surf = face.Surface
+        partner = any(
+            other.Surface.TypeId == "Part::GeomCylinder"
+            and other.hashCode() != face.hashCode()
+            and abs(abs(other.Surface.Radius - surf.Radius) - thickness) < tol
+            and other.Surface.Axis.cross(surf.Axis).Length < 1e-6
+            and (other.Surface.Center - surf.Center).cross(surf.Axis).Length < 1e-6
+            for other in faces
+        )
+        if not partner:
+            errmsg = (
+                f"Cannot unfold: the estimated sheet thickness {thickness:g} mm does not match "
+                f"the bend (Face{idx + 1}, radius {surf.Radius:g} mm), which has no concentric "
+                "bend face one thickness away. The part is not a uniform-thickness sheet, or "
+                "the thickness could not be determined."
+            )
+            raise RuntimeError(errmsg)
+
+
 def unfold(
     shape: Part.Shape, root_face_index: int, bac: BendAllowanceCalculator
 ) -> tuple[list[Part.Edge], list[BendInfo]]:
@@ -1380,6 +1415,8 @@ def unfold(
     thickness = EstimateThickness.using_best_method(shape, root_face_index)
     # Also build a list of all seam edges, to be filtered out from the
     # unfolded shape.
+    this_shape_faces = list(shape.Faces)
+    check_thickness_against_bends(this_shape_faces, graph_of_sheet_faces, thickness)
     seam_edges_list = []
     this_shape_edges = list(shape.Edges)
     for _, _, edata in graph_of_sheet_faces.edges(data=True):
@@ -1406,7 +1443,6 @@ def unfold(
     # The digraph should now have everything we need to unfold the shape,
     # For every edge f1--e1-->f2 where f2 is a cylindrical face, feed f1
     # through our unbending functions with e1 as the stationary edge.
-    this_shape_faces = list(shape.Faces)
     for e in [
         e for e in dg.edges if this_shape_faces[e[1]].Surface.TypeId == "Part::GeomCylinder"
     ]:

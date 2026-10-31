@@ -879,8 +879,8 @@ if SheetMetalTools.isGuiLoaded():
                 # Sichere Ermittlung des Namens/Labels, egal ob mds ein Spreadsheet-Objekt oder ein String ist
                 label_name = mds.Label if hasattr(mds, "Label") else str(mds)
 
-                # Fügt sowohl 'material_' Spreadsheets als auch 'csv_' Tabellen hinzu
-                if label_name.startswith("material_") or label_name.startswith("csv_"):
+                # material_ spreadsheets, csv_ K-factor files and bt_ bend tables
+                if label_name.startswith(("material_", "csv_", SheetMetalBendTable.PREFIX)):
                     self.form.availableMds.addItem(label_name)
 
             self.form.availableMds.addItem(translate("SheetMetal", "Manual K-Factor"))

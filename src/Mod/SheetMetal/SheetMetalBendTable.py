@@ -60,7 +60,7 @@ def outside_setback(thickness, radius, angle_deg):
     """OSSB = tan(theta / 2) * (R + T), the setback from the mould-line apex to the tangent line."""
     if not 0.0 < angle_deg < 180.0:
         raise BendTableError(
-            "outside setback is defined for bend angles between 0 and 180 degrees, got %g" % angle_deg
+            "outside setback is defined for bend angles between 0 and 180 degrees, got %.9g" % angle_deg
         )
     return math.tan(math.radians(angle_deg) / 2.0) * (radius + thickness)
 
@@ -88,7 +88,7 @@ def _interp_1d(axis, x, label, unit=""):
     lo, hi = axis[0], axis[-1]
     if x < lo - EPS or x > hi + EPS:
         raise BendTableRangeError(
-            "%s %g%s is outside the table range %g to %g%s; the table is not extrapolated"
+            "%s %.9g%s is outside the table range %.9g to %.9g%s; the table is not extrapolated"
             % (label, x, unit, lo, hi, unit)
         )
     pos = bisect.bisect_left(axis, x - EPS)
@@ -158,13 +158,13 @@ class BendTable:
                 raise BendTableError("bend table %s has a row without a material" % self.name)
             if thickness <= 0 or radius < 0 or not 0.0 < angle <= 180.0:
                 raise BendTableError(
-                    "bend table %s: impossible row thickness=%g radius=%g angle=%g"
+                    "bend table %s: impossible row thickness=%.9g radius=%.9g angle=%.9g"
                     % (self.name, thickness, radius, angle)
                 )
             cell = raw.setdefault(material, {}).setdefault(thickness, {})
             if (radius, angle) in cell:
                 raise BendTableError(
-                    "bend table %s lists %s T=%g R=%g angle=%g twice" % (self.name, material, thickness, radius, angle)
+                    "bend table %s lists %s T=%.9g R=%.9g angle=%.9g twice" % (self.name, material, thickness, radius, angle)
                 )
             cell[(radius, angle)] = value
             if gauge:
@@ -179,7 +179,7 @@ class BendTable:
                 angles = sorted({a for _, a in cell})
                 if len(cell) != len(radii) * len(angles):
                     raise BendTableError(
-                        "bend table %s: %s T=%g is not a full radius x angle grid (%d rows for %d x %d)"
+                        "bend table %s: %s T=%.9g is not a full radius x angle grid (%d rows for %d x %d)"
                         % (self.name, material, thickness, len(cell), len(radii), len(angles))
                     )
                 self._grids[material][thickness] = (radii, angles, cell)
@@ -313,7 +313,7 @@ class BendTableLookup:
     def _check_gauge(self, thickness):
         if self.gauge_thickness is not None and abs(self.gauge_thickness - thickness) > 1e-3:
             raise BendTableRangeError(
-                "gauge %s is %g mm in table %s but the part is %g mm thick"
+                "gauge %s is %.9g mm in table %s but the part is %.9g mm thick"
                 % (self.gauge, self.gauge_thickness, self.table.name, thickness)
             )
 
