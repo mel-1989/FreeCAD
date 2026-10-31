@@ -6,6 +6,7 @@ import TestApp  # noqa: F401  (FreeCAD test harness)
 from SMTests.testBendCuts import TestBendCuts  # noqa: F401
 from SMTests.testEdgeFlange import TestEdgeFlange  # noqa: F401
 from SMTests.testFolder import TestFolder  # noqa: F401
+from SMTests.testHem import TestHem  # noqa: F401
 from SMTests.testKfactor import TestKFactor  # noqa: F401
 from SMTests.testLicence import TestSheetMetalLicence  # noqa: F401
 from SMTests.testOracle import TestFlatPatternOracle  # noqa: F401
