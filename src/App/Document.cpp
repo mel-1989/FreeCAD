@@ -178,6 +178,7 @@ bool Document::undo(const int id)
     if (d->agent && AgentTurnGuard::refuseHistory(*this, "undo")) {
         return false;
     }
+    DocumentP::OpScope opScope(*d, DocOp::Transaction);
     if (id != 0) {
         const auto it = mUndoMap.find(id);
         if (it == mUndoMap.end()) {
@@ -237,6 +238,7 @@ bool Document::redo(const int id)
     if (d->agent && AgentTurnGuard::refuseHistory(*this, "redo")) {
         return false;
     }
+    DocumentP::OpScope opScope(*d, DocOp::Transaction);
     if (id != 0) {
         const auto it = mRedoMap.find(id);
         if (it == mRedoMap.end()) {
@@ -402,6 +404,7 @@ int Document::openTransaction(std::string name, int tid)
 
 int Document::_openTransaction(std::string name, int id)
 {
+    DocumentP::OpScope opScope(*d, DocOp::Transaction);
     if (isTransactionLocked() && id != d->bookedTransaction) {
         if (FC_LOG_INSTANCE.isEnabled(FC_LOGLEVEL_LOG)) {
             FC_WARN("Transaction locked, ignore new transaction '" << name << "'");
@@ -599,6 +602,7 @@ void Document::_checkTransaction(DocumentObject* pcDelObj, const Property* What,
 
 void Document::_clearRedos(std::list<Transaction*>* detach)
 {
+    DocumentP::OpScope opScope(*d, DocOp::Transaction);
     if (isPerformingTransaction() || d->committing) {
         FC_ERR("Cannot clear redo while transacting");
         return;
@@ -646,6 +650,7 @@ void Document::commitTransaction() // NOLINT
 
 bool Document::_commitTransaction(const bool notify)
 {
+    DocumentP::OpScope opScope(*d, DocOp::Transaction);
     if (isPerformingTransaction()) {
         if (FC_LOG_INSTANCE.isEnabled(FC_LOGLEVEL_LOG)) {
             FC_WARN("Cannot commit transaction while transacting");
@@ -719,6 +724,7 @@ void Document::abortTransaction() const
 
 void Document::_abortTransaction()
 {
+    DocumentP::OpScope opScope(*d, DocOp::Transaction);
     if (isPerformingTransaction() || d->committing) {
         if (FC_LOG_INSTANCE.isEnabled(FC_LOGLEVEL_LOG)) {
             FC_WARN("Cannot abort transaction while transacting");
@@ -847,6 +853,7 @@ void Document::clearUndos()
         FC_ERR("Cannot clear undos while transacting");
         return;
     }
+    DocumentP::OpScope opScope(*d, DocOp::Transaction);
 
     if (d->activeUndoTransaction) {
         _commitTransaction(true);
@@ -1008,6 +1015,8 @@ void Document::onChanged(const Property* prop)
 
 void Document::onBeforeChangeProperty(const TransactionalObject* Who, const Property* What)
 {
+    // A thread parked on the turn lock below has the document half-entered: no close meanwhile.
+    DocumentP::OpScope opScope(*d, DocOp::PropertyHook);
     if (d->agent) {
         // Refuse before anything is touched or signalled: when another thread has the turn busy
         // and this one holds the GIL, the lock throws, and the property is still untouched.
@@ -2623,6 +2632,26 @@ bool Document::isClosable() const
     return testStatus(Document::Closable);
 }
 
+std::string Document::closeRefusal() const
+{
+    const auto active = [this](DocOp op) {
+        return d->activeOps[static_cast<std::size_t>(op)].load() > 0;
+    };
+    if (active(DocOp::Transaction)) {
+        return "a transaction (open, commit, abort, undo or redo) is in progress on it";
+    }
+    if (active(DocOp::Recompute)) {
+        return "a recompute is in progress on it";
+    }
+    if (active(DocOp::TurnBusy)) {
+        return "an agent turn is busy on it";
+    }
+    if (active(DocOp::PropertyHook)) {
+        return "a thread is changing a property of it (parked on the agent turn)";
+    }
+    return {};
+}
+
 int Document::countObjects() const
 {
     return static_cast<int>(d->objectArray.size());
@@ -3034,6 +3063,7 @@ int Document::recompute(const std::vector<DocumentObject*>& objs,
     // signalBeforeRecompute() temporarily release it when they need to run
     // Python on the GUI thread to avoid deadlocks.
     Base::PyGILStateLocker locker;
+    DocumentP::OpScope opScope(*d, DocOp::Recompute);
 
     if (d->undoing || d->rollback) {
         if (FC_LOG_INSTANCE.isEnabled(FC_LOGLEVEL_LOG)) {

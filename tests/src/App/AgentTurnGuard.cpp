@@ -596,3 +596,37 @@ TEST_F(AgentTurnGuardTest, CanEndReportsBusyWorkerAndLock)
     App::AgentTurnGuard::end(*_doc, false);
     EXPECT_FALSE(App::AgentTurnGuard::canEnd(*_doc, 10ms, why));
 }
+
+TEST_F(AgentTurnGuardTest, CloseIsRefusedWhileATransactionOperationIsMidWay)
+{
+    EXPECT_TRUE(_doc->closeRefusal().empty());
+    EXPECT_TRUE(App::GetApplication().closeRefusal(_docName.c_str()).empty());
+
+    // A re-entrant close from inside the operation (what a Python __del__ run by it would do).
+    std::string whyInside;
+    bool closedInside = true;
+    auto conn = _doc->signalAbortTransaction.connect([&](const App::Document&) {
+        whyInside = _doc->closeRefusal();
+        closedInside = App::GetApplication().closeDocument(_docName.c_str());
+    });
+
+    // A plain abort, and a nested abort inside a turn.
+    _doc->openTransaction("plain");
+    _a->Integer.setValue(1);
+    _doc->abortTransaction();
+    EXPECT_NE(whyInside.find("transaction"), std::string::npos) << whyInside;
+    EXPECT_FALSE(closedInside);
+    EXPECT_NE(App::GetApplication().getDocument(_docName.c_str()), nullptr);
+
+    whyInside.clear();
+    closedInside = true;
+    App::AgentTurnGuard::begin(*_doc, "the turn");
+    _doc->openTransaction("nested");
+    _a->Integer.setValue(2);
+    _doc->abortTransaction();
+    EXPECT_FALSE(whyInside.empty());
+    EXPECT_FALSE(closedInside);
+    conn.disconnect();
+    App::AgentTurnGuard::end(*_doc, false);
+    EXPECT_TRUE(_doc->closeRefusal().empty()) << "the guard must be released after the operation";
+}

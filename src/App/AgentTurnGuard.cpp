@@ -178,6 +178,7 @@ bool AgentTurnGuard::canEnd(Document& doc, std::chrono::milliseconds wait, std::
 int AgentTurnGuard::begin(Document& doc, const std::string& name, std::chrono::milliseconds wait)
 {
     auto acc = Transaction::accessDocument(doc);
+    DocumentP::OpScope opScope(*acc.d, DocOp::TurnBusy);
     if (acc.d->agent) {
         throw Base::RuntimeError("an agent turn is already active on this document");
     }
@@ -216,6 +217,7 @@ int AgentTurnGuard::begin(Document& doc, const std::string& name, std::chrono::m
 AgentTurnReport AgentTurnGuard::end(Document& doc, bool commit, std::chrono::milliseconds wait)
 {
     auto acc = Transaction::accessDocument(doc);
+    DocumentP::OpScope opScope(*acc.d, DocOp::TurnBusy);
     std::shared_ptr<AgentTurnState> st = acc.d->agent;
     if (!st || st->ending) {
         throw Base::RuntimeError("no agent turn is active on this document");

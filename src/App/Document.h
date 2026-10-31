@@ -804,6 +804,18 @@ public:
     /// Check whether the document can be closed.
     bool isClosable() const;
 
+    /**
+     * @brief Why the document must not be closed right now, or an empty string when it may be.
+     *
+     * Closing frees the document under any operation that is mid-way on it. Refused while a
+     * transaction is being opened, committed, aborted, undone or redone (or a history stack is
+     * cleared, whose destructors can run Python), while a recompute runs, while an agent turn
+     * begins, ends or is marked busy, and while a thread is inside the property hook. The check is
+     * made on every thread and also catches a re-entrant close from inside the operation (a
+     * Python __del__ run by it). Thread-safe.
+     */
+    std::string closeRefusal() const;
+
     /// Set the document to autoCreated, this is off by default.
     void setAutoCreated(bool);
 

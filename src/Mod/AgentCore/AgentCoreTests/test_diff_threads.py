@@ -225,6 +225,77 @@ App.closeDocument("DEL")
 print("OK", n[0], dels[0])
 """
 
+# Close guard (run 021): another thread closing a document while one of its operations is mid-way
+# must get a RuntimeError, never a crash. The operation's Python callback (onChanged) parks the
+# running thread on the GIL, so the closer gets in while the document is half-rolled-back.
+CLOSE_DURING = PRELUDE + '''
+MODE = "__MODE__"
+class Slow:
+    def __init__(self, o): self.arm = False; o.Proxy = self
+    def onChanged(self, o, p):
+        if self.arm and p == "L":
+            started.set(); time.sleep(0.4)
+    def execute(self, o): pass
+    def dumps(self): return {"n": 0}
+    def loads(self, s): pass
+started = threading.Event()
+d = App.newDocument("CL")
+objs = []
+for i in range(3):
+    o = d.addObject("App::FeaturePython", "O%d" % i); o.addProperty("App::PropertyLength", "L"); objs.append(o)
+slow = Slow(objs[0])
+d.recompute()
+if MODE in ("nested", "end"):
+    d.beginAgentTurn("t")
+    objs[0].L = 5
+    if MODE == "nested":
+        d.openTransaction("n"); objs[0].L = 9
+else:
+    d.openTransaction("plain"); objs[0].L = 9
+errs = []
+def closer():
+    started.wait(10)
+    try: App.closeDocument("CL"); errs.append(None)
+    except Exception as e: errs.append(e)
+t = threading.Thread(target=closer); t.start()
+slow.arm = True
+if MODE == "end":
+    d.endAgentTurn(False)
+else:
+    d.abortTransaction()
+t.join()
+slow.arm = False
+assert len(errs) == 1 and isinstance(errs[0], RuntimeError), errs
+assert "in progress" in str(errs[0]) or "busy" in str(errs[0]), errs
+assert App.getDocument("CL") is not None
+if MODE == "nested":
+    d.endAgentTurn(False)
+App.closeDocument("CL")
+print("OK", errs[0])
+'''
+
+# A proxy __del__ that closes its own document while the redo stack is cleared (also crashes upstream).
+CLOSE_IN_DEL = PRELUDE + '''
+state = []
+class Del:
+    def __del__(self):
+        try: App.closeDocument("DL"); state.append("closed")
+        except Exception as e: state.append(type(e).__name__)
+d = App.newDocument("DL")
+o = d.addObject("App::FeaturePython", "O"); Prox(o)
+o.addProperty("App::PropertyPythonObject", "PO"); o.addProperty("App::PropertyLength", "L")
+o.PO = {"a": 1}
+d.openTransaction("t1"); o.PO = Del(); d.commitTransaction()
+d.undo()          # the redo stack now holds the Del instance
+assert not state
+d.openTransaction("t2"); o.L = 3   # clearing the redo stack frees Del -> __del__
+d.commitTransaction()
+assert state == ["RuntimeError"], state
+assert App.getDocument("DL") is not None
+App.closeDocument("DL")
+print("OK", state)
+'''
+
 
 def _freecadcmd():
     home = App.getHomePath()
@@ -283,6 +354,18 @@ class TestTurnMutexLockOrder(unittest.TestCase):
 
     def test_python_del_does_not_run_under_the_turn_mutex(self):
         self.assertIn("OK", self._run(DEL_UNDER_MUTEX))
+
+    def test_close_is_refused_during_a_nested_abort(self):
+        self.assertIn("OK", self._run(CLOSE_DURING.replace("__MODE__", "nested"), scribble=True))
+
+    def test_close_is_refused_during_end_of_turn(self):
+        self.assertIn("OK", self._run(CLOSE_DURING.replace("__MODE__", "end"), scribble=True))
+
+    def test_close_is_refused_during_a_plain_abort(self):
+        self.assertIn("OK", self._run(CLOSE_DURING.replace("__MODE__", "plain"), scribble=True))
+
+    def test_del_that_closes_its_document_during_a_redo_clear_is_refused(self):
+        self.assertIn("OK", self._run(CLOSE_IN_DEL, scribble=True))
 
 
 if __name__ == "__main__":
