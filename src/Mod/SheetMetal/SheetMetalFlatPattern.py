@@ -206,8 +206,14 @@ def source_bend_count(shape, thickness):
     return count
 
 
-def flat_problem(shape, normal, bends, thickness, source_bends):
-    """A readable reason why `shape` is not a complete flat pattern, or "" when it is."""
+def flat_problem(shape, normal, bends, thickness, source_bends, source_volume=None):
+    """A readable reason why `shape` is not a complete flat pattern, or "" when it is.
+
+    With `source_volume` (the folded part's volume) the flat's volume is also checked: unfolding
+    changes the volume only through the bends, by theta * (K - 0.5) * T^2 * width each, which is at
+    most 0.5 * theta * T^2 * width for K between 0 and 0.5. A larger difference (more than 0.5 %
+    of the part on top of that) means something that is not sheet metal bends, such as a formed
+    dimple, louver, lance or rib, was dropped or distorted by the unfolder (cad-fork run 027)."""
     n = Vector(normal)
     n.normalize()
     if thickness:
@@ -219,6 +225,15 @@ def flat_problem(shape, normal, bends, thickness, source_bends):
     if len(bends) < source_bends:
         return ("The unfold recorded %d of the part's %d bends, so it is only partly flattened."
                 % (len(bends), source_bends))
+    if source_volume and thickness:
+        allowed = 0.005 * source_volume + sum(
+            0.5 * math.radians(b.angle) * thickness * thickness * b.length for b in bends)
+        diff = abs(shape.Volume - source_volume)
+        if diff > allowed:
+            return ("The flat's volume differs from the part's by %.1f mm3, more than its bends "
+                    "explain (%.1f mm3), so a formed feature (dimple, louver, lance, rib, extruded "
+                    "hole) or another non-sheet-metal feature was not unfolded correctly. Suppress "
+                    "the forming features before unfolding." % (diff, allowed))
     return ""
 
 
