@@ -192,12 +192,14 @@ struct DocumentP
     {
         Throw,     ///< throw Base::RuntimeError (becomes a Python RuntimeError)
         Refuse,    ///< no throw: the scope reports refused() and the caller returns without acting
-        CloserMay  ///< like Refuse for every thread but the closing one, which is counted and goes on
+        CloserMay  ///< same as Refuse for other threads (kept to mark sites the destructor itself reaches)
     };
 
     /**
      * Marks an operation on the document for the lifetime of the object (re-entrant, any thread)
      * and refuses it when the document is being closed.
+     *
+     * The closing thread itself is never refused, whatever the policy; only other threads are.
      *
      * Order matters: increment the counter, then read @c closing, and back out of the counter
      * when it is set. A throwing policy is only safe where the caller may throw (a Python-facing
@@ -229,7 +231,10 @@ struct DocumentP
             if (!dp.closing.load()) {
                 return;
             }
-            if (policy == OnClosing::CloserMay && dp.closer.load() == std::this_thread::get_id()) {
+            // The closing thread runs the destructor, the observers and the __del__ code of the
+            // close; it is let through every scope (it only counts itself in). The double free is
+            // prevented by beginClose's compare-exchange, not by the scopes.
+            if (dp.closer.load() == std::this_thread::get_id()) {
                 return;
             }
             --counter;

@@ -220,7 +220,19 @@ PyObject* ApplicationPy::sSetActiveDocument(PyObject* /*self*/, PyObject* args)
     Py_Return;
 }
 
+static PyObject* closeDocumentBody(PyObject* args);
+
 PyObject* ApplicationPy::sCloseDocument(PyObject* /*self*/, PyObject* args)
+{
+    // Observers run by the close can throw C++ exceptions; none may unwind through CPython.
+    PY_TRY
+    {
+        return closeDocumentBody(args);
+    }
+    PY_CATCH;
+}
+
+static PyObject* closeDocumentBody(PyObject* args)
 {
     char* pstr = nullptr;
     if (PyArg_ParseTuple(args, "s", &pstr)) {

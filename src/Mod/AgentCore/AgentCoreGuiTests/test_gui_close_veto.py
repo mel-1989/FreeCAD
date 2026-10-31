@@ -39,6 +39,19 @@ class Closer:
 
 
 class TestGuiCloseVeto(unittest.TestCase):
+    def test_app_close_with_a_sketch_in_edit_mode_does_not_throw(self):
+        # ViewProviderSketch::unsetEdit opens a transaction while the document is being closed.
+        doc = App.newDocument("CloseSketch")
+        self.addCleanup(lambda: "CloseSketch" in App.listDocuments() and App.closeDocument("CloseSketch"))
+        sk = doc.addObject("Sketcher::SketchObject", "Sketch")
+        doc.recompute()
+        pump()
+        Gui.getDocument("CloseSketch").setEdit(sk.Name)
+        pump()
+        App.closeDocument("CloseSketch")
+        pump()
+        self.assertNotIn("CloseSketch", App.listDocuments())
+
     def test_window_stays_while_a_recompute_is_running_then_closes(self):
         doc = App.newDocument("CloseVeto")
         self.addCleanup(lambda: "CloseVeto" in App.listDocuments() and App.closeDocument("CloseVeto"))

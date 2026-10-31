@@ -606,8 +606,9 @@ void Document::_checkTransaction(DocumentObject* pcDelObj, const Property* What,
 
 void Document::_clearRedos(std::list<Transaction*>* detach)
 {
-    // Runs from destructors (Python __del__ of dropped transactions): never throw.
-    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::Refuse);
+    // Runs from destructors (Python __del__ of dropped transactions): never throw. ~Document
+    // reaches it on the closing thread, which must be let through to free the redo stack.
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::CloserMay);
     if (opScope.refused()) {
         return;
     }
@@ -659,7 +660,7 @@ void Document::commitTransaction() // NOLINT
 
 bool Document::_commitTransaction(const bool notify)
 {
-    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::Refuse);
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::CloserMay);
     if (opScope.refused()) {
         return false;
     }

@@ -657,12 +657,17 @@ TEST_F(AgentTurnGuardTest, ClosingDocumentRefusesNewOperationsAndARefusedCloseLe
             }
             return false;
         };
+        // The closing thread itself is let through (observers, __del__ and the destructor
+        // run operations on the document being closed); only other threads are refused.
         openThrew = thrown([&] { _doc->openTransaction("x"); });
         commitThrew = thrown([&] { _doc->commitTransaction(); });
         abortThrew = thrown([&] { _doc->abortTransaction(); });
         recomputeThrew = thrown([&] { _doc->recompute(); });
         undoThrew = thrown([&] { _doc->undo(); });
         turnThrew = thrown([&] { App::AgentTurnGuard::begin(*_doc, "t"); });
+        if (!turnThrew) {
+            App::AgentTurnGuard::end(*_doc, false);
+        }
         std::thread other([&] {
             otherThreadThrew = thrown([&] { _doc->openTransaction("y"); });
         });
@@ -675,12 +680,12 @@ TEST_F(AgentTurnGuardTest, ClosingDocumentRefusesNewOperationsAndARefusedCloseLe
     conn.disconnect();
 
     EXPECT_NE(whyInside.find("already being closed"), std::string::npos) << whyInside;
-    EXPECT_TRUE(openThrew);
-    EXPECT_TRUE(commitThrew);
-    EXPECT_TRUE(abortThrew);
-    EXPECT_TRUE(recomputeThrew);
-    EXPECT_TRUE(undoThrew);
-    EXPECT_TRUE(turnThrew);
+    EXPECT_FALSE(openThrew);
+    EXPECT_FALSE(commitThrew);
+    EXPECT_FALSE(abortThrew);
+    EXPECT_FALSE(recomputeThrew);
+    EXPECT_FALSE(undoThrew);
+    EXPECT_FALSE(turnThrew);
     EXPECT_TRUE(otherThreadThrew);
     EXPECT_FALSE(nestedClose);
 

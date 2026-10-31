@@ -326,6 +326,34 @@ assert late == ["ReferenceError"], late
 print("OK", res)
 '''
 
+# Closing a document must free its redo stack: an undone object whose expression points into another
+# document used to stay registered and crash the next property rename there (run 023 verifier).
+CLOSE_REDO = PRELUDE + '''
+import gc
+dels = []
+class Tracker:
+    def __del__(self): dels.append("freed")
+import tempfile, os
+tmp = tempfile.mkdtemp()
+a = App.newDocument("RA"); b = App.newDocument("RB")
+a.saveAs(os.path.join(tmp, "ra.FCStd")); b.saveAs(os.path.join(tmp, "rb.FCStd"))
+vb = b.addObject("App::VarSet", "VB"); vb.addProperty("App::PropertyInteger", "P"); vb.P = 1
+a.UndoMode = 1
+a.openTransaction("add")
+x = a.addObject("App::FeaturePython", "X"); Prox(x)
+x.addProperty("App::PropertyInteger", "Q"); x.addProperty("App::PropertyPythonObject", "T"); x.T = Tracker()
+x.setExpression("Q", "RB#VB.P + 1")
+a.commitTransaction(); a.recompute()
+a.undo()
+del x; gc.collect()
+App.closeDocument("RA"); gc.collect()
+assert dels == ["freed"], dels
+vb.renameProperty("P", "P2")
+b.Label = "Bee"
+App.closeDocument("RB")
+print("OK", dels)
+'''
+
 # A close from inside signalDeleteDocument (slotDeletedDocument in Python) is refused: it used to
 # free the document twice.
 CLOSE_DOUBLE = PRELUDE + '''
@@ -442,6 +470,9 @@ class TestTurnMutexLockOrder(unittest.TestCase):
     def test_operation_that_starts_during_a_close_is_refused_and_a_late_wrapper_errors(self):
         for _ in range(3):
             self.assertIn("OK", self._run(CLOSE_TOCTOU, scribble=True))
+
+    def test_closing_frees_the_redo_stack_and_a_later_rename_elsewhere_is_safe(self):
+        self.assertIn("OK", self._run(CLOSE_REDO, scribble=True))
 
     def test_close_from_inside_the_delete_observer_is_refused(self):
         self.assertIn("OK", self._run(CLOSE_DOUBLE, scribble=True))
