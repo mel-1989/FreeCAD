@@ -3,6 +3,8 @@
 #  SheetMetalNewUnfolder.py
 #
 #  Copyright 2025 Alex Neufeld <alex.d.neufeld@gmail.com>
+#  Modified for cad-fork on 2026-10-31 (LGPL-2.1 section 2a): clean-room bend labels; optional networkx; K-factor interpolation and inside-radius fixes; ray-measured thickness and sheet consistency checks with V1 fallback.
+#
 #
 #  This program is free software; you can redistribute it and/or
 #  modify it under the terms of the GNU Lesser General Public
