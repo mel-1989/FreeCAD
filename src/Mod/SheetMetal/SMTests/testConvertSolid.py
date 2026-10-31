@@ -371,6 +371,24 @@ class TestConvertSolid(Doc):
         for kw in (dict(rip_gap=0.0), dict(radius=0.0), dict(thickness=0.0), dict(thickness=-1.0)):
             with self.assertRaises(CS.ConvertSolidError, msg=str(kw)):
                 build(**kw)
+        # tiny gap the unfolder cannot separate, and non-finite numbers
+        with self.assertRaisesRegex(CS.ConvertSolidError, "rip gap must be at least"):
+            build(rip_gap=1e-7)
+        for kw in (dict(thickness=float("nan")), dict(radius=float("inf")), dict(rip_gap=float("nan")),
+                   dict(thickness=float("inf"))):
+            with self.assertRaisesRegex(CS.ConvertSolidError, "finite number", msg=str(kw)):
+                build(**kw)
+        # a wall a hair wider than nothing gets the same clear message as exactly nothing
+        for height in (2.0, 2.0000001, 2.00001):
+            slim = self.doc.addObject("Part::Box", "Slim")
+            slim.Length, slim.Width, slim.Height = 40.0, 30.0, height
+            self.doc.recompute()
+            ss = slim.Shape
+            sol = CS.source_solid(ss)
+            idx = lambda d: [i for i, f in enumerate(sol.Faces) if (f.normalAt(0, 0) - V(*AX[d])).Length < 1e-9][0]  # noqa: E731, B023
+            bl = [int(edge_between(ss, "-z", d)[4:]) - 1 for d in DIRS4]
+            with self.assertRaisesRegex(CS.ConvertSolidError, "too small", msg="height %r" % height):
+                CS.build_from_solid(sol, idx("-z"), bl, [idx("+z")], 1.0, 1.0, 1.0)
         # fixed face open
         with self.assertRaisesRegex(CS.ConvertSolidError, "fixed face"):
             build(fixed_face=sel("+z"))

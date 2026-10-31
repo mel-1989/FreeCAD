@@ -252,6 +252,24 @@ class TestEdgeFlange(Doc):
         self.assertAlmostEqual(EF.sheet_thickness_of(sh), 3.0, 9)
         self.assertTrue(EF.build_edge_flange(sh, [find_edge(box, "+x")], 15.0, 90.0, 2.0).isValid())
 
+    def test_narrow_tab_edge_uses_the_main_faces_for_thickness(self):
+        """A tab narrower than T must not make its side faces pass for the thickness."""
+        T = 3.0
+        plate = Part.makeBox(PL, W, T)
+        tab = Part.makeBox(10.0, 2.5, T, V(PL, 5.0, 0.0))
+        shape = plate.fuse(tab).removeSplitter()
+        obj = self.doc.addObject("Part::Feature", "TabPlate")
+        obj.Shape = shape
+        self.doc.recompute()
+        self.assertAlmostEqual(EF.sheet_thickness_of(shape), T, 9)
+        end = next("Edge%d" % (i + 1) for i, e in enumerate(shape.Edges)
+                   if abs(e.Vertexes[0].Point.z - T) < 1e-9 and abs(e.Vertexes[-1].Point.z - T) < 1e-9
+                   and abs(e.Vertexes[0].Point.x - (PL + 10.0)) < 1e-9
+                   and abs(e.Vertexes[-1].Point.x - (PL + 10.0)) < 1e-9)
+        result = EF.build_edge_flange(shape, [end], 12.0, 90.0, 2.0)
+        self.assertTrue(result.isValid())
+        self.assertEqual(len(result.Solids), 1)
+
     def test_refusals(self):
         box = make_box(self.doc, 2.0)
         flat_edge = find_edge(box, "+x")

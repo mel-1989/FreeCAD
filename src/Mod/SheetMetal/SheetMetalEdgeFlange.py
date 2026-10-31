@@ -90,28 +90,31 @@ def make_flange_solid(origin, along, width, out, up, radius, thickness, angle_de
 
 
 def sheet_thickness_of(shape):
-    """Sheet thickness of a sheet-metal solid: the smallest distance between two antiparallel planar
-    faces that overlap when projected on each other (the two sides of a wall). None if there is no
-    such pair."""
+    """Sheet thickness of a sheet-metal solid: the distance between the two main faces of the sheet.
+
+    Candidates are antiparallel planar faces that face away from each other and overlap when
+    projected on each other (the two sides of a wall). The pair whose smaller face is largest wins,
+    so the side faces of a narrow tab or a thin end never pass for the thickness. None if there is
+    no such pair."""
     planes = [f for f in shape.Faces if isinstance(f.Surface, Part.Plane)]
-    best = None
+    best = None  # (smaller face area, distance)
     for i, fa in enumerate(planes):
         na = fa.normalAt(*fa.Surface.parameter(fa.CenterOfMass))
         for fb in planes[i + 1:]:
             nb = fb.normalAt(*fb.Surface.parameter(fb.CenterOfMass))
             if na.dot(nb) > -1.0 + 1e-9:
                 continue
-            dist = abs((fb.CenterOfMass - fa.CenterOfMass).dot(na))
-            if dist < 1e-9 or (best is not None and dist >= best):
-                continue
-            # the faces face away from each other (outer sides of a wall): their projections along na
-            # must overlap, which rules out the far side of a channel or box
-            if (fb.CenterOfMass - fa.CenterOfMass).dot(na) > 0.0:
+            gap = (fb.CenterOfMass - fa.CenterOfMass).dot(na)
+            dist = abs(gap)
+            if dist < 1e-9 or gap > 0.0:  # facing each other (inside of a channel): not a wall
                 continue
             if fa.distToShape(fb)[0] > dist + 1e-6:
                 continue
-            best = dist
-    return best
+            area = min(fa.Area, fb.Area)
+            if best is None or area > best[0] * (1.0 + 1e-9) or \
+                    (area >= best[0] * (1.0 - 1e-9) and dist < best[1]):
+                best = (area, dist)
+    return None if best is None else best[1]
 
 
 def _edge_frame(base, edge, thickness_hint=None):

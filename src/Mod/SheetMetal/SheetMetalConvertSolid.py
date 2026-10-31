@@ -46,6 +46,8 @@ import SheetMetalTools
 
 EPS = 1e-7
 ANG = 1e-6
+MIN_GAP = 1e-6  # smallest rip gap the unfolder can still separate
+MIN_WALL = 1e-4  # a wall narrower than this is a sliver, not a wall
 smElementMapVersion = "sm1."
 
 
@@ -75,6 +77,19 @@ def _clip(poly, q, m, delta):
         if (da > EPS and db < -EPS) or (da < -EPS and db > EPS):
             out.append(a + (b - a) * (da / (da - db)))
     return _dedupe(out)
+
+
+def _min_width(poly):
+    """Smallest width of a convex polygon: the least, over its edges, of the farthest vertex."""
+    best = None
+    for i in range(len(poly)):
+        d = poly[(i + 1) % len(poly)] - poly[i]
+        if d.Length < EPS:
+            continue
+        d.normalize()
+        far = max((p - poly[i]).cross(d).Length for p in poly)
+        best = far if best is None else min(best, far)
+    return 0.0 if best is None else best
 
 
 def _area(poly, normal):
@@ -172,14 +187,17 @@ def build_from_solid(solid, fixed_face, bend_edges, open_faces, thickness, radiu
 
     Returns (shape, info) with the sheet-metal solid and a dict with the bend list. Raises
     ConvertSolidError with a readable message when the selection or the numbers do not work."""
+    for label, value in (("thickness", thickness), ("inside bend radius", radius), ("rip gap", rip_gap)):
+        if not math.isfinite(value):
+            raise ConvertSolidError("%s must be a finite number, got %r" % (label, value))
     if thickness <= 0.0:
         raise ConvertSolidError("thickness must be greater than zero, got %g" % thickness)
     if radius <= 0.0:
         raise ConvertSolidError("inside bend radius must be greater than zero (sharp bends are not "
                                 "supported), got %g" % radius)
-    if rip_gap <= 0.0:
-        raise ConvertSolidError("rip gap must be greater than zero, got %g (a zero gap welds the "
-                                "corner shut and the part could not be flattened)" % rip_gap)
+    if rip_gap < MIN_GAP:
+        raise ConvertSolidError("rip gap must be at least %g mm, got %g (a smaller gap welds the "
+                                "corner shut and the part could not be flattened)" % (MIN_GAP, rip_gap))
     faces, edges = solid.Faces, solid.Edges
     names = ["Face%d" % (i + 1) for i in range(len(faces))]
     ename = lambda i: "Edge%d" % (i + 1)  # noqa: E731
@@ -263,7 +281,7 @@ def build_from_solid(solid, fixed_face, bend_edges, open_faces, thickness, radiu
                 poly = _clip(poly, a, m, delta)
                 if len(poly) < 3:
                     break
-        if len(poly) < 3 or _area(poly, n) < 1e-9:
+        if len(poly) < 3 or _area(poly, n) < 1e-9 or _min_width(poly) < MIN_WALL:
             raise ConvertSolidError("%s is too small for the bend radius %g, thickness %g and rip gap "
                                     "%g: nothing is left of the wall" % (names[fi], radius, thickness, rip_gap))
         polys[fi] = (poly, n, constraints)
