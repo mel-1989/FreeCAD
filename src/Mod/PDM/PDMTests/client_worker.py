@@ -8,7 +8,10 @@ its return value or the error class, message and lock holder, so tests can asser
 
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 
 import FreeCAD as App
@@ -42,6 +45,10 @@ def metrics(doc):
     shape = doc.getObject("Body").Shape
     bb = shape.BoundBox
     return {"volume": shape.Volume, "area": shape.Area, "bbox": [bb.XLength, bb.YLength, bb.ZLength]}
+
+
+def stem(doc):
+    return os.path.basename(doc.FileName.rstrip("/"))[:-len(V.DOC_SUFFIX)]
 
 
 def barrier(directory, tag, user, n, timeout=120):
@@ -87,6 +94,54 @@ def run(op):
         out["filename"] = doc.FileName
         App.closeDocument(doc.Name)
         return {"ok": True, "metrics": out}
+    if kind == "build_link":
+        # A document with one App::Link per target (targets are documents already in this working copy).
+        targets = [App.openDocument(v.doc_path(t)) for t in op["targets"]]
+        doc = App.newDocument(op["name"])
+        doc.saveAsFolder(v.doc_path(op["name"]))  # the link path is relative to the saved owner
+        for i, t in enumerate(targets):
+            lk = doc.addObject("App::Link", f"Link{i}")
+            lk.LinkedObject = t.getObject("Body")
+        doc.save()
+        out = {t.Name: metrics(t) for t in targets}
+        for d in [doc] + targets:
+            App.closeDocument(d.Name)
+        return {"ok": True, "metrics": out}
+    if kind == "link_check":
+        # Open a linking document in this fresh process and report what each link resolves to.
+        doc = App.openDocument(v.doc_path(op["name"]))
+        res = []
+        for o in doc.Objects:
+            if o.TypeId == "App::Link":
+                tgt = o.LinkedObject
+                res.append({"link": o.Name, "resolved": tgt is not None, "valid": bool(tgt and tgt.isValid()),
+                            "target_doc": tgt.Document.Label if tgt else None,
+                            "target_file": os.path.basename(tgt.Document.FileName) if tgt else None,
+                            "metrics": metrics(tgt.Document) if tgt else None})
+        out = {"ok": True, "links": res}
+        for d in list(App.listDocuments().values()):
+            App.closeDocument(d.Name)
+        return out
+    if kind == "fc_graph":
+        # FreeCAD's own link graph: export the newest revision of every document side by side, open them all and
+        # ask FreeCAD who links to each document's Body (getLinksTo) and which documents each depends on.
+        base = os.path.realpath(tempfile.mkdtemp(prefix="pdm-graph-"))  # a symlinked path would open linked documents twice
+        docs = {}
+        for n in op["names"]:
+            v.export_revision(n, v.history(n)[0]["revision"], dest=base)
+        for n in op["names"]:
+            docs[n] = App.openDocument(os.path.join(base, n + V.DOC_SUFFIX))
+        used = {}
+        for n, d in docs.items():
+            body = d.getObject("Body")
+            users = {stem(x.Document) for x in App.getLinksTo(body)} if body else set()
+            used[n] = sorted(u for u in users if u != n)
+        deps = {n: sorted(stem(x) for x in d.getDependentDocuments() if stem(x) != n) for n, d in docs.items()}
+        for d in list(App.listDocuments().values()):
+            App.closeDocument(d.Name)
+        subprocess.run(["chmod", "-R", "u+w", base], check=False)
+        shutil.rmtree(base, ignore_errors=True)
+        return {"ok": True, "used": used, "deps": deps}
     if kind == "call":
         try:
             r = getattr(v, op["m"])(*op.get("a", []), **op.get("k", {}))

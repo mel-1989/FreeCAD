@@ -19,6 +19,7 @@ import contextlib
 import datetime
 import json
 import os
+import posixpath
 import re
 import shutil
 import socket
@@ -26,6 +27,8 @@ import subprocess
 import tempfile
 import time
 import uuid
+import xml.etree.ElementTree as ET
+from xml.sax import saxutils
 
 STATES = ("WIP", "InReview", "Released", "Obsolete")
 TRANSITIONS = {
@@ -41,6 +44,8 @@ DOC_SUFFIX = ".FCStd.d"
 FAULT_ENV = "PDM_TEST_FAULT"  # read only here; values: "before_push", "after_commit"
 _NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")  # no leading "-": never an option to git
 _TRAILER = "PDM-"
+CONTENT_EVENTS = ("add", "checkin", "move", "relink")  # commits whose tree is a full revision of the document
+_XLINK_RE = re.compile(r'(<XLink\s+file=")([^"]*)(")')
 _PERM_RE = re.compile(r"permission denied|insufficient permission|read-only|not permitted|unable to (?:create|write|append)",
                       re.I)
 
@@ -272,20 +277,25 @@ class Vault:
             recs.append({"sha": sha, "author": author, "time": when, "message": message,
                          "revision": meta.get("Revision"), "state": meta.get("State"),
                          "event": meta.get("Event"), "document": meta.get("Document"),
-                         "released": meta.get("Released") == "1"})
+                         "released": meta.get("Released") == "1", "moved_from": meta.get("Moved-From")})
         return recs
 
     def _head(self):
         return self._git(["rev-parse", "--verify", f"refs/remotes/origin/{BRANCH}"]).stdout.decode().strip()
 
-    def _commit(self, parent, name, subject, revision, state, event, released, doc_dir):
-        """Build a commit on top of ``parent`` with the working copy's folder for ``name`` (plumbing, temp index)."""
+    def _commit(self, parent, name, subject, revision, state, event, released, doc_dir, edit=None, extra=()):
+        """Build a commit on top of ``parent`` with the working copy's folder for ``name`` (plumbing, temp index).
+
+        ``edit(env)``, if given, edits the temporary index instead (used by move/relink, which change the
+        tree without a working copy); ``extra`` is a list of additional ``(key, value)`` trailers."""
         idx = os.path.join(self.workdir, ".git", f"pdm-index-{uuid.uuid4().hex}")
         env = {"GIT_INDEX_FILE": idx}
         try:
             self._git(["read-tree", parent], env=env)
             if doc_dir is not None:
                 self._git(["add", "-A", "-f", "--", os.path.basename(doc_dir)], env=env)
+            if edit is not None:
+                edit(env)
             tree = self._git(["write-tree"], env=env).stdout.decode().strip()
         finally:
             with contextlib.suppress(FileNotFoundError):
@@ -293,6 +303,8 @@ class Vault:
         _check_message(subject)
         msg = (f"{subject}\n\n{_TRAILER}Document: {name}\n{_TRAILER}Revision: {revision}\n{_TRAILER}State: {state}\n"
                f"{_TRAILER}Event: {event}\n{_TRAILER}Released: {1 if released else 0}\n")
+        for k, v in extra:
+            msg += f"{_TRAILER}{k}: {v}\n"
         return tree, self._git(["commit-tree", tree, "-p", parent, "-m", msg]).stdout.decode().strip()
 
     def _push_main(self, sha):
@@ -410,7 +422,19 @@ class Vault:
         recs = self._records(name)
         if not recs:
             raise DocumentError(f"no document {name!r} in the vault")
-        return recs
+        # A moved document keeps its history: follow the Moved-From trailer to the commits before the move.
+        out = list(recs)
+        seen = {name}
+        cur = recs
+        while True:
+            mv = [r for r in cur if r["moved_from"] and r["event"] == "move"]
+            if not mv or mv[-1]["moved_from"] in seen:
+                break
+            old = mv[-1]["moved_from"]
+            seen.add(old)
+            cur = self._records(old, ref=mv[-1]["sha"] + "^")
+            out.extend(cur)
+        return out
 
     def status(self, name):
         """Latest record plus the lock and whether this client's base is current."""
@@ -592,12 +616,258 @@ class Vault:
                 return {"revision": cur["revision"], "state": new_state, "sha": sha}
         raise GitError("vault kept moving; transition gave up after 8 attempts")
 
+    # ---- where-used and move (slice 3) ---------------------------------------------------------
+
+    @staticmethod
+    def _link_target(file_attr):
+        """Document name a stored link path points at, or None when it is not a root-level vault document.
+
+        FreeCAD stores a link as a path relative to the linking document's own folder (``PropertyXLink`` writes
+        ``DocInfo::getDocPath(.., relative=true)``); vault documents all sit side by side in the vault root, so a
+        link into the vault is ``<name>.FCStd.d``. URLs, absolute paths and anything that leaves the root are not
+        vault links. The comparison ignores case because macOS and Windows resolve the link that way and the vault
+        forbids names that differ only by case."""
+        p = file_attr.replace("\\", "/")
+        if p.startswith("https://") or p.startswith("/") or re.match(r"^[A-Za-z]:", p):
+            return None
+        norm = posixpath.normpath(p)
+        if norm.startswith("..") or "/" in norm or not norm.lower().endswith(DOC_SUFFIX.lower()):
+            return None
+        return norm[:-len(DOC_SUFFIX)]
+
+    def _doc_names_at(self, commit):
+        out = self._git(["ls-tree", "--name-only", commit]).stdout.decode().split("\n")
+        return sorted(n[:-len(DOC_SUFFIX)] for n in out if n.endswith(DOC_SUFFIX))
+
+    def _document_xml(self, commit, name):
+        p = self._git(["cat-file", "blob", f"{commit}:{name}{DOC_SUFFIX}/Document.xml"], check=False)
+        return p.stdout if p.returncode == 0 else None
+
+    @staticmethod
+    def _scan_xlinks(xml_bytes):
+        """Every ``<XLink file=..>`` in a folder-format ``Document.xml`` as ``(object, property, file)``.
+
+        FreeCAD writes the path-carrying form from ``PropertyXLink`` (also the base of ``App::Link``'s
+        ``LinkedObject``, ``PropertyXLinkSub`` and, per element, ``PropertyXLinkList``, ``PropertyXLinkSubList`` and
+        the ``ExpressionEngine``'s ``XLinks`` container) always as ``<XLink file="..." stamp=".." name="..">``; the
+        element without ``file`` names an object in the same export and is not a path."""
+        found = []
+        try:
+            root = ET.fromstring(xml_bytes)
+        except ET.ParseError as e:
+            raise DocumentError(f"Document.xml is not well-formed: {e}")
+
+        def walk(el, objname):
+            for child in el:
+                if child.tag == "Property":
+                    for x in child.iter("XLink"):
+                        f = x.get("file")
+                        if f:
+                            found.append((objname, child.get("name"), f))
+                else:
+                    walk(child, child.get("name") if child.tag == "Object" and child.get("name") else objname)
+
+        walk(root, "(document)")
+        return found
+
+    def _where_used_at(self, commit, name, suspects=None):
+        """Links to ``name`` at ``commit``. A link whose last component is ``name``'s folder but whose path is not a
+        plain root-level one (``../x/name.FCStd.d``, an absolute path) cannot be proven to be this document, so it is
+        appended to ``suspects`` when a list is given (``move`` refuses rather than leave it behind)."""
+        used = []
+        for other in self._doc_names_at(commit):
+            if other == name:
+                continue
+            xml = self._document_xml(commit, other)
+            if xml is None:
+                continue
+            for obj, prop, f in self._scan_xlinks(xml):
+                tgt = self._link_target(f)
+                if tgt is not None and tgt.lower() == name.lower():
+                    used.append({"document": other, "object": obj, "property": prop, "file": f})
+                elif (tgt is None and suspects is not None and not f.startswith("https://")
+                      and posixpath.basename(f.replace("\\", "/")).lower() == (name + DOC_SUFFIX).lower()):
+                    suspects.append({"document": other, "object": obj, "property": prop, "file": f})
+        return used
+
+    def where_used(self, name):
+        """Documents at the vault head that link to ``name``: a list of ``{document, object, property, file}``.
+
+        Read from the committed ``Document.xml`` files with git only; no FreeCAD document is opened. Covers every
+        property type that stores a file path (``App::Link``, ``PropertyXLink`` and its Sub/List variants, and
+        expression links), because they all use the one ``<XLink file=..>`` element."""
+        _check_name(name)
+        self._fetch()
+        head = self._head()
+        if name not in self._doc_names_at(head):
+            raise DocumentError(f"no document {name!r} in the vault")
+        return self._where_used_at(head, name)
+
+    def _rewrite_links(self, xml_bytes, old, new):
+        """Replace, in the ``file`` attribute of every ``<XLink>`` that resolves to ``old``, the path by ``new``'s.
+
+        Textual on purpose: only the matched attribute values change, so the rest of the file (and every shape file
+        beside it) stays byte for byte, the diff is the link lines alone, and nothing is opened, recomputed or
+        re-serialised (re-saving through FreeCAD would also rewrite touched flags and BREP numbers, see run 021
+        Exhibit 2). Returns ``(new_bytes, count)``."""
+        text = xml_bytes.decode("utf-8")
+        count = 0
+
+        def sub(m):
+            nonlocal count
+            raw = m.group(2)
+            tgt = self._link_target(saxutils.unescape(raw, {"&quot;": '"', "&apos;": "'"}))
+            if tgt is None or tgt.lower() != old.lower():
+                return m.group(0)
+            count += 1
+            return m.group(1) + new + DOC_SUFFIX + m.group(3)
+
+        return _XLINK_RE.sub(sub, text).encode("utf-8"), count
+
+    def move(self, old, new, message=None):
+        """Rename document ``old`` to ``new`` in the vault and re-point every link that names it.
+
+        Takes the locks of ``old`` and of every document that links to it (refused with ``LockError`` naming the
+        holder, and nothing changed, if another client holds any of them), then publishes one vault update that
+        holds one commit per document: a ``move`` commit for ``new`` (same revision label and state, history
+        follows the rename) and a ``relink`` commit per referencing document (next revision number, WIP; the next
+        letter if it was Released). The commits go out in a single push, so the vault either has the whole move or
+        none of it. Referencing documents that are InReview or Obsolete are refused, as for check-out; local edits
+        in any involved working-copy folder are refused. Locks taken by the move are released at the end; the lock
+        on ``old`` is always deleted since that name no longer exists. Returns ``{new, revision, sha, relinked}``."""
+        _check_name(old)
+        _check_name(new)
+        _check_message(message or "")
+        if old == new:
+            raise DocumentError("old and new names are the same")
+        held = {}  # name -> True when taken by this call (to be released on failure)
+        try:
+            for _ in range(8):
+                self._fetch()
+                head = self._head()
+                names = self._doc_names_at(head)
+                if old not in names:
+                    raise DocumentError(f"no document {old!r} in the vault")
+                for n in names:
+                    if n.lower() == new.lower():
+                        raise DocumentError(f"cannot move to {new!r}: document {n!r} already exists (names are case-insensitive)")
+                if self._records(new):
+                    raise DocumentError(f"cannot move to {new!r}: that name has history in the vault")
+                suspects = []
+                refs = sorted({u["document"] for u in self._where_used_at(head, old, suspects)})
+                if suspects:
+                    s0 = suspects[0]
+                    raise DocumentError(
+                        f"{s0['document']} ({s0['object']}.{s0['property']}) links to {s0['file']!r}, which is not a plain "
+                        f"vault-relative path to {old}; re-link it (e.g. save the pair from one folder) before moving")
+                missing = [n for n in [old] + refs if n not in held]
+                for n in missing:  # lock in sorted order; any refusal aborts before anything changed
+                    mine_before = self._mine(self.lock_info(n, refresh=False))
+                    self.lock(n)
+                    held[n] = not mine_before
+                if missing:
+                    continue  # the head or the reference set may have moved while locking; recompute under the locks
+                # Under all locks and the set is stable at this head.
+                recs_old = self._records(old)
+                for n in refs:
+                    self._check_checkout_allowed(n, self._records(n)[0], True)
+                    if self._dirty(n):
+                        raise DocumentError(f"{n} has local edits in this working copy; check them in first")
+                if self._dirty(old):
+                    raise DocumentError(f"{old} has local edits in this working copy; check them in first")
+                mv_rec = recs_old[0]
+                parent = head
+                relinked = []
+                subject = message or f"Move {old} -> {new}"
+                _tree, parent = self._commit(
+                    parent, new, subject, mv_rec["revision"], mv_rec["state"], "move", mv_rec["released"], None,
+                    edit=lambda env: self._edit_rename(env, head, old, new), extra=[("Moved-From", old)])
+                for n in refs:
+                    rec = self._records(n)[0]
+                    letter, number = parse_label(rec["revision"])
+                    letter, number = (letter + 1, 1) if rec["released"] else (letter, number + 1)
+                    label = revision_label(letter, number)
+                    _tree, parent = self._commit(
+                        parent, n, f"Relink {n}: {old} -> {new}", label, "WIP", "relink", False, None,
+                        edit=lambda env, n=n: self._edit_relink(env, head, n, old, new),
+                        extra=[("Relink", f"{old} -> {new}")])
+                    relinked.append({"document": n, "revision": label, "sha": parent})
+                _fault("after_commit")
+                if not self._push_main(parent):
+                    continue  # vault moved; recompute everything under the locks we hold
+                self._fetch()
+                self._after_move(old, new, refs, parent)
+                for n, mine in held.items():
+                    if n == old or mine:
+                        with contextlib.suppress(PDMError):
+                            self._delete_lock_if_mine(n)
+                held.clear()
+                return {"new": new, "revision": mv_rec["revision"], "sha": parent, "relinked": relinked}
+            raise GitError("vault kept moving; move gave up after 8 attempts (nothing changed)")
+        except BaseException:
+            for n, mine in held.items():
+                if mine:
+                    with contextlib.suppress(Exception):
+                        self.release_lock(n)
+            raise
+
+    def _delete_lock_if_mine(self, name):
+        cur = self.lock_info(name)
+        if cur is not None and self._mine(cur):
+            self._delete_lock(name, cur["sha"])
+
+    def _edit_rename(self, env, head, old, new):
+        """Index edit: every entry under ``old``'s folder moves to ``new``'s folder."""
+        listing = self._git(["ls-tree", "-r", "-z", head, "--", old + DOC_SUFFIX]).stdout
+        lines = []
+        for ent in listing.split(b"\0"):
+            if not ent:
+                continue
+            meta, _, path = ent.partition(b"\t")
+            mode, _typ, sha = meta.decode().split()
+            path = path.decode("utf-8", "surrogateescape")
+            rel = path[len(old + DOC_SUFFIX):]
+            lines.append(f"0 {'0' * 40}\t{path}\0")
+            lines.append(f"{mode} {sha}\t{new}{DOC_SUFFIX}{rel}\0")
+        self._git(["update-index", "-z", "--index-info"], env=env,
+                  input="".join(lines).encode("utf-8", "surrogateescape"))
+
+    def _edit_relink(self, env, head, name, old, new):
+        path = f"{name}{DOC_SUFFIX}/Document.xml"
+        xml = self._document_xml(head, name)
+        out, count = self._rewrite_links(xml, old, new)
+        if count == 0:
+            raise DocumentError(f"{name}: no link to {old} found to rewrite (the document changed under the lock?)")
+        if self._where_used_at_bytes(out, old):
+            raise DocumentError(f"{name}: a link to {old} survived the rewrite")
+        sha = self._git(["hash-object", "-w", "--stdin"], input=out).stdout.decode().strip()
+        mode = self._git(["ls-tree", head, "--", path]).stdout.decode().split()[0]
+        self._git(["update-index", "--add", "--cacheinfo", f"{mode},{sha},{path}"], env=env)
+
+    def _where_used_at_bytes(self, xml, name):
+        return [1 for _o, _p, f in self._scan_xlinks(xml)
+                if (self._link_target(f) or "").lower() == name.lower()]
+
+    def _after_move(self, old, new, refs, sha):
+        """Bring this working copy in line: clean folders of relinked documents are refreshed to the new
+        revision, the old folder is dropped, the new one is not materialised (check it out when needed)."""
+        for n in refs:
+            dest = self.doc_path(n)
+            if os.path.isdir(dest) and self._base(n) is not None:
+                shutil.rmtree(dest, ignore_errors=True)
+                self._git(["checkout", "-q", sha, "--", os.path.basename(dest)])
+                self._set_base(n, sha)
+        if os.path.isdir(self.doc_path(old)):
+            shutil.rmtree(self.doc_path(old), ignore_errors=True)
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(self._base_file(old))
+
     # ---- reading old revisions ----------------------------------------------------------------
 
     def find_revision(self, name, revision):
         """The newest record of ``name`` with label ``revision`` that holds content (a check-in or add)."""
         for r in self.history(name):
-            if r["revision"] == revision and r["event"] in ("add", "checkin"):
+            if r["revision"] == revision and r["event"] in CONTENT_EVENTS:
                 return r
         raise DocumentError(f"{name} has no revision {revision}")
 

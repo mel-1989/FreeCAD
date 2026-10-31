@@ -748,6 +748,112 @@ class TestFolderLinks(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestFolderLinkRelocation(unittest.TestCase):
+    """G03 slice 3, checks 3 and 4: links between folder documents follow a save-as of the linked document, keep
+    resolving when a linked pair is moved together, and report themselves broken (never retargeted) when only the
+    linked folder moves. FreeCAD's PropertyXLink needed no change for folders: the paths are handled exactly as for
+    zip documents. The temp dir is resolved with realpath because DocInfo::getDocPath builds the relative path from
+    the canonical folder of the linking document (a symlinked /var on macOS gives a ../../..-style path; same for zip)."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="g03reloc"))
+
+    def tearDown(self):
+        for d in list(App.listDocuments()):
+            App.closeDocument(d)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def p(self, *a):
+        return os.path.join(self.tmp, *a)
+
+    def xlink_files(self, folder):
+        with open(os.path.join(folder, "Document.xml"), encoding="utf-8") as f:
+            return [m for m in re.findall(r'<XLink file="([^"]*)"', f.read()) if m]
+
+    def build_pair(self):
+        lib = App.newDocument("Lib")
+        box = lib.addObject("Part::Box", "Box")
+        box.Length, box.Width, box.Height = 10, 20, 30
+        lib.recompute()
+        lib.saveAsFolder(self.p("Lib.FCStd.d"))
+        asm = App.newDocument("Asm")
+        asm.saveAsFolder(self.p("Asm.FCStd.d"))
+        link = asm.addObject("App::Link", "BoxLink")
+        link.LinkedObject = box
+        asm.recompute()
+        asm.save()
+        return lib, asm, link
+
+    def probe(self, asm_folder):
+        out = self.p("probe.json")
+        script = self.p("lprobe.py")
+        with open(script, "w") as fh:
+            fh.write(LINK_PROBE)
+        r = run_cmd([script, asm_folder, out])
+        self.assertTrue(os.path.isfile(out), r.stdout[-1500:] + r.stderr[-1500:])
+        with open(out) as fh:
+            return json.load(fh)
+
+    def test_saveas_of_open_linked_folder_updates_the_link(self):
+        lib, asm, link = self.build_pair()
+        self.assertEqual(self.xlink_files(self.p("Asm.FCStd.d")), ["Lib.FCStd.d"])
+        lib.saveAs(self.p("Renamed.FCStd.d"))
+        self.assertEqual(link.LinkedObject.Document.FileName, self.p("Renamed.FCStd.d"))
+        self.assertTrue(link.LinkedObject.isValid())
+        self.assertEqual([d.Name for d in asm.getDependentDocuments()], [lib.Name, asm.Name])
+        asm.save()  # a later save of the linking document records the new path
+        self.assertEqual(self.xlink_files(self.p("Asm.FCStd.d")), ["Renamed.FCStd.d"])
+        for d in list(App.listDocuments()):
+            App.closeDocument(d)
+        res = self.probe(self.p("Asm.FCStd.d"))
+        self.assertTrue(res["resolved"], res)
+        self.assertAlmostEqual(res["volume"], 6000)
+        self.assertTrue(res["file"].endswith("Renamed.FCStd.d"), res)
+
+    def test_moved_pair_keeps_links_and_moved_linked_only_is_broken(self):
+        self.build_pair()
+        for d in list(App.listDocuments()):
+            App.closeDocument(d)
+        os.makedirs(self.p("moved"))
+        os.makedirs(self.p("decoy"))
+        shutil.copytree(self.p("Lib.FCStd.d"), self.p("decoy", "Lib.FCStd.d"))  # same name elsewhere
+        shutil.move(self.p("Asm.FCStd.d"), self.p("moved", "Asm.FCStd.d"))
+        shutil.move(self.p("Lib.FCStd.d"), self.p("moved", "Lib.FCStd.d"))
+        res = self.probe(self.p("moved", "Asm.FCStd.d"))  # check 4a: the pair moved together
+        self.assertTrue(res["resolved"] and res["valid"], res)
+        self.assertEqual(res["file"], self.p("moved", "Lib.FCStd.d"))
+        self.assertAlmostEqual(res["volume"], 6000)
+        self.assertEqual(self.xlink_files(self.p("moved", "Asm.FCStd.d")), ["Lib.FCStd.d"])
+        # check 4b: only the linked folder moves on; the decoy with the same name in another folder is ignored
+        shutil.move(self.p("moved", "Lib.FCStd.d"), self.p("elsewhere"))
+        res = self.probe(self.p("moved", "Asm.FCStd.d"))
+        self.assertFalse(res["resolved"], res)
+        self.assertFalse(res["valid"], res)
+        self.assertIn("Invalid", res["state"], res)
+        self.assertIsNone(res["file"], res)
+        self.assertTrue(res["recompute_errors"], res)
+        # the saved link path is not rewritten to the decoy, and Lib is not opened from anywhere else
+        self.assertEqual(self.xlink_files(self.p("moved", "Asm.FCStd.d")), ["Lib.FCStd.d"])
+        self.assertEqual(res["docs"], ["Asm"], res)
+
+
+LINK_PROBE = '''
+import json, sys
+import FreeCAD as App
+src, out = sys.argv[-2:]
+doc = App.openDocument(src)
+link = doc.getObject("BoxLink")
+lo = link.LinkedObject
+res = {"resolved": lo is not None, "valid": bool(lo and lo.isValid()), "state": list(link.State),
+       "file": lo.Document.FileName if lo else None, "volume": lo.Shape.Volume if lo else None}
+doc.recompute()
+res["recompute_errors"] = [o.Name for o in doc.Objects if "Invalid" in o.State]
+res["docs"] = sorted(App.listDocuments())
+doc.save()
+json.dump(res, open(out, "w"))
+'''
+
+
 PROBE = '''
 import json, sys
 import FreeCAD as App
