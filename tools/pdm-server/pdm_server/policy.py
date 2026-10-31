@@ -8,8 +8,34 @@ change, overwrite or move onto an existing document, edit a document other than 
 through a merge or a symlink, sign as someone else, or force a lifecycle step or revision label the library would
 never make."""
 
+import base64
+import re
+
 ZERO = "0" * 40
 BAD_MODES = ("120000", "160000")  # symlinks and gitlinks never belong in a vault
+
+
+def rewrite_mismatch(V, c, old, new, need_change):
+    """None when the commit's new Document.xml is, byte for byte, the old one after the library's own link rewrite
+    ``old`` -> ``new`` (``Vault._rewrite_links``, the function ``Vault.move`` uses); otherwise why not."""
+    for n in (old, new):
+        try:
+            V._check_name(n)
+        except Exception:
+            return f"{n!r} is not a document name"
+    pair = c.get("xml_pair")
+    if not pair:
+        return "Document.xml could not be read"
+    before, after = base64.b64decode(pair[0]), base64.b64decode(pair[1])
+    try:
+        expected, count = V.Vault._rewrite_links(V.Vault, before, old, new)
+    except Exception as e:
+        return f"Document.xml cannot be rewritten ({e})"
+    if need_change and count == 0:
+        return f"the old Document.xml has no link to {old} to rewrite"
+    if expected != after:
+        return f"Document.xml differs from the old one by more than the link rewrite {old} -> {new}"
+    return None
 
 
 def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=()):
@@ -124,10 +150,14 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                 if why:
                     return f"commit {short} ({event} {doc}): {why}"
                 if event == "relink":
-                    only = {f"{folder}/Document.xml"}
-                    if not ({p for _s, p, *_r in c["changes"]} <= only and set(c.get("link_only", [])) == only
-                            and len(c["changes"]) == 1):
-                        return f"commit {short} (relink {doc}) may change only link paths in its Document.xml"
+                    if [ch[1] for ch in c["changes"]] != [f"{folder}/Document.xml"]:
+                        return f"commit {short} (relink {doc}) may change only its Document.xml"
+                    m = re.fullmatch(r"(\S+) -> (\S+)", meta.get("Relink", ""))
+                    if not m:
+                        return f"commit {short} (relink {doc}): missing PDM-Relink trailer"
+                    bad = rewrite_mismatch(V, c, m.group(1), m.group(2), need_change=True)
+                    if bad:
+                        return f"commit {short} (relink {doc}): {bad}"
             elif event == "move":
                 src = meta.get("Moved-From")
                 try:
@@ -149,7 +179,10 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                     return f"commit {short} (move {src} -> {doc}) must remove {src} and create {doc}"
                 if c.get("move_equal") is not True:
                     return (f"commit {short} (move {src} -> {doc}): the new folder must equal {src}'s, file for file, "
-                            "apart from rewritten link paths")
+                            "apart from Document.xml")
+                bad = rewrite_mismatch(V, c, src, doc, need_change=False)
+                if bad:
+                    return f"commit {short} (move {src} -> {doc}): {bad}"
                 if (meta.get("Revision"), meta.get("State"), meta.get("Released")) != (
                         sprev["revision"], sprev["state"], "1" if sprev["released"] else "0"):
                     return f"commit {short} (move {src} -> {doc}) must keep {src}'s revision, state and release flag"

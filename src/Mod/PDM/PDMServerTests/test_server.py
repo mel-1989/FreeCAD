@@ -39,6 +39,7 @@ The named multi-user scenarios (acceptance check 3):
 29. lifecycle_across_users                         release by one user, new revision by another
 30. transition_refused_while_other_user_holds_lock
 31. non_holder_cannot_release_lock                 library and raw HTTP
+52-53. move and relink may carry only the library's own link rewrite, byte for byte (TestHardening)
 45-51. TestHardening: branch rename defeated by head pinning, check-in of InReview/Obsolete, move with changed
     content, add onto a moved-away name, transition of a missing document, stray root entries and case twins, e-mail
 33-44. forged commits (TestForgedCommits): add over an existing document (unlocked, locked by another), move onto
@@ -780,6 +781,43 @@ class TestHardening(ServerCase):
         r = self.forge("bob", trailers=tr(self.c, "checkin", "A.2"), email="alice@pdm.local",
                        files={self.c + V.DOC_SUFFIX + "/Document.xml": "x\n"})
         self.refused(r, "e-mail")
+
+    # -- third round: the only difference a move or relink may carry is the library's own link rewrite ------------
+
+    @staticmethod
+    def linking_xml(target, extra=""):
+        return ('<Document><Object name="O"><Property name="L">'
+                f'<XLink file="{target}{V.DOC_SUFFIX}" stamp="1" name="x"/></Property></Object>{extra}</Document>\n')
+
+    def seed_link(self):
+        tgt, asm = self.doc + "t", self.doc + "asm"
+        self.seed(tgt)
+        r = self.client("alice", [{"op": "plain_doc", "name": asm, "xml": self.linking_xml(tgt)}])
+        self.assertTrue(r[0]["ok"], r)
+        self.assertTrue(self.client("bob", [call("lock", asm)], fresh=True)[0]["ok"])
+        return tgt, asm
+
+    def test_52_move_that_repoints_a_link_or_hides_a_comment_refused(self):
+        tgt, asm = self.seed_link()
+        d, new = V.DOC_SUFFIX, self.doc + "asm2"
+        for xml in (self.linking_xml("Evil"), self.linking_xml(tgt, "<!-- payload -->"), self.linking_xml(new)):
+            # the last one is the honest rewrite of an asm -> asm2 move only if the link named asm itself: it does not
+            r = self.client("bob", [{"op": "forge", "trailers": tr(new, "move", "A.1", **{"Moved-From": asm}),
+                                     "files": {new + d + "/Document.xml": xml}, "delete": [asm + d]}])[0]
+            self.refused(r, "more than the link rewrite")
+        self.assertEqual(self.head(asm), ("A.1", "WIP"))
+
+    def test_53_relink_to_an_arbitrary_value_refused_but_the_exact_rewrite_is_accepted(self):
+        tgt, asm = self.seed_link()
+        new = self.doc + "t2"
+        d = V.DOC_SUFFIX
+        for xml in (self.linking_xml("Evil"), self.linking_xml(new, "<!-- payload -->")):
+            r = self.client("bob", [{"op": "forge", "trailers": tr(asm, "relink", "A.2", Relink=f"{tgt} -> {new}"),
+                                     "files": {asm + d + "/Document.xml": xml}}])[0]
+            self.refused(r, "more than the link rewrite")
+        r = self.client("bob", [{"op": "forge", "trailers": tr(asm, "relink", "A.2", Relink=f"{tgt} -> {new}"),
+                                 "files": {asm + d + "/Document.xml": self.linking_xml(new)}}])[0]
+        self.assertTrue(r.get("pushed"), r)
 
 
 if __name__ == "__main__":

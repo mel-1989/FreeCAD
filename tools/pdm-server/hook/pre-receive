@@ -8,6 +8,7 @@ closed: if the server cannot be reached the push is refused, so a service outage
 change into the vault.
 """
 
+import base64
 import json
 import os
 import re
@@ -25,22 +26,9 @@ def git(*args):
                           errors="replace")
 
 
-XLINK = re.compile(r'(<XLink\s+file=")[^"]*(")')
-
-
 def blob(rev, path):
     p = subprocess.run(["git", "cat-file", "blob", f"{rev}:{path}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return p.stdout if p.returncode == 0 else None
-
-
-def same_but_links(a, b):
-    """True when two Document.xml blobs differ at most in the ``file`` attribute of ``<XLink>`` elements."""
-    if a is None or b is None:
-        return False
-    try:
-        return XLINK.sub(r"\1\2", a.decode("utf-8")) == XLINK.sub(r"\1\2", b.decode("utf-8"))
-    except UnicodeDecodeError:
-        return False
 
 
 def commit_info(sha):
@@ -68,25 +56,28 @@ def commit_info(sha):
             changes.append([head[4][0], raw[k + 1], head[1], head[2], head[3]])
         k += 2
     top = [p for p in git("ls-tree", "--name-only", "-z", sha).stdout.split("\0") if p]
-    # Facts the server cannot get from the trailers: do the changed Document.xml files differ only in link paths,
-    # and (for a move) is the new folder the old one, file for file, apart from such a rewrite?
-    link_only = [c[1] for c in changes if c[0] == "M" and c[1].endswith("/Document.xml")
-                 and parents and same_but_links(blob(parents[0], c[1]), blob(sha, c[1]))]
-    move_equal = None
-    src, dst = meta.get("Moved-From"), meta.get("Document")
-    if meta.get("Event") == "move" and parents and src and dst:
-        sfx = ".FCStd.d"
+    # Facts the server cannot get from the trailers. For a move: is the new folder the old one, file for file,
+    # apart from Document.xml? For a move or a relink the two Document.xml versions go to the server, which
+    # checks the difference against the library's own link rewrite (byte for byte); this hook decides nothing.
+    sfx = ".FCStd.d"
+    move_equal, xml_pair = None, None
+    ev, src, dst = meta.get("Event"), meta.get("Moved-From"), meta.get("Document")
+    if ev == "move" and parents and src and dst:
         def tree(rev, folder):
             r = git("ls-tree", "-r", "-z", rev, "--", folder + sfx).stdout.split("\0")
             return {e.partition("\t")[2][len(folder + sfx) + 1:]: e.split()[2] for e in r if e}
         a, b = tree(parents[0], src), tree(sha, dst)
-        move_equal = bool(a) and set(a) == set(b) and all(
-            a[k] == b[k] or (k == "Document.xml" and same_but_links(blob(parents[0], f"{src}{sfx}/{k}"),
-                                                                    blob(sha, f"{dst}{sfx}/{k}")))
-            for k in a)
+        move_equal = bool(a) and set(a) == set(b) and all(a[k] == b[k] for k in a if k != "Document.xml")
+        old, new = blob(parents[0], f"{src}{sfx}/Document.xml"), blob(sha, f"{dst}{sfx}/Document.xml")
+    elif ev == "relink" and parents and dst:
+        old, new = blob(parents[0], f"{dst}{sfx}/Document.xml"), blob(sha, f"{dst}{sfx}/Document.xml")
+    else:
+        old = new = None
+    if old is not None and new is not None:
+        xml_pair = [base64.b64encode(old).decode(), base64.b64encode(new).decode()]
     return {"sha": sha, "meta": meta, "parents": parents, "author": author, "committer": committer,
             "author_email": aemail, "committer_email": cemail, "changes": changes, "top": top,
-            "link_only": link_only, "move_equal": move_equal}
+            "move_equal": move_equal, "xml_pair": xml_pair}
 
 
 def main():

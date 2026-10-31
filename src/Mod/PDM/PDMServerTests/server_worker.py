@@ -65,6 +65,12 @@ def run(op):
             return {"ok": True, "pushed": v._push_main(sha)}
         except V.PDMError as e:
             return cw.err(e)
+    if kind == "plain_doc":
+        d = v.doc_path(op["name"])
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "Document.xml"), "w") as f:
+            f.write(op["xml"])
+        return {"ok": True, "value": v.add_document(op["name"])}
     if kind == "git_push":
         # A plain `git push <refspec>` with the user's credentials (no fetch first; the branch may be gone).
         p = v._git(["push", "-q", "origin", op["refspec"]], check=False)
