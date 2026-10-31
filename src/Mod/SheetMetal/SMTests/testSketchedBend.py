@@ -63,6 +63,15 @@ _ROWS = [
 ]
 PL = 80.0
 
+# Notes from the run 027 verification (recorded, not asserted; the cases above avoid them):
+# - the vendored Fold with Position="intersection of planes" and invertbend=True places the fixed
+#   flange from x = -T * tan(theta / 2), not from x = 0 (finding 5): the strip starts
+#   R * tan(theta / 2) before the line on the moved side, so the fixed flange is longer than the
+#   line position suggests.
+# - "intersection of planes" derives K = (R * tan(theta / 2) / (theta / 2) - R) / T and ignores
+#   the kfactor property; at theta = 150 degrees, R = 3 T that is K of about 5.5 (finding 6),
+#   which the DXF export refuses as an implausible K (the Fold itself accepts it).
+
 
 def make_cfg(row):
     name, t, r_t, k, ang, d, pos, inv, flip = row

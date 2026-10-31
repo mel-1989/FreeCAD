@@ -143,6 +143,60 @@ def merge_bends(bends):
     return out
 
 
+def merge_axis_pieces(records):
+    """Fold the partial-arc pieces of a bend into the bend (cad-fork G07, run 027).
+
+    A corner relief or cutout that cuts across a bend obliquely leaves a few separate bend-face
+    pieces on the same cylinder, each spanning only part of the bend's angle. They are one bend:
+    the records (dicts from SheetMetalUnfolder.getUnfold(bend_out=...)) that share a cylinder
+    axis, inside radius and direction with a record of a larger angle are folded into that
+    record, their segments projected onto its bend line, so no bend is ever reported at an angle
+    the part does not have. Records without an "axis" key pass through unchanged."""
+    def same_cylinder(a, b):
+        ka, kb = a.get("axis"), b.get("axis")
+        if not ka or not kb or a["direction"] != b["direction"]:
+            return False
+        if abs(a["inside_radius"] - b["inside_radius"]) > 1e-6:
+            return False
+        da, db = Vector(*ka[0]), Vector(*kb[0])
+        if abs(da.dot(db)) < 1 - 1e-6:
+            return False
+        return (Vector(*ka[1]) - Vector(*kb[1])).Length < 1e-4
+
+    mains = []
+    for rec in records:
+        main = None
+        for other in records:
+            if (other is not rec and same_cylinder(rec, other)
+                    and other["angle"] > rec["angle"] + 1e-6
+                    and (main is None or other["angle"] > main["angle"])):
+                main = other
+        mains.append(main)
+    extra = {}
+    for rec, main in zip(records, mains):
+        if main is None:
+            continue
+        a0, a1 = (Vector(v) for v in main["segments"][0])
+        d = a1 - a0
+        if d.Length < 1e-12:
+            mains[records.index(rec)] = None
+            continue
+        d.normalize()
+        extra.setdefault(id(main), []).extend(
+            (a0 + d * (Vector(p) - a0).dot(d), a0 + d * (Vector(q) - a0).dot(d))
+            for p, q in rec["segments"])
+    out = []
+    for rec, main in zip(records, mains):
+        if main is not None:
+            continue
+        if id(rec) in extra:
+            merged = dict(rec)
+            merged["segments"] = list(rec["segments"]) + extra[id(rec)]
+            rec = merged
+        out.append(rec)
+    return out
+
+
 def _collinear(ref, seg, tol=1e-4):
     d = ref[1] - ref[0]
     if d.Length < 1e-12:

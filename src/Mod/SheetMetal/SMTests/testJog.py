@@ -10,10 +10,14 @@ Handbook bend allowance, annular-sector areas):
 - moved wall: its faces sit exactly d from the fixed wall's, its extent is plate length - X/2 - line
 - flat length = plate - X + s + 2 BA, BA = th (R + K T)
 Exactly 60 degree bends are avoided in the unfold cases: the vendored V1 unfolder flattens some
-shapes with 60 degree bends only partly (run 026); the jog says so on recompute instead.
+shapes with 60 degree bends only partly (run 026). The jog does not flag it on recompute: the
+Unfold feature's State stays up to date and only a console line warns; the DXF export of that
+partial flat is refused (see test_jog_60_dxf_refused).
 """
 
 import math
+import os
+import tempfile
 import unittest
 
 import FreeCAD
@@ -226,6 +230,48 @@ class TestJog(Doc):
         self.doc.recompute()
         self.assertNotIn("Invalid", jog.State)
         self.assertTrue(jog.Shape.isValid())
+
+    def _plain_jog(self, offset, angle, radius, T):
+        box = make_box(self.doc, T)
+        ln = line_obj(self.doc, 20.0, T)
+        return JG.make_jog(self.doc, box, top_face(box), ln, offset=offset, angle=angle, radius=radius)
+
+    def test_jog_60_dxf_refused(self):
+        """The V1 unfolder flattens a 60 degree jog only partly: the Unfold feature stays up to
+        date (no recompute flag), but it records no bends and the DXF export refuses it."""
+        jog = self._plain_jog(6.0, 60.0, 2.0, 2.0)
+        self.assertNotIn("Invalid", jog.State)
+        feat = feature_unfold(self.doc, jog, unfold_target_face(jog.Shape), k=K, old=None)
+        self.assertNotIn("Invalid", feat.State)
+        self.assertEqual(UC.get_bend_lines(feat), [])
+        path = os.path.join(tempfile.mkdtemp(), "jog60.dxf")
+        with self.assertRaises(ValueError) as cm:
+            UC.export_flat_dxf(feat, path)
+        self.assertIn("partly flattened", str(cm.exception))
+        self.assertFalse(os.path.exists(path))
+
+    def test_minimum_straight_segment(self):
+        """The straight segment between the bends is at least max(0.1 mm, T / 10): shorter ones
+        made valid solids whose unfold crashed (run 027)."""
+        self.assertAlmostEqual(JG.min_straight(0.5), 0.1)
+        self.assertAlmostEqual(JG.min_straight(3.0), 0.3)
+        for angle, T, R in ((90.0, 2.0, 2.0), (45.0, 1.0, 0.5), (75.0, 3.0, 1.5), (30.0, 0.5, 0.5)):
+            th = math.radians(angle)
+            dmin = (2 * R + T) * (1 - math.cos(th))
+            smin = max(0.1, T / 10.0)
+            with self.subTest(angle=angle, T=T):
+                ok = self._plain_jog(dmin + smin * math.sin(th) * 1.001, angle, R, T)
+                self.assertNotIn("Invalid", ok.State)
+                feat = feature_unfold(self.doc, ok, unfold_target_face(ok.Shape), k=K, old=None)
+                self.assertNotIn("Invalid", feat.State)
+                self.assertEqual(len(UC.get_bend_lines(feat)), 2)
+                bad = self._plain_jog(dmin + smin * math.sin(th) * 0.9, angle, R, T)
+                self.assertIn("Invalid", bad.State)
+                box = make_box(self.doc, T)
+                with self.assertRaises(JG.JogError) as cm:
+                    JG.build_jog(box.Shape, top_face(box), V(20, 0, T), V(20, W, T),
+                                 dmin + smin * math.sin(th) * 0.9, angle=angle, radius=R)
+                self.assertIn("straight segment of at least %g mm" % smin, str(cm.exception))
 
     def test_not_a_sheet_and_not_a_line(self):
         cyl = self.doc.addObject("Part::Cylinder", "Cyl")

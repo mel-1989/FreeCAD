@@ -118,7 +118,8 @@ def _store_bends(obj, bend_records, norm, shape=None, source=None, thickness=Non
     if not hasattr(obj, "BendData"):
         return
     bends = SheetMetalFlatPattern.merge_bends(
-        [SheetMetalFlatPattern.FlatBend.from_record(r) for r in bend_records])
+        [SheetMetalFlatPattern.FlatBend.from_record(r)
+         for r in SheetMetalFlatPattern.merge_axis_pieces(bend_records)])
     problem = ""
     if shape is not None and source is not None and thickness:
         problem = SheetMetalFlatPattern.flat_problem(

@@ -86,6 +86,12 @@ def jog_dimensions(d, angle_deg, radius, thickness):
     return s, x
 
 
+def min_straight(thickness):
+    """Shortest straight segment allowed between the two bends of a jog, mm: a shorter one makes
+    a valid solid that the unfolder cannot flatten (run 027)."""
+    return max(0.1, thickness / 10.0)
+
+
 def bend_allowance(angle_deg, radius, thickness, k):
     return EF.bend_allowance(angle_deg, radius, thickness, k)
 
@@ -192,11 +198,14 @@ def build_jog(base_shape, face_name, p0, p1, offset, offset_type="outside", angl
         raise JogError("the offset gives a displacement of %g mm; it must be positive "
                        "(overall offsets must exceed the thickness %g)" % (d, thk))
     s, xw = jog_dimensions(d, angle, r, thk)
-    if s < -EPS:
+    s_min = min_straight(thk)
+    if s < s_min - EPS:
+        d_min = (2.0 * r + thk) * (1.0 - math.cos(math.radians(angle))) \
+            + s_min * math.sin(math.radians(angle))
         raise JogError("the offset is too small for two bends of radius %g, angle %g and thickness %g "
-                       "to fit: the displacement must be at least %g mm (it is %g)"
-                       % (r, angle, thk, (2.0 * r + thk) * (1.0 - math.cos(math.radians(angle))), d))
-    s = max(s, 0.0)
+                       "with a straight segment of at least %g mm between them (the larger of "
+                       "0.1 mm and a tenth of the thickness): the displacement must be at least "
+                       "%g mm (it is %g)" % (r, angle, thk, s_min, d_min, d))
     # frame on the face
     along = p1 - p0
     if along.Length < EPS:

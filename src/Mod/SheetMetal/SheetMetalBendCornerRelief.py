@@ -126,7 +126,14 @@ def corner_frame(base, edge):
         arcs.sort(key=lambda e: e.Curve.Radius)
         inner, outer = arcs[0], arcs[-1]
         radius = inner.Curve.Radius
-        if abs(outer.Curve.Radius - radius - thickness) > 1e-6 * max(1.0, thickness):
+        arc_gap = outer.Curve.Radius - radius
+        if abs(arc_gap - thickness) > 1e-6 * max(1.0, thickness):
+            if arc_gap > 1e-9 and abs(edge.Length - arc_gap) > 1e-6 * max(1.0, arc_gap):
+                # bends beyond 90 degrees also have a longer corner edge where the side faces meet
+                raise ReliefError("the selected edge is %g mm long but the sheet is %g mm thick: "
+                                  "pick the corner edge that is one thickness long (bends beyond "
+                                  "90 degrees have a longer edge there as well, which is not "
+                                  "supported)" % (edge.Length, arc_gap))
             raise ReliefError("the bend arcs are not one thickness apart")
         info.append(dict(normal=m, inner=inner, radius=radius, center=inner.Curve.Center,
                          angle=abs(inner.LastParameter - inner.FirstParameter)))
@@ -323,6 +330,56 @@ def build_corner_relief(base_shape, edge_name, relief_type="Round", size=3.0, si
     return result.Solids[0] if result.ShapeType != "Solid" else result
 
 
+def _base_of(obj):
+    """The feature below `obj` in its base chain, or None."""
+    for name in ("baseObject", "BaseObject", "Base"):
+        if name in getattr(obj, "PropertiesList", []):
+            value = getattr(obj, name)
+            if isinstance(value, (tuple, list)):
+                value = value[0] if value else None
+            if value is not None and hasattr(value, "PropertiesList"):
+                return value
+    return None
+
+
+def part_kfactor(obj):
+    """The K-factor (ANSI) of the nearest feature at or below `obj` that has one (an edge
+    flange, a jog, a hem), or None when the chain has none."""
+    seen = set()
+    while obj is not None and id(obj) not in seen:
+        seen.add(id(obj))
+        if "kfactor" in obj.PropertiesList and "kfromPart" not in obj.PropertiesList:
+            return float(obj.kfactor)
+        obj = _base_of(obj)
+    return None
+
+
+def relief_k_mismatch(unfold_feature):
+    """A readable message when a corner relief under an Unfold feature was built with a
+    K-factor other than the one the flat pattern uses (more than 1e-9 apart), else None.
+    Walks the unfold's base chain; an Unfold that takes K from a material table is not checked
+    because there is no single K to compare."""
+    if "KFactor" not in unfold_feature.PropertiesList:
+        return None
+    if str(getattr(unfold_feature, "MaterialSheet", "_manual")) != "_manual":
+        return None
+    k_unfold = float(unfold_feature.KFactor)
+    if str(getattr(unfold_feature, "KFactorStandard", "ansi")) == "din":
+        k_unfold /= 2.0
+    seen = set()
+    obj = _base_of(unfold_feature)
+    while obj is not None and id(obj) not in seen:
+        seen.add(id(obj))
+        if "kUsed" in obj.PropertiesList and abs(float(obj.kUsed) - k_unfold) > 1e-9:
+            return ("%s was cut with K-factor %g but the flat pattern uses %g: the relief and the "
+                    "unfolded part differ by up to %.2f mm per bend; set the relief to take K from "
+                    "the part or change the unfold's K-factor"
+                    % (obj.Label, float(obj.kUsed), k_unfold,
+                       abs(float(obj.kUsed) - k_unfold) * 3.1416 / 2.0 * float(obj.thickness)))
+        obj = _base_of(obj)
+    return None
+
+
 class SMBendCornerRelief:
     def __init__(self, obj, selobj, sel_elements):
         """Cut a relief at the corner edge `sel_elements` of `selobj`."""
@@ -339,6 +396,9 @@ class SMBendCornerRelief:
         SheetMetalTools.smAddFloatProperty(obj, "ratio", tr("App::Property", "Obround length / width"), 2.0)
         SheetMetalTools.smAddAngleProperty(obj, "rotation", tr("App::Property", "Rotation of the shape in the flat pattern"), 0.0)
         SheetMetalTools.smAddFloatProperty(obj, "kfactor", tr("App::Property", "K-factor of the flat pattern (ANSI)"), 0.4)
+        SheetMetalTools.smAddBoolProperty(obj, "kfromPart", tr("App::Property", "Take the K-factor from the bends of the part (the nearest feature below with a K-factor); off uses kfactor"), True)
+        SheetMetalTools.smAddFloatProperty(obj, "kUsed", tr("App::Property", "K-factor the relief was built with"), 0.4)
+        obj.setEditorMode("kUsed", 1)
         SheetMetalTools.smAddLengthProperty(obj, "thickness", tr("App::Property", "Thickness (from the base)"), 0.0)
         obj.setEditorMode("thickness", 1)
         SheetMetalTools.smAddLengthProperty(obj, "sizeUsed", tr("App::Property", "Size used in mm"), 0.0)
@@ -350,13 +410,17 @@ class SMBendCornerRelief:
     def execute(self, fp):
         self.addVerifyProperties(fp)
         base = fp.baseObject[0].Shape.copy()
+        k_used = part_kfactor(fp.baseObject[0]) if fp.kfromPart else None
+        if k_used is None:
+            k_used = fp.kfactor
         try:
             shape = build_corner_relief(base, fp.baseObject[1][0], str(fp.reliefType), fp.size,
-                                        str(fp.sizeMode), fp.kfactor, fp.ratio, fp.rotation.Value)
+                                        str(fp.sizeMode), k_used, fp.ratio, fp.rotation.Value)
             edge = base.getElement(SheetMetalTools.getElementFromTNP(fp.baseObject[1][0]))
             thk = edge.Length
         except ReliefError as exc:
             raise FreeCAD.Base.FreeCADError("Corner relief: %s" % exc)
+        fp.kUsed = k_used
         fp.thickness = thk
         fp.sizeUsed = effective_size(fp.size, str(fp.sizeMode), thk)
         fp.Shape = shape

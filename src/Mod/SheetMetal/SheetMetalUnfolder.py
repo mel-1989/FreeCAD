@@ -480,6 +480,17 @@ def get_surface(face):
     return surface
 
 
+def _axis_key(axis, cent):
+    """cad-fork G07: the bend cylinder's axis as (unit direction, foot of the perpendicular from
+    the origin), so flat-pattern pieces of one bend can be recognised later."""
+    d = Base.Vector(axis)
+    if d.Length < 1e-12:
+        return None
+    d.normalize()
+    foot = Base.Vector(cent) - d * Base.Vector(cent).dot(d)
+    return [list(d), list(foot)]
+
+
 class SheetTree(object):
     # Class representing a wire to replace in the unfolded shape.
     # During tree creation, some features are detected (e.g. countersink
@@ -2696,6 +2707,7 @@ class SheetTree(object):
             "k_factor": kFactor,
             "allowance": bend_node._trans_length,
             "thickness": thick,
+            "axis": _axis_key(axis, cent),
         })
         return wireList
 

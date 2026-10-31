@@ -14,6 +14,8 @@ Expected values come from closed forms only:
 """
 
 import math
+import os
+import tempfile
 import unittest
 
 import FreeCAD
@@ -22,6 +24,7 @@ from FreeCAD import Vector as V
 
 import SheetMetalBendCornerRelief as CR
 import SheetMetalEdgeFlange as EF
+import SheetMetalFlatPattern as FP
 import SheetMetalUnfoldCmd as UC
 from SMTests.testEdgeFlange import PL, W, find_edge, make_box
 from SMTests.testOracle import unfold_target_face
@@ -45,6 +48,9 @@ CASES = [
     _case("r09_square_T2_R1T_s5_rot45", 2.0, 1.0, 90.0, "Square", 5.0, rot=45.0),
     _case("r10_obround_T1_R2T_w2T_x4_a45_rot30", 1.0, 2.0, 45.0, "Obround", 2.0, mode="Thickness",
           ratio=4.0, rot=30.0, k=0.45),
+    # an oblique cut leaves bend-face slivers; they are part of the bend, not bends of their own
+    _case("r11_obround_T1_R1T_w2T_x5_rot135", 1.0, 1.0, 90.0, "Obround", 2.0, mode="Thickness",
+          ratio=5.0, rot=135.0, k=0.45),
 ]
 
 
@@ -176,6 +182,34 @@ def corner_edge(shape):
     raise AssertionError("corner edge not found")
 
 
+def corner_edges(shape):
+    """Every straight edge with both ends on the plate corner line (x, y) = (PL, W)."""
+    out = []
+    for i, e in enumerate(shape.Edges):
+        a, b = e.Vertexes[0].Point, e.Vertexes[-1].Point
+        if all(abs(p.x - PL) < 1e-6 and abs(p.y - W) < 1e-6 for p in (a, b)):
+            out.append("Edge%d" % (i + 1))
+    return out
+
+
+def thickness_corner_edge(shape, T):
+    return next(n for n in corner_edges(shape) if abs(shape.getElement(n).Length - T) < 1e-6)
+
+
+def raw_tray(doc, T, R, a1, a2, length=15.0):
+    """A tray whose +x and +y flanges have their own angles (the Edge Flange feature refuses
+    some of these); a plain Part feature."""
+    box = make_box(doc, T)
+    res = box.Shape
+    for which, a in (("+x", a1), ("+y", a2)):
+        p0, along, w, out, nsheet, thk = EF._edge_frame(box.Shape, box.Shape.getElement(find_edge(box, which)))
+        fl = EF.make_flange_solid(p0, along, w, out, nsheet, R, thk, a, EF.straight_length(length, a, R, thk))
+        res = res.fuse(fl).removeSplitter()
+    tray = doc.addObject("Part::Feature", "Tray")
+    tray.Shape = Part.Solid(res.Solids[0])
+    return tray
+
+
 class Doc(unittest.TestCase):
     def setUp(self):
         self.doc = FreeCAD.newDocument("ReliefTest")
@@ -269,6 +303,88 @@ class TestCornerRelief(Doc):
                 self.report.append((c["name"], dev, top.Area - (full_area - cut_area)))
                 bends = UC.get_bend_lines(feat)
                 self.assertEqual(len(bends), 2)
+
+    def test_oblique_cut_keeps_one_bend_per_axis(self):
+        """The oblique obround leaves slivers of the bend faces (34 degree arcs of a 90 degree
+        bend); they must not show as bends of their own, in BendData or in the DXF."""
+        T, R, k = 1.0, 1.0, 0.45
+        for a1, a2 in ((90.0, 90.0), (45.0, 135.0), (135.0, 45.0)):
+            with self.subTest(angles=(a1, a2)):
+                doc = FreeCAD.newDocument("Oblique")
+                try:
+                    tray = raw_tray(doc, T, R, a1, a2)
+                    rel = CR.make_corner_relief(doc, tray, thickness_corner_edge(tray.Shape, T), reliefType="Obround",
+                                                size=2.0, sizeMode="Thickness", ratio=5.0,
+                                                rotation=135.0, kfactor=k)
+                    self.assertNotIn("Invalid", rel.State)
+                    feat = feature_unfold(doc, rel, unfold_target_face(rel.Shape), k=k, old=None)
+                    self.assertNotIn("Invalid", feat.State)
+                    bends = UC.get_bend_lines(feat)
+                    self.assertEqual(sorted(round(b.angle, 6) for b in bends), sorted([a1, a2]))
+                    for b in bends:
+                        self.assertGreater(b.length, 20.0, "a bend line is a full-length line, not a fragment")
+                    path = os.path.join(tempfile.mkdtemp(), "oblique.dxf")
+                    drawn = UC.export_flat_dxf(feat, path)
+                    self.assertEqual(len(drawn), 2)
+                finally:
+                    FreeCAD.closeDocument(doc.Name)
+
+    def test_merge_axis_pieces_unit(self):
+        ax = [[0.0, 1.0, 0.0], [5.0, 0.0, 0.0]]
+        other = [[0.0, 1.0, 0.0], [9.0, 0.0, 0.0]]
+        base = dict(direction="UP", inside_radius=1.0, allowance=2.0, k_factor=0.4, thickness=1.0)
+        main = dict(base, angle=1.5, axis=ax, segments=[(V(3, 0, 0), V(3, 10, 0))])
+        piece = dict(base, angle=0.5, axis=[[0.0, -1.0, 0.0], ax[1]], segments=[(V(3.7, 4, 0), V(3.7, 5, 0))])
+        far = dict(base, angle=0.5, axis=other, segments=[(V(8, 0, 0), V(8, 10, 0))])
+        out = FP.merge_axis_pieces([piece, main, far])
+        self.assertEqual([r["angle"] for r in out], [1.5, 0.5])
+        self.assertEqual(len(out[0]["segments"]), 2)
+        for a, b in out[0]["segments"][1:]:
+            self.assertAlmostEqual(a.x, 3.0)
+            self.assertAlmostEqual(b.x, 3.0)
+
+    def test_relief_takes_k_from_the_part(self):
+        c = dict(CASES[0])
+        c["k"] = 0.42
+        tray = self.tray(c)
+        edge = corner_edge(tray.Shape)
+        rel = CR.make_corner_relief(self.doc, tray, edge, size=3.0, kfactor=0.30)
+        self.assertAlmostEqual(rel.kUsed, 0.42, 12)
+        ref = CR.make_corner_relief(self.doc, tray, edge, name="Ref", size=3.0, kfactor=0.42, kfromPart=False)
+        self.assertAlmostEqual(ref.kUsed, 0.42, 12)
+        self.assertAlmostEqual(rel.Shape.Volume, ref.Shape.Volume, 9)
+        own = CR.make_corner_relief(self.doc, tray, edge, name="Own", size=3.0, kfactor=0.30, kfromPart=False)
+        self.assertAlmostEqual(own.kUsed, 0.30, 12)
+        self.assertNotAlmostEqual(own.Shape.Volume, rel.Shape.Volume, 6)
+
+    def test_k_mismatch_message(self):
+        c = dict(CASES[0])
+        c["k"] = 0.42
+        tray = self.tray(c)
+        edge = corner_edge(tray.Shape)
+        # a relief on a bare solid (no K in the chain) keeps its own K
+        bare = self.doc.addObject("Part::Feature", "Bare")
+        bare.Shape = tray.Shape
+        rel = CR.make_corner_relief(self.doc, bare, edge, size=3.0, kfactor=0.42)
+        same = feature_unfold(self.doc, rel, unfold_target_face(rel.Shape), k=0.42, old=None)
+        self.assertIsNone(CR.relief_k_mismatch(same))
+        diff = feature_unfold(self.doc, rel, unfold_target_face(rel.Shape), k=0.30, old=None)
+        msg = CR.relief_k_mismatch(diff)
+        self.assertIn("0.42", msg)
+        self.assertIn("0.3", msg)
+        # a relief that takes K from the flanges' K and an unfold with another K
+        rel2 = CR.make_corner_relief(self.doc, tray, edge, name="R2", size=3.0)
+        self.assertIsNone(CR.relief_k_mismatch(feature_unfold(self.doc, rel2, unfold_target_face(rel2.Shape), k=0.42, old=None)))
+        self.assertIsNotNone(CR.relief_k_mismatch(feature_unfold(self.doc, rel2, unfold_target_face(rel2.Shape), k=0.31, old=None)))
+
+    def test_over_90_degree_corner_refusal_names_the_cause(self):
+        tray = raw_tray(self.doc, 1.0, 1.0, 135.0, 135.0)
+        long_edge = next(n for n in corner_edges(tray.Shape)
+                         if abs(tray.Shape.getElement(n).Length - 1.0) > 1e-3)
+        with self.assertRaises(CR.ReliefError) as cm:
+            CR.build_corner_relief(tray.Shape, long_edge, "Round", 3.0)
+        self.assertIn("one thickness long", str(cm.exception))
+        self.assertNotIn("not one thickness apart", str(cm.exception))
 
     def test_zz_report(self):
         for name, dev, err in self.report:
