@@ -309,6 +309,49 @@ class TestFolderBehaviour(unittest.TestCase):
         self.assertEqual(tree_text(self.p("one.FCStd.d")), first)
         self.assertNotIn(b'status="67108865"', first["Document.xml"])
 
+    def test_string_edits_with_decimals_are_saved(self):
+        """Only numeric elements get the 1e-12 keep-old-text rule: a Label, a string property or a
+        spreadsheet cell that differs from the stored text only in a decimal is still written."""
+        doc = App.newDocument("strs")
+        box = doc.addObject("Part::Box", "Box")
+        box.Label = "Rev 1.5"
+        box.addProperty("App::PropertyString", "Version")
+        box.Version = "1.10"
+        sheet = doc.addObject("Spreadsheet::Sheet", "Sheet")
+        sheet.set("A1", "'0.1")
+        doc.recompute()
+        doc.saveAsFolder(self.p("s.FCStd.d"))
+        App.closeDocument(doc.Name)
+        doc = App.openDocument(self.p("s.FCStd.d"))
+        doc.Box.Label = "Rev 1.50"
+        doc.Box.Version = "1.1"
+        doc.Sheet.set("A1", "'0.10")
+        doc.recompute()
+        doc.save()
+        App.closeDocument(doc.Name)
+        doc = App.openDocument(self.p("s.FCStd.d"))
+        self.assertEqual(doc.Box.Label, "Rev 1.50")
+        self.assertEqual(doc.Box.Version, "1.1")
+        self.assertEqual(doc.Sheet.getContents("A1"), "'0.10")
+        App.closeDocument(doc.Name)
+
+    def test_shape_flag_change_is_saved(self):
+        """A closed-flag change in a shape is written, though only the TShape flag word differs."""
+        import Part
+
+        box = Part.makeBox(10, 10, 10)
+        doc = App.newDocument("flags")
+        feat = doc.addObject("Part::Feature", "F")
+        feat.Shape = box.Shells[0]
+        doc.saveAsFolder(self.p("f.FCStd.d"))
+        feat.Shape = Part.Shell(box.Faces)
+        expected = feat.Shape.isClosed()
+        doc.save()
+        App.closeDocument(doc.Name)
+        doc = App.openDocument(self.p("f.FCStd.d"))
+        self.assertEqual(doc.F.Shape.isClosed(), expected)
+        App.closeDocument(doc.Name)
+
     def test_diff_of_one_pad_length(self):
         """Check 3: one Pad length changes only that parameter and the shapes recomputed from it."""
         self.doc.saveAsFolder(self.p("d.FCStd.d"))

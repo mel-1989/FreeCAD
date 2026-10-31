@@ -325,11 +325,15 @@ bool brepTextClose(const std::string& a, const std::string& b, double tol)
         if (x == y) {
             continue;
         }
-        // TShape flag words (free, modified, checked, ...) are OCCT bookkeeping, not geometry
+        // TShape flag words: free, modified and checked (the first three) are OCCT bookkeeping;
+        // orientable, closed, infinite and convex describe the shape and must match
         auto isFlags = [](const std::string& t) {
             return t.size() == 7 && t.find_first_not_of("01") == std::string::npos;
         };
         if (isFlags(x) && isFlags(y)) {
+            if (x.compare(3, 4, y, 3, 4) != 0) {
+                return false;
+            }
             continue;
         }
         char* endX = nullptr;
@@ -342,41 +346,55 @@ bool brepTextClose(const std::string& a, const std::string& b, double tol)
     }
 }
 
-// Splits text into its non-numeric segments and its decimal numbers ("-0.7071067811865476")
+// Splits Document.xml into literal segments and the numbers held in whole attribute values of the
+// numeric elements (PropertyPlacement, PropertyVector, Float). Everything else, strings, labels and
+// spreadsheet cells included, stays literal, so only those numbers are compared with a tolerance.
 void splitNumbers(const std::string& t, std::vector<std::string>& segments, std::vector<double>& nums)
 {
+    static const char* const numericTags[] = {"PropertyPlacement", "PropertyVector", "Float"};
     std::string seg;
     std::size_t i = 0;
-    while (i < t.size()) {
-        std::size_t j = i;
-        if (t[j] == '-') {
-            ++j;
+    std::size_t pos = 0;
+    while ((pos = t.find('<', pos)) != std::string::npos) {
+        std::size_t nameEnd = pos + 1;
+        while (nameEnd < t.size()
+               && (std::isalnum(static_cast<unsigned char>(t[nameEnd])) || t[nameEnd] == '_')) {
+            ++nameEnd;
         }
-        const std::size_t digits = j;
-        while (j < t.size() && std::isdigit(static_cast<unsigned char>(t[j]))) {
-            ++j;
+        const std::size_t close = t.find('>', nameEnd);
+        if (close == std::string::npos) {
+            break;
         }
-        if (j > digits && j + 1 < t.size() && t[j] == '.' && std::isdigit(static_cast<unsigned char>(t[j + 1]))) {
-            ++j;
-            while (j < t.size() && std::isdigit(static_cast<unsigned char>(t[j]))) {
-                ++j;
+        const std::string name = t.substr(pos + 1, nameEnd - pos - 1);
+        if (std::find(std::begin(numericTags), std::end(numericTags), name) != std::end(numericTags)) {
+            for (std::size_t q = t.find("=\"", nameEnd); q != std::string::npos && q < close;
+                 q = t.find("=\"", q + 1)) {
+                const std::size_t start = q + 2;
+                const std::size_t end = t.find('"', start);
+                if (end == std::string::npos || end > close || end == start) {
+                    break;
+                }
+                const std::string value = t.substr(start, end - start);
+                char* stop = nullptr;
+                const double v = std::strtod(value.c_str(), &stop);
+                if (*stop != '\0' || value.find('.') == std::string::npos
+                    || value.find_first_not_of("-0123456789.eE+") != std::string::npos) {
+                    continue;
+                }
+                seg.append(t, i, start - i);
+                segments.push_back(seg);
+                seg.clear();
+                nums.push_back(v);
+                i = end;
             }
-            segments.push_back(seg);
-            seg.clear();
-            nums.push_back(std::strtod(t.substr(i, j - i).c_str(), nullptr));
-            i = j;
         }
-        else {
-            // not a decimal number: copy the run of digits or the single character
-            const std::size_t end = std::max(j, i + 1);
-            seg.append(t, i, end - i);
-            i = end;
-        }
+        pos = close;
     }
+    seg.append(t, i, std::string::npos);
     segments.push_back(seg);
 }
 
-// Same text apart from decimal numbers that differ by at most tol
+// Same text apart from the numeric attribute values of numeric elements, which may differ by at most tol
 bool textClose(const std::string& a, const std::string& b, double tol)
 {
     std::vector<std::string> sa;
