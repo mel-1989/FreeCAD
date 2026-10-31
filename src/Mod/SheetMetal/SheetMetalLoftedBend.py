@@ -262,6 +262,87 @@ def build_mesh(segs_a, segs_b):
 # Mid-surface analysis
 ###################################################################################################
 
+###################################################################################################
+# Triangle-triangle intersection (pure Python, tolerance eps)
+###################################################################################################
+
+def _v_sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _v_dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _v_cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _seg_hits_tri(p, q, tri, eps):
+    """Segment pq against a triangle that is not coplanar with it; True when they touch."""
+    e1, e2 = _v_sub(tri[1], tri[0]), _v_sub(tri[2], tri[0])
+    nrm = _v_cross(e1, e2)
+    ln = math.sqrt(_v_dot(nrm, nrm))
+    nrm = (nrm[0] / ln, nrm[1] / ln, nrm[2] / ln)
+    dp, dq = _v_dot(_v_sub(p, tri[0]), nrm), _v_dot(_v_sub(q, tri[0]), nrm)
+    if (dp > eps and dq > eps) or (dp < -eps and dq < -eps):
+        return False
+    den = dp - dq
+    t = 0.5 if abs(den) < 1e-300 else min(1.0, max(0.0, dp / den))
+    x = (p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1]), p[2] + t * (q[2] - p[2]))
+    # barycentric test of the crossing point, tolerance eps in length
+    for k in range(3):
+        a, b = tri[k], tri[(k + 1) % 3]
+        edge = _v_sub(b, a)
+        inward = _v_cross(nrm, edge)          # points to the inside for a ccw triangle
+        c = _v_sub(tri[(k + 2) % 3], a)
+        sign = 1.0 if _v_dot(inward, c) > 0 else -1.0
+        il = math.sqrt(_v_dot(inward, inward))
+        if sign * _v_dot(inward, _v_sub(x, a)) / il < -eps:
+            return False
+    return True
+
+
+def _coplanar_overlap(a, b, eps, strict):
+    """2D separating-axis test of two coplanar triangles (strict: touching does not count)."""
+    nrm = _v_cross(_v_sub(a[1], a[0]), _v_sub(a[2], a[0]))
+    ln = math.sqrt(_v_dot(nrm, nrm))
+    nrm = (nrm[0] / ln, nrm[1] / ln, nrm[2] / ln)
+    for tri in (a, b):
+        for k in range(3):
+            ax = _v_cross(nrm, _v_sub(tri[(k + 1) % 3], tri[k]))
+            al = math.sqrt(_v_dot(ax, ax))
+            if al == 0:
+                continue
+            pa = [_v_dot(q, ax) / al for q in a]
+            pb = [_v_dot(q, ax) / al for q in b]
+            tol = eps if strict else -eps
+            if max(pa) <= min(pb) + tol or max(pb) <= min(pa) + tol:
+                return False
+    return True
+
+
+def _tris_cross(a, b, sa, sb, eps):
+    """True when triangles a and b (3 points each) intersect anywhere but at the vertices they
+    share (sa, sb flag the shared corners; none or one corner is shared)."""
+    def plane_dist(tri, ref):
+        n = _v_cross(_v_sub(ref[1], ref[0]), _v_sub(ref[2], ref[0]))
+        ln = math.sqrt(_v_dot(n, n))
+        return [_v_dot(_v_sub(q, ref[0]), n) / ln for q in tri]
+
+    if all(abs(d) <= eps for d in plane_dist(b, a)):
+        return _coplanar_overlap(a, b, eps, any(sa))
+    if any(sa):
+        # the intersection is a segment out of the shared vertex; it ends on the opposite edge
+        ia = sa.index(True)
+        ib = sb.index(True)
+        pa, qa = a[(ia + 1) % 3], a[(ia + 2) % 3]
+        pb, qb = b[(ib + 1) % 3], b[(ib + 2) % 3]
+        return _seg_hits_tri(pa, qa, b, eps) or _seg_hits_tri(pb, qb, a, eps)
+    return (any(_seg_hits_tri(a[k], a[(k + 1) % 3], b, eps) for k in range(3))
+            or any(_seg_hits_tri(b[k], b[(k + 1) % 3], a, eps) for k in range(3)))
+
+
 class Mesh:
     """Triangles of the mid-surface with their hinges, normals and the flat development."""
 
@@ -274,6 +355,7 @@ class Mesh:
         self._normals(invert)
         self._hinges()
         self._check_triangles()
+        self._check_self_intersection()
         self._development()
 
     # -- normals, inside orientation
@@ -353,6 +435,38 @@ class Mesh:
         self.hinges.sort(key=lambda h: (h["k"], h["a"], h["b"]))
 
     # -- per triangle offset geometry
+    def _check_self_intersection(self):
+        """Refuse a mid-surface whose non-adjacent triangles intersect (a twisted loft)."""
+        pts = [(p.x, p.y, p.z) for p in self.points]
+        tris = self.tris
+        scale = max(max(abs(c) for p in pts for c in p), 1.0)
+        eps = 1e-9 * scale
+        boxes = []
+        for t in tris:
+            ps = [pts[v] for v in t]
+            boxes.append(([min(q[i] for q in ps) - eps for i in range(3)],
+                          [max(q[i] for q in ps) + eps for i in range(3)]))
+        n = len(tris)
+        for i in range(n):
+            lo_i, hi_i = boxes[i]
+            si = set(tris[i])
+            for j in range(i + 1, n):
+                lo_j, hi_j = boxes[j]
+                if (lo_i[0] > hi_j[0] or lo_j[0] > hi_i[0] or lo_i[1] > hi_j[1]
+                        or lo_j[1] > hi_i[1] or lo_i[2] > hi_j[2] or lo_j[2] > hi_i[2]):
+                    continue
+                shared = si & set(tris[j])
+                if len(shared) >= 2:
+                    continue
+                if _tris_cross([pts[v] for v in tris[i]], [pts[v] for v in tris[j]],
+                               [v in shared for v in tris[i]], [v in shared for v in tris[j]],
+                               eps):
+                    raise LoftedBendError(
+                        "the mid-surface intersects itself: facets %d and %d cross each other "
+                        "(the profiles are twisted against each other); change the start point "
+                        "of one profile or the alignment (forward or reversed) so that the "
+                        "profiles run the same way round" % (i, j))
+
     def _check_triangles(self):
         P = self.points
         scale = max((p - P[0]).Length for p in P)
