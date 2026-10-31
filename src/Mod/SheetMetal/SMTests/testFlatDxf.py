@@ -10,6 +10,7 @@ back with a small R12 group-code parser (``SheetMetalFlatPattern.read_dxf_entiti
 Regenerate the goldens with ``flat_dxf_cases.regenerate()``.
 """
 
+import json
 import math
 import os
 import tempfile
@@ -410,17 +411,40 @@ class TestFlatDxf(Doc):
                 base = build_base(self.doc, case)
                 feat = feature_unfold(self.doc, base, unfold_target_face(base.Shape), k=0.42, old=None)
                 path = self.path("zm.dxf")
-                complete = False
-                try:
+                with self.assertRaises(ValueError) as cm:
                     UC.export_flat_dxf(feat, path)
-                    complete = True
-                except ValueError as exc:
-                    self.assertIn("bends", str(exc))
-                if complete:  # then the unfold really is the full flat: length must match
-                    _v, flat_len, _vol = measure(feat.Shape, 2.0, WIDTH)
-                    self.assertAlmostEqual(flat_len, case.developed_length(), delta=LEN_TOL)
-                else:
-                    self.assertFalse(os.path.exists(path))
+                self.assertIn("bends", str(cm.exception))
+                self.assertFalse(os.path.exists(path))
+
+    def test_concentric_arc_slot_is_not_a_bend(self):
+        """A ring-sector slot as wide as the sheet is two coaxial cylinders T apart, but it
+        meets the sheet at an angle: the export must not take it for a missing bend."""
+        import Part
+        case = Case("arc", 2.0, 1.0, 0.42, [60.0, 40.0], [90.0])
+        base = build_base(self.doc, case)
+        web = max((f for f in base.Shape.Faces if f.Surface.TypeId == "Part::GeomPlane"),
+                  key=lambda f: f.Area)
+        n = web.normalAt(0, 0)
+        c = web.CenterOfMass
+        along = FreeCAD.Vector(1, 0, 0) if abs(n.x) < 0.9 else FreeCAD.Vector(0, 1, 0)
+        along = along - n * along.dot(n)
+        along.normalize()
+        ring = Part.makeCylinder(7.0, 6.0, c - n * 3.0, n).cut(Part.makeCylinder(5.0, 6.0, c - n * 3.0, n))
+        wedge = Part.Face(Part.makePolygon([c - n * 4.0, c - n * 4.0 + along * 20.0,
+                                            c - n * 4.0 + n.cross(along) * 20.0, c - n * 4.0])
+                          ).extrude(n * 8.0)
+        slot = ring.cut(wedge)  # a 270 degree sector
+        self.assertGreater(slot.Volume, 0.0)
+        cut = self.doc.addObject("Part::Feature", "ArcCut")
+        cut.Shape = base.Shape.cut(slot)
+        self.doc.recompute()
+        feat = feature_unfold(self.doc, cut, unfold_target_face(cut.Shape), k=0.42, old=None)
+        self.assertNotIn("Invalid", feat.State)
+        self.assertEqual(json.loads(feat.BendData)["problem"], "")
+        path = self.path("arc.dxf")
+        UC.export_flat_dxf(feat, path)
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(FP.source_bend_count(cut.Shape, 2.0), 1)
 
     def test_zz_report(self):
         for name, n, worst, err in self.report:
