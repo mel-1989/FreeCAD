@@ -154,12 +154,38 @@ def _collinear(ref, seg, tol=1e-4):
     return True
 
 
+def _is_bend_face(shape, face):
+    """A cylinder is a bend face only if it runs tangent into planar sheet faces along straight
+    edges parallel to its axis. A hole, a slot wall or a ring-shaped cutout meets its planar
+    neighbours at an angle, so it is not a bend."""
+    ax = Vector(face.Surface.Axis)
+    ax.normalize()
+    centre = Vector(face.Surface.Center)
+    for edge in face.Edges:
+        if not isinstance(edge.Curve, Part.Line) or len(edge.Vertexes) < 2:
+            continue
+        d = edge.Vertexes[-1].Point - edge.Vertexes[0].Point
+        if d.Length < 1e-9 or d.cross(ax).Length > 1e-6 * d.Length:
+            continue
+        mid = edge.valueAt(0.5 * (edge.FirstParameter + edge.LastParameter))
+        radial = (mid - centre) - ax * (mid - centre).dot(ax)
+        if radial.Length < 1e-9:
+            continue
+        radial.normalize()
+        for other in shape.ancestorsOfType(edge, Part.Face):
+            if other.isSame(face) or other.Surface.TypeId != "Part::GeomPlane":
+                continue
+            if abs(other.normalAt(0, 0).dot(radial)) > 1.0 - 1e-6:  # tangent plane
+                return True
+    return False
+
+
 def source_bend_count(shape, thickness):
-    """Number of bends in the folded sheet-metal part: distinct cylinder axes that carry two
-    cylinders whose radii differ by the sheet thickness (the inside and outside of a bend)."""
+    """Number of bends in the folded sheet-metal part: distinct cylinder axes that carry two tangent
+    bend cylinders whose radii differ by the sheet thickness (the inside and outside of a bend)."""
     groups = {}
     for f in shape.Faces:
-        if f.Surface.TypeId != "Part::GeomCylinder":
+        if f.Surface.TypeId != "Part::GeomCylinder" or not _is_bend_face(shape, f):
             continue
         ax = Vector(f.Surface.Axis)
         ax.normalize()
