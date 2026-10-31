@@ -39,6 +39,8 @@ The named multi-user scenarios (acceptance check 3):
 29. lifecycle_across_users                         release by one user, new revision by another
 30. transition_refused_while_other_user_holds_lock
 31. non_holder_cannot_release_lock                 library and raw HTTP
+45-51. TestHardening: branch rename defeated by head pinning, check-in of InReview/Obsolete, move with changed
+    content, add onto a moved-away name, transition of a missing document, stray root entries and case twins, e-mail
 33-44. forged commits (TestForgedCommits): add over an existing document (unlocked, locked by another), move onto
     an existing document (locked, unlocked), move that keeps its source, merge commit, root commit, commit signed
     as another user, wrong revision label, wrong transition trailers, symlink, trailing-newline name and oversized
@@ -691,6 +693,93 @@ class TestForgedCommits(ServerCase):
         st, _ = self.api("POST", f"/locks/{self.b}", "bob", body={"client": {"x": 1}})
         self.assertEqual(st, 400)
         self.assertIsNone(self.lock_of(self.b))
+
+
+# ---- second repair round: branch pinning, lifecycle, move content, history, tree hygiene ---------
+
+class TestHardening(ServerCase):
+    def setUp(self):
+        ServerCase.setUp(self)
+        self.a, self.b, self.c = self.doc + "a", self.doc + "b", self.doc + "c"
+
+    # the forging helpers, without inheriting (and re-running) its tests
+    seed3 = TestForgedCommits.seed3
+    forge = TestForgedCommits.forge
+    refused = TestForgedCommits.refused
+
+    def rename_main(self, user, to):
+        return S.http("PATCH", f"{self.stack.fj_url}/api/v1/repos/pdmadmin/vault/branches/main", self.stack.tokens[user],
+                      {"name": to})
+
+    def rename_back(self, user, frm):
+        S.http("PATCH", f"{self.stack.fj_url}/api/v1/repos/pdmadmin/vault/branches/{frm}", self.stack.tokens[user],
+               {"name": "main"})
+
+    def test_45_branch_rename_then_push_to_recreated_main_refused(self):
+        self.seed3()
+        self.client("bob", [], fresh=True, tag="-h")  # bob's working copy holds origin/main
+        st, body = self.rename_main("bob", "hidden")
+        try:
+            if st != 204:
+                self.skipTest(f"this Forgejo does not let a writer rename the branch ({st}); nothing to defend")
+            r = self.client("bob", [{"op": "git_push", "refspec": "origin/main~2:refs/heads/main"}], tag="-h")[0]
+            self.assertFalse(r["pushed"], r)
+            self.assertIn("PDM: push refused", r["stderr"])  # by the hook: the service cannot find the branch it approved
+            r = self.client("bob", [{"op": "forge", "nofetch": True, "trailers": tr(self.b, "add", "A.1"),
+                                     "files": {self.b + V.DOC_SUFFIX + "/Document.xml": "pwn\n"}}], tag="-h")[0]
+            self.assertFalse(r.get("pushed"), r)
+        finally:
+            self.rename_back("bob", "hidden")
+        self.assertEqual(self.head(self.b), ("A.1", "WIP"))
+        self.assertEqual(self.head(self.a), ("A.1", "WIP"))
+
+    def test_46_checkin_of_in_review_or_obsolete_document_refused(self):
+        self.seed(self.a)
+        self.client("alice", [call("transition", self.a, "InReview")])
+        r = self.client("bob", [call("lock", self.a)], fresh=True)  # a lock is only a reservation
+        r = self.client("bob", [{"op": "forge", "trailers": tr(self.a, "checkin", "A.2"),
+                                 "files": {self.a + V.DOC_SUFFIX + "/Document.xml": "x\n"}}])
+        self.refused(r[0], "InReview")
+        self.client("bob", [call("release_lock", self.a)])
+        self.client("alice", [call("transition", self.a, "Obsolete")])
+        self.client("bob", [call("lock", self.a)])
+        r = self.client("bob", [{"op": "forge", "trailers": tr(self.a, "checkin", "A.2"),
+                                 "files": {self.a + V.DOC_SUFFIX + "/Document.xml": "x\n"}}])
+        self.refused(r[0], "Obsolete")
+
+    def test_47_move_with_changed_content_refused(self):
+        self.seed3()
+        d = V.DOC_SUFFIX
+        r = self.forge("bob", trailers=tr(self.doc + "n", "move", "A.1", **{"Moved-From": self.c}),
+                       files={self.doc + "n" + d + "/Document.xml": "<Document changed='1'/>\n"}, delete=[self.c + d])
+        self.refused(r, "file for file")
+
+    def test_48_add_onto_moved_away_name_refused(self):
+        self.seed(self.a)
+        self.assertTrue(self.client("alice", [call("move", self.a, self.a + "m")])[0]["ok"])
+        r = self.forge("bob", trailers=tr(self.a, "add", "A.1"), files={self.a + V.DOC_SUFFIX + "/Document.xml": "<D/>\n"})
+        self.refused(r, "has history")
+
+    def test_49_transition_of_missing_document_refused(self):
+        self.seed3()
+        r = self.forge("bob", trailers=tr(self.doc + "ghost", "transition", "A.1", "InReview"))
+        self.refused(r, "no such document")
+
+    def test_50_stray_root_entries_and_case_twins_refused(self):
+        self.seed3()
+        d = V.DOC_SUFFIX
+        r = self.forge("bob", trailers=tr(self.doc + "x", "add", "A.1"),
+                       files={self.doc + "x" + d + "/Document.xml": "<D/>\n", "stray.txt": "x\n"})
+        self.refused(r, "may hold only")
+        r = self.forge("bob", trailers=tr(self.b.upper(), "add", "A.1"),
+                       files={self.b.upper() + d + "/Document.xml": "<D/>\n"})
+        self.assertEqual(r.get("error"), "PermissionDenied", r)  # case twin of an existing document
+
+    def test_51_commit_with_another_users_email_refused(self):
+        self.seed3()
+        r = self.forge("bob", trailers=tr(self.c, "checkin", "A.2"), email="alice@pdm.local",
+                       files={self.c + V.DOC_SUFFIX + "/Document.xml": "x\n"})
+        self.refused(r, "e-mail")
 
 
 if __name__ == "__main__":

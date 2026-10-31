@@ -206,12 +206,42 @@ async def pre_receive(request: Request, x_pdm_hook_secret: str = Header(default=
     pusher = body["pusher"]
     role = st["fj"].role_of(pusher, site_admin=st["fj"].is_site_admin(pusher))
     mirror = st["mirror"]
+    db = st["db"]
     with mirror.lock:
+        pinned, pending = db.pin()
         try:
-            v, _ = mirror.sync()
-        except Exception:  # an empty vault (the init push) has nothing to mirror yet
-            v = None
-        reason = policy.check_push(mirror.V, st["db"], v, pusher, role, body["updates"])
+            v, head = mirror.sync()
+        except Exception:
+            v, head = None, None
+        reason = None
+        if pinned is None:
+            # Not initialised yet: only an admin's init push onto an empty repository may go through (policy).
+            if v is not None:
+                if pending and head == pending:
+                    db.set_pin(head, None)
+                    pinned = head
+                else:
+                    reason = ("the vault repository already has history but this service never approved it; "
+                              "an admin must pin its head (see tools/pdm-server/README.md, Recovery)")
+        elif v is None:
+            reason = "the service cannot read the vault branch (renamed or deleted?); an admin must recover it"
+        elif head == pinned or head == pending or (
+                v._git(["merge-base", "--is-ancestor", pinned, head], check=False).returncode == 0):
+            # Branch renames and re-creations through Forgejo's API run no hook, so the head the service last
+            # approved is the anchor: the branch must still be that head or descend from it.
+            if head != pinned:
+                db.set_pin(head, None)
+                pinned = head
+        else:
+            reason = (f"the vault branch ({head[:10]}) no longer descends from the last approved head "
+                      f"({pinned[:10]}); an admin must recover it (see README, Recovery)")
+        if reason is None:
+            reason = policy.check_push(mirror.V, db, v, pusher, role, body["updates"], pinned=pinned,
+                                       emails={f"{pusher}@pdm.local", st["fj"].email_of(pusher)} - {None})
+        if reason is None:
+            new = [u["new"] for u in body["updates"] if u["ref"] == f"refs/heads/{mirror.V.BRANCH}"]
+            if new:
+                db.set_pin(pinned, new[-1])
     if reason:
         st["db"].log(pusher, "push-refused", None, {"reason": reason})
         return {"allow": False, "reason": reason}

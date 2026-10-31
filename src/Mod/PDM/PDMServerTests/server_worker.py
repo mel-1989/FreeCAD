@@ -65,9 +65,14 @@ def run(op):
             return {"ok": True, "pushed": v._push_main(sha)}
         except V.PDMError as e:
             return cw.err(e)
+    if kind == "git_push":
+        # A plain `git push <refspec>` with the user's credentials (no fetch first; the branch may be gone).
+        p = v._git(["push", "-q", "origin", op["refspec"]], check=False)
+        return {"ok": True, "pushed": p.returncode == 0, "stderr": p.stderr.decode(errors="replace")[-400:]}
     if kind == "forge":
         # Hand-built vault commit with arbitrary trailers, parents, author, files, deletions and symlinks.
-        v._fetch()
+        if not op.get("nofetch"):
+            v._fetch()
         head = v._head()
         parents = [head if p == "head" else v._git(["rev-parse", f"{head}~1"]).stdout.decode().strip()
                    for p in op.get("parents", ["head"])]
@@ -93,6 +98,8 @@ def run(op):
         cenv = {}
         if op.get("author"):
             cenv = {"GIT_AUTHOR_NAME": op["author"], "GIT_COMMITTER_NAME": op["author"]}
+        if op.get("email"):
+            cenv.update(GIT_AUTHOR_EMAIL=op["email"], GIT_COMMITTER_EMAIL=op["email"])
         args = ["commit-tree", tree] + sum((["-p", p] for p in parents), []) + ["-m", msg]
         sha = v._git(args, env=cenv).stdout.decode().strip()
         try:

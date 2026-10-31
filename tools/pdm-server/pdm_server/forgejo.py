@@ -38,6 +38,10 @@ class Forgejo:
         status, data = self._get(f"/users/{urllib.parse.quote(login)}", self.service_token)
         return status == 200 and bool(data and data.get("is_admin"))
 
+    def email_of(self, login):
+        status, data = self._get(f"/users/{urllib.parse.quote(login)}", self.service_token)
+        return data.get("email") if status == 200 and data else None
+
     def role_of(self, login, site_admin=False):
         """admin, writer, reader or None, from the user's permission on the vault repository."""
         if site_admin:

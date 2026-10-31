@@ -603,14 +603,23 @@ class Vault:
         return self.doc_path(name)
 
     @staticmethod
-    def _check_checkout_allowed(name, rec, new_revision):
+    def checkout_refusal(name, rec, new_revision):
+        """Why the document with latest record ``rec`` may not be checked out (``new_revision``: for the next
+        letter), or None. The one rule shared by ``checkout``, ``move`` and the server's push check."""
         st = rec["state"]
         if st == "Obsolete":
-            raise LifecycleError(f"{name} is Obsolete and cannot be checked out")
+            return f"{name} is Obsolete and cannot be checked out"
         if st == "InReview":
-            raise LifecycleError(f"{name} is InReview; move it back to WIP before checking it out")
+            return f"{name} is InReview; move it back to WIP before checking it out"
         if st == "Released" and not new_revision:
-            raise LifecycleError(f"{name} is Released ({rec['revision']}); check out with new_revision=True to start the next revision")
+            return f"{name} is Released ({rec['revision']}); check out with new_revision=True to start the next revision"
+        return None
+
+    @staticmethod
+    def _check_checkout_allowed(name, rec, new_revision):
+        why = Vault.checkout_refusal(name, rec, new_revision)
+        if why:
+            raise LifecycleError(why)
 
     def _dirty(self, name):
         dest = self.doc_path(name)

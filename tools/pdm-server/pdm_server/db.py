@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS link_index (
     id        integer PRIMARY KEY CHECK (id = 1),
     head      text NOT NULL
 );
+CREATE TABLE IF NOT EXISTS head_pin (
+    id        integer PRIMARY KEY CHECK (id = 1),
+    head      text,
+    pending   text
+);
 CREATE TABLE IF NOT EXISTS links (
     document  text NOT NULL,
     object    text,
@@ -84,7 +89,7 @@ class Db:
 
     def lock(self, document):
         with self.conn() as c:
-            r = c.execute("SELECT * FROM locks WHERE document = %s", (document,)).fetchone()
+            r = c.execute("SELECT * FROM locks WHERE lower(document) = lower(%s)", (document,)).fetchone()
             return self._lock_dict(r) if r else None
 
     def acquire(self, document, lock_id, holder, payload):
@@ -129,6 +134,19 @@ class Db:
         with self.conn() as c:
             c.execute("INSERT INTO audit (actor, action, document, detail) VALUES (%s, %s, %s, %s)",
                       (actor, action, document, json.dumps(detail or {})))
+
+    # ---- head pin: the last vault head this service approved -------------------------------
+
+    def pin(self):
+        """(pinned, pending): the head last seen landed, and the head of the last approved push (may not have landed)."""
+        with self.conn() as c:
+            r = c.execute("SELECT head, pending FROM head_pin WHERE id = 1").fetchone()
+            return (r["head"], r["pending"]) if r else (None, None)
+
+    def set_pin(self, head, pending):
+        with self.conn() as c:
+            c.execute("INSERT INTO head_pin (id, head, pending) VALUES (1, %s, %s) "
+                      "ON CONFLICT (id) DO UPDATE SET head = EXCLUDED.head, pending = EXCLUDED.pending", (head, pending))
 
     # ---- where-used index -------------------------------------------------------------------
 
