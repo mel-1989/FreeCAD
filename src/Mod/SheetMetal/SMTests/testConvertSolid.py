@@ -18,6 +18,7 @@ and BA = theta * (R + K T):
 import math
 import os
 import unittest
+from SMTests.quiet import expected_recompute_errors
 
 import FreeCAD
 import Part
@@ -414,7 +415,8 @@ class TestConvertSolid(Doc):
         c = CASES[5]
         src, ft = self.feature(c)
         ft.ripGap = 0.0
-        self.doc.recompute()
+        with expected_recompute_errors():
+            self.doc.recompute()
         self.assertIn("Invalid", ft.State)
         ft.ripGap = c["g"]
         self.doc.recompute()

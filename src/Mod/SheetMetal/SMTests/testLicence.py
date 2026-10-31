@@ -28,7 +28,7 @@ LEFT_OUT = {
 
 # Built piecewise so this file does not contain the phrase itself.
 GPL_PHRASE = "GNU General " + "Public License"
-TEXT_SUFFIXES = (".py", ".md", ".csv", ".ui", ".svg", ".txt", ".cmake")
+TEXT_SUFFIXES = (".py", ".md", ".csv", ".ui", ".svg", ".txt", ".cmake", ".json")
 
 
 def _files(suffixes):

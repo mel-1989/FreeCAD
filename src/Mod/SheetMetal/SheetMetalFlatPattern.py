@@ -143,6 +143,60 @@ def merge_bends(bends):
     return out
 
 
+def merge_axis_pieces(records):
+    """Fold the partial-arc pieces of a bend into the bend (cad-fork G07, run 027).
+
+    A corner relief or cutout that cuts across a bend obliquely leaves a few separate bend-face
+    pieces on the same cylinder, each spanning only part of the bend's angle. They are one bend:
+    the records (dicts from SheetMetalUnfolder.getUnfold(bend_out=...)) that share a cylinder
+    axis, inside radius and direction with a record of a larger angle are folded into that
+    record, their segments projected onto its bend line, so no bend is ever reported at an angle
+    the part does not have. Records without an "axis" key pass through unchanged."""
+    def same_cylinder(a, b):
+        ka, kb = a.get("axis"), b.get("axis")
+        if not ka or not kb or a["direction"] != b["direction"]:
+            return False
+        if abs(a["inside_radius"] - b["inside_radius"]) > 1e-6:
+            return False
+        da, db = Vector(*ka[0]), Vector(*kb[0])
+        if abs(da.dot(db)) < 1 - 1e-6:
+            return False
+        return (Vector(*ka[1]) - Vector(*kb[1])).Length < 1e-4
+
+    mains = []
+    for rec in records:
+        main = None
+        for other in records:
+            if (other is not rec and same_cylinder(rec, other)
+                    and other["angle"] > rec["angle"] + 1e-6
+                    and (main is None or other["angle"] > main["angle"])):
+                main = other
+        mains.append(main)
+    extra = {}
+    for rec, main in zip(records, mains):
+        if main is None:
+            continue
+        a0, a1 = (Vector(v) for v in main["segments"][0])
+        d = a1 - a0
+        if d.Length < 1e-12:
+            mains[records.index(rec)] = None
+            continue
+        d.normalize()
+        extra.setdefault(id(main), []).extend(
+            (a0 + d * (Vector(p) - a0).dot(d), a0 + d * (Vector(q) - a0).dot(d))
+            for p, q in rec["segments"])
+    out = []
+    for rec, main in zip(records, mains):
+        if main is not None:
+            continue
+        if id(rec) in extra:
+            merged = dict(rec)
+            merged["segments"] = list(rec["segments"]) + extra[id(rec)]
+            rec = merged
+        out.append(rec)
+    return out
+
+
 def _collinear(ref, seg, tol=1e-4):
     d = ref[1] - ref[0]
     if d.Length < 1e-12:
@@ -206,10 +260,60 @@ def source_bend_count(shape, thickness):
     return count
 
 
-def flat_problem(shape, normal, bends, thickness, source_bends):
-    """A readable reason why `shape` is not a complete flat pattern, or "" when it is."""
+FORMING_PROBLEM = ("The part has forming feature(s) %s that are not suppressed, and the unfolder "
+                   "cannot flatten a formed region. Suppress the forming features before "
+                   "unfolding.")
+
+# Residual allowed between the flat's volume change and the sum of the bends' expected changes,
+# relative to the part's volume. Measured on 87 bent parts (goldens, base flanges, edge flanges,
+# hems, convert-from-solid, jogs, folds, cutouts): the largest residual is 6e-11 (also asserted
+# in SMTests/testFormingTools.py). A corner relief cuts the bend zones, where the flat loses T per
+# unit area but the part less (T*(R + T/2)/(R + K*T)); the relief feature stores that difference
+# (flatVolumeOffset, up to 1.7e-3 of the part volume) and the caller passes it as `volume_offset`,
+# so reliefs leave a residual at the 1e-9 level too.
+VOLUME_RESIDUAL = 1e-4
+
+
+def forming_features(source_obj):
+    """Labels of the forming features (SMBendWall, which every tool of the forming-tool library is
+    applied through) that are not suppressed anywhere in the dependency chain of `source_obj`."""
+    seen, stack, found = set(), [source_obj], []
+    while stack:
+        obj = stack.pop()
+        if obj is None or obj.Name in seen:
+            continue
+        seen.add(obj.Name)
+        if type(getattr(obj, "Proxy", None)).__name__ == "SMBendWall" \
+                and not getattr(obj, "SuppressFeature", False):
+            found.append(obj.Label)
+        stack.extend(obj.OutList)
+    return sorted(found)
+
+
+def expected_bend_volume_change(bends):
+    """Expected flat-minus-part volume change from the bends alone, mm3. A bend of angle theta,
+    inside radius r, sheet thickness T and width W has part volume theta*W*T*(r + T/2) and
+    flat volume BA*W*T, so the flat is larger by W*T*(BA - theta*(r + T/2)), which equals
+    theta*T^2*W*(K - 0.5) for BA = theta*(r + K*T) (positive for K above 0.5)."""
+    return sum(b.length * b.thickness * (b.allowance - math.radians(b.angle)
+                                         * (b.inside_radius + 0.5 * b.thickness)) for b in bends)
+
+
+def flat_problem(shape, normal, bends, thickness, source_bends, source_volume=None,
+                 forming=(), volume_offset=0.0):
+    """A readable reason why `shape` is not a complete flat pattern, or "" when it is.
+
+    `forming` lists unsuppressed forming features of the source (see `forming_features`); any of
+    them is a problem. With `source_volume` (the folded part's volume) the flat's volume is also
+    checked: unfolding changes the volume only through the bends, by exactly
+    ``expected_bend_volume_change``; a residual above ``VOLUME_RESIDUAL`` of the part means
+    something that is not sheet-metal bends, such as a formed dimple, louver, lance or rib, was
+    dropped or distorted by the unfolder (cad-fork run 027). `volume_offset` is the further
+    change in (flat - part) volume that corner reliefs cause (their `flatVolumeOffset`)."""
     n = Vector(normal)
     n.normalize()
+    if forming:
+        return FORMING_PROBLEM % ", ".join(forming)
     if thickness:
         heights = [v.Point.dot(n) for v in shape.Vertexes]
         extent = max(heights) - min(heights)
@@ -219,6 +323,16 @@ def flat_problem(shape, normal, bends, thickness, source_bends):
     if len(bends) < source_bends:
         return ("The unfold recorded %d of the part's %d bends, so it is only partly flattened."
                 % (len(bends), source_bends))
+    if source_volume and thickness:
+        expected = expected_bend_volume_change(bends) + volume_offset
+        residual = abs((shape.Volume - source_volume) - expected)
+        if residual > VOLUME_RESIDUAL * source_volume:
+            msg = ("The flat's volume differs from the part's by %.2f mm3 where its bends explain "
+                   "%.2f mm3 (residual %.2f mm3), so the flat does not match the part's bends"
+                   % (shape.Volume - source_volume, expected, residual))
+            return msg + (": material was added or removed that the bends do not account for "
+                          "(for example a non-sheet-metal feature that was not unfolded "
+                          "correctly).")
     return ""
 
 

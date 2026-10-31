@@ -11,6 +11,7 @@ match them. Formula and sources as in testOracle.py (Machinery's Handbook bend a
 
 import math
 import unittest
+from SMTests.quiet import expected_recompute_errors
 
 import FreeCAD
 import Part
@@ -276,7 +277,8 @@ class TestSheetValidation(unittest.TestCase):
             obj = self._add(name, shape)
             for i in sheet_faces(shape, 2.0):
                 with self.subTest(part=name, face=i + 1):
-                    feat = feature_unfold(self.doc, obj, "Face%d" % (i + 1), k=0.5)
+                    with expected_recompute_errors():
+                        feat = feature_unfold(self.doc, obj, "Face%d" % (i + 1), k=0.5)
                     self.assertTrue(refused(feat), "%s Face%d gave a flat" % (name, i + 1))
         with self.assertRaises(NU.SheetConsistencyError) as cm:
             shape = l_profile(2.0, outer=2.0)
@@ -304,7 +306,8 @@ class TestSheetValidation(unittest.TestCase):
                     with self.assertRaises(NU.RootFaceError) as cm:
                         NU.check_sheet_consistency(shape, i, NU.EstimateThickness.using_best_method(shape, i))
                     self.assertIn("large faces of the sheet", str(cm.exception))
-                feat = feature_unfold(self.doc, base, "Face%d" % (i + 1), k=0.5)
+                with expected_recompute_errors():
+                    feat = feature_unfold(self.doc, base, "Face%d" % (i + 1), k=0.5)
                 self.assertTrue(refused(feat), "root on a wall gave a flat")
 
 

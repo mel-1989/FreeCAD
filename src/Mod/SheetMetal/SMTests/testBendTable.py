@@ -26,7 +26,7 @@ BD_FILE = os.path.join(BT.TABLE_DIR, "mild_steel_gauge_bd.csv")
 
 def rule_k(radius, thickness):
     ratio = radius / thickness
-    return 0.33 if ratio < 2 else (0.40 if ratio < 4 else 0.50)
+    return 0.38 if ratio < 1 else (0.43 if ratio <= 3 else 0.50)
 
 
 def all_rows(table):
@@ -73,9 +73,9 @@ class TestBendTable(unittest.TestCase):
             ba = BT.bend_allowance_from_k(t, r, a, rule_k(r, t))
             worst = max(worst, abs(v - BT.ba_to_bd(ba, t, r, a)))
         self.assertLess(worst, 1e-6)
-        # hand check: T = 2, R = 2 (R < 2T so K = .33), 90 deg: BA = pi/2 * 2.66, OSSB = 4, BD = 8 - BA
-        self.assertAlmostEqual(self.ba.allowance(2.0, 2.0, 90.0), math.pi / 2 * 2.66, 5)
-        self.assertAlmostEqual(self.ba.deduction(2.0, 2.0, 90.0), 8.0 - math.pi / 2 * 2.66, 5)
+        # hand check: T = 2, R = 2 (R/T = 1 so K = .43), 90 deg: BA = pi/2 * 2.66, OSSB = 4, BD = 8 - BA
+        self.assertAlmostEqual(self.ba.allowance(2.0, 2.0, 90.0), math.pi / 2 * 2.86, 5)
+        self.assertAlmostEqual(self.ba.deduction(2.0, 2.0, 90.0), 8.0 - math.pi / 2 * 2.86, 5)
 
     def test_exact_at_listed_points(self):
         for table in (self.ba, self.bd):
@@ -96,9 +96,9 @@ class TestBendTable(unittest.TestCase):
         # thickness between 1.5 and 2.0
         self.assertAlmostEqual(v(1.75, 2.0, 90.0), 0.5 * (v(1.5, 2.0, 90.0) + v(2.0, 2.0, 90.0)), 12)
         self.assertAlmostEqual(v(1.6, 2.0, 90.0), 0.8 * v(1.5, 2.0, 90.0) + 0.2 * v(2.0, 2.0, 90.0), 12)
-        # a single-K stretch is exactly the formula, linear in theta: R/T < 2 -> K .33 for T = 3, R = 1 and 1.5
+        # a single-K stretch is exactly the formula, linear in theta: R/T < 1 -> K .38 for T = 3, R = 1 and 1.5
         t3 = 3.0
-        want = BT.bend_allowance_from_k(t3, 1.25, 52.5, 0.33)
+        want = BT.bend_allowance_from_k(t3, 1.25, 52.5, 0.38)
         self.assertAlmostEqual(self.ba.allowance(t3, 1.25, 52.5), want, 5)
 
     def test_interpolation_of_a_bd_table_is_in_bd(self):

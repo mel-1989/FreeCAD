@@ -19,10 +19,14 @@ import SheetMetalBendTable as BT
 import SheetMetalConvertSolid as CS
 import SheetMetalEdgeFlange as EF
 import SheetMetalHemFeature as HF
+import SheetMetalJog as JG
+import SheetMetalLighteningCutout as LC
 
 from SMTests import testConvertSolid as TCS
 from SMTests import testEdgeFlange as TEF
 from SMTests import testHem as THM
+from SMTests import testSketchedBend as TSB
+from SMTests import testJog as TJG
 from SMTests.testOracle import BASE_CASES, Case, build_base, inner_root_face, unfold_target_face
 from SMTests.testUnfoldFeature import feature_unfold
 
@@ -117,6 +121,28 @@ def _drill(doc, base, case):
     return out
 
 
+def lightening_case(name, case, group="cutout"):
+    """A two-bend U strip with a 3 x 2 grid of 12 x 5 slots cut in the web by the lightening
+    cutout (clean-room, cad-fork run 027); the strip expectations are those of the plain part."""
+    def build(doc):
+        from SMTests import testLighteningCutout as TLC
+        base = build_base(doc, case)
+        face = TLC.planar_big(base.Shape)
+        geo, _a, _p = TLC.slot_geo(0.0, 0.0, 12.0, 5.0)
+        sk = TLC.make_sketch(doc, face, geo, du=-24.0, dv=-6.0)
+        feat = LC.make_lightening_cutout(doc, base, TLC.face_name(base.Shape, face), sk, Pattern="Grid",
+                                         CountX=3, CountY=2, PitchX=12.0 + 12.0, PitchY=12.0,
+                                         Direction=TLC.face_frame(face)[1])
+        return feat, unfold_target_face(feat.Shape), "_manual", case.k
+
+    def expect(doc):
+        exp = _strip_expect(case)
+        exp["hole"] = False
+        return exp
+
+    return FlatCase(name, build, expect, group)
+
+
 def edge_flange_case(name, c):
     def build(doc):
         box = TEF.make_box(doc, c["T"])
@@ -180,6 +206,39 @@ def convert_case(name, c):
     return FlatCase(name, build, expect, "convert")
 
 
+def fold_case(name, cfg):
+    """A flat plate folded along a sketch line by the vendored Fold (slice 4a, check 2)."""
+    def build(doc):
+        fold, _plate = TSB.build_sketched_bend(doc, cfg)
+        exp = TSB.expected(cfg)
+        return fold, inner_root_face(fold.Shape), "_manual", exp["k"]
+
+    def expect(doc):
+        e = TSB.expected(cfg)
+        return dict(strip=[e["l_fixed"] + e["ba"] / 2.0], length=cfg["PL"], angles=[e["angle"]],
+                    ba=[e["ba"]], radius=e["radius"])
+
+    return FlatCase(name, build, expect, "fold")
+
+
+def jog_case(name, c):
+    def build(doc):
+        box = TEF.make_box(doc, c["T"])
+        ln = TJG.line_obj(doc, c["xc"], c["T"])
+        jog = JG.make_jog(doc, box, TJG.top_face(box), ln, offset=c["off"], offsetType=c["kind"],
+                          angle=c["angle"], radius=c["R"], kfactor=c["k"], flip=c["flip"],
+                          fixedSide=c["side"])
+        return jog, unfold_target_face(jog.Shape), "_manual", c["k"]
+
+    def expect(doc):
+        d, s, X, ba = TJG.derived(c)
+        x1 = c["xc"] - X / 2.0  # fixed flat (fixed on the left of the line, x < xc)
+        return dict(strip=[x1 + ba / 2.0, x1 + ba + s + ba / 2.0], length=TEF.PL - X + s + 2 * ba,
+                    angles=[c["angle"]] * 2, ba=[ba] * 2, radius=c["R"], signs=[1, -1])
+
+    return FlatCase(name, build, expect, "jog")
+
+
 # --- the cases ------------------------------------------------------------------------------
 _B = {c.name: c for c in BASE_CASES}
 _TABLE_CASE = Case("t01_table_90x2_T2_R1T", 2.0, 1.0, None, [20.0, 40.0, 20.0], [90.0, 90.0])
@@ -191,8 +250,13 @@ _HEM_OPEN = next(c for c in THM.CASES if c["name"] == "h05_open_T2_g1T")
 _TRAY = next(c for c in TCS.CASES if c["name"] == "tray_T1_R1T_g.5R_in")
 _ZIG = Case("m01_zigzag_T2_R1T", 2.0, 1.0, 0.42, [20.0, 30.0, 20.0], [90.0, -90.0])
 _HAT = Case("m02_hat_T2_R1T", 2.0, 1.0, 0.42, [20.0, 30.0, 40.0, 30.0, 20.0], [90.0, -90.0, -90.0, 90.0])
+_SB = {c["name"]: c for c in TSB.CASES}
+_LIGHT = Case("l01_lightening_u_T2_R1T", 2.0, 1.0, 0.42, [30.0, 70.0, 30.0], [90.0, 90.0])
 _L = next(c for c in TCS.CASES if c["name"] == "L_T1_R.5T_in")
 _U = next(c for c in TCS.CASES if c["name"] == "U_T3_R3T_in")
+
+
+_JOG = next(c for c in TJG.CASES if c["name"] == "j02_45_T2_R1T_out4T")
 
 
 def all_cases():
@@ -215,6 +279,10 @@ def all_cases():
         convert_case("g15_convert_solid_tray", _TRAY),
         base_case("g16_mixed_updown_zigzag", _ZIG, group="mixed"),
         base_case("g17_mixed_updown_hat", _HAT, group="mixed"),
+        fold_case("g18_fold_45_offcentre", _SB["s02_45_T2_R1T_offc"]),
+        fold_case("g19_fold_135_invertbend", _SB["s04_135_T2_R3T_inv"]),
+        jog_case("g20_jog_45", _JOG),
+        lightening_case("g21_lightening_cutout_grid", _LIGHT),
     ]
 
 
@@ -228,19 +296,21 @@ def build_flat(doc, case):
 FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "flat_dxf")
 
 
-def regenerate(out_dir=FIXTURE_DIR):
+def regenerate(out_dir=FIXTURE_DIR, names=None):
     """Rebuild every golden DXF. Run from src/Mod/SheetMetal:
 
         FreeCADCmd -c "import sys; sys.path.insert(0, '.'); \\
             from SMTests import flat_dxf_cases as C; C.regenerate()"
 
-    Review the diff (`git diff --stat src/Mod/SheetMetal/SMTests/fixtures`) before committing:
+    Pass names=[...] to rebuild only those goldens. Review the diff (`git diff --stat src/Mod/SheetMetal/SMTests/fixtures`) before committing:
     a golden changes only when the unfolder, the bend tables or the exporter changed on purpose.
     """
     import SheetMetalUnfoldCmd
 
     os.makedirs(out_dir, exist_ok=True)
     for case in all_cases():
+        if names is not None and case.name not in names:
+            continue
         doc = FreeCAD.newDocument("Regen")
         try:
             feat, _exp = build_flat(doc, case)

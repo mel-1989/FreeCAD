@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later (no per-file header upstream; the repository LICENSE, LGPL-2.1-or-later, covers it)
 """Run with FreeCAD's Test framework, or unittest in the FreeCAD console."""
 import unittest
+from SMTests.quiet import expected_recompute_errors
 from unittest.mock import patch
 
 import FreeCAD
@@ -166,7 +167,8 @@ class TestBendCuts(unittest.TestCase):
 
                 export.reset_mock()
                 obj.BendCutWaveGap = 0
-                smUnfoldExportSketches(obj, False)
+                with expected_recompute_errors():
+                    smUnfoldExportSketches(obj, False)
                 self.assertIn("Invalid", obj.State)
                 export.assert_not_called()
         finally:
