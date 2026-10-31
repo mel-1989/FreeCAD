@@ -5,6 +5,7 @@ import TestApp  # noqa: F401  (FreeCAD test harness)
 
 from SMTests.testBendCuts import TestBendCuts  # noqa: F401
 from SMTests.testBendTable import TestBendTable, TestBendTableUnfold  # noqa: F401
+from SMTests.testConvertSolid import TestConvertSolid  # noqa: F401
 from SMTests.testEdgeFlange import TestEdgeFlange  # noqa: F401
 from SMTests.testFolder import TestFolder  # noqa: F401
 from SMTests.testHem import TestHem  # noqa: F401

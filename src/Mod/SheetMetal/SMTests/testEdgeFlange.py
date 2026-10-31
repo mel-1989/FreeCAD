@@ -233,6 +233,43 @@ class TestEdgeFlange(Doc):
         self.assertAlmostEqual(bb.XMax, 55.0 + R + 2.0, delta=1e-6)
         self.assertAlmostEqual(bb.ZMax, 15.0, delta=1e-6)
 
+    def test_vertical_end_edge_is_not_a_sheet_edge(self):
+        """Run 025 LOW: the edge between an end face and a side face of a plate was refused with the
+        setback message; it must say the edge is not an edge of a sheet face."""
+        box = make_box(self.doc, 3.0)
+        sh = box.Shape
+        vertical = [("Edge%d" % (i + 1)) for i, e in enumerate(sh.Edges)
+                    if abs(e.Vertexes[0].Point.z - e.Vertexes[-1].Point.z) > 1e-9]
+        self.assertEqual(len(vertical), 4)
+        for name in vertical:
+            with self.assertRaisesRegex(EF.EdgeFlangeError, "not an edge of a sheet face"):
+                EF.build_edge_flange(sh, [name], 15.0, 90.0, 2.0)
+        # the same message through the hem frame
+        import SheetMetalHemFeature as HF
+        with self.assertRaisesRegex(HF.HemError, "not an edge of a sheet face"):
+            HF.build_hem(sh, [vertical[0]], "Closed", length=10.0)
+        # a real end edge still works, and the thickness helper reads T from the plate
+        self.assertAlmostEqual(EF.sheet_thickness_of(sh), 3.0, 9)
+        self.assertTrue(EF.build_edge_flange(sh, [find_edge(box, "+x")], 15.0, 90.0, 2.0).isValid())
+
+    def test_narrow_tab_edge_uses_the_main_faces_for_thickness(self):
+        """A tab narrower than T must not make its side faces pass for the thickness."""
+        T = 3.0
+        plate = Part.makeBox(PL, W, T)
+        tab = Part.makeBox(10.0, 2.5, T, V(PL, 5.0, 0.0))
+        shape = plate.fuse(tab).removeSplitter()
+        obj = self.doc.addObject("Part::Feature", "TabPlate")
+        obj.Shape = shape
+        self.doc.recompute()
+        self.assertAlmostEqual(EF.sheet_thickness_of(shape), T, 9)
+        end = next("Edge%d" % (i + 1) for i, e in enumerate(shape.Edges)
+                   if abs(e.Vertexes[0].Point.z - T) < 1e-9 and abs(e.Vertexes[-1].Point.z - T) < 1e-9
+                   and abs(e.Vertexes[0].Point.x - (PL + 10.0)) < 1e-9
+                   and abs(e.Vertexes[-1].Point.x - (PL + 10.0)) < 1e-9)
+        result = EF.build_edge_flange(shape, [end], 12.0, 90.0, 2.0)
+        self.assertTrue(result.isValid())
+        self.assertEqual(len(result.Solids), 1)
+
     def test_refusals(self):
         box = make_box(self.doc, 2.0)
         flat_edge = find_edge(box, "+x")

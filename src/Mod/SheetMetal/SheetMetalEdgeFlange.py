@@ -89,6 +89,34 @@ def make_flange_solid(origin, along, width, out, up, radius, thickness, angle_de
     return face.extrude(along * width)
 
 
+def sheet_thickness_of(shape):
+    """Sheet thickness of a sheet-metal solid: the distance between the two main faces of the sheet.
+
+    Candidates are antiparallel planar faces that face away from each other and overlap when
+    projected on each other (the two sides of a wall). The pair whose smaller face is largest wins,
+    so the side faces of a narrow tab or a thin end never pass for the thickness. None if there is
+    no such pair."""
+    planes = [f for f in shape.Faces if isinstance(f.Surface, Part.Plane)]
+    best = None  # (smaller face area, distance)
+    for i, fa in enumerate(planes):
+        na = fa.normalAt(*fa.Surface.parameter(fa.CenterOfMass))
+        for fb in planes[i + 1:]:
+            nb = fb.normalAt(*fb.Surface.parameter(fb.CenterOfMass))
+            if na.dot(nb) > -1.0 + 1e-9:
+                continue
+            gap = (fb.CenterOfMass - fa.CenterOfMass).dot(na)
+            dist = abs(gap)
+            if dist < 1e-9 or gap > 0.0:  # facing each other (inside of a channel): not a wall
+                continue
+            if fa.distToShape(fb)[0] > dist + 1e-6:
+                continue
+            area = min(fa.Area, fb.Area)
+            if best is None or area > best[0] * (1.0 + 1e-9) or \
+                    (area >= best[0] * (1.0 - 1e-9) and dist < best[1]):
+                best = (area, dist)
+    return None if best is None else best[1]
+
+
 def _edge_frame(base, edge, thickness_hint=None):
     """(point0, along, length, out, up_top, thickness) for a straight edge between a sheet face
     and the end face of the sheet."""
@@ -107,6 +135,11 @@ def _edge_frame(base, edge, thickness_hint=None):
 
     end_face, sheet_face = sorted(faces, key=extent)
     thickness = extent(end_face)
+    sheet_thickness = sheet_thickness_of(base)
+    if sheet_thickness is not None and abs(thickness - sheet_thickness) > 1e-6 * max(1.0, sheet_thickness):
+        raise EdgeFlangeError("the selected edge is not an edge of a sheet face: it does not lie on an "
+                              "end face of the sheet (thickness %g); pick an edge along the end of the "
+                              "sheet" % sheet_thickness)
     n_end = end_face.normalAt(*end_face.Surface.parameter(v0))
     n_sheet = sheet_face.normalAt(*sheet_face.Surface.parameter(v0))
     if abs(n_end.dot(n_sheet)) > 1e-6:
