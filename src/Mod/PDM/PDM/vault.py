@@ -39,8 +39,10 @@ LOCK_NS = "refs/locks/"
 LOCK_MIRROR = "refs/pdm-locks/"
 DOC_SUFFIX = ".FCStd.d"
 FAULT_ENV = "PDM_TEST_FAULT"  # read only here; values: "before_push", "after_commit"
-_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")  # no leading "-": never an option to git
 _TRAILER = "PDM-"
+_PERM_RE = re.compile(r"permission denied|insufficient permission|read-only|not permitted|unable to (?:create|write|append)",
+                      re.I)
 
 
 class PDMError(Exception):
@@ -109,6 +111,22 @@ def _git(args, cwd=None, env=None, input=None, check=True):
     return p
 
 
+def _check_message(text):
+    """Refuse a user message with a line starting ``PDM-``: those lines are the vault's own trailers."""
+    for line in str(text).splitlines():
+        if line.strip().startswith(_TRAILER):
+            raise DocumentError(f"message lines must not start with {_TRAILER!r} (reserved for vault trailers)")
+    return text
+
+
+def _warn(text):
+    try:
+        import FreeCAD
+        FreeCAD.Console.PrintWarning(f"PDM: {text}\n")
+    except Exception:
+        pass
+
+
 def _fault(point):
     if os.environ.get(FAULT_ENV) == point:
         raise GitError(f"injected fault at {point}")
@@ -173,6 +191,29 @@ class Vault:
         self._git(["fetch", "-q", "--no-tags", "origin", f"+refs/heads/{BRANCH}:refs/remotes/origin/{BRANCH}",
                    f"+{LOCK_NS}*:{LOCK_MIRROR}*", "--prune"])
 
+    def client_id(self):
+        """Random id of this working copy (``.git/pdm/client-id``); with the user it identifies a lock owner."""
+        path = os.path.join(self.workdir, ".git", "pdm", "client-id")
+        with contextlib.suppress(FileNotFoundError):
+            with open(path) as f:
+                cid = f.read().strip()
+            if cid:
+                return cid
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        cid = uuid.uuid4().hex
+        with open(path, "w") as f:
+            f.write(cid + "\n")
+        return cid
+
+    def _mine(self, info):
+        return info is not None and info["holder"] == self.user and info.get("client") == self.client_id()
+
+    def _held_by_other_msg(self, name, cur):
+        if cur["holder"] == self.user:
+            return (f"{name} is checked out by {cur['holder']} (you) in another working copy: "
+                    f"{cur['host']}:{cur.get('workdir', '?')}")
+        return f"{name} is checked out by {cur['holder']} on {cur['host']} since {cur['time']}"
+
     def doc_path(self, name):
         """Path of the document's folder inside this working copy."""
         return os.path.join(self.workdir, _check_name(name) + DOC_SUFFIX)
@@ -205,12 +246,20 @@ class Vault:
                 continue
             sha, author, when, body = chunk.split("\x1f", 3)
             lines = body.rstrip("\n").split("\n")
-            meta = {}
+            # Trailers only from the last paragraph (the block _commit writes); a PDM- line elsewhere in a
+            # message, or a message naming another document, never counts.
             i = len(lines)
-            while i > 0 and lines[i - 1].startswith(_TRAILER):
-                k, _, v = lines[i - 1][len(_TRAILER):].partition(": ")
-                meta[k] = v
+            while i > 0 and lines[i - 1].strip() != "":
                 i -= 1
+            if i == 0:
+                continue
+            meta = {}
+            for ln in lines[i:]:
+                if ln.startswith(_TRAILER):
+                    k, _, v = ln[len(_TRAILER):].partition(": ")
+                    meta[k] = v
+            if meta.get("Document") != name:
+                continue
             message = "\n".join(lines[:i]).strip()
             recs.append({"sha": sha, "author": author, "time": when, "message": message,
                          "revision": meta.get("Revision"), "state": meta.get("State"),
@@ -233,6 +282,7 @@ class Vault:
         finally:
             with contextlib.suppress(FileNotFoundError):
                 os.remove(idx)
+        _check_message(subject)
         msg = (f"{subject}\n\n{_TRAILER}Document: {name}\n{_TRAILER}Revision: {revision}\n{_TRAILER}State: {state}\n"
                f"{_TRAILER}Event: {event}\n{_TRAILER}Released: {1 if released else 0}\n")
         return tree, self._git(["commit-tree", tree, "-p", parent, "-m", msg]).stdout.decode().strip()
@@ -241,6 +291,9 @@ class Vault:
         _fault("before_push")
         p = self._git(["push", "-q", "origin", f"{sha}:refs/heads/{BRANCH}"], check=False)
         if p.returncode != 0:
+            err = p.stderr.decode(errors="replace").strip()
+            if _PERM_RE.search(err):
+                raise GitError(f"the vault refused the push (permissions; is it read-only?): {err}")
             return False
         return True
 
@@ -260,10 +313,13 @@ class Vault:
         info["sha"] = sha
         return info
 
+    def _lock_names(self):
+        out = self._git(["for-each-ref", "--format=%(refname)", LOCK_MIRROR]).stdout.decode().split()
+        return [r[len(LOCK_MIRROR):] for r in out]
+
     def locks(self):
         self._fetch()
-        out = self._git(["for-each-ref", "--format=%(refname)", LOCK_MIRROR]).stdout.decode().split()
-        return {r[len(LOCK_MIRROR):]: self.lock_info(r[len(LOCK_MIRROR):], refresh=False) for r in out}
+        return {n: self.lock_info(n, refresh=False) for n in self._lock_names()}
 
     def lock(self, name, new_revision=False):
         """Acquire the lock on ``name`` (atomic create-if-absent in the vault). Idempotent for the holder.
@@ -271,12 +327,17 @@ class Vault:
         Raises LockError naming the holder when someone else has it. Does not touch working files.
         """
         _check_name(name)
+        self._fetch()
+        for other in self._lock_names():
+            if other != name and other.lower() == name.lower():
+                raise DocumentError(f"{name!r} differs only by case from the locked name {other!r}")
         cur = self.lock_info(name)
         if cur is not None:
-            if cur["holder"] == self.user:
+            if self._mine(cur):
                 return cur
-            raise LockError(f"{name} is checked out by {cur['holder']} on {cur['host']} since {cur['time']}", cur["holder"])
+            raise LockError(self._held_by_other_msg(name, cur), cur["holder"])
         payload = json.dumps({"document": name, "holder": self.user, "host": socket.gethostname(),
+                              "workdir": self.workdir, "client": self.client_id(),
                               "time": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
                               "new_revision": bool(new_revision), "nonce": uuid.uuid4().hex}, sort_keys=True)
         tree = self._git(["mktree"], input=b"").stdout.decode().strip()
@@ -288,7 +349,7 @@ class Vault:
             cur = self.lock_info(name)
             if cur is None:
                 raise GitError(f"lock push for {name} failed: {p.stderr.decode(errors='replace').strip()}")
-            raise LockError(f"{name} is checked out by {cur['holder']} on {cur['host']} since {cur['time']}", cur["holder"])
+            raise LockError(self._held_by_other_msg(name, cur), cur["holder"])
         return self.lock_info(name)
 
     def release_lock(self, name):
@@ -296,8 +357,8 @@ class Vault:
         cur = self.lock_info(name)
         if cur is None:
             return False
-        if cur["holder"] != self.user:
-            raise LockError(f"{name} is locked by {cur['holder']}, not {self.user}", cur["holder"])
+        if not self._mine(cur):
+            raise LockError(self._held_by_other_msg(name, cur), cur["holder"])
         self._delete_lock(name, cur["sha"])
         return True
 
@@ -315,8 +376,8 @@ class Vault:
         cur = self.lock_info(name)
         if cur is None:
             raise LockError(f"{name} is not checked out; check it out first")
-        if cur["holder"] != self.user:
-            raise LockError(f"{name} is checked out by {cur['holder']} on {cur['host']}", cur["holder"])
+        if not self._mine(cur):
+            raise LockError(self._held_by_other_msg(name, cur), cur["holder"])
         return cur
 
     # ---- documents ----------------------------------------------------------------------------
@@ -354,7 +415,12 @@ class Vault:
         """Add a new document (revision A.1, WIP). ``source`` is a folder-format directory to copy in;
         without it the folder must already exist at ``doc_path(name)``."""
         _check_name(name)
+        _check_message(message)
         dest = self.doc_path(name)
+        self._fetch()
+        for n in self._git(["ls-tree", "--name-only", f"refs/remotes/origin/{BRANCH}"]).stdout.decode().split("\n"):
+            if n.endswith(DOC_SUFFIX) and n[:-len(DOC_SUFFIX)] != name and n[:-len(DOC_SUFFIX)].lower() == name.lower():
+                raise DocumentError(f"{name!r} differs only by case from existing document {n[:-len(DOC_SUFFIX)]!r}")
         if source is not None:
             if os.path.exists(dest):
                 raise DocumentError(f"{dest} already exists in the working copy")
@@ -387,7 +453,7 @@ class Vault:
             raise DocumentError(f"no document {name!r} in the vault")
         self._check_checkout_allowed(name, recs[0], new_revision)
         mine = self.lock_info(name, refresh=False)
-        already = mine is not None and mine["holder"] == self.user
+        already = self._mine(mine)
         info = self.lock(name, new_revision=new_revision)
         try:
             if already and self._base(name) == recs[0]["sha"] and os.path.isdir(self.doc_path(name)):
@@ -396,9 +462,10 @@ class Vault:
             self._fetch()
             recs = self._records(name)
             self._check_checkout_allowed(name, recs[0], new_revision or bool(info.get("new_revision")))
-            if already and not discard_local and self._dirty(name):
-                raise DocumentError(f"{name} has local edits on a stale base; check in, or discard them first")
             dest = self.doc_path(name)
+            if not discard_local and os.path.exists(dest) and (self._dirty(name) or self._base(name) is None):
+                raise DocumentError(f"{name} has local edits (or an untracked folder) that checkout would overwrite; "
+                                    "check in, or pass discard_local=True to discard them")
             shutil.rmtree(dest, ignore_errors=True)
             self._git(["checkout", "-q", recs[0]["sha"], "--", os.path.basename(dest)])
             self._set_base(name, recs[0]["sha"])
@@ -446,6 +513,7 @@ class Vault:
         the previous revision and the lock held.
         """
         _check_name(name)
+        _check_message(message)
         lock = self._require_lock(name)
         dest = self.doc_path(name)
         if not os.path.isfile(os.path.join(dest, "Document.xml")):
@@ -460,7 +528,8 @@ class Vault:
             latest = recs[0]
             if self._base(name) != latest["sha"]:
                 raise StaleRevisionError(
-                    f"{name}: working copy is based on {self._base_label(name, recs)}, the vault is at {latest['revision']}")
+                    f"{name}: working copy is based on {self._base_label(name, recs)}, the vault head for it is "
+                    f"{latest['revision']} {latest['state']} (commit {latest['sha'][:10]})")
             letter, number = parse_label(latest["revision"])
             if latest["released"]:
                 letter, number = letter + 1, 1  # the next change after a release starts the next letter
@@ -471,9 +540,14 @@ class Vault:
             _fault("after_commit")
             if self._push_main(sha):
                 self._set_base(name, sha)
+                result = {"revision": label, "sha": sha}
                 if not keep_lock:
-                    self.release_lock(name)
-                return {"revision": label, "sha": sha}
+                    try:
+                        self.release_lock(name)
+                    except Exception as e:  # the revision has landed; report, never raise
+                        result["warning"] = f"revision {label} landed but releasing the lock on {name} failed: {e}"
+                        _warn(result["warning"])
+                return result
             # Push refused: the vault moved (maybe another document). Fetch and re-check staleness.
         raise GitError("vault kept moving; checkin gave up after 8 attempts (lock still held)")
 
@@ -481,7 +555,7 @@ class Vault:
         b = self._base(name)
         for r in recs:
             if r["sha"] == b:
-                return r["revision"]
+                return f"{r['revision']} {r['state']} (commit {r['sha'][:10]})"
         return "an unknown revision"
 
     def transition(self, name, new_state, message=None):
@@ -489,6 +563,7 @@ class Vault:
         _check_name(name)
         if new_state not in STATES:
             raise LifecycleError(f"unknown state {new_state!r}")
+        _check_message(message or "")
         for _ in range(8):
             self._fetch()
             recs = self._records(name)
@@ -524,7 +599,7 @@ class Vault:
         rec = self.find_revision(name, revision)
         base = dest or tempfile.mkdtemp(prefix="pdm-rev-")
         os.makedirs(base, exist_ok=True)
-        arch = _git(["archive", "--format=tar", rec["sha"], name + DOC_SUFFIX], cwd=self.workdir)
+        arch = _git(["archive", "--format=tar", rec["sha"], "--", name + DOC_SUFFIX], cwd=self.workdir)
         subprocess.run(["tar", "-x", "-C", base], input=arch.stdout, check=True)
         path = os.path.join(base, name + DOC_SUFFIX)
         subprocess.run(["chmod", "-R", "a-w", path], check=True)

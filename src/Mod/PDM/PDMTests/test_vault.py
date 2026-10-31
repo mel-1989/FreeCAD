@@ -57,10 +57,11 @@ class VaultCase(unittest.TestCase):
     def wc(self, user):
         return os.path.join(self.tmp, "wc-" + user)
 
-    def client(self, user, ops, fresh=False, fault=None):
+    def client(self, user, ops, fresh=False, fault=None, wc=None):
         """Run ``ops`` as ``user`` in a new FreeCADCmd process; returns the list of op results."""
-        head = [{"op": "clone", "vault": self.vault, "wc": self.wc(user), "user": user}] if fresh else \
-            [{"op": "open", "wc": self.wc(user), "user": user}]
+        wc = wc or self.wc(user)
+        head = [{"op": "clone", "vault": self.vault, "wc": wc, "user": user}] if fresh else \
+            [{"op": "open", "wc": wc, "user": user}]
         proc = _spawn(head + ops, self.tmp, {V.FAULT_ENV: fault} if fault else None)
         return _collect(proc)[1:]
 
@@ -106,7 +107,7 @@ class TestHelpers(unittest.TestCase):
         self.assertNotIn("Released", V.TRANSITIONS["WIP"])
 
     def test_bad_names_refused(self):
-        for bad in ("../x", "a b", "", "a.b", "x/y"):
+        for bad in ("../x", "a b", "", "a.b", "x/y", "-x", "--help"):
             with self.assertRaises(V.DocumentError):
                 V._check_name(bad)
 
@@ -302,6 +303,121 @@ class TestIntegrity(VaultCase):
                                   call("checkin", "bracket", "nothing changed")])
         self.assertEqual(r[0]["error"], "DocumentError")
         self.assertEqual(r[2]["error"], "DocumentError")
+
+
+def _plain_doc(path, text="x"):
+    os.makedirs(path, exist_ok=True)
+    with open(os.path.join(path, "Document.xml"), "w") as f:
+        f.write(f"<doc>{text}</doc>\n")
+
+
+class TestRepairs(VaultCase):
+    """Regression tests for the verifier's round-1 findings on slice 2."""
+
+    def test_h1_forged_trailer_cannot_rewrite_another_documents_history(self):
+        self.seed("bracket")
+        self.client("alice", [{"op": "build_pad", "name": "other", "length": 7}, call("add_document", "other")])
+        self.client("alice", [call("checkout", "bracket")])
+        # a message carrying a reserved trailer line is refused outright
+        r = self.client("alice", [{"op": "set_pad", "name": "bracket", "length": 12},
+                                  call("checkin", "bracket", "fix\nPDM-Document: other\nPDM-State: Released")])
+        self.assertEqual(r[1]["error"], "DocumentError", r)
+        # and a forged commit that already sits in the vault (written with raw git) is ignored when reading
+        # the other document: the forged line is in the message body, the real trailer block names bracket
+        head = self.git("rev-parse", "refs/heads/main").strip()
+        tree = self.git("rev-parse", head + "^{tree}").strip()
+        msg = ("forge\nPDM-Document: other\n\nPDM-Document: bracket\nPDM-Revision: B.1\nPDM-State: Released\n"
+               "PDM-Event: transition\nPDM-Released: 1\n")
+        env = dict(os.environ, GIT_AUTHOR_NAME="m", GIT_AUTHOR_EMAIL="m@x", GIT_COMMITTER_NAME="m", GIT_COMMITTER_EMAIL="m@x")
+        forged = subprocess.run(["git", "--git-dir", self.vault, "commit-tree", tree, "-p", head, "-m", msg], env=env,
+                                check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+        self.git("update-ref", "refs/heads/main", forged)
+        r = self.client("alice", [call("history", "other"), call("history", "bracket")])
+        self.assertEqual([x["state"] for x in r[0]["value"]], ["WIP"])
+        self.assertEqual(r[1]["value"][0]["state"], "Released")
+
+    def test_h2_checkout_never_overwrites_unlocked_edits(self):
+        self.seed("bracket")
+        r = self.client("alice", [call("checkout", "bracket"), call("release_lock", "bracket"),
+                                  {"op": "set_pad", "name": "bracket", "length": 33}])
+        self.assertTrue(r[0]["ok"], r)
+        r = self.client("alice", [call("checkout", "bracket"), call("has_changes", "bracket")])
+        self.assertEqual(r[0]["error"], "DocumentError", r)
+        self.assertTrue(r[1]["value"], "the edit must survive the refused checkout")
+        self.assertIsNone(self.lock_ref("bracket"), "a refused checkout must not leave a lock behind")
+        r = self.client("alice", [call("checkout", "bracket", discard_local=True), call("has_changes", "bracket")])
+        self.assertTrue(r[0]["ok"], r)
+        self.assertFalse(r[1]["value"])
+
+    def test_m1_second_working_copy_of_same_user_is_refused(self):
+        self.seed("bracket")
+        self.client("alice", [call("checkout", "bracket")])
+        wc2 = os.path.join(self.tmp, "wc-alice-two")
+        r = self.client("alice", [call("lock", "bracket"), call("checkout", "bracket"),
+                                  call("release_lock", "bracket"), call("checkin", "bracket", "from copy two")],
+                        fresh=True, wc=wc2)
+        for res in r[1:]:
+            self.assertEqual(res["error"], "LockError", res)
+            self.assertIn("alice", res["message"])
+            self.assertIn(self.wc("alice").replace(os.sep + "private", ""), res["message"].replace(os.sep + "private", ""))
+        self.assertTrue(self.lock_ref("bracket"))
+        # the owning working copy still has it
+        r = self.client("alice", [call("checkout", "bracket")])
+        self.assertTrue(r[0]["ok"], r)
+
+    def test_m2_case_variants_are_refused(self):
+        self.seed("bracket")
+        self.client("alice", [call("checkout", "bracket")])
+        r = self.client("alice", [{"op": "build_pad", "name": "Bracket", "length": 5}, call("add_document", "Bracket")])
+        self.assertEqual(r[1]["error"], "DocumentError", r)
+        self.assertIn("case", r[1]["message"])
+        self.assertEqual(self.git("ls-tree", "--name-only", "refs/heads/main").split(), ["bracket.FCStd.d"])
+        r = self.client("bob", [call("lock", "BRACKET")], fresh=True)
+        self.assertEqual(r[0]["error"], "DocumentError", r)
+
+    def test_m3_release_failure_after_push_is_a_warning(self):
+        class FlakyVault(V.Vault):
+            def release_lock(self, name):
+                raise V.GitError("injected release failure")
+
+        vault = V.Vault.create(os.path.join(self.tmp, "m3.git"))
+        wc = os.path.join(self.tmp, "m3wc")
+        v = FlakyVault.clone(vault, wc, "alice")
+        _plain_doc(v.doc_path("part"), "one")
+        v.add_document("part")
+        v.lock("part")
+        _plain_doc(v.doc_path("part"), "two")
+        res = v.checkin("part", "second")
+        self.assertEqual(res["revision"], "A.2")
+        self.assertIn("warning", res)
+        self.assertIn("injected release failure", res["warning"])
+        self.assertEqual(V.Vault.open(wc, "alice").history("part")[0]["revision"], "A.2")
+
+    def test_l2_readonly_vault_and_stale_messages(self):
+        vault = V.Vault.create(os.path.join(self.tmp, "ro.git"))
+        v = V.Vault.clone(vault, os.path.join(self.tmp, "rowc"), "alice")
+        _plain_doc(v.doc_path("part"))
+        v.add_document("part")
+        subprocess.run(["chmod", "-R", "a-w", vault], check=True)
+        try:
+            v.lock_info("part")
+            _plain_doc(os.path.join(v.workdir, "second.FCStd.d"))
+            with self.assertRaises(V.GitError) as cm:
+                v.add_document("second")
+            self.assertIn("refused the push", str(cm.exception))
+            self.assertNotIn("kept moving", str(cm.exception))
+        finally:
+            subprocess.run(["chmod", "-R", "u+w", vault], check=True)
+
+    def test_l2_stale_message_names_commit_and_state(self):
+        self.seed()
+        self.client("bob", [call("checkout", "bracket"), call("release_lock", "bracket")], fresh=True)
+        self.client("alice", [call("checkout", "bracket"), {"op": "set_pad", "name": "bracket", "length": 12},
+                              call("checkin", "bracket", "alice A.2")])
+        r = self.client("bob", [call("lock", "bracket"), {"op": "set_pad", "name": "bracket", "length": 40},
+                                call("checkin", "bracket", "stale")])
+        self.assertEqual(r[2]["error"], "StaleRevisionError", r)
+        self.assertRegex(r[2]["message"], r"A\.1 WIP \(commit [0-9a-f]{10}\).*A\.2 WIP \(commit [0-9a-f]{10}\)")
 
 
 if __name__ == "__main__":

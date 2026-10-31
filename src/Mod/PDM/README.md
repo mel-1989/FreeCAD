@@ -16,7 +16,7 @@ a.checkout("bracket"); ...edit and doc.save()...; a.checkin("bracket", "longer p
 
 ## Vault layout
 
-- `refs/heads/main` holds the history; the tree root has one `<name>.FCStd.d` folder per document. Document names match `[A-Za-z0-9_-]{1,64}`.
+- `refs/heads/main` holds the history; the tree root has one `<name>.FCStd.d` folder per document. Document names match `[A-Za-z0-9_][A-Za-z0-9_-]{0,63}` (no leading `-`); a name that differs from an existing document only by case is refused, because case-insensitive file systems would alias the two. Messages may not contain lines starting with `PDM-`: those are the vault's own trailers, and history is read only from the trailer block each commit ends with, filtered to the document asked about.
 - Each revision or lifecycle change is one commit. The subject is the user's message; the author is the user; trailers record `PDM-Document`, `PDM-Revision`, `PDM-State`, `PDM-Event` (`add`, `checkin`, `transition`) and `PDM-Released`. Lifecycle transitions are commits that change no files.
 - `refs/locks/<name>` is one lock per document (below). The vault sets `receive.denyNonFastForwards` so `main` can never be rewritten.
 - A working copy keeps, per document, the commit its files were taken from (`.git/pdm/base/<name>`). Check-in builds its commit with git plumbing from a temporary index, so it never touches the working copy's own index or other documents.
@@ -30,8 +30,8 @@ Labels are `<letters>.<number>`, modelled on the major.minor revisions of public
 - Check-out acquires the lock first, then fetches and copies the then-current revision into the working copy, so a check-in that lands in between is not missed.
 - A lock is a commit on an empty tree whose message carries JSON (holder, host, UTC time, `new_revision`, a nonce), pushed to `refs/locks/<name>` without force. Git decides creation inside the vault's ref transaction, so of two racing clients exactly one wins; the other gets `LockError` naming the holder. The check is the same whether the clients run on one machine or share the vault over a network file system that honours git's lock files.
 - Release deletes the ref with `--force-with-lease` on the exact value that was read, so a lock that changed hands is never removed by the old owner. `break_lock` is the explicit administrator override.
-- The lock lives in the vault, so it survives a client restart. The same user name asking again gets the same lock (idempotent). Identity is the user name given to `Vault`; there is no authentication in this slice.
-- `checkin` needs the lock; without it, or with someone else's, it raises `LockError`. `keep_lock=True` keeps the lock after the check-in.
+- The lock lives in the vault, so it survives a client restart. The owner is the user plus a random id of the working copy (`.git/pdm/client-id`): the same working copy asking again gets the same lock (idempotent), a second working copy of the same user is refused with an error naming the other host and folder. Identity is the user name given to `Vault`; there is no authentication in this slice.
+- `checkin` needs the lock; without it, or with someone else's, it raises `LockError`. `keep_lock=True` keeps the lock after the check-in. If the check-in landed but releasing the lock failed, `checkin` still returns the revision, with a `warning` field. `checkout` never replaces working files that have uncommitted edits unless `discard_local=True`.
 
 ## Integrity
 
