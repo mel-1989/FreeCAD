@@ -199,7 +199,9 @@ struct DocumentP
      * Marks an operation on the document for the lifetime of the object (re-entrant, any thread)
      * and refuses it when the document is being closed.
      *
-     * The closing thread itself is never refused, whatever the policy; only other threads are.
+     * The closing thread itself is never refused, whatever the policy; only other threads are,
+     * so Refuse and CloserMay differ only in name now, and Throw differs from them only for
+     * other threads (it throws rather than returning).
      *
      * Order matters: increment the counter, then read @c closing, and back out of the counter
      * when it is set. A throwing policy is only safe where the caller may throw (a Python-facing
@@ -215,9 +217,9 @@ struct DocumentP
      * | Document::recompute | Throw (the async worker catches it and reports it) |
      * | AgentTurnGuard::begin, end | Throw |
      * | Document::_openTransaction | Refuse (returns 0) |
-     * | Document::_commitTransaction | Refuse (returns false) |
+     * | Document::_commitTransaction | CloserMay (returns false; the destructor's clearUndos reaches it) |
      * | Document::_abortTransaction | Refuse (returns) |
-     * | Document::_clearRedos | Refuse (returns, nothing cleared) |
+     * | Document::_clearRedos | CloserMay (returns, nothing cleared; the destructor's clearUndos reaches it) |
      * | Document::clearUndos | CloserMay (the destructor's own call must run) |
      * | Document::onBeforeChangeProperty | CloserMay (object destructors set properties; others skip the hook) |
      */

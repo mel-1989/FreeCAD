@@ -48,6 +48,7 @@ class TestGuiCloseVeto(unittest.TestCase):
         pump()
         Gui.getDocument("CloseSketch").setEdit(sk.Name)
         pump()
+        self.assertIsNotNone(Gui.getDocument("CloseSketch").getInEdit(), "the sketch never entered edit mode")
         App.closeDocument("CloseSketch")
         pump()
         self.assertNotIn("CloseSketch", App.listDocuments())
