@@ -802,7 +802,7 @@ class Vault:
 
         return _XLINK_RE.sub(sub, text).encode("utf-8"), count
 
-    def move(self, old, new, message=None):
+    def move(self, old, new, message=None, allow_unreadable=False):
         """Rename document ``old`` to ``new`` in the vault and re-point every link that names it.
 
         Takes the locks of ``old`` and of every document that links to it (refused with ``LockError`` naming the
@@ -811,7 +811,9 @@ class Vault:
         follows the rename) and a ``relink`` commit per referencing document (next revision number, WIP; the next
         letter if it was Released). The commits go out in a single push, so the vault either has the whole move or
         none of it. Referencing documents that are InReview or Obsolete are refused, as for check-out; local edits
-        in any involved working-copy folder are refused. Locks taken by the move are released at the end; the lock
+        in any involved working-copy folder are refused. Any other document that cannot be scanned refuses the move,
+        because it might link to ``old`` in a form the scan cannot see; ``allow_unreadable=True`` moves anyway and
+        lists them in ``unreadable``. Locks taken by the move are released at the end; the lock
         on ``old`` is always deleted since that name no longer exists. Returns ``{new, revision, sha, relinked}``."""
         _check_name(old)
         _check_name(new)
@@ -834,11 +836,13 @@ class Vault:
                 suspects = []
                 unreadable = []
                 refs = sorted({u["document"] for u in self._where_used_at(head, old, suspects, unreadable)})
-                risky = [u for u in unreadable if u["mentions"] and u["document"] != old]
+                risky = [u for u in unreadable if u["document"] != old
+                         and (u["mentions"] or not allow_unreadable)]
                 if risky:
                     raise DocumentError(
-                        f"{risky[0]['document']} cannot be read ({risky[0]['reason']}) and its text mentions {old!r}, so it "
-                        f"might link to it; repair or remove that document before moving {old}")
+                        f"{risky[0]['document']} cannot be read ({risky[0]['reason']}), so it might link to {old!r}; "
+                        f"repair or remove that document before moving {old}"
+                        + ("" if risky[0]["mentions"] else ", or pass allow_unreadable=True"))
                 if suspects:
                     s0 = suspects[0]
                     raise DocumentError(

@@ -246,7 +246,14 @@ class TestLinkLogic(unittest.TestCase):
         used = self.a.where_used("base")
         self.assertEqual([u["document"] for u in used], ["asm"])
         self.assertEqual(sorted(u["document"] for u in used.unreadable), ["bomb", "broken"])
-        r = self.a.move("base", "base2")  # neither bad document mentions base: the move proceeds
+        # an unreadable document might link to base in a form the scan cannot see: refused by default
+        head = self.head()
+        with self.assertRaises(V.DocumentError) as cm:
+            self.a.move("base", "base2")
+        self.assertIn("allow_unreadable", str(cm.exception))
+        self.assertEqual(self.head(), head)
+        self.assertEqual(self.locks(), [])
+        r = self.a.move("base", "base2", allow_unreadable=True)  # neither mentions base: proceeds when allowed
         self.assertEqual(sorted(r["unreadable"]), ["bomb", "broken"])
         self.assertEqual([x["document"] for x in r["relinked"]], ["asm"])
         self.assertIn("base2.FCStd.d", self.blob("asm"))
@@ -254,7 +261,7 @@ class TestLinkLogic(unittest.TestCase):
         self.add_raw("hostile", bomb.replace("<Document>", "<Document><!-- base2.FCStd.d -->"))
         head = self.head()
         with self.assertRaises(V.DocumentError) as cm:
-            self.a.move("base2", "base3")
+            self.a.move("base2", "base3", allow_unreadable=True)
         self.assertIn("hostile", str(cm.exception))
         self.assertEqual(self.head(), head)
         self.assertEqual(self.locks(), [])
