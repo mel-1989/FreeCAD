@@ -171,6 +171,24 @@ PyObject* DocumentPy::saveAs(PyObject* args)
     PY_CATCH
 }
 
+PyObject* DocumentPy::saveAsFolder(PyObject* args)
+{
+    char* fn;
+    if (!PyArg_ParseTuple(args, "et", "utf-8", &fn)) {
+        return nullptr;
+    }
+
+    std::string utf8Name = fn;
+    PyMem_Free(fn);
+
+    PY_TRY
+    {
+        getDocumentPtr()->saveAsFolder(utf8Name.c_str());
+        Py_Return;
+    }
+    PY_CATCH
+}
+
 PyObject* DocumentPy::saveCopy(PyObject* args)
 {
     char* fn;

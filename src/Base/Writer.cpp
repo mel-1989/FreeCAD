@@ -390,7 +390,13 @@ ZipWriter::~ZipWriter()
 
 FileWriter::FileWriter(const char* DirName)
     : DirName(DirName)
-{}
+{
+    // Same number format as ZipWriter, so a file written to a directory holds the same text as
+    // the zip entry (default stream precision would round every double to 6 digits).
+    FileStream.imbue(std::locale::classic());
+    FileStream.precision(std::numeric_limits<double>::digits10 + 1);
+    FileStream.setf(std::ios::fixed, std::ios::floatfield);
+}
 
 FileWriter::~FileWriter() = default;
 

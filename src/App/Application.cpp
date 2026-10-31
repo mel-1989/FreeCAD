@@ -1169,6 +1169,18 @@ Document* Application::openDocumentPrivate(const char * FileName,
         bool isMainDoc, DocumentInitFlags initFlags,
         std::vector<std::string> &&objNames)
 {
+    // A folder document is the same document with or without a trailing slash
+    std::string folderName;
+    if (Document::isFolderPath(FileName)) {
+        folderName = FileName;
+        while (folderName.size() > 1 && (folderName.back() == '/' || folderName.back() == '\\')) {
+            folderName.pop_back();
+        }
+        if (propFileName == FileName) {
+            propFileName = folderName.c_str();
+        }
+        FileName = folderName.c_str();
+    }
     Base::FileInfo File(FileName);
 
     if (!File.exists()) {
@@ -1234,6 +1246,13 @@ Document* Application::openDocumentPrivate(const char * FileName,
         name = fi.fileNamePure();
     }else
         name = File.fileNamePure();
+
+    // A folder document "model.FCStd.d" is called "model", as saveAsFolder() labels it
+    if (Document::isFolderPath(FileName) && !name.empty()) {
+        if (boost::iends_with(name, ".fcstd")) {
+            name.erase(name.size() - 6);
+        }
+    }
 
     // Use the same name for the internal and user name.
     // The file name is UTF-8 encoded which means that the internal name will be modified

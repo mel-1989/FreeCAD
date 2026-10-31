@@ -157,6 +157,7 @@ SET(Document_CPP_SRCS
     Annotation.cpp
     BackupPolicy.cpp
     Document.cpp
+    DocumentFolder.cpp
     RecoverySnapshot.cpp
     DocumentObject.cpp
     DepEdgePyImp.cpp

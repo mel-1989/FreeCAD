@@ -98,6 +98,15 @@ class Document(PropertyContainer):
         """
         ...
 
+    def saveAsFolder(self, path: str, /) -> None:
+        """
+        Save the document as a folder of text files ("FCStd as folder") and bind the
+        document to it: FileName becomes the folder and save() writes back to it.
+        The output is deterministic, so the folder diffs cleanly under version control.
+        saveAs() with a path ending in ".FCStd.d" does the same.
+        """
+        ...
+
     def saveCopy(self, path: str, /) -> None:
         """
         Save a copy of the document under a new name to disk.
