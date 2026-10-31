@@ -29,9 +29,18 @@ from SMTests.testOracle import HAVE_NEW, LEN_TOL, WIDTH, Case, build_base, measu
 
 
 def feature_unfold(doc, base, face, material="_manual", k=0.4, old=False):
-    """Unfold through the SMUnfold feature exactly as the command does; returns the feature."""
+    """Unfold through the SMUnfold feature exactly as the command does; returns the feature.
+
+    old=False runs the new unfolder (opt-in), old=True the V1 unfolder, old=None leaves the
+    parameter alone (the fork default, V1). The parameter is put back afterwards: removed if it
+    was not set before, so no test leaves it persisted.
+    """
+    params = SheetMetalTools.params
+    existed = "UseOldUnfolder" in params.GetBools()
+    previous = params.GetBool("UseOldUnfolder", True)
     FreeCAD.setActiveDocument(doc.Name)
-    SheetMetalTools.params.SetBool("UseOldUnfolder", old)
+    if old is not None:
+        params.SetBool("UseOldUnfolder", old)
     try:
         obj = doc.addObject("Part::FeaturePython", "Unfold")
         SheetMetalUnfoldCmd.SMUnfold(obj, base, [face])
@@ -41,7 +50,10 @@ def feature_unfold(doc, base, face, material="_manual", k=0.4, old=False):
         obj.GenerateSketch = False
         doc.recompute()
     finally:
-        SheetMetalTools.params.SetBool("UseOldUnfolder", False)
+        if existed:
+            params.SetBool("UseOldUnfolder", previous)
+        else:
+            params.RemBool("UseOldUnfolder")
     return obj
 
 
@@ -106,12 +118,9 @@ class TestUProfileThickness(unittest.TestCase):
         shape = base.Shape
         root = big_planes(shape, case.T)[0]
         NU.check_sheet_consistency(shape, root, case.T)  # the right thickness passes
-        with self.assertRaises(NU.SheetConsistencyError) as cm:
+        with self.assertRaises(NU.RootFaceError) as cm:  # the bends show 2.0, not 2.5
             NU.check_sheet_consistency(shape, root, 2.5, "measured for the test")
-        msg = str(cm.exception)
-        self.assertIn("thickness 2.5", msg)
-        self.assertIn("measured for the test", msg)
-        self.assertIn("Face", msg)
+        self.assertIn("2.5", str(cm.exception))
 
     def test_task_panel_lists_bend_tables(self):
         """The material list the panel filters (getSpreadSheetNames) offers bt_ entries."""
@@ -297,6 +306,59 @@ class TestSheetValidation(unittest.TestCase):
                     self.assertIn("large faces of the sheet", str(cm.exception))
                 feat = feature_unfold(self.doc, base, "Face%d" % (i + 1), k=0.5)
                 self.assertTrue(refused(feat), "root on a wall gave a flat")
+
+
+class TestDefaultIsV1(unittest.TestCase):
+    """The fork default is the V1 unfolder; the new one is opt-in (UseOldUnfolder = False)."""
+
+    def setUp(self):
+        self.doc = FreeCAD.newDocument("SMDefault")
+        self.had = "UseOldUnfolder" in SheetMetalTools.params.GetBools()
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.doc.Name)
+        # the helper must not leave the parameter persisted
+        self.assertEqual("UseOldUnfolder" in SheetMetalTools.params.GetBools(), self.had)
+
+    def test_default_uses_v1(self):
+        from unittest import mock
+
+        if not self.had:
+            self.assertTrue(SheetMetalTools.use_old_unfolder())
+        case = Case("def", 2.0, 1.5, 0.4, [25.0, 30.0, 25.0], [90.0, 90.0])
+        base = build_base(self.doc, case)
+        face = "Face%d" % (big_planes(base.Shape, case.T)[0] + 1)
+        with mock.patch.object(SheetMetalUnfoldCmd.SMUnfold, "newUnfolder", side_effect=AssertionError("new unfolder ran")), \
+                mock.patch.object(SheetMetalUnfoldCmd.SMUnfold, "oldUnfolder",
+                                  autospec=True, side_effect=SheetMetalUnfoldCmd.SMUnfold.oldUnfolder) as old_fn:
+            if self.had:
+                self.skipTest("UseOldUnfolder is set in this profile")
+            obj = feature_unfold(self.doc, base, face, k=case.k, old=None)
+        self.assertEqual(old_fn.call_count, 1)
+        self.assertFalse(refused(obj))
+        self.assertAlmostEqual(measure(obj.Shape, case.T, WIDTH)[1], case.developed_length(), delta=LEN_TOL)
+
+    def test_bend_table_on_the_default_path(self):
+        case = Case("deft", 2.0, 1.5, 0.4, [25.0, 30.0, 25.0], [90.0, 90.0])
+        base = build_base(self.doc, case)
+        lookup = BT.lookup_from_ref("bt_mild_steel_ba")
+        expected = case.straight_total() + 2 * lookup.allowance(case.T, case.R, 90.0)
+        for i in big_planes(base.Shape, case.T):
+            obj = feature_unfold(self.doc, base, "Face%d" % (i + 1), "bt_mild_steel_ba", old=None)
+            self.assertFalse(refused(obj))
+            self.assertAlmostEqual(measure(obj.Shape, case.T, WIDTH)[1], expected, delta=LEN_TOL)
+
+    def test_new_path_falls_back_on_conical_faces(self):
+        """A countersink (cone) makes the opt-in new unfolder fall back to V1 with a warning."""
+        shape = l_profile(2.0, inner=3.0, outer=5.0)
+        shape = shape.cut(Part.makeCone(1.0, 5.0, 3.0, V(20, -1, 20), V(0, 1, 0)))
+        obj = self.doc.addObject("Part::Feature", "Lcs")
+        obj.Shape = shape
+        self.doc.recompute()
+        root = sheet_faces(shape, 2.0)[0]
+        with self.assertRaises(NU.SheetNeedsV1Error) as cm:
+            NU.check_sheet_consistency(shape, root, 2.0)
+        self.assertIn("cone", str(cm.exception))
 
 
 class TestFeaturePathEdgeFlangeAndHem(unittest.TestCase):

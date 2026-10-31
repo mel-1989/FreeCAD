@@ -1048,7 +1048,9 @@ def is_autolink_enabled():
 
 
 def use_old_unfolder():
-    return params.GetBool("UseOldUnfolder", False)
+    # cad-fork default (run 026): the V1 unfolder. The new unfolder (networkx) is opt-in, with
+    # UseOldUnfolder = False, until it is never worse than V1 on the verifier suites.
+    return params.GetBool("UseOldUnfolder", True)
 
 def is_absolute_path(path: str) -> bool:
     # 1. Linux root ('/'), Windows drive root ('\\'), or UNC paths ('\\\\' / '//')

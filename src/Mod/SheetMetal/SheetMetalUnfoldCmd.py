@@ -206,7 +206,7 @@ class SMUnfold:
         unchanged = [(name, factor) for name, initial, factor in defaults
                      if abs(getattr(obj, name).Value - initial) < SheetMetalBendCuts.eps
                      and name not in expressions]
-        if not unchanged or not NewUnfolderAvailable:
+        if not unchanged or not NewUnfolderAvailable or SheetMetalTools.use_old_unfolder():
             return
         base, face_name = SheetMetalTools.smGetSubElementName(obj.baseObject[1][0])
         shape = (base if base is not None else obj.baseObject[0]).Shape

@@ -1467,14 +1467,49 @@ def check_sheet_consistency(shape: Part.Shape, root_index: int, thickness: float
     faces = list(shape.Faces)
     tol = LEN_TOL
     root = faces[root_index]
-    longest = max((e.Length for e in root.Edges), default=0.0)
-    if root.Surface.TypeId != "Part::GeomPlane" or (longest > 0 and root.Area / longest < thickness - tol):
-        raise RootFaceError(
-            f"Face{root_index + 1} is not one of the two large faces of the sheet (the sheet "
-            f"thickness measured through it is {thickness:.9g} mm, but the face is narrower "
-            "than that). Select a large sheet face as the root of the unfold."
+    def is_flat_or_cylinder(f):
+        if f.Surface.TypeId in ("Part::GeomPlane", "Part::GeomCylinder"):
+            return True
+        try:  # a flat face carried by a spline surface (some imported or swept parts)
+            return f.findPlane() is not None
+        except Exception:
+            return False
+
+    odd = [i for i, f in enumerate(faces) if not is_flat_or_cylinder(f)]
+    if odd:
+        kinds = sorted({faces[i].Surface.TypeId.replace("Part::Geom", "").lower() for i in odd})
+        raise SheetNeedsV1Error(
+            f"the part has {', '.join(kinds)} faces (Face{odd[0] + 1}, for instance: countersinks, "
+            "embosses or other formed features) that the new unfolder does not flatten"
         )
     cylinders = [(i, f) for i, f in enumerate(faces) if f.Surface.TypeId == "Part::GeomCylinder"]
+    # Thicknesses the bends themselves show: radius gaps of concentric cylinder pairs that meet a
+    # planar face along a straight edge parallel to their axis (hole and counterbore walls do not).
+    gaps = []
+    for ci, cf in cylinders:
+        axis = cf.Surface.Axis
+        joined = any(
+            e.Curve.TypeId == "Part::GeomLine" and e.Curve.Direction.cross(axis).Length < 1e-6
+            and any(o.Surface.TypeId == "Part::GeomPlane" for o in shape.ancestorsOfType(e, Part.Face))
+            for e in cf.Edges
+        )
+        if not joined:
+            continue
+        for cj, cg in cylinders:
+            if cj > ci and cg.Surface.Axis.cross(axis).Length < 1e-5 \
+                    and (cg.Surface.Center - cf.Surface.Center).cross(axis).Length < 0.2 * max(thickness, 1e-9):
+                gaps.append(abs(cg.Surface.Radius - cf.Surface.Radius))
+    longest = max((e.Length for e in root.Edges), default=0.0)
+    if gaps:
+        root_ok = any(abs(g - thickness) <= 0.1 * thickness for g in gaps)
+    else:
+        root_ok = longest <= 0 or root.Area / longest >= thickness - tol
+    if root.Surface.TypeId != "Part::GeomPlane" or not root_ok:
+        raise RootFaceError(
+            f"Face{root_index + 1} is not one of the two large faces of the sheet (the thickness "
+            f"measured through it is {thickness:.9g} mm, which the bends of the part do not show). "
+            "Select a large sheet face as the root of the unfold."
+        )
     sheet_cache = {}
 
     def is_sheet(i):
@@ -1532,6 +1567,14 @@ def check_sheet_consistency(shape: Part.Shape, root_index: int, thickness: float
                         f"{miss:+.3g} mm from the sheet thickness {thickness:.9g} mm ({how}), "
                         f"beyond the {tol:g} mm tolerance of the new unfolder"
                     )
+                vmin_, vmax_ = face.ParameterRange[2], face.ParameterRange[3]
+                if abs((vmax_ - vmin_) - thickness) < 1e-3 * max(1.0, thickness):
+                    # A wall only as long as the sheet is thick (a window or tab corner), not a bend.
+                    raise SheetNeedsV1Error(
+                        f"Face{idx + 1} (radius {surf.Radius:.9g} mm) is a rounded wall exactly one "
+                        f"thickness ({thickness:.9g} mm) tall, as at a window or tab border; the new "
+                        "unfolder does not flatten these"
+                    )
                 raise SheetConsistencyError(
                     f"Cannot unfold: the sheet thickness {thickness:.9g} mm ({how}) does not match "
                     f"the bend Face{idx + 1} (radius {surf.Radius:.9g} mm), which has no concentric "
@@ -1565,10 +1608,10 @@ def check_sheet_consistency(shape: Part.Shape, root_index: int, thickness: float
             continue
         if is_sheet(i) and is_sheet(j):
             if has_bend_cylinders:
-                raise SheetConsistencyError(
-                    f"Cannot unfold: Face{i + 1} and Face{j + 1} are sheet faces that meet at an "
-                    "angle with no bend radius (a sharp bend) in a part that also has round "
-                    "bends. Give every bend a radius on both faces, or make every bend sharp."
+                raise SheetNeedsV1Error(
+                    f"Face{i + 1} and Face{j + 1} are sheet faces that meet at an angle with no "
+                    "bend radius (a sharp edge or a wall as wide as the sheet) in a part that also "
+                    "has round bends"
                 )
             raise SheetNeedsV1Error(
                 f"Cannot unfold with the new unfolder: Face{i + 1} and Face{j + 1} are sheet "
