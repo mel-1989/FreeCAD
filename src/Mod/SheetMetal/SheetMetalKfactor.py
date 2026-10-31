@@ -4,6 +4,8 @@
 #
 #  Copyright 2014, 2018 Ulrich Brammer <ulrich@Pauline>
 #  Copyright 2023 Ondsel Inc.
+#  Modified for cad-fork on 2026-10-31 (LGPL-2.1 section 2a): bend-table (bt_) entries in the material list.
+#
 #
 #  This program is free software; you can redistribute it and/or
 #  modify it under the terms of the GNU Lesser General Public

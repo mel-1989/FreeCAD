@@ -3,6 +3,8 @@
 #  SheetMetalUnfolder.py
 #
 #  Copyright 2014, 2018 Ulrich Brammer <ulrich@Pauline>
+#  Modified for cad-fork on 2026-10-31 (LGPL-2.1 section 2a): lazy Draft import; bend-table K lookup; per-bend records (bend_out, meta_out) for bend lines.
+#
 #
 #  This program is free software; you can redistribute it and/or
 #  modify it under the terms of the GNU Lesser General Public

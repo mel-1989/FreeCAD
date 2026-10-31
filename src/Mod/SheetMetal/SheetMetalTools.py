@@ -3,6 +3,8 @@
 #  SheetMetalTools.py
 #
 #  Copyright 2024 Shai Seger <shaise at gmail dot com>
+#  Modified for cad-fork on 2026-10-31 (LGPL-2.1 section 2a): lazy importDXF/importSVG/Draft imports; bend-table entries; V1 unfolder as default (UseOldUnfolder defaults True).
+#
 #
 #  This program is free software; you can redistribute it and/or
 #  modify it under the terms of the GNU Lesser General Public
