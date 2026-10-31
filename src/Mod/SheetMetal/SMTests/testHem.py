@@ -12,6 +12,7 @@ R is gap/2 for an open hem and 0.1*T for a closed one.
 
 import math
 import unittest
+from SMTests.quiet import expected_recompute_errors
 
 import FreeCAD
 import Part
@@ -158,7 +159,8 @@ class TestHem(Doc):
         obj = self.doc.addObject("Part::FeaturePython", "Bad")
         HF.SMHem(obj, box, [e])
         obj.length = 0.0
-        self.doc.recompute()
+        with expected_recompute_errors():
+            self.doc.recompute()
         self.assertIn("Invalid", obj.State)
         obj.length = 10.0
         self.doc.recompute()

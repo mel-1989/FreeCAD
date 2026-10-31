@@ -11,6 +11,7 @@ Expected values are computed from the case parameters with fabrication trigonome
 
 import math
 import unittest
+from SMTests.quiet import expected_recompute_errors
 
 import FreeCAD
 import Part
@@ -294,7 +295,8 @@ class TestEdgeFlange(Doc):
         obj = self.doc.addObject("Part::FeaturePython", "Bad")
         EF.SMEdgeFlange(obj, box, [flat_edge])
         obj.angle = 180.0
-        self.doc.recompute()
+        with expected_recompute_errors():
+            self.doc.recompute()
         self.assertIn("Invalid", obj.State)
         obj.angle = 90.0
         self.doc.recompute()
