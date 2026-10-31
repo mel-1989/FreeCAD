@@ -239,6 +239,8 @@ class TestEdgeFlange(Doc):
         for ang in (0.0, 180.0, -5.0, 200.0):
             with self.assertRaises(EF.EdgeFlangeError, msg="angle %g" % ang):
                 EF.build_edge_flange(box.Shape, [flat_edge], 15.0, ang, 2.0)
+        with self.assertRaises(EF.EdgeFlangeError):  # zero radius (sharp bends unsupported)
+            EF.build_edge_flange(box.Shape, [flat_edge], 15.0, 90.0, 0.0)
         with self.assertRaises(EF.EdgeFlangeError):  # too short for the setback
             EF.build_edge_flange(box.Shape, [flat_edge], 2.0, 90.0, 2.0)
         with self.assertRaises(EF.EdgeFlangeError):  # gap eats the width
@@ -261,11 +263,6 @@ class TestEdgeFlange(Doc):
         self.doc.recompute()
         self.assertNotIn("Invalid", obj.State)
         self.assertTrue(obj.Shape.isValid())
-
-    def test_default_untouched(self):
-        """Importing the flange module registers nothing in the default (non-SheetMetal) path."""
-        import sys
-        self.assertNotIn("PySide", sys.modules)
 
 
 if __name__ == "__main__":

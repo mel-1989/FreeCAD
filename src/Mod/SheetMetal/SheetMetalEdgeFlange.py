@@ -122,8 +122,8 @@ def build_edge_flange(base_shape, edge_names, length, angle, radius, k_factor=0.
     shape (one valid solid). Raises EdgeFlangeError with a readable message on bad input."""
     if not 0.0 < angle < 180.0:
         raise EdgeFlangeError("angle must be strictly between 0 and 180 degrees, got %g" % angle)
-    if radius < 0.0:
-        raise EdgeFlangeError("bend radius must not be negative")
+    if radius <= 0.0:
+        raise EdgeFlangeError("bend radius must be greater than zero (sharp bends are not supported)")
     if measure not in ("outer", "inner"):
         raise EdgeFlangeError("measure must be 'outer' or 'inner'")
     if not edge_names:
