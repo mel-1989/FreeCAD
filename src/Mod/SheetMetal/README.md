@@ -53,3 +53,7 @@ Local changes to vendored files: `SheetMetalTools.py` and `SheetMetalUnfolder.py
 ## Dependencies
 
 `networkx` (3.4.2 or later) is needed by the new unfolder only; the pixi environment does not ship it, so the new-unfolder oracle cases skip when it is missing. The old unfolder, the base flange, bend, fold and the K-factor code do not need it.
+
+## Bend lines and DXF export of the flat pattern (G07 slice 3b)
+
+The Unfold feature (default V1 unfolder) stores one bend line per bend on the flat pattern: `SheetMetalUnfoldCmd.get_bend_lines(feature)` returns `FlatBend` objects with `direction` (UP bends toward the viewer on the selected root face's side, DOWN away), `angle`, `inside_radius`, `allowance` (the BA used), `k_factor`, `segments` (the bend centreline, at BA / 2 inside the bend zone) and `note` (`UP 90° R2 BA 3.456`); `feature.BendNotes` lists the notes. `SheetMetalUnfoldCmd.export_flat_dxf(feature, path)` writes a DXF R12 file headlessly with layers OUTLINE, INNER, BEND_UP, BEND_DOWN and NOTES, deterministic byte for byte. The opt-in new unfolder keeps no per-bend data in this form, so the export refuses it. The goldens in `SMTests/fixtures/flat_dxf/` are rebuilt with `flat_dxf_cases.regenerate()` (see its docstring).

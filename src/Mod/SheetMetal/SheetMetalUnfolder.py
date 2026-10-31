@@ -507,6 +507,7 @@ class SheetTree(object):
 
         # make_new_face_node adds the root node if parent_node == None.
         self.root = None
+        self.bend_records = []  # cad-fork G07: per-bend data, see makeFoldLines
         self.__Shape = TheShape.copy()
         self.obj = obj
         self.error_code = None
@@ -2683,6 +2684,17 @@ class SheetTree(object):
             else:
                 print("FIXME! make errorcondition")
 
+        # cad-fork G07: keep the per-bend data beside the fold edges (same edge objects, so they
+        # follow every later rotate / translate of the unfold) for the flat-pattern bend lines.
+        self.bend_records.append({
+            "edges": wireList,
+            "direction": str(bend_node.bend_dir).upper(),
+            "angle": abs(bend_node.bend_angle),
+            "inside_radius": bRad,
+            "k_factor": kFactor,
+            "allowance": bend_node._trans_length,
+            "thickness": thick,
+        })
         return wireList
 
     def unbendVertDict(self, bend_node, cent, axis, nullVec):
@@ -2944,7 +2956,7 @@ def sew_Shape(obj):
     return None
 
 
-def getUnfold(k_factor_lookup, solid, facename, kFactorStandard):
+def getUnfold(k_factor_lookup, solid, facename, kFactorStandard, bend_out=None, meta_out=None):
     global KFACTORSTANDARD
     KFACTORSTANDARD = kFactorStandard
 
@@ -2981,6 +2993,16 @@ def getUnfold(k_factor_lookup, solid, facename, kFactorStandard):
                 debug_print("time to run the unfold: " + str(unfoldTime - endzeit))
                 folds = Part.Compound(foldLines)
                 # Part.show(folds, 'Fold_Lines')
+                if meta_out is not None:
+                    meta_out["thickness"] = TheTree._SheetTree__thickness
+                if bend_out is not None:
+                    # cad-fork G07: one plain dict per bend, root side first.
+                    for rec in reversed(TheTree.bend_records):
+                        out = {k: v for k, v in rec.items() if k != "edges"}
+                        out["segments"] = [
+                            (Base.Vector(e.Vertexes[0].Point), Base.Vector(e.Vertexes[-1].Point))
+                            for e in rec["edges"]]
+                        bend_out.append(out)
                 try:
                     newShell = Part.Shell(theFaceList)
                 except:
