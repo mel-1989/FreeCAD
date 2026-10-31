@@ -15,9 +15,11 @@ ZERO = "0" * 40
 BAD_MODES = ("120000", "160000")  # symlinks and gitlinks never belong in a vault
 
 
-def rewrite_mismatch(V, c, old, new, need_change):
+def rewrite_mismatch(V, c, old, new, need_change, unreadable_stays=False):
     """None when the commit's new Document.xml is, byte for byte, the old one after the library's own link rewrite
-    ``old`` -> ``new`` (``Vault._rewrite_links``, the function ``Vault.move`` uses); otherwise why not."""
+    ``old`` -> ``new`` (``Vault._rewrite_links``, the function ``Vault.move`` uses); otherwise why not. With
+    ``unreadable_stays`` (a move) a Document.xml that ``Vault._scan_xlinks`` refuses (not UTF-8, a DOCTYPE or ENTITY,
+    not well-formed) must stay byte for byte, which is what ``Vault._edit_rename`` does with it."""
     for n in (old, new):
         try:
             V._check_name(n)
@@ -28,6 +30,12 @@ def rewrite_mismatch(V, c, old, new, need_change):
         return "Document.xml could not be read"
     before, after = base64.b64decode(pair[0]), base64.b64decode(pair[1])
     try:
+        if unreadable_stays:
+            try:
+                V.Vault._scan_xlinks(before)
+            except V.DocumentError:
+                return None if before == after else (
+                    f"Document.xml cannot be scanned for links, so a move must leave it unchanged ({old} -> {new})")
         expected, count = V.Vault._rewrite_links(V.Vault, before, old, new)
     except Exception as e:
         return f"Document.xml cannot be rewritten ({e})"
@@ -64,6 +72,7 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
         if old != ZERO and mirror_vault is not None:
             docs = set(mirror_vault._doc_names_at(old))
 
+        moves = set()    # (src, dst) pairs of the move commits accepted earlier in this push
         touched = set()  # names added or moved to earlier in this push (they have history from then on)
 
         def has_history(doc):
@@ -134,6 +143,8 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                     return f"commit {short} (add {doc}): {doc} is locked by {lk['holder']}"
                 if (meta.get("Revision"), meta.get("State"), meta.get("Released")) != (V.revision_label(0, 1), "WIP", "0"):
                     return f"commit {short} (add {doc}): a new document starts at A.1, WIP, unreleased"
+                if not any(ch[1] == f"{folder}/Document.xml" and ch[0] != "D" for ch in c["changes"]):
+                    return f"commit {short} (add {doc}): the new folder has no Document.xml"
             elif event in ("checkin", "relink"):
                 if prev is None or doc not in docs:
                     return f"commit {short} ({event} {doc}): no such document in the vault"
@@ -158,6 +169,9 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                     bad = rewrite_mismatch(V, c, m.group(1), m.group(2), need_change=True)
                     if bad:
                         return f"commit {short} (relink {doc}): {bad}"
+                    if (m.group(1), m.group(2)) not in moves:
+                        return (f"commit {short} (relink {doc}): {m.group(1)} -> {m.group(2)} does not match a move "
+                                "commit earlier in this push")
             elif event == "move":
                 src = meta.get("Moved-From")
                 try:
@@ -180,7 +194,7 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                 if c.get("move_equal") is not True:
                     return (f"commit {short} (move {src} -> {doc}): the new folder must equal {src}'s, file for file, "
                             "apart from Document.xml")
-                bad = rewrite_mismatch(V, c, src, doc, need_change=False)
+                bad = rewrite_mismatch(V, c, src, doc, need_change=False, unreadable_stays=True)
                 if bad:
                     return f"commit {short} (move {src} -> {doc}): {bad}"
                 if (meta.get("Revision"), meta.get("State"), meta.get("Released")) != (
@@ -217,6 +231,7 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                 touched.add(doc)
             if event == "move":
                 touched.add(src)
+                moves.add((src, doc))
             docs = {d for d in docs if d in after} | after
             last[doc] = {"revision": meta.get("Revision"), "state": meta.get("State"),
                          "released": meta.get("Released") == "1"}
