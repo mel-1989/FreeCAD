@@ -1169,6 +1169,18 @@ Document* Application::openDocumentPrivate(const char * FileName,
         bool isMainDoc, DocumentInitFlags initFlags,
         std::vector<std::string> &&objNames)
 {
+    // A folder document is the same document with or without a trailing slash
+    std::string folderName;
+    if (Document::isFolderPath(FileName)) {
+        folderName = FileName;
+        while (folderName.size() > 1 && (folderName.back() == '/' || folderName.back() == '\\')) {
+            folderName.pop_back();
+        }
+        if (propFileName == FileName) {
+            propFileName = folderName.c_str();
+        }
+        FileName = folderName.c_str();
+    }
     Base::FileInfo File(FileName);
 
     if (!File.exists()) {

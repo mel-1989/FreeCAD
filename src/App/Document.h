@@ -1410,6 +1410,9 @@ protected:
     /// DocumentFolder.cpp.
     bool saveToFolder(const char* dirname) const;
 
+    /// save() with the choice of format: forceFolder writes the folder form whatever the name
+    bool save(bool forceFolder);
+
     /**
      * @brief Count the object of a given type.
      *

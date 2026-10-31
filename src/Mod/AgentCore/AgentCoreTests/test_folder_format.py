@@ -382,6 +382,188 @@ class TestFolderBehaviour(unittest.TestCase):
         self.assertEqual(self.doc.LastModifiedDate, first)
 
 
+def shape_doc(name, **shapes):
+    import Part
+    doc = App.newDocument(name)
+    for n, shape in shapes.items():
+        doc.addObject("Part::Feature", n).Shape = shape
+    return doc
+
+
+class TestFolderRepair(unittest.TestCase):
+    """Verifier findings on slice 1 (data-loss and safety edge cases)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="g03r")
+
+    def tearDown(self):
+        for d in list(App.listDocuments()):
+            App.closeDocument(d)
+        subprocess.call(["chflags", "-R", "nouchg", self.tmp], stderr=subprocess.DEVNULL) if sys.platform == "darwin" else None
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def p(self, *a):
+        return os.path.join(self.tmp, *a)
+
+    def test_case_collision_is_refused_and_rename_by_case_survives(self):
+        import Part
+        # HIGH 1a: Box and box would be one file on APFS: refuse loudly, whatever the platform
+        doc = shape_doc("caseA", Box=Part.makeBox(1, 2, 3), box=Part.makeSphere(5))
+        with self.assertRaises(Exception) as cm:
+            doc.saveAsFolder(self.p("a.FCStd.d"))
+        self.assertIn("case", str(cm.exception))
+        self.assertEqual(doc.FileName, "")  # LOW 8: a failed saveAs does not rename the document
+        # HIGH 1b: delete Box, add box, save again: the new file must not be swept away
+        doc = shape_doc("caseB", Box=Part.makeBox(1, 2, 3))
+        doc.saveAsFolder(self.p("b.FCStd.d"))
+        doc.removeObject("Box")
+        doc.addObject("Part::Feature", "box").Shape = Part.makeBox(4, 5, 6)
+        doc.save()
+        self.assertEqual(sorted(f for f in os.listdir(self.p("b.FCStd.d")) if f.endswith(".brp")),
+                         ["box.Shape.brp"])
+        App.closeDocument(doc.Name)
+        doc = App.openDocument(self.p("b.FCStd.d"))
+        self.assertAlmostEqual(doc.box.Shape.Volume, 120.0)
+        # same content under a re-cased name: the stale file still must not delete the new one
+        doc.removeObject("box")
+        doc.addObject("Part::Feature", "BOX").Shape = Part.makeBox(4, 5, 6)
+        doc.save()
+        App.closeDocument(doc.Name)
+        doc = App.openDocument(self.p("b.FCStd.d"))
+        self.assertAlmostEqual(doc.BOX.Shape.Volume, 120.0)
+        self.assertEqual(sorted(f for f in os.listdir(self.p("b.FCStd.d")) if f.endswith(".brp")),
+                         ["BOX.Shape.brp"])
+
+    def test_manifest_cannot_delete_outside_or_hidden_files(self):
+        import Part
+        outside = self.p("outside")
+        os.makedirs(outside)
+        for n in ("precious.txt", "keep.txt"):
+            open(os.path.join(outside, n), "w").write("user data")
+        target = self.p("crafted.FCStd.d")
+        os.makedirs(os.path.join(target, ".git"))
+        open(os.path.join(target, ".git", "HEAD"), "w").write("ref\n")
+        open(os.path.join(target, "README"), "w").write("readme")
+        os.symlink(outside, os.path.join(target, "lnk"))
+        open(self.p("sibling.txt"), "w").write("sibling")
+        with open(os.path.join(target, MANIFEST), "w") as fh:
+            fh.write("FCStdFolder 1\nlnk/precious.txt\n.git/HEAD\nREADME\n../sibling.txt\n"
+                     "sub/../../sibling.txt\n./../sibling.txt\n/etc/hosts_x\n")
+        doc = shape_doc("crafted", Box=Part.makeBox(1, 1, 1))
+        doc.saveAsFolder(target)
+        self.assertTrue(os.path.exists(os.path.join(outside, "precious.txt")))
+        self.assertTrue(os.path.exists(self.p("sibling.txt")))
+        self.assertTrue(os.path.exists(os.path.join(target, ".git", "HEAD")))
+        self.assertTrue(os.path.islink(os.path.join(target, "lnk")))
+        # README is a plain top-level name from the (previous) manifest: only that may go
+        self.assertTrue(set(os.listdir(outside)) == {"precious.txt", "keep.txt"})
+
+    @unittest.skipUnless(sys.platform == "darwin", "uses chflags uchg")
+    def test_failed_save_leaves_previous_state_loadable(self):
+        import Part
+        doc = shape_doc("atomic", Aaa=Part.makeBox(1, 1, 1), Zzz=Part.makeBox(2, 2, 2))
+        target = self.p("atomic.FCStd.d")
+        doc.saveAsFolder(target)
+        before = tree_text(target)
+        subprocess.check_call(["chflags", "uchg", os.path.join(target, "Zzz.Shape.brp")])
+        doc.Aaa.Shape = Part.makeBox(3, 3, 3)
+        doc.Zzz.Shape = Part.makeBox(4, 4, 4)
+        doc.Aaa.Label = "changed"
+        with self.assertRaises(Exception):
+            doc.save()
+        self.assertEqual(tree_text(target), before, "a failed save changed the folder")
+        self.assertFalse([f for f in os.listdir(self.tmp) if ".saving-" in f])
+        subprocess.check_call(["chflags", "nouchg", os.path.join(target, "Zzz.Shape.brp")])
+        App.closeDocument(doc.Name)
+        doc = App.openDocument(target)
+        self.assertAlmostEqual(doc.Aaa.Shape.Volume, 1.0)
+        self.assertAlmostEqual(doc.Zzz.Shape.Volume, 8.0)
+        self.assertNotEqual(doc.Aaa.Label, "changed")
+
+    def test_negative_zero_rewrite_only_touches_shapes(self):
+        src = self.p("inc")
+        os.makedirs(src)
+        files = {"notes..v2.txt": "hello", "data.xml": '<a v="-0.000"> -0.000 \n-0.000\n</a>\n',
+                 "pts.brp": "1 -0.000 2\n-0.000000 x\n"}
+        doc = App.newDocument("nz")
+        for i, (n, c) in enumerate(files.items()):
+            with open(os.path.join(src, n), "w") as fh:
+                fh.write(c)
+            o = doc.addObject("App::FeaturePython", "G%d" % i)
+            o.addProperty("App::PropertyFileIncluded", "Inc")
+            o.Inc = os.path.join(src, n)
+        m = doc.addObject("App::FeaturePython", "M")
+        m.addProperty("App::PropertyMap", "Map")
+        m.Map = {"k": "-0.000"}
+        m.addProperty("App::PropertyStringList", "SL")
+        m.SL = ["-0.000"]
+        m.addProperty("App::PropertyString", "S")
+        m.S = "-0.000"
+        m.addProperty("App::PropertyEnumeration", "E")
+        m.E = ["-0.000", "x"]
+        m.E = "-0.000"
+        doc.Comment = "-0.000"
+        target = self.p("nz.FCStd.d")
+        doc.saveAsFolder(target)
+        App.closeDocument(doc.Name)
+        for rep in range(2):  # MEDIUM 5: the ".." file name must survive open and save
+            doc = App.openDocument(target)
+            for i, (n, c) in enumerate(files.items()):
+                f = doc.getObject("G%d" % i).Inc
+                self.assertTrue(f and os.path.exists(f), (rep, n, f))
+                with open(f) as fh:
+                    self.assertEqual(fh.read(), c, n)
+            m = doc.M
+            self.assertEqual((m.Map, m.SL, m.S, m.E, doc.Comment),
+                             ({"k": "-0.000"}, ["-0.000"], "-0.000", "-0.000", "-0.000"))
+            doc.M.Label = "touched%d" % rep
+            doc.save()  # raised before the fix when an attachment name contained ".."
+            App.closeDocument(doc.Name)
+
+    def test_save_as_folder_forces_folder_mode(self):
+        import Part
+        doc = shape_doc("plain", Box=Part.makeBox(1, 1, 1))
+        doc.saveAsFolder(self.p("plaindir"))
+        self.assertTrue(os.path.isdir(self.p("plaindir")))
+        self.assertTrue(os.path.isfile(self.p("plaindir", "Document.xml")))
+        doc.save()  # stays a folder
+        self.assertTrue(os.path.isfile(self.p("plaindir", "Document.xml")))
+        # an existing directory is written into, never moved aside
+        os.makedirs(self.p("existing"))
+        open(self.p("existing", "keep.txt"), "w").write("k")
+        doc.saveAsFolder(self.p("existing"))
+        doc.save()
+        self.assertTrue(os.path.isfile(self.p("existing", "keep.txt")))
+        self.assertTrue(os.path.isfile(self.p("existing", "Document.xml")))
+        self.assertEqual([f for f in os.listdir(self.tmp) if "FCBak" in f or "fcbak" in f.lower()], [])
+        App.closeDocument(doc.Name)
+        doc = App.openDocument(self.p("plaindir"))
+        self.assertAlmostEqual(doc.Box.Shape.Volume, 1.0)
+
+    def test_trailing_slash_opens_the_same_document(self):
+        import Part
+        doc = shape_doc("twice", Box=Part.makeBox(1, 1, 1))
+        doc.saveAsFolder(self.p("t.FCStd.d") + "/")
+        self.assertFalse(doc.FileName.endswith("/"))
+        App.closeDocument(doc.Name)
+        d1 = App.openDocument(self.p("t.FCStd.d"))
+        d2 = App.openDocument(self.p("t.FCStd.d") + "/")
+        self.assertEqual(d1.Name, d2.Name)
+        self.assertEqual(len(App.listDocuments()), 1)
+
+    def test_failed_save_as_keeps_name(self):
+        import Part
+        doc = shape_doc("fail", Box=Part.makeBox(1, 1, 1))
+        doc.saveAs(self.p("ok.FCStd.d"))
+        label = doc.Label
+        open(self.p("isfile.FCStd.d"), "w").write("not a folder")
+        with self.assertRaises(Exception):
+            doc.saveAs(self.p("isfile.FCStd.d"))
+        self.assertEqual(doc.FileName, self.p("ok.FCStd.d"))
+        self.assertEqual(doc.Label, label)
+        self.assertEqual(open(self.p("isfile.FCStd.d")).read(), "not a folder")
+
+
 @unittest.skipUnless(os.path.isdir(MODELS), "control repo golden models not found; set CADFORK_CTL")
 class TestFolderLinks(unittest.TestCase):
     """Check 5 of the brief: a folder document with App::Link / PropertyXLink to another folder

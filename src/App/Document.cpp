@@ -2005,13 +2005,30 @@ bool Document::saveAs(const char* _file)
     }
     const std::string file = checkFileName(_file);
     const Base::FileInfo fi(file.c_str());
+    const std::string restoreName = this->FileName.getStrValue();
+    const std::string restoreLabel = this->Label.getStrValue();
     if (this->FileName.getStrValue() != file) {
         this->FileName.setValue(file);
         this->Label.setValue(fi.fileNamePure());
         this->Uid.touch();  // this forces a rename of the transient directory
     }
 
-    return save();
+    // A failed save must not leave the document renamed
+    const std::string oldFile = restoreName;
+    const std::string oldLabel = restoreLabel;
+    try {
+        if (save()) {
+            return true;
+        }
+    }
+    catch (...) {
+        this->FileName.setValue(oldFile);
+        this->Label.setValue(oldLabel);
+        throw;
+    }
+    this->FileName.setValue(oldFile);
+    this->Label.setValue(oldLabel);
+    return false;
 }
 
 bool Document::saveCopy(const char* file) const
@@ -2033,6 +2050,11 @@ bool Document::canWriteRecoverySnapshot() const
 // Save the document under the name it has been opened
 bool Document::save()
 {
+    return save(false);
+}
+
+bool Document::save(bool forceFolder)
+{
     if (testStatus(Document::PartialDoc)) {
         FC_ERR("Partial loaded document '" << Label.getValue() << "' cannot be saved");
         // TODO We don't make this a fatal error and return 'true' to make it possible to
@@ -2049,7 +2071,7 @@ bool Document::save()
 
         // Folder documents keep the date they have once set: a volatile timestamp would change
         // Document.xml on every save and defeat diffing; the revision store records the time.
-        const bool folder = isFolderPath(FileName.getValue());
+        const bool folder = forceFolder || isFolderPath(FileName.getValue());
         if (!folder || *LastModifiedDate.getValue() == '\0') {
             const std::string LastModifiedDateString = Base::Tools::currentDateTimeString();
             LastModifiedDate.setValue(LastModifiedDateString.c_str());

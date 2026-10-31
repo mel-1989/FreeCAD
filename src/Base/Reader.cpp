@@ -505,6 +505,27 @@ void Base::XMLReader::readFiles(zipios::ZipInputStream& zipstream) const
     }
 }
 
+// A plain relative path: no leading '/', backslash, or empty, "." or ".." component. A component
+// that merely contains dots ("notes..v2.txt") is fine.
+static bool isPlainRelativeName(const std::string& name)
+{
+    if (name.empty() || name.front() == '/' || name.find('\\') != std::string::npos) {
+        return false;
+    }
+    std::size_t start = 0;
+    while (true) {
+        const std::size_t end = name.find('/', start);
+        const std::string part = name.substr(start, end == std::string::npos ? end : end - start);
+        if (part.empty() || part == "." || part == "..") {
+            return false;
+        }
+        if (end == std::string::npos) {
+            return true;
+        }
+        start = end + 1;
+    }
+}
+
 void Base::XMLReader::readFilesFromDirectory(const std::string& dirName) const
 {
     // Same contract as readFiles(zipstream): entries that were registered but are not present
@@ -513,9 +534,7 @@ void Base::XMLReader::readFilesFromDirectory(const std::string& dirName) const
     for (const auto& entry : FileList) {
         seq.next();
         // Names come from the document itself; never leave the folder.
-        if (entry.FileName.empty() || entry.FileName.front() == '/'
-            || entry.FileName.find("..") != std::string::npos
-            || entry.FileName.find('\\') != std::string::npos) {
+        if (!isPlainRelativeName(entry.FileName)) {
             Base::Console().error("Skipped unsafe embedded file name: {}\n", entry.FileName);
             FailedFiles.push_back(entry.FileName);
             continue;
