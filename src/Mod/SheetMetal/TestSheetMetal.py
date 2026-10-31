@@ -14,5 +14,6 @@ from SMTests.testKfactor import TestKFactor  # noqa: F401
 from SMTests.testLicence import TestSheetMetalLicence  # noqa: F401
 from SMTests.testNewUnfolderK import TestGetKFactor, TestRootFaceIndependence  # noqa: F401
 from SMTests.testOracle import TestFlatPatternOracle  # noqa: F401
+from SMTests.testSketchedBend import TestSketchedBend  # noqa: F401
 from SMTests.testUnfoldFeature import (  # noqa: F401
     TestDefaultIsV1, TestFeaturePathEdgeFlangeAndHem, TestSheetValidation, TestUProfileThickness)

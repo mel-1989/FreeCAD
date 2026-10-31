@@ -23,6 +23,7 @@ import SheetMetalHemFeature as HF
 from SMTests import testConvertSolid as TCS
 from SMTests import testEdgeFlange as TEF
 from SMTests import testHem as THM
+from SMTests import testSketchedBend as TSB
 from SMTests.testOracle import BASE_CASES, Case, build_base, inner_root_face, unfold_target_face
 from SMTests.testUnfoldFeature import feature_unfold
 
@@ -180,6 +181,21 @@ def convert_case(name, c):
     return FlatCase(name, build, expect, "convert")
 
 
+def fold_case(name, cfg):
+    """A flat plate folded along a sketch line by the vendored Fold (slice 4a, check 2)."""
+    def build(doc):
+        fold, _plate = TSB.build_sketched_bend(doc, cfg)
+        exp = TSB.expected(cfg)
+        return fold, inner_root_face(fold.Shape), "_manual", exp["k"]
+
+    def expect(doc):
+        e = TSB.expected(cfg)
+        return dict(strip=[e["l_fixed"] + e["ba"] / 2.0], length=cfg["PL"], angles=[e["angle"]],
+                    ba=[e["ba"]], radius=e["radius"])
+
+    return FlatCase(name, build, expect, "fold")
+
+
 # --- the cases ------------------------------------------------------------------------------
 _B = {c.name: c for c in BASE_CASES}
 _TABLE_CASE = Case("t01_table_90x2_T2_R1T", 2.0, 1.0, None, [20.0, 40.0, 20.0], [90.0, 90.0])
@@ -191,6 +207,7 @@ _HEM_OPEN = next(c for c in THM.CASES if c["name"] == "h05_open_T2_g1T")
 _TRAY = next(c for c in TCS.CASES if c["name"] == "tray_T1_R1T_g.5R_in")
 _ZIG = Case("m01_zigzag_T2_R1T", 2.0, 1.0, 0.42, [20.0, 30.0, 20.0], [90.0, -90.0])
 _HAT = Case("m02_hat_T2_R1T", 2.0, 1.0, 0.42, [20.0, 30.0, 40.0, 30.0, 20.0], [90.0, -90.0, -90.0, 90.0])
+_SB = {c["name"]: c for c in TSB.CASES}
 _L = next(c for c in TCS.CASES if c["name"] == "L_T1_R.5T_in")
 _U = next(c for c in TCS.CASES if c["name"] == "U_T3_R3T_in")
 
@@ -215,6 +232,8 @@ def all_cases():
         convert_case("g15_convert_solid_tray", _TRAY),
         base_case("g16_mixed_updown_zigzag", _ZIG, group="mixed"),
         base_case("g17_mixed_updown_hat", _HAT, group="mixed"),
+        fold_case("g18_fold_45_offcentre", _SB["s02_45_T2_R1T_offc"]),
+        fold_case("g19_fold_135_invertbend", _SB["s04_135_T2_R3T_inv"]),
     ]
 
 
