@@ -23,7 +23,8 @@ from AgentCore.paths import source_root
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKER = os.path.join(HERE, "fixtures", "folder", "folder_worker.py")
-CTL = os.path.expanduser(os.environ.get("CADFORK_CTL", "~/_agents/repos/app development/cad-fork"))
+# The workshop (control repo) holds the golden corpus; harness/env.sh exports CADFORK_CTL. Without it the corpus tests skip.
+CTL = os.path.expanduser(os.environ.get("CADFORK_CTL", "")) or os.devnull
 GOLDEN = os.path.join(CTL, "fixtures", "golden")
 MODELS = os.path.join(GOLDEN, "models")
 CMD = os.path.join(App.getHomePath(), "bin", "FreeCADCmd")
