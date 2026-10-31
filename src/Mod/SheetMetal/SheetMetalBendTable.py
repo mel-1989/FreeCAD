@@ -21,6 +21,10 @@ sheet-metal chapter; the same formulas are in Wikipedia, "Bending (metalworking)
 
 so a BA table and a BD table describe the same bends and convert into each other exactly.
 
+K-factor of the shipped tables: 0.38 (R < T), 0.43 (T <= R <= 3T), 0.50 (R > 3T) for mild steel, air bending
+(Wikipedia "Bending (metalworking)", generic K-factors table, medium steel; Durma Press, "K Factor in
+Press Brake Bending"; a rule of thumb, see the CSV headers).
+
 Lookup rules:
 
 * A value at a listed (thickness, radius, angle) point is returned exactly as stored.
