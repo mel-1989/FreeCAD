@@ -175,10 +175,10 @@ bool Document::checkOnCycle()
 
 bool Document::undo(const int id)
 {
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::Throw);
     if (d->agent && AgentTurnGuard::refuseHistory(*this, "undo")) {
         return false;
     }
-    DocumentP::OpScope opScope(*d, DocOp::Transaction);
     if (id != 0) {
         const auto it = mUndoMap.find(id);
         if (it == mUndoMap.end()) {
@@ -235,10 +235,10 @@ bool Document::undo(const int id)
 
 bool Document::redo(const int id)
 {
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::Throw);
     if (d->agent && AgentTurnGuard::refuseHistory(*this, "redo")) {
         return false;
     }
-    DocumentP::OpScope opScope(*d, DocOp::Transaction);
     if (id != 0) {
         const auto it = mRedoMap.find(id);
         if (it == mRedoMap.end()) {
@@ -377,6 +377,7 @@ std::vector<std::string> Document::getAvailableRedoNames() const
 
 int Document::openTransaction(TransactionName name, int tid) // NOLINT
 {
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::Throw);
     if (tid != NullTransaction && tid == d->bookedTransaction) {
         return tid; // Early exit without warning
     }
@@ -404,7 +405,10 @@ int Document::openTransaction(std::string name, int tid)
 
 int Document::_openTransaction(std::string name, int id)
 {
-    DocumentP::OpScope opScope(*d, DocOp::Transaction);
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::Refuse);
+    if (opScope.refused()) {
+        return 0;
+    }
     if (isTransactionLocked() && id != d->bookedTransaction) {
         if (FC_LOG_INSTANCE.isEnabled(FC_LOGLEVEL_LOG)) {
             FC_WARN("Transaction locked, ignore new transaction '" << name << "'");
@@ -602,7 +606,11 @@ void Document::_checkTransaction(DocumentObject* pcDelObj, const Property* What,
 
 void Document::_clearRedos(std::list<Transaction*>* detach)
 {
-    DocumentP::OpScope opScope(*d, DocOp::Transaction);
+    // Runs from destructors (Python __del__ of dropped transactions): never throw.
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::Refuse);
+    if (opScope.refused()) {
+        return;
+    }
     if (isPerformingTransaction() || d->committing) {
         FC_ERR("Cannot clear redo while transacting");
         return;
@@ -622,6 +630,7 @@ void Document::_clearRedos(std::list<Transaction*>* detach)
 
 void Document::commitTransaction() // NOLINT
 {
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::Throw);
     if (isPerformingTransaction() || d->committing) {
         if (FC_LOG_INSTANCE.isEnabled(FC_LOGLEVEL_LOG)) {
             FC_WARN("Cannot commit transaction while transacting");
@@ -650,7 +659,10 @@ void Document::commitTransaction() // NOLINT
 
 bool Document::_commitTransaction(const bool notify)
 {
-    DocumentP::OpScope opScope(*d, DocOp::Transaction);
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::Refuse);
+    if (opScope.refused()) {
+        return false;
+    }
     if (isPerformingTransaction()) {
         if (FC_LOG_INSTANCE.isEnabled(FC_LOGLEVEL_LOG)) {
             FC_WARN("Cannot commit transaction while transacting");
@@ -700,6 +712,7 @@ bool Document::_commitTransaction(const bool notify)
 
 void Document::abortTransaction() const
 {
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::Throw);
     if (isPerformingTransaction() || d->committing) {
         if (FC_LOG_INSTANCE.isEnabled(FC_LOGLEVEL_LOG)) {
             FC_WARN("Cannot abort transaction while transacting");
@@ -724,7 +737,11 @@ void Document::abortTransaction() const
 
 void Document::_abortTransaction()
 {
-    DocumentP::OpScope opScope(*d, DocOp::Transaction);
+    // Reached from AutoTransaction destructors: never throw.
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::Refuse);
+    if (opScope.refused()) {
+        return;
+    }
     if (isPerformingTransaction() || d->committing) {
         if (FC_LOG_INSTANCE.isEnabled(FC_LOGLEVEL_LOG)) {
             FC_WARN("Cannot abort transaction while transacting");
@@ -846,6 +863,11 @@ void Document::clearDocument() // NOLINT
 
 void Document::clearUndos()
 {
+    // The destructor's own call (on the closing thread) must run; it may not throw.
+    DocumentP::OpScope opScope(*d, DocOp::Transaction, DocumentP::OnClosing::CloserMay);
+    if (opScope.refused()) {
+        return;
+    }
     if (d->agent && AgentTurnGuard::refuseHistory(*this, "clearUndos")) {
         return;
     }
@@ -853,7 +875,6 @@ void Document::clearUndos()
         FC_ERR("Cannot clear undos while transacting");
         return;
     }
-    DocumentP::OpScope opScope(*d, DocOp::Transaction);
 
     if (d->activeUndoTransaction) {
         _commitTransaction(true);
@@ -1016,7 +1037,12 @@ void Document::onChanged(const Property* prop)
 void Document::onBeforeChangeProperty(const TransactionalObject* Who, const Property* What)
 {
     // A thread parked on the turn lock below has the document half-entered: no close meanwhile.
-    DocumentP::OpScope opScope(*d, DocOp::PropertyHook);
+    // Object destructors on the closing thread set properties: that thread is let through, any
+    // other thread skips the hook (no throw: this is reached from arbitrary C++ code).
+    DocumentP::OpScope opScope(*d, DocOp::PropertyHook, DocumentP::OnClosing::CloserMay);
+    if (opScope.refused()) {
+        return;
+    }
     if (d->agent) {
         // Refuse before anything is touched or signalled: when another thread has the turn busy
         // and this one holds the GIL, the lock throws, and the property is still untouched.
@@ -2634,22 +2660,10 @@ bool Document::isClosable() const
 
 std::string Document::closeRefusal() const
 {
-    const auto active = [this](DocOp op) {
-        return d->activeOps[static_cast<std::size_t>(op)].load() > 0;
-    };
-    if (active(DocOp::Transaction)) {
-        return "a transaction (open, commit, abort, undo or redo) is in progress on it";
+    if (d->closing.load()) {
+        return "it is already being closed (a re-entrant close, for instance from an observer)";
     }
-    if (active(DocOp::Recompute)) {
-        return "a recompute is in progress on it";
-    }
-    if (active(DocOp::TurnBusy)) {
-        return "an agent turn is busy on it";
-    }
-    if (active(DocOp::PropertyHook)) {
-        return "a thread is changing a property of it (parked on the agent turn)";
-    }
-    return {};
+    return d->activeOpReason();
 }
 
 int Document::countObjects() const
@@ -3063,7 +3077,7 @@ int Document::recompute(const std::vector<DocumentObject*>& objs,
     // signalBeforeRecompute() temporarily release it when they need to run
     // Python on the GUI thread to avoid deadlocks.
     Base::PyGILStateLocker locker;
-    DocumentP::OpScope opScope(*d, DocOp::Recompute);
+    DocumentP::OpScope opScope(*d, DocOp::Recompute, DocumentP::OnClosing::Throw);
 
     if (d->undoing || d->rollback) {
         if (FC_LOG_INSTANCE.isEnabled(FC_LOGLEVEL_LOG)) {

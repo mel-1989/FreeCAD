@@ -630,3 +630,90 @@ TEST_F(AgentTurnGuardTest, CloseIsRefusedWhileATransactionOperationIsMidWay)
     App::AgentTurnGuard::end(*_doc, false);
     EXPECT_TRUE(_doc->closeRefusal().empty()) << "the guard must be released after the operation";
 }
+
+// Run 023: the close publishes its intent (the closing flag) before it reads the operation
+// counters, and operations count before they read the flag. From inside signalDeleteDocument the
+// flag is set; the observer throws at the end so the document survives and can be inspected.
+TEST_F(AgentTurnGuardTest, ClosingDocumentRefusesNewOperationsAndARefusedCloseLeavesItUsable)
+{
+    bool openThrew = false;
+    bool commitThrew = false;
+    bool abortThrew = false;
+    bool recomputeThrew = false;
+    bool undoThrew = false;
+    bool turnThrew = false;
+    bool otherThreadThrew = false;
+    bool nestedClose = true;
+    std::string whyInside;
+
+    auto conn = App::GetApplication().signalDeleteDocument.connect([&](const App::Document&) {
+        whyInside = _doc->closeRefusal();
+        const auto thrown = [](auto&& op) {
+            try {
+                op();
+            }
+            catch (const Base::RuntimeError&) {
+                return true;
+            }
+            return false;
+        };
+        openThrew = thrown([&] { _doc->openTransaction("x"); });
+        commitThrew = thrown([&] { _doc->commitTransaction(); });
+        abortThrew = thrown([&] { _doc->abortTransaction(); });
+        recomputeThrew = thrown([&] { _doc->recompute(); });
+        undoThrew = thrown([&] { _doc->undo(); });
+        turnThrew = thrown([&] { App::AgentTurnGuard::begin(*_doc, "t"); });
+        std::thread other([&] {
+            otherThreadThrew = thrown([&] { _doc->openTransaction("y"); });
+        });
+        other.join();
+        // A re-entrant close (an observer closing the document it is told about).
+        nestedClose = App::GetApplication().closeDocument(_docName.c_str());
+        throw Base::RuntimeError("observer vetoes the close");
+    });
+    EXPECT_THROW(App::GetApplication().closeDocument(_docName.c_str()), Base::RuntimeError);
+    conn.disconnect();
+
+    EXPECT_NE(whyInside.find("already being closed"), std::string::npos) << whyInside;
+    EXPECT_TRUE(openThrew);
+    EXPECT_TRUE(commitThrew);
+    EXPECT_TRUE(abortThrew);
+    EXPECT_TRUE(recomputeThrew);
+    EXPECT_TRUE(undoThrew);
+    EXPECT_TRUE(turnThrew);
+    EXPECT_TRUE(otherThreadThrew);
+    EXPECT_FALSE(nestedClose);
+
+    // The failed close lifted the flag: the document is fully usable and closes later.
+    ASSERT_NE(App::GetApplication().getDocument(_docName.c_str()), nullptr);
+    EXPECT_TRUE(_doc->closeRefusal().empty());
+    EXPECT_GT(_doc->openTransaction("after"), 0);
+    _a->Integer.setValue(7);
+    _doc->commitTransaction();
+    _doc->recompute();
+    EXPECT_EQ(_a->Integer.getValue(), 7);
+    EXPECT_NO_THROW(App::AgentTurnGuard::begin(*_doc, "turn"));
+    App::AgentTurnGuard::end(*_doc, false);
+    EXPECT_TRUE(App::GetApplication().closeDocument(_docName.c_str()));
+    EXPECT_EQ(App::GetApplication().getDocument(_docName.c_str()), nullptr);
+}
+
+TEST_F(AgentTurnGuardTest, RefusedCloseLeavesTheDocumentUsable)
+{
+    bool closedInside = true;
+    auto conn = _doc->signalAbortTransaction.connect([&](const App::Document&) {
+        closedInside = App::GetApplication().closeDocument(_docName.c_str());
+    });
+    _doc->openTransaction("plain");
+    _a->Integer.setValue(1);
+    _doc->abortTransaction();
+    conn.disconnect();
+    EXPECT_FALSE(closedInside);
+
+    // The refusal must not have left the closing flag set.
+    EXPECT_TRUE(_doc->closeRefusal().empty());
+    EXPECT_GT(_doc->openTransaction("again"), 0);
+    _doc->commitTransaction();
+    _doc->recompute();
+    EXPECT_TRUE(App::GetApplication().closeDocument(_docName.c_str()));
+}

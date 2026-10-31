@@ -240,7 +240,14 @@ PyObject* ApplicationPy::sCloseDocument(PyObject* /*self*/, PyObject* args)
         }
 
         if (!GetApplication().closeDocument(pstr)) {
-            PyErr_Format(PyExc_RuntimeError, "Closing the document '%s' failed", pstr);
+            // closeDocument refuses on its own too: an operation can start between the check
+            // above and the close, and the close sets the closing flag first.
+            const std::string why = GetApplication().closeRefusal(pstr);
+            PyErr_Format(PyExc_RuntimeError,
+                         "Closing the document '%s' failed%s%s",
+                         pstr,
+                         why.empty() ? "" : ": ",
+                         why.c_str());
             return nullptr;
         }
 
@@ -269,8 +276,14 @@ PyObject* ApplicationPy::sCloseDocument(PyObject* /*self*/, PyObject* args)
             return nullptr;
         }
 
+        const std::string docName = doc->getName();
         if (!GetApplication().closeDocument(doc)) {
-            PyErr_Format(PyExc_RuntimeError, "Closing the document '%s' failed", doc->getName());
+            const std::string why = GetApplication().closeRefusal(docName.c_str());
+            PyErr_Format(PyExc_RuntimeError,
+                         "Closing the document '%s' failed%s%s",
+                         docName.c_str(),
+                         why.empty() ? "" : ": ",
+                         why.c_str());
             return nullptr;
         }
 
