@@ -25,12 +25,12 @@ The repository carries a `pre-receive` hook (`hook/pre-receive`, installed by `i
 
 - Only `refs/heads/main` can be pushed, never deleted, never rewritten. Lock refs do not exist in this mode.
 - The pusher must be a writer or admin (Forgejo itself already refuses a read-only collaborator).
-- Each pushed commit names a document and an event in its `PDM-` trailers; the hook also reports which top-level folders the commit really changes. `checkin` and `relink` may change only their own document's folder and need the pusher to hold its lock; `move` needs the lock on the old name and may touch only the two folders; `transition` must change no files, needs the document unlocked and must be a step of the lifecycle table (`Vault.TRANSITIONS`, read from the previous state in the service's clone); `add` may add only its own folder; all but `transition` must leave the document WIP and unreleased; `init` is for an admin on an empty repository.
+- Each pushed commit is read with git (trailers, parents, author, the changes against its first parent, the tree's top-level names) and checked against what it really does. Merge and root commits are refused (the vault history is linear; only an admin's empty `init` commit may be a root), as are symlinks and submodule entries, and a commit whose author or committer is not the authenticated pusher.
+- `checkin` and `relink` need an existing document, the pusher's lock, may change only that document's folder, must leave it WIP and unreleased, and must carry the label `Vault`'s own rule gives next (`next_label`). `add` needs a name that does not exist (case-insensitively) and is not locked by someone else, and starts at A.1. `move` needs the lock on the old name, a destination that does not exist and is not locked, the source removed and the destination created in the same commit, and the source's revision, state and release flag. `transition` must change no files, needs the document unlocked, must be a step of `Vault.TRANSITIONS` and must carry the unchanged revision and the release flag the rule gives. `init` is for an admin on an empty repository.
 - The hook fails closed: if the service cannot be reached the push is refused, so a service outage can never let an unlocked change in. The tests also check at start-up that the hook is really running.
 
 ### Known gaps
 
-- Revision labels are not checked on push: a writer who holds a document's lock can publish a check-in with a wrong `PDM-Revision` trailer (the library never does).
 - The hook verifies trailers and changed paths, not the content of the document folder: a lock holder can publish any bytes for the document they hold (as they can in any vault).
 - Lock expiry and stale-lock policy do not exist; an admin breaks a lock by hand.
 - Access is per repository (three roles), not per document or per project; ECO approval is not part of this slice.

@@ -42,7 +42,7 @@ LOCK_NS = "refs/locks/"
 LOCK_MIRROR = "refs/pdm-locks/"
 DOC_SUFFIX = ".FCStd.d"
 FAULT_ENV = "PDM_TEST_FAULT"  # read only here; values: "before_push", "after_commit"
-_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")  # no leading "-": never an option to git
+_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,63}")  # no leading "-": never an option to git
 _TRAILER = "PDM-"
 CONTENT_EVENTS = ("add", "checkin", "move", "relink")  # commits whose tree is a full revision of the document
 _XLINK_RE = re.compile(r'(<XLink\s+file=")([^"]*)(")')
@@ -94,6 +94,15 @@ def revision_label(letter_index, number):
             return f"{letters}.{number}"
 
 
+def next_label(rec):
+    """Label of the revision that follows record ``rec`` (``revision`` and ``released``): the next number, or
+    ``<next letter>.1`` once the document has been released. One rule for check-in, relink and the server."""
+    letter, number = parse_label(rec["revision"])
+    if rec["released"]:
+        return revision_label(letter + 1, 1)
+    return revision_label(letter, number + 1)
+
+
 def parse_label(label):
     m = re.fullmatch(r"([A-Z]+)\.(\d+)", label or "")
     if not m:
@@ -109,7 +118,7 @@ def _is_url(text):
 
 
 def _check_name(name):
-    if not isinstance(name, str) or not _NAME_RE.match(name):
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
         raise DocumentError(f"document name {name!r} must match {_NAME_RE.pattern}")
     return name
 
@@ -650,12 +659,7 @@ class Vault:
                 raise StaleRevisionError(
                     f"{name}: working copy is based on {self._base_label(name, recs)}, the vault head for it is "
                     f"{latest['revision']} {latest['state']} (commit {latest['sha'][:10]})")
-            letter, number = parse_label(latest["revision"])
-            if latest["released"]:
-                letter, number = letter + 1, 1  # the next change after a release starts the next letter
-            else:
-                number += 1
-            label = revision_label(letter, number)
+            label = next_label(latest)  # the next change after a release starts the next letter
             _tree, sha = self._commit(self._head(), name, message, label, "WIP", "checkin", False, dest)
             _fault("after_commit")
             if self._push_main(sha):
@@ -905,9 +909,7 @@ class Vault:
                     edit=lambda env: self._edit_rename(env, head, old, new), extra=[("Moved-From", old)])
                 for n in refs:
                     rec = self._records(n)[0]
-                    letter, number = parse_label(rec["revision"])
-                    letter, number = (letter + 1, 1) if rec["released"] else (letter, number + 1)
-                    label = revision_label(letter, number)
+                    label = next_label(rec)
                     _tree, parent = self._commit(
                         parent, n, f"Relink {n}: {old} -> {new}", label, "WIP", "relink", False, None,
                         edit=lambda env, n=n: self._edit_relink(env, head, n, old, new),

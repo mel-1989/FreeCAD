@@ -39,6 +39,10 @@ The named multi-user scenarios (acceptance check 3):
 29. lifecycle_across_users                         release by one user, new revision by another
 30. transition_refused_while_other_user_holds_lock
 31. non_holder_cannot_release_lock                 library and raw HTTP
+33-44. forged commits (TestForgedCommits): add over an existing document (unlocked, locked by another), move onto
+    an existing document (locked, unlocked), move that keeps its source, merge commit, root commit, commit signed
+    as another user, wrong revision label, wrong transition trailers, symlink, trailing-newline name and oversized
+    lock fields
 32. gui_connect_against_server                     the slice 5 panels' connection layer (PDMGui.state) on a server URL,
                                                    with another user's lock held by a separate process
 """
@@ -561,6 +565,132 @@ class TestAccess(ServerCase):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = val
+
+
+# ---- forged commits: the verifier's lock bypasses (run 024 repair round) -------------------------
+
+def tr(doc, event, rev="A.2", state="WIP", released=0, **extra):
+    d = {"Document": doc, "Revision": rev, "State": state, "Event": event, "Released": released}
+    d.update(extra)
+    return d
+
+
+class TestForgedCommits(ServerCase):
+    def setUp(self):
+        super().setUp()
+        self.a, self.b, self.c = self.doc + "a", self.doc + "b", self.doc + "c"
+
+    def seed3(self):
+        """alice owns documents a (locked by alice) and b (unlocked); bob has c (locked by bob)."""
+        self.seed(self.a)
+        self.seed(self.b)
+        self.seed(self.c, user="bob")
+        self.client("alice", [call("checkout", self.a)])
+        self.client("bob", [call("checkout", self.c)])
+
+    def forge(self, user, **op):
+        r = self.client(user, [dict(op, op="forge")], fresh=not os.path.isdir(self.wc(user)))
+        return r[0]
+
+    def refused(self, r, text):
+        self.assertEqual(r.get("error"), "PermissionDenied", r)
+        self.assertIn(text, r["message"])
+
+    def intact(self, doc):
+        """The document still has its original single revision (history was not reset or overwritten)."""
+        self.assertEqual([h["revision"] for h in self.client("carol", [call("history", doc)], fresh=True,
+                                                             tag="-chk")[0]["value"]][-1], "A.1")
+        shutil.rmtree(self.wc("carol", "-chk"), ignore_errors=True)
+
+    def test_33_forged_add_over_existing_unlocked_document_refused(self):
+        self.seed3()
+        r = self.forge("bob", trailers=tr(self.b, "add", "A.1"), files={self.b + V.DOC_SUFFIX + "/Document.xml": "pwn\n"})
+        self.refused(r, "already exists")
+        self.assertEqual(self.head(self.b), ("A.1", "WIP"))
+
+    def test_34_forged_add_over_document_locked_by_other_refused(self):
+        self.seed3()
+        r = self.forge("bob", trailers=tr(self.a, "add", "A.1"), files={self.a + V.DOC_SUFFIX + "/Document.xml": "pwn\n"})
+        self.refused(r, "already exists")
+        self.assertEqual(self.lock_of(self.a)["holder"], "alice")
+        self.assertEqual(self.head(self.a), ("A.1", "WIP"))
+
+    def test_35_forged_move_onto_document_locked_by_other_refused(self):
+        self.seed3()
+        d = V.DOC_SUFFIX
+        r = self.forge("bob", trailers=tr(self.a, "move", "A.1", **{"Moved-From": self.c}),
+                       files={self.a + d + "/Document.xml": "pwn\n"}, delete=[self.c + d])
+        self.refused(r, "would be overwritten")
+        self.assertEqual(self.head(self.a), ("A.1", "WIP"))
+
+    def test_36_forged_move_onto_unlocked_document_refused(self):
+        self.seed3()
+        d = V.DOC_SUFFIX
+        r = self.forge("bob", trailers=tr(self.b, "move", "A.1", **{"Moved-From": self.c}),
+                       files={self.b + d + "/Document.xml": "pwn\n"}, delete=[self.c + d])
+        self.refused(r, "would be overwritten")
+        self.assertEqual(self.head(self.b), ("A.1", "WIP"))
+
+    def test_37_forged_move_keeping_the_source_refused(self):
+        self.seed3()
+        d = V.DOC_SUFFIX
+        r = self.forge("bob", trailers=tr(self.doc + "new", "move", "A.1", **{"Moved-From": self.c}),
+                       files={self.doc + "new" + d + "/Document.xml": "copy\n"})
+        self.refused(r, "must remove")
+
+    def test_38_merge_commit_rewriting_unlocked_document_refused(self):
+        self.seed3()
+        r = self.forge("bob", trailers=tr(self.c, "checkin", "A.2"), parents=["head", "ancestor"],
+                       files={self.b + V.DOC_SUFFIX + "/Document.xml": "pwn-merge\n"})
+        self.refused(r, "merge")
+        self.assertEqual(self.head(self.b), ("A.1", "WIP"))
+
+    def test_39_root_commit_refused(self):
+        self.seed3()
+        r = self.forge("bob", trailers=tr(self.c, "checkin", "A.2"), parents=[],
+                       files={self.c + V.DOC_SUFFIX + "/Document.xml": "x\n"})
+        self.assertFalse(r.get("pushed"), r)  # unrelated history is refused (non-fast-forward, before the root-commit rule)
+        self.assertEqual(self.head(self.c), ("A.1", "WIP"))
+
+    def test_40_commit_signed_as_another_user_refused(self):
+        self.seed3()
+        r = self.forge("bob", trailers=tr(self.c, "checkin", "A.2"), author="alice",
+                       files={self.c + V.DOC_SUFFIX + "/Document.xml": "x\n"})
+        self.refused(r, "not by the authenticated pusher")
+
+    def test_41_checkin_with_wrong_revision_label_refused(self):
+        self.seed3()
+        r = self.forge("bob", trailers=tr(self.c, "checkin", "Z.9"), files={self.c + V.DOC_SUFFIX + "/Document.xml": "x\n"})
+        self.refused(r, "is not the one after")
+        # and the honest label is accepted by the same path
+        r = self.forge("bob", trailers=tr(self.c, "checkin", "A.2"), files={self.c + V.DOC_SUFFIX + "/Document.xml": "x\n"})
+        self.assertTrue(r.get("pushed"), r)
+
+    def test_42_transition_with_wrong_trailers_refused(self):
+        self.seed3()
+        r = self.forge("alice", trailers=tr(self.b, "transition", "A.1", "InReview", released=1))
+        self.refused(r, "do not match the lifecycle rule")
+        r = self.forge("alice", trailers=tr(self.b, "transition", "B.1", "InReview", released=0))
+        self.refused(r, "do not match the lifecycle rule")
+        self.assertEqual(self.head(self.b), ("A.1", "WIP"))
+
+    def test_43_symlink_in_commit_refused(self):
+        self.seed3()
+        r = self.forge("bob", trailers=tr(self.c, "checkin", "A.2"),
+                       files={self.c + V.DOC_SUFFIX + "/Document.xml": "x\n"},
+                       symlink={self.c + V.DOC_SUFFIX + "/link": "/etc/passwd"})
+        self.refused(r, "symlink")
+
+    def test_44_name_with_trailing_newline_and_oversized_lock_fields_refused(self):
+        self.seed3()
+        self.assertEqual(self.api("POST", "/locks/zz%0A", "bob", body={})[0], 400)
+        with self.assertRaises(V.DocumentError):
+            V._check_name("a\n")
+        st, body = self.api("POST", f"/locks/{self.b}", "bob", body={"host": "h" * 100000})
+        self.assertEqual(st, 400, body)
+        st, _ = self.api("POST", f"/locks/{self.b}", "bob", body={"client": {"x": 1}})
+        self.assertEqual(st, 400)
+        self.assertIsNone(self.lock_of(self.b))
 
 
 if __name__ == "__main__":

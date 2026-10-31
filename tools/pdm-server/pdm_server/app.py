@@ -103,6 +103,11 @@ async def acquire(name: str, request: Request, user: User = Depends(auth)):
     _doc(name)
     body = await request.json()
     payload = {k: body.get(k) for k in ("host", "workdir", "client", "new_revision", "nonce")}
+    for k in ("host", "workdir", "client", "nonce"):
+        if payload[k] is not None and (not isinstance(payload[k], str) or len(payload[k]) > 512):
+            raise HTTPException(400, f"lock field {k} must be a string of at most 512 characters")
+    if not isinstance(payload["new_revision"], (bool, type(None))):
+        raise HTTPException(400, "lock field new_revision must be a boolean")
     payload["document"] = name
     payload["time"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
     ok, info = S()["db"].acquire(name, uuid.uuid4().hex, user.login, payload)

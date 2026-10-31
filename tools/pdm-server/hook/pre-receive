@@ -25,7 +25,9 @@ def git(*args):
 
 
 def commit_info(sha):
-    body = git("log", "-1", "--format=%B", sha).stdout
+    out = git("log", "-1", "-z", "--format=%P%n%an%n%cn%n%B", sha).stdout.rstrip("\0")
+    parents_s, author, committer, body = (out.split("\n", 3) + ["", "", "", ""])[:4]
+    parents = parents_s.split()
     lines = body.rstrip("\n").split("\n")
     i = len(lines)
     while i > 0 and lines[i - 1].strip() != "":
@@ -35,10 +37,20 @@ def commit_info(sha):
         if ln.startswith("PDM-"):
             k, _, v = ln[4:].partition(": ")
             meta[k] = v
-    # Top-level paths this commit changes against its first parent (all of them for a root commit).
-    ch = git("diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", "--first-parent", sha).stdout
-    changed = sorted({p.split("/", 1)[0] for p in ch.split("\0") if p})
-    return {"sha": sha, "meta": meta, "changed": changed}
+    # What this commit changes against its FIRST parent, stated explicitly (a merge shows nothing in a plain
+    # diff-tree, which once let a two-parent commit rewrite any document); merges are refused by the server anyway.
+    base = [parents[0]] if parents else ["--root"]
+    raw = git("diff-tree", "-r", "-z", "--raw", "--no-renames", "--no-commit-id", *base, sha).stdout.split("\0")
+    changes = []  # [status, path, new mode]
+    k = 0
+    while k + 1 < len(raw):
+        head = raw[k].lstrip(":").split()
+        if len(head) >= 5:
+            changes.append([head[4][0], raw[k + 1], head[1]])
+        k += 2
+    top = [p for p in git("ls-tree", "--name-only", "-z", sha).stdout.split("\0") if p]
+    return {"sha": sha, "meta": meta, "parents": parents, "author": author, "committer": committer,
+            "changes": changes, "top": top}
 
 
 def main():

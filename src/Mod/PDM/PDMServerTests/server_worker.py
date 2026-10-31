@@ -65,6 +65,40 @@ def run(op):
             return {"ok": True, "pushed": v._push_main(sha)}
         except V.PDMError as e:
             return cw.err(e)
+    if kind == "forge":
+        # Hand-built vault commit with arbitrary trailers, parents, author, files, deletions and symlinks.
+        v._fetch()
+        head = v._head()
+        parents = [head if p == "head" else v._git(["rev-parse", f"{head}~1"]).stdout.decode().strip()
+                   for p in op.get("parents", ["head"])]
+        idx = os.path.join(v.workdir, ".git", "pdm-forge-index")
+        env = {"GIT_INDEX_FILE": idx}
+        try:
+            if parents:
+                v._git(["read-tree", head], env=env)
+            for path in op.get("delete", []):
+                v._git(["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", path], env=env)
+            for path, text in op.get("files", {}).items():
+                sha = v._git(["hash-object", "-w", "--stdin"], input=text.encode()).stdout.decode().strip()
+                v._git(["update-index", "--add", "--cacheinfo", f"100644,{sha},{path}"], env=env)
+            for path, target in op.get("symlink", {}).items():
+                sha = v._git(["hash-object", "-w", "--stdin"], input=target.encode()).stdout.decode().strip()
+                v._git(["update-index", "--add", "--cacheinfo", f"120000,{sha},{path}"], env=env)
+            tree = v._git(["write-tree"], env=env).stdout.decode().strip()
+        finally:
+            if os.path.exists(idx):
+                os.remove(idx)
+        tr = op["trailers"]
+        msg = "forged\n\n" + "".join(f"PDM-{k}: {val}\n" for k, val in tr.items())
+        cenv = {}
+        if op.get("author"):
+            cenv = {"GIT_AUTHOR_NAME": op["author"], "GIT_COMMITTER_NAME": op["author"]}
+        args = ["commit-tree", tree] + sum((["-p", p] for p in parents), []) + ["-m", msg]
+        sha = v._git(args, env=cenv).stdout.decode().strip()
+        try:
+            return {"ok": True, "pushed": v._push_main(sha)}
+        except V.PDMError as e:
+            return cw.err(e)
     if kind == "outage_checkin":
         # Pause just before the push so the test can take the service down, then go on.
         orig = v._push_main
