@@ -74,8 +74,12 @@ FreeCAD side (checked, no C++ change): for folder documents `PropertyXLink` beha
 
 ## Not in this slice
 
-No server, users or access control, no BOM, no GUI (slice 5). Where-used reads the head only (no history of links), and absolute-path links are not handled. A lock is not time-limited.
+No BOM. Users, roles and a shared server are slice 4 (see below); the GUI is slice 5. Where-used reads the head only (no history of links), and absolute-path links are not handled. A lock is not time-limited.
 
 ## Tests
 
 `FreeCADCmd -t TestPDM` or `python3 -I harness/run_tests.py --suites TestPDM --skip-ctest`. Each client is a separate `FreeCADCmd` process running `PDMTests/client_worker.py`.
+
+## Server backend (slice 4)
+
+`PDM/remote.py` holds `RemoteVault`, a `Vault` whose git remote is a Forgejo repository and whose locks, roles, audit log and where-used index live in the PDM server (`tools/pdm-server/`, which has the design, configuration and the push-enforcement description). `Vault.clone(<http(s) URL of the server>, workdir, user)` and `Vault.open` pick it automatically (URL given, `PDM_SERVER_URL` set, or a working copy cloned from a server); with none of those the local vault is used exactly as before. Credentials: `PDM_TOKEN`. Tests: `FreeCADCmd -t TestPDMServer` (skips when PostgreSQL, Forgejo or the service venv is missing).

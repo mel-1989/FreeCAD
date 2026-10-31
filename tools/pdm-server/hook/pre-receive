@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+"""Pre-receive hook of the vault repository on Forgejo: asks the PDM server whether a push may land.
+
+Installed by ``install_hook.py`` as ``<repo>.git/hooks/pre-receive.d/pdm`` (Forgejo runs everything in that
+directory); ``<repo>.git/pdm-hook.json`` holds the server URL and the shared secret. Standard library only. Fails
+closed: if the server cannot be reached the push is refused, so a service outage can never let an unlocked
+change into the vault.
+"""
+
+import base64
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+ZERO = "0" * 40
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def git(*args):
+    return subprocess.run(["git"] + list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                          errors="replace")
+
+
+def blob(rev, path):
+    p = subprocess.run(["git", "cat-file", "blob", f"{rev}:{path}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return p.stdout if p.returncode == 0 else None
+
+
+def commit_info(sha):
+    out = git("log", "-1", "-z", "--format=%P%n%an%n%cn%n%ae%n%ce%n%B", sha).stdout.rstrip("\0")
+    parents_s, author, committer, aemail, cemail, body = (out.split("\n", 5) + ["", "", "", "", "", ""])[:6]
+    parents = parents_s.split()
+    lines = body.rstrip("\n").split("\n")
+    i = len(lines)
+    while i > 0 and lines[i - 1].strip() != "":
+        i -= 1
+    meta = {}
+    for ln in lines[i:]:
+        if ln.startswith("PDM-"):
+            k, _, v = ln[4:].partition(": ")
+            meta[k] = v
+    # What this commit changes against its FIRST parent, stated explicitly (a merge shows nothing in a plain
+    # diff-tree, which once let a two-parent commit rewrite any document); merges are refused by the server anyway.
+    base = [parents[0]] if parents else ["--root"]
+    raw = git("diff-tree", "-r", "-z", "--raw", "--no-renames", "--no-commit-id", *base, sha).stdout.split("\0")
+    changes = []  # [status, path, new mode]
+    k = 0
+    while k + 1 < len(raw):
+        head = raw[k].lstrip(":").split()
+        if len(head) >= 5:
+            changes.append([head[4][0], raw[k + 1], head[1], head[2], head[3]])
+        k += 2
+    top = [p for p in git("ls-tree", "--name-only", "-z", sha).stdout.split("\0") if p]
+    # Facts the server cannot get from the trailers. For a move: is the new folder the old one, file for file,
+    # apart from Document.xml? For a move or a relink the two Document.xml versions go to the server, which
+    # checks the difference against the library's own link rewrite (byte for byte); this hook decides nothing.
+    sfx = ".FCStd.d"
+    move_equal, xml_pair = None, None
+    ev, src, dst = meta.get("Event"), meta.get("Moved-From"), meta.get("Document")
+    if ev == "move" and parents and src and dst:
+        def tree(rev, folder):
+            r = git("ls-tree", "-r", "-z", rev, "--", folder + sfx).stdout.split("\0")
+            return {e.partition("\t")[2][len(folder + sfx) + 1:]: e.split()[2] for e in r if e}
+        a, b = tree(parents[0], src), tree(sha, dst)
+        move_equal = bool(a) and set(a) == set(b) and all(a[k] == b[k] for k in a if k != "Document.xml")
+        old, new = blob(parents[0], f"{src}{sfx}/Document.xml"), blob(sha, f"{dst}{sfx}/Document.xml")
+    elif ev == "relink" and parents and dst:
+        old, new = blob(parents[0], f"{dst}{sfx}/Document.xml"), blob(sha, f"{dst}{sfx}/Document.xml")
+    else:
+        old = new = None
+    if old is not None and new is not None:
+        xml_pair = [base64.b64encode(old).decode(), base64.b64encode(new).decode()]
+    return {"sha": sha, "meta": meta, "parents": parents, "author": author, "committer": committer,
+            "author_email": aemail, "committer_email": cemail, "changes": changes, "top": top,
+            "move_equal": move_equal, "xml_pair": xml_pair}
+
+
+def main():
+    with open(os.path.join(HERE, "..", "..", "pdm-hook.json")) as f:  # <repo>.git/pdm-hook.json
+        cfg = json.load(f)
+    pusher = (os.environ.get("GITEA_PUSHER_NAME") or os.environ.get("FORGEJO_PUSHER_NAME")
+              or os.environ.get("GITEA_PUSHER_USERNAME") or "")
+    updates = []
+    for line in sys.stdin.read().splitlines():
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        old, new, ref = parts
+        commits, ff = [], True
+        if new != ZERO:
+            if old != ZERO:
+                ff = git("merge-base", "--is-ancestor", old, new).returncode == 0
+            rng = new if old == ZERO else f"{old}..{new}"
+            shas = (git("rev-list", "--reverse", new, "--not", "--all") if old == ZERO
+                    else git("rev-list", "--reverse", rng)).stdout.split()
+            commits = [commit_info(s) for s in shas]
+        updates.append({"ref": ref, "old": old, "new": new, "fast_forward": ff, "commits": commits})
+    req = urllib.request.Request(cfg["url"].rstrip("/") + "/internal/pre-receive", method="POST",
+                                 data=json.dumps({"pusher": pusher, "updates": updates}).encode(),
+                                 headers={"Content-Type": "application/json", "X-PDM-Hook-Secret": cfg["secret"]})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            answer = json.loads(r.read())
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        sys.stderr.write(f"PDM: push refused, the PDM server could not be asked ({e}); nothing was changed\n")
+        return 1
+    if not answer.get("allow"):
+        sys.stderr.write(f"PDM: push refused: {answer.get('reason')}\n")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

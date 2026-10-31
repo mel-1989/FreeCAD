@@ -38,10 +38,14 @@ def connect(vault_path, workdir, user, save=True):
     """Use ``workdir`` as this user's working copy of the vault at ``vault_path`` (cloned when ``workdir`` is
     missing or empty). Raises a PDM error on a bad path or user."""
     global _vault
-    vault_path, workdir = os.path.abspath(vault_path), os.path.abspath(workdir)
+    remote = V._is_url(vault_path)  # a PDM server (slice 4): credentials come from PDM_TOKEN in the environment
+    workdir = os.path.abspath(workdir)
+    vault_path = vault_path.rstrip("/") if remote else os.path.abspath(vault_path)
     if os.path.isdir(os.path.join(workdir, ".git")):
         v = V.Vault.open(workdir, user)
-        if os.path.realpath(v.vault_path) != os.path.realpath(vault_path):
+        same = (getattr(v, "server_url", "").rstrip("/") == vault_path if remote
+                else os.path.realpath(v.vault_path) == os.path.realpath(vault_path))
+        if not same:
             raise V.PDMError(f"{workdir} is a working copy of {v.vault_path}, not of {vault_path}")
     else:
         if os.path.exists(workdir) and os.listdir(workdir):

@@ -120,7 +120,7 @@ class ConnectPanel(Panel):
         self.wc_edit.setObjectName("workdir")
         self.user_edit = QtWidgets.QLineEdit(s["user"])
         self.user_edit.setObjectName("user")
-        form.addRow("Vault (bare repository)", self.vault_edit)
+        form.addRow("Vault (bare repository or PDM server URL)", self.vault_edit)
         form.addRow("Working copy folder", self.wc_edit)
         form.addRow("User name", self.user_edit)
         self.layout_.addLayout(form)

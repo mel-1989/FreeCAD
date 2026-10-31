@@ -3,4 +3,4 @@
 
 import FreeCAD
 
-FreeCAD.__unit_test__ += ["TestPDM"]
+FreeCAD.__unit_test__ += ["TestPDM", "TestPDMServer"]
