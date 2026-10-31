@@ -171,7 +171,16 @@ bool StdOrthographicCamera::isActive()
         return false;
     }
 
-    const std::string& camera = view->getCamera();
+    // isActive() runs from MainWindow::_updateActions() on a timer, also while a view is being
+    // torn down or rebuilt (leaving sketch edit mode) and has no camera for a moment; getCamera()
+    // throws then, and an exception out of a timer slot terminates the process.
+    std::string camera;
+    try {
+        camera = view->getCamera();
+    }
+    catch (const Base::RuntimeError&) {
+        return false;
+    }
     const bool mode = camera.find("OrthographicCamera") != std::string_view::npos;
     _pcAction->setChecked(mode);
 
@@ -218,7 +227,16 @@ bool StdPerspectiveCamera::isActive()
         return false;
     }
 
-    const std::string& camera = view->getCamera();
+    // isActive() runs from MainWindow::_updateActions() on a timer, also while a view is being
+    // torn down or rebuilt (leaving sketch edit mode) and has no camera for a moment; getCamera()
+    // throws then, and an exception out of a timer slot terminates the process.
+    std::string camera;
+    try {
+        camera = view->getCamera();
+    }
+    catch (const Base::RuntimeError&) {
+        return false;
+    }
     const bool mode = camera.find("PerspectiveCamera") != std::string_view::npos;
     _pcAction->setChecked(mode);
 
