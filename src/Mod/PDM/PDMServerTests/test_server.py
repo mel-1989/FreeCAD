@@ -40,6 +40,8 @@ The named multi-user scenarios (acceptance check 3):
 30. transition_refused_while_other_user_holds_lock
 31. non_holder_cannot_release_lock                 library and raw HTTP
 52-53. move and relink may carry only the library's own link rewrite, byte for byte (TestHardening)
+54. a relink must follow a matching move in the same push; 55. an add needs a Document.xml; 56. a move leaves a
+    Document.xml the library cannot scan (DOCTYPE, not UTF-8) unchanged, as the library does
 45-51. TestHardening: branch rename defeated by head pinning, check-in of InReview/Obsolete, move with changed
     content, add onto a moved-away name, transition of a missing document, stray root entries and case twins, e-mail
 33-44. forged commits (TestForgedCommits): add over an existing document (unlocked, locked by another), move onto
@@ -815,9 +817,42 @@ class TestHardening(ServerCase):
             r = self.client("bob", [{"op": "forge", "trailers": tr(asm, "relink", "A.2", Relink=f"{tgt} -> {new}"),
                                      "files": {asm + d + "/Document.xml": xml}}])[0]
             self.refused(r, "more than the link rewrite")
+        # the exact rewrite alone is no longer enough: see test_54 for the move it must follow
         r = self.client("bob", [{"op": "forge", "trailers": tr(asm, "relink", "A.2", Relink=f"{tgt} -> {new}"),
                                  "files": {asm + d + "/Document.xml": self.linking_xml(new)}}])[0]
-        self.assertTrue(r.get("pushed"), r)
+        self.refused(r, "does not match a move")
+
+    def test_54_relink_without_a_matching_move_in_the_push_refused_but_a_library_move_passes(self):
+        tgt, asm = self.seed_link()
+        new, d = self.doc + "t2", V.DOC_SUFFIX
+        r = self.client("bob", [{"op": "forge", "trailers": tr(asm, "relink", "A.2", Relink=f"{tgt} -> {new}"),
+                                 "files": {asm + d + "/Document.xml": self.linking_xml(new)}}])[0]
+        self.refused(r, "does not match a move")
+        self.assertEqual(self.head(asm), ("A.1", "WIP"))
+        # a real move (move commit, then a relink commit per referencing document, one push) still passes
+        r = self.client("bob", [call("move", tgt, new)])[0]  # bob's working copy holds the lock on asm
+        self.assertTrue(r.get("ok"), r)
+        self.assertEqual(self.head(asm), ("A.2", "WIP"))
+
+    def test_55_add_without_document_xml_refused(self):
+        self.seed3()
+        d = V.DOC_SUFFIX
+        r = self.forge("bob", trailers=tr(self.doc + "x", "add", "A.1"), files={self.doc + "x" + d + "/other.txt": "x\n"})
+        self.refused(r, "no Document.xml")
+
+    def test_56_move_of_a_document_with_a_doctype_matches_the_library(self):
+        src, dst, d = self.doc + "dt", self.doc + "dt2", V.DOC_SUFFIX
+        xml = '<!DOCTYPE Document []>\n<Document><Object name="O"/></Document>\n'
+        r = self.client("alice", [{"op": "plain_doc", "name": src, "xml": xml}], fresh=True)
+        self.assertTrue(r[0]["ok"], r)
+        # the library leaves such a file untouched on a move; so must the server accept it, and only so
+        self.assertTrue(self.client("alice", [call("lock", src)], fresh=True, tag="-dt")[0]["ok"])
+        r = self.client("alice", [{"op": "forge", "trailers": tr(dst, "move", "A.1", **{"Moved-From": src}),
+                                   "files": {dst + d + "/Document.xml": xml + "<!-- x -->\n"}, "delete": [src + d]}])[0]
+        self.refused(r, "must leave it unchanged")
+        r = self.client("alice", [call("move", src, dst)], tag="-dt")[0]
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.head(dst), ("A.1", "WIP"))
 
 
 if __name__ == "__main__":
