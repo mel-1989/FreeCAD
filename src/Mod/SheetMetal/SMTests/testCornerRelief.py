@@ -381,6 +381,73 @@ class TestCornerRelief(Doc):
         self.assertIsNone(CR.relief_k_mismatch(feature_unfold(self.doc, rel2, unfold_target_face(rel2.Shape), k=0.42, old=None)))
         self.assertIsNotNone(CR.relief_k_mismatch(feature_unfold(self.doc, rel2, unfold_target_face(rel2.Shape), k=0.31, old=None)))
 
+    def test_relief_flats_pass_the_volume_check_exactly(self):
+        """The relief's flatVolumeOffset makes the flat's volume match the bends and the cut
+        exactly, so no legitimate relief is refused (cad-fork run 027 repair)."""
+        worst = 0.0
+        for c in CASES:
+            with self.subTest(case=c["name"]):
+                tray, rel = self.feature(c)
+                feat = feature_unfold(self.doc, rel, unfold_target_face(rel.Shape), k=c["k"], old=None)
+                bends, _n, problem = FP.bends_and_problem_from_json(feat.BendData)
+                self.assertEqual(problem, "")
+                part = rel.Shape.Volume
+                bare = FP.expected_bend_volume_change(bends)
+                offset = CR.relief_volume_offset(feat)
+                self.assertAlmostEqual(offset, rel.flatVolumeOffset, 12)
+                if abs(c["k"] - 0.5) > 1e-9:  # at K = 0.5 the zones lose the same volume
+                    self.assertNotEqual(offset, 0.0)
+                residual = abs((feat.Shape.Volume - part) - (bare + offset)) / part
+                worst = max(worst, residual)
+                self.assertLess(residual, 2e-5)
+                # without the offset the 1e-4 bound is exceeded for the larger reliefs
+                if abs((feat.Shape.Volume - part) - bare) > FP.VOLUME_RESIDUAL * part:
+                    self.assertIn("does not match the part's bends",
+                                  FP.flat_problem(feat.Shape, (0, 0, 1), bends, c["T"], 2, part))
+                    self.assertNotIn("formed feature",
+                                     FP.flat_problem(feat.Shape, (0, 0, 1), bends, c["T"], 2, part))
+                out = os.path.join(tempfile.mkdtemp(), "relief.dxf")
+                UC.export_flat_dxf(feat, out)
+                self.assertTrue(os.path.exists(out))
+        print("corner relief worst volume residual %.2e of the part volume" % worst)
+
+    def test_offset_without_relief_is_zero_and_formed_parts_stay_flagged(self):
+        c = dict(CASES[0])
+        tray = self.tray(c)
+        feat = feature_unfold(self.doc, tray, unfold_target_face(tray.Shape), k=c["k"], old=None)
+        self.assertEqual(CR.relief_volume_offset(feat), 0.0)
+        bends, _n, problem = FP.bends_and_problem_from_json(feat.BendData)
+        self.assertEqual(problem, "")
+        # a wrong offset (or a stray volume change) is refused with a message that names the residual
+        msg = FP.flat_problem(feat.Shape, (0, 0, 1), bends, c["T"], 2, tray.Shape.Volume,
+                              volume_offset=0.01 * tray.Shape.Volume)
+        self.assertIn("residual", msg)
+
+    def test_k_mismatch_under_a_bend_table_unfold(self):
+        from SMTests import flat_dxf_cases as DC
+        c = dict(CASES[0])
+        c["k"] = 0.33
+        tray = self.tray(c)
+        edge = corner_edge(tray.Shape)
+        rel = CR.make_corner_relief(self.doc, tray, edge, size=3.0)
+        self.assertAlmostEqual(rel.kUsed, 0.33, 12)
+        self.assertEqual(len(rel.bendRadii), 2)
+        feat = feature_unfold(self.doc, rel, unfold_target_face(rel.Shape), material=DC.TABLE_REF,
+                              old=None)
+        bends, _n, problem = FP.bends_and_problem_from_json(feat.BendData)
+        self.assertAlmostEqual(bends[0].k_factor, 0.43, 6)
+        self.assertIn("K-factor 0.33", problem)
+        self.assertIn("uses 0.43", problem)
+        with self.assertRaises(ValueError):
+            UC.export_flat_dxf(feat, os.path.join(tempfile.gettempdir(), "r027_table_kmismatch.dxf"))
+        # the same relief built with the K the table gives (as recorded on the bends) is not flagged
+        rel2 = CR.make_corner_relief(self.doc, tray, edge, name="R2", size=3.0, kfromPart=False,
+                                     kfactor=bends[0].k_factor)
+        feat2 = feature_unfold(self.doc, rel2, unfold_target_face(rel2.Shape), material=DC.TABLE_REF,
+                               old=None)
+        self.assertEqual(FP.bends_and_problem_from_json(feat2.BendData)[2], "")
+        self.assertIsNone(CR.relief_k_mismatch(feat2, FP.bends_and_problem_from_json(feat2.BendData)[0]))
+
     def test_over_90_degree_corner_refusal_names_the_cause(self):
         tray = raw_tray(self.doc, 1.0, 1.0, 135.0, 135.0)
         long_edge = next(n for n in corner_edges(tray.Shape)

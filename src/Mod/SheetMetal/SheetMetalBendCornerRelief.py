@@ -274,10 +274,47 @@ def strip_cutters(shape2d, origin, out_a, out_b, up, radius, angle, thickness, k
     return cutters
 
 
+def bend_zone_cut(shape2d, radius, angle, thickness, k):
+    """(area, lost) of `shape2d` (flat coordinates) in the bend strip of one flange: its area
+    inside the strip, mm2, and the length of bend line the unfolder no longer records, mm. The
+    unfolder records every separate piece of bend face that is left as a bend line along the
+    piece's own middle (halfway across its extent in the bend direction), so `lost` is the
+    length of the strip's side from the plate edge outwards minus the lengths of those lines."""
+    ba = angle * (radius + k * thickness)
+    area = sum(f.Area for f in _region(shape2d, 0.0, ba, -BIG, 0.0))
+    box_b = -(shape2d.BoundBox.DiagonalLength + 1.0)
+    strip = Part.Face(Part.makePolygon([Vector(0, box_b, 0), Vector(ba, box_b, 0), Vector(ba, 0, 0),
+                                        Vector(0, 0, 0), Vector(0, box_b, 0)]))
+    recorded = 0.0
+    for piece in strip.cut(shape2d).Faces:
+        mid = 0.5 * (piece.BoundBox.XMin + piece.BoundBox.XMax)
+        line = Part.makeLine(Vector(mid, box_b - 1.0, 0), Vector(mid, 1.0, 0))
+        recorded += sum(e.Length for e in line.common(piece).Edges)
+    return area, -box_b - recorded
+
+
+def flat_volume_offset(cuts, radii, angles, thickness, k):
+    """Change a relief makes to the part's flat-minus-part volume beyond what
+    ``SheetMetalFlatPattern.expected_bend_volume_change`` already gives, mm3. `cuts` are the
+    (area, lost) pairs of `bend_zone_cut` for the two bends, `radii` and `angles` (radians)
+    those bends' inside radii and angles. In a bend zone, flat minus part is T*A*(1 - x) over
+    the material that is left, with x = (R + T/2)/(R + K*T) (the flat area wraps onto the
+    mid-thickness cylinder), where A is the area of left material. The bends-only formula
+    counts BA * (full width - lost) as that area, so the missing term is
+    T*(1 - x)*(BA*lost - cut area) per bend."""
+    total = 0.0
+    for (area, lost), r, th in zip(cuts, radii, angles):
+        rho = r + k * thickness
+        total += thickness * (1.0 - (r + 0.5 * thickness) / rho) * (th * rho * lost - area)
+    return total
+
+
 def build_corner_relief(base_shape, edge_name, relief_type="Round", size=3.0, size_mode="Absolute",
-                        k_factor=0.4, ratio=2.0, rotation=0.0):
+                        k_factor=0.4, ratio=2.0, rotation=0.0, info=None):
     """Pure geometry: cut the relief at the corner edge `edge_name` of `base_shape`. Returns one
-    valid solid; raises ReliefError with a readable message on bad input."""
+    valid solid; raises ReliefError with a readable message on bad input. When `info` is a dict
+    it receives "flat_volume_offset" (see `flat_volume_offset`) and "radii" (the two bends'
+    inside radii)."""
     _check_finite(size=size, k_factor=k_factor, ratio=ratio, rotation=rotation)
     if relief_type not in RELIEF_TYPES:
         raise ReliefError("relief type must be one of %s, got %r" % (RELIEF_TYPES, relief_type))
@@ -311,6 +348,13 @@ def build_corner_relief(base_shape, edge_name, relief_type="Round", size=3.0, si
     cutters += strip_cutters(shape2d, origin, out1, out2, up, st1["radius"], st1["angle"], thk,
                              k_factor, delta)
     mirrored = shape2d.mirror(Vector(0, 0, 0), Vector(1, -1, 0))
+    if info is not None:
+        cuts = [bend_zone_cut(shape2d, st1["radius"], st1["angle"], thk, k_factor),
+                bend_zone_cut(mirrored, st2["radius"], st2["angle"], thk, k_factor)]
+        radii = [st1["radius"], st2["radius"]]
+        info["radii"] = radii
+        info["flat_volume_offset"] = flat_volume_offset(
+            cuts, radii, [st1["angle"], st2["angle"]], thk, k_factor)
     cutters += strip_cutters(mirrored, origin, out2, out1, up, st2["radius"], st2["angle"], thk,
                              k_factor, delta)
     if not cutters:
@@ -354,28 +398,56 @@ def part_kfactor(obj):
     return None
 
 
-def relief_k_mismatch(unfold_feature):
+def relief_volume_offset(unfold_feature):
+    """Sum of `flatVolumeOffset` over the corner reliefs in the unfold's base chain, mm3."""
+    total, seen = 0.0, set()
+    obj = _base_of(unfold_feature)
+    while obj is not None and id(obj) not in seen:
+        seen.add(id(obj))
+        if "flatVolumeOffset" in obj.PropertiesList:
+            total += float(obj.flatVolumeOffset)
+        obj = _base_of(obj)
+    return total
+
+
+def _k_message(obj, k_relief, k_flat):
+    return ("%s was cut with K-factor %g but the flat pattern uses %g: the relief and the "
+            "unfolded part differ by up to %.2f mm per bend; set the relief to take K from "
+            "the part or change the unfold's K-factor"
+            % (obj.Label, k_relief, k_flat,
+               abs(k_relief - k_flat) * 3.1416 / 2.0 * float(obj.thickness)))
+
+
+def relief_k_mismatch(unfold_feature, bends=None):
     """A readable message when a corner relief under an Unfold feature was built with a
     K-factor other than the one the flat pattern uses (more than 1e-9 apart), else None.
-    Walks the unfold's base chain; an Unfold that takes K from a material table is not checked
-    because there is no single K to compare."""
-    if "KFactor" not in unfold_feature.PropertiesList:
-        return None
-    if str(getattr(unfold_feature, "MaterialSheet", "_manual")) != "_manual":
-        return None
-    k_unfold = float(unfold_feature.KFactor)
-    if str(getattr(unfold_feature, "KFactorStandard", "ansi")) == "din":
-        k_unfold /= 2.0
+    Walks the unfold's base chain. With `bends` (the FlatBend records of the flat) each relief's
+    `kUsed` is compared with the K recorded on the bends whose inside radius is one of the
+    relief's bend radii (within 1e-6), which covers manual, DIN and table unfolds alike; without
+    them the Unfold's own K-factor is used and a table unfold is not checked."""
+    if bends is None:
+        if "KFactor" not in unfold_feature.PropertiesList:
+            return None
+        if str(getattr(unfold_feature, "MaterialSheet", "_manual")) != "_manual":
+            return None
+        k_unfold = float(unfold_feature.KFactor)
+        if str(getattr(unfold_feature, "KFactorStandard", "ansi")) == "din":
+            k_unfold /= 2.0
     seen = set()
     obj = _base_of(unfold_feature)
     while obj is not None and id(obj) not in seen:
         seen.add(id(obj))
-        if "kUsed" in obj.PropertiesList and abs(float(obj.kUsed) - k_unfold) > 1e-9:
-            return ("%s was cut with K-factor %g but the flat pattern uses %g: the relief and the "
-                    "unfolded part differ by up to %.2f mm per bend; set the relief to take K from "
-                    "the part or change the unfold's K-factor"
-                    % (obj.Label, float(obj.kUsed), k_unfold,
-                       abs(float(obj.kUsed) - k_unfold) * 3.1416 / 2.0 * float(obj.thickness)))
+        if "kUsed" in obj.PropertiesList:
+            k_relief = float(obj.kUsed)
+            if bends is None:
+                if abs(k_relief - k_unfold) > 1e-9:
+                    return _k_message(obj, k_relief, k_unfold)
+            else:
+                radii = list(getattr(obj, "bendRadii", []))
+                for b in bends:
+                    if any(abs(b.inside_radius - r) < 1e-6 for r in radii) \
+                            and abs(b.k_factor - k_relief) > 1e-9:
+                        return _k_message(obj, k_relief, b.k_factor)
         obj = _base_of(obj)
     return None
 
@@ -399,6 +471,11 @@ class SMBendCornerRelief:
         SheetMetalTools.smAddBoolProperty(obj, "kfromPart", tr("App::Property", "Take the K-factor from the bends of the part (the nearest feature below with a K-factor); off uses kfactor"), True)
         SheetMetalTools.smAddFloatProperty(obj, "kUsed", tr("App::Property", "K-factor the relief was built with"), 0.4)
         obj.setEditorMode("kUsed", 1)
+        SheetMetalTools.smAddFloatProperty(obj, "flatVolumeOffset", tr("App::Property", "Change this cut makes to (flat volume - part volume), mm3"), 0.0)
+        obj.setEditorMode("flatVolumeOffset", 1)
+        if "bendRadii" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyFloatList", "bendRadii", "Parameters", "Inside radii of the two bends the relief cuts")
+            obj.setEditorMode("bendRadii", 1)
         SheetMetalTools.smAddLengthProperty(obj, "thickness", tr("App::Property", "Thickness (from the base)"), 0.0)
         obj.setEditorMode("thickness", 1)
         SheetMetalTools.smAddLengthProperty(obj, "sizeUsed", tr("App::Property", "Size used in mm"), 0.0)
@@ -413,14 +490,18 @@ class SMBendCornerRelief:
         k_used = part_kfactor(fp.baseObject[0]) if fp.kfromPart else None
         if k_used is None:
             k_used = fp.kfactor
+        info = {}
         try:
             shape = build_corner_relief(base, fp.baseObject[1][0], str(fp.reliefType), fp.size,
-                                        str(fp.sizeMode), k_used, fp.ratio, fp.rotation.Value)
+                                        str(fp.sizeMode), k_used, fp.ratio, fp.rotation.Value,
+                                        info)
             edge = base.getElement(SheetMetalTools.getElementFromTNP(fp.baseObject[1][0]))
             thk = edge.Length
         except ReliefError as exc:
             raise FreeCAD.Base.FreeCADError("Corner relief: %s" % exc)
         fp.kUsed = k_used
+        fp.flatVolumeOffset = info["flat_volume_offset"]
+        fp.bendRadii = info["radii"]
         fp.thickness = thk
         fp.sizeUsed = effective_size(fp.size, str(fp.sizeMode), thk)
         fp.Shape = shape
