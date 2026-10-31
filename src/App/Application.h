@@ -199,6 +199,16 @@ public:
      */
     bool closeDocument(const char* name);
     /**
+     * @brief Why the document @p name must not be closed right now, or an empty string.
+     *
+     * Document::closeRefusal() (a transaction, recompute or agent-turn operation mid-way on any
+     * thread, or re-entrantly on this one) plus a recompute of it queued on or running on the
+     * async worker. The Python closeDocument() refuses with this reason instead of waiting for the
+     * worker with the GIL held. closeDocument() itself refuses (returns false) on the Document
+     * part only, after it has waited for the worker as before.
+     */
+    std::string closeRefusal(const char* name);
+    /**
      * @brief Acquire a unique document name from a proposed name.
      *
      * @param[in] Name The proposed name.

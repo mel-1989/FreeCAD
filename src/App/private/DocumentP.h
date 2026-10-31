@@ -28,6 +28,8 @@
 #pragma warning(disable : 4834)
 #endif
 
+#include <array>
+#include <atomic>
 #include <map>
 #include <string>
 #include <memory>
@@ -69,9 +71,21 @@ using HasherMap = boost::bimap<StringHasherRef, int>;
 class Transaction;
 struct AgentTurnState;
 
+/// Operations that must not be interrupted by closing the document (Document::closeRefusal).
+enum class DocOp
+{
+    Transaction,   ///< open, commit, abort, undo, redo or a history clear (runs observers and Python)
+    Recompute,     ///< a recompute (Python features execute)
+    TurnBusy,      ///< an agent turn's begin or end
+    PropertyHook,  ///< a thread inside the pre-change property hook, possibly parked on the turn lock
+    Count
+};
+
 // Pimpl class
 struct DocumentP
 {
+    /// How many threads are inside each DocOp right now. Atomic: read by the thread that closes.
+    std::array<std::atomic<int>, static_cast<std::size_t>(DocOp::Count)> activeOps {};
     // Array to preserve the creation order of created objects
     std::vector<DocumentObject*> objectArray;
     std::unordered_set<App::DocumentObject*> touchedObjs;
@@ -111,6 +125,26 @@ struct DocumentP
     StringHasherRef Hasher {new StringHasher};
 
     DocumentP();
+
+    /// Marks an operation on the document for the lifetime of the object (re-entrant, any thread).
+    class OpScope
+    {
+    public:
+        OpScope(DocumentP& dp, DocOp op)
+            : counter(dp.activeOps[static_cast<std::size_t>(op)])
+        {
+            ++counter;
+        }
+        OpScope(const OpScope&) = delete;
+        OpScope& operator=(const OpScope&) = delete;
+        ~OpScope()
+        {
+            --counter;
+        }
+
+    private:
+        std::atomic<int>& counter;
+    };
 
     void addRecomputeLog(const char* why, App::DocumentObject* obj)
     {

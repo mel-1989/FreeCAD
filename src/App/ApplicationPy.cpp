@@ -234,6 +234,11 @@ PyObject* ApplicationPy::sCloseDocument(PyObject* /*self*/, PyObject* args)
             return nullptr;
         }
 
+        if (const std::string why = GetApplication().closeRefusal(pstr); !why.empty()) {
+            PyErr_Format(PyExc_RuntimeError, "Cannot close the document '%s': %s", pstr, why.c_str());
+            return nullptr;
+        }
+
         if (!GetApplication().closeDocument(pstr)) {
             PyErr_Format(PyExc_RuntimeError, "Closing the document '%s' failed", pstr);
             return nullptr;
@@ -253,6 +258,14 @@ PyObject* ApplicationPy::sCloseDocument(PyObject* /*self*/, PyObject* args)
 
         if (!doc->isClosable()) {
             PyErr_Format(PyExc_RuntimeError, "The document '%s' is not closable for the moment", doc->getName());
+            return nullptr;
+        }
+
+        if (const std::string why = GetApplication().closeRefusal(doc->getName()); !why.empty()) {
+            PyErr_Format(PyExc_RuntimeError,
+                         "Cannot close the document '%s': %s",
+                         doc->getName(),
+                         why.c_str());
             return nullptr;
         }
 

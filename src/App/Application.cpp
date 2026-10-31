@@ -683,6 +683,13 @@ bool Application::closeDocument(const char* name)
     if (pos == DocMap.end()) // no such document
         return false;
 
+    // An operation mid-way on the document (another thread's abort, a __del__ run by a redo
+    // clear ...) would be freed under its feet.
+    if (const std::string why = pos->second->closeRefusal(); !why.empty()) {
+        FC_WARN("Cannot close document '" << documentName << "': " << why);
+        return false;
+    }
+
     Base::ConsoleRefreshDisabler disabler;
 
     // Trigger observers before removing the document from the internal map.
@@ -705,12 +712,33 @@ bool Application::closeDocument(const char* name)
     return true;
 }
 
+std::string Application::closeRefusal(const char* name)
+{
+    const auto pos = DocMap.find(name);
+    if (pos == DocMap.end()) {
+        return {};
+    }
+    if (std::string why = pos->second->closeRefusal(); !why.empty()) {
+        return why;
+    }
+    std::lock_guard<std::mutex> lock(_recomputeMutex);
+    if (_recomputeDocumentsInProgress.contains(name)) {
+        return "an async recompute is in progress on it";
+    }
+    return {};
+}
+
 void Application::closeAllDocuments()
 {
     Base::FlagToggler<bool> flag(_isClosingAll);
-    std::map<std::string,Document*>::iterator pos;
-    while((pos = DocMap.begin()) != DocMap.end())
-        closeDocument(pos->first.c_str());
+    // One attempt per document: a refused close (closeRefusal) must not loop forever.
+    std::vector<std::string> names;
+    for (const auto& entry : DocMap) {
+        names.push_back(entry.first);
+    }
+    for (const auto& name : names) {
+        closeDocument(name.c_str());
+    }
 }
 
 Document* Application::getDocument(const char *Name) const
