@@ -418,9 +418,15 @@ def _k_message(obj, k_relief, k_flat):
                abs(k_relief - k_flat) * 3.1416 / 2.0 * float(obj.thickness)))
 
 
+# A bend table's K, recorded on the flat's bends, is back-computed from its 6-decimal allowance and
+# differs from the listed K by up to about 3e-7; a K difference of 1e-6 moves a relief outline by
+# about theta * T * 1e-6 (under 1e-5 mm for T up to 3 mm), far inside the 1e-3 mm flat-pattern tolerance.
+K_TOLERANCE = 1e-6
+
+
 def relief_k_mismatch(unfold_feature, bends=None):
     """A readable message when a corner relief under an Unfold feature was built with a
-    K-factor other than the one the flat pattern uses (more than 1e-9 apart), else None.
+    K-factor other than the one the flat pattern uses (more than K_TOLERANCE apart), else None.
     Walks the unfold's base chain. With `bends` (the FlatBend records of the flat) each relief's
     `kUsed` is compared with the K recorded on the bends whose inside radius is one of the
     relief's bend radii (within 1e-6), which covers manual, DIN and table unfolds alike; without
@@ -440,13 +446,13 @@ def relief_k_mismatch(unfold_feature, bends=None):
         if "kUsed" in obj.PropertiesList:
             k_relief = float(obj.kUsed)
             if bends is None:
-                if abs(k_relief - k_unfold) > 1e-9:
+                if abs(k_relief - k_unfold) > K_TOLERANCE:
                     return _k_message(obj, k_relief, k_unfold)
             else:
                 radii = list(getattr(obj, "bendRadii", []))
                 for b in bends:
                     if any(abs(b.inside_radius - r) < 1e-6 for r in radii) \
-                            and abs(b.k_factor - k_relief) > 1e-9:
+                            and abs(b.k_factor - k_relief) > K_TOLERANCE:
                         return _k_message(obj, k_relief, b.k_factor)
         obj = _base_of(obj)
     return None
