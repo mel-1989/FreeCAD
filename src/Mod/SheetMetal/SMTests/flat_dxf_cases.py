@@ -20,6 +20,7 @@ import SheetMetalConvertSolid as CS
 import SheetMetalEdgeFlange as EF
 import SheetMetalHemFeature as HF
 import SheetMetalJog as JG
+import SheetMetalLighteningCutout as LC
 
 from SMTests import testConvertSolid as TCS
 from SMTests import testEdgeFlange as TEF
@@ -118,6 +119,28 @@ def _drill(doc, base, case):
     out.Shape = shape
     doc.recompute()
     return out
+
+
+def lightening_case(name, case, group="cutout"):
+    """A two-bend U strip with a 3 x 2 grid of 12 x 5 slots cut in the web by the lightening
+    cutout (clean-room, cad-fork run 027); the strip expectations are those of the plain part."""
+    def build(doc):
+        from SMTests import testLighteningCutout as TLC
+        base = build_base(doc, case)
+        face = TLC.planar_big(base.Shape)
+        geo, _a, _p = TLC.slot_geo(0.0, 0.0, 12.0, 5.0)
+        sk = TLC.make_sketch(doc, face, geo, du=-24.0, dv=-6.0)
+        feat = LC.make_lightening_cutout(doc, base, TLC.face_name(base.Shape, face), sk, Pattern="Grid",
+                                         CountX=3, CountY=2, PitchX=12.0 + 12.0, PitchY=12.0,
+                                         Direction=TLC.face_frame(face)[1])
+        return feat, unfold_target_face(feat.Shape), "_manual", case.k
+
+    def expect(doc):
+        exp = _strip_expect(case)
+        exp["hole"] = False
+        return exp
+
+    return FlatCase(name, build, expect, group)
 
 
 def edge_flange_case(name, c):
@@ -228,6 +251,7 @@ _TRAY = next(c for c in TCS.CASES if c["name"] == "tray_T1_R1T_g.5R_in")
 _ZIG = Case("m01_zigzag_T2_R1T", 2.0, 1.0, 0.42, [20.0, 30.0, 20.0], [90.0, -90.0])
 _HAT = Case("m02_hat_T2_R1T", 2.0, 1.0, 0.42, [20.0, 30.0, 40.0, 30.0, 20.0], [90.0, -90.0, -90.0, 90.0])
 _SB = {c["name"]: c for c in TSB.CASES}
+_LIGHT = Case("l01_lightening_u_T2_R1T", 2.0, 1.0, 0.42, [30.0, 70.0, 30.0], [90.0, 90.0])
 _L = next(c for c in TCS.CASES if c["name"] == "L_T1_R.5T_in")
 _U = next(c for c in TCS.CASES if c["name"] == "U_T3_R3T_in")
 
@@ -258,6 +282,7 @@ def all_cases():
         fold_case("g18_fold_45_offcentre", _SB["s02_45_T2_R1T_offc"]),
         fold_case("g19_fold_135_invertbend", _SB["s04_135_T2_R3T_inv"]),
         jog_case("g20_jog_45", _JOG),
+        lightening_case("g21_lightening_cutout_grid", _LIGHT),
     ]
 
 
