@@ -464,6 +464,70 @@ class TestCornerRelief(Doc):
         self.assertIn("one thickness long", str(cm.exception))
         self.assertNotIn("not one thickness apart", str(cm.exception))
 
+    def test_flat_plate_volume_is_exact_where_the_walls_are_malformed(self):
+        """Run 028: a flat plate's volume is its planar face area times T, so the malformed
+        B-spline hole walls of the old unfolder cannot make a correct flat look short; anything
+        that is not a plain plate keeps the solid's own volume, and real losses stay refused."""
+        plate = Part.makeBox(30, 20, 2)
+        self.assertAlmostEqual(FP.flat_plate_volume(plate, (0, 0, 1), 2.0), 1200.0, 9)
+        # not a plate for this thickness (deeper than T): the solid's own volume
+        self.assertAlmostEqual(FP.flat_plate_volume(plate, (0, 0, 1), 1.0), 1200.0, 9)
+        thick = Part.makeBox(30, 20, 5)
+        self.assertAlmostEqual(FP.flat_plate_volume(thick, (0, 0, 1), 2.0), thick.Volume, 9)
+        # a face area that disagrees with the volume by more than the guard: the solid's volume
+        holed = plate.cut(Part.makeBox(10, 10, 1, V(5, 5, 0)))  # a blind pocket, half deep
+        self.assertAlmostEqual(FP.flat_plate_volume(holed, (0, 0, 1), 2.0), holed.Volume, 9)
+        # a flat that lost 5 percent of its volume to something other than bends is still refused
+        part = 1200.0 / 0.95
+        self.assertIn("does not match the part's bends",
+                      FP.flat_problem(plate, (0, 0, 1), [], 2.0, 0, part))
+        self.assertEqual(FP.flat_problem(plate, (0, 0, 1), [], 2.0, 0, 1200.0), "")
+
+    def test_oblique_obround_reliefs_are_not_falsely_refused(self):
+        """Run 028 (verifier D): obround reliefs at rotations 120 to 150 degrees left the old
+        unfolder's hole walls malformed, the flat's volume short by up to 1.4e-3, and the export
+        refused a correct outline. The flat is now measured as planar area times T."""
+        for a1, a2, rot in ((90.0, 90.0, 120), (90.0, 90.0, 150), (45.0, 135.0, 120), (135.0, 45.0, 150)):
+            with self.subTest(a1=a1, a2=a2, rot=rot):
+                tray = raw_tray(self.doc, 1.5, 1.5, a1, a2)
+                rel = CR.make_corner_relief(self.doc, tray, thickness_corner_edge(tray.Shape, 1.5),
+                                            reliefType="Obround", size=2.5, sizeMode="Absolute",
+                                            ratio=4.0, rotation=float(rot), kfactor=0.42)
+                feat = feature_unfold(self.doc, rel, unfold_target_face(rel.Shape), k=0.42, old=None)
+                _bends, _n, problem = FP.bends_and_problem_from_json(feat.BendData)
+                self.assertEqual(problem, "")
+                out = os.path.join(tempfile.mkdtemp(), "oblique.dxf")
+                UC.export_flat_dxf(feat, out)
+                self.assertTrue(os.path.exists(out))
+
+    def test_obround_relief_on_a_thick_tray(self):
+        """Run 028 (verifier D, 12 of 192 sweep runs): the obround 3 x 3 relief on a T 3, R 1T
+        tray unfolds to a correct flat at every rotation; the 'flat with no planar face' was the
+        sweep's 2 x 4 obround, whose 2 mm width is below the 3 mm thickness, which the relief
+        feature refuses (Invalid, with the reason) instead of cutting."""
+        for rot in (0.0, 45.0, 120.0, 150.0):
+            with self.subTest(rot=rot):
+                c = _case("thick", 3.0, 1.0, 90.0, "Obround", 3.0, ratio=3.0, rot=rot)
+                tray, rel = self.feature(c)
+                self.assertNotIn("Invalid", rel.State)
+                feat = feature_unfold(self.doc, rel, unfold_target_face(rel.Shape), k=c["k"], old=None)
+                _bends, _n, problem = FP.bends_and_problem_from_json(feat.BendData)
+                self.assertEqual(problem, "")
+                top = max((f for f in feat.Shape.Faces if f.Surface.TypeId == "Part::GeomPlane"),
+                          key=lambda f: f.Area)
+                full, _area = full_flat_face(c, 3.0)
+                shape2d = CR.make_shape_2d("Obround", rel.sizeUsed.Value, 3.0, rot)
+                shape2d.translate(V(PL, W, 0))
+                expected = full.cut(shape2d).Faces[0]
+                self.assertAlmostEqual(top.Area, expected.Area, delta=1e-3)
+        narrow = _case("narrow", 3.0, 1.0, 90.0, "Obround", 2.0, ratio=4.0, rot=0.0)
+        tray, rel = self.feature(narrow)
+        self.assertIn("Invalid", rel.State)
+        with self.assertRaises(CR.ReliefError) as cm:
+            CR.build_corner_relief(tray.Shape, corner_edge(tray.Shape), "Obround", 2.0,
+                                   size_mode="Absolute", ratio=4.0, k_factor=0.42)
+        self.assertIn("smaller than the thickness", str(cm.exception))
+
     def test_zz_report(self):
         for name, dev, err in self.report:
             print("corner relief %-40s outline deviation %.2e mm  flat area error %.2e mm2" % (name, dev, err))

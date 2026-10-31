@@ -272,6 +272,7 @@ FORMING_PROBLEM = ("The part has forming feature(s) %s that are not suppressed, 
 # (flatVolumeOffset, up to 1.7e-3 of the part volume) and the caller passes it as `volume_offset`,
 # so reliefs leave a residual at the 1e-9 level too.
 VOLUME_RESIDUAL = 1e-4
+PLATE_VOLUME_AGREE = 1e-2
 
 
 def forming_features(source_obj):
@@ -297,6 +298,40 @@ def expected_bend_volume_change(bends):
     theta*T^2*W*(K - 0.5) for BA = theta*(r + K*T) (positive for K above 0.5)."""
     return sum(b.length * b.thickness * (b.allowance - math.radians(b.angle)
                                          * (b.inside_radius + 0.5 * b.thickness)) for b in bends)
+
+
+def flat_plate_volume(shape, normal, thickness):
+    """The volume of `shape`, measured robustly when it is a flat plate of `thickness`.
+
+    The old unfolder builds the walls of a cutout (an obround corner relief at an oblique
+    rotation, for one) as malformed B-spline faces, so `shape.Volume` can be short by 1e-3 of
+    the part while the outline is exact. For a proper flat plate (every vertex within
+    `thickness` of one plane, a planar face across the normal) the area of that face times
+    `thickness` is exact. The face-based volume is used only when it agrees with `shape.Volume`
+    to within PLATE_VOLUME_AGREE; otherwise (the plate is not a plain plate) `shape.Volume`
+    is returned unchanged (cad-fork run 028)."""
+    volume = shape.Volume
+    if not thickness:
+        return volume
+    n = Vector(normal)
+    n.normalize()
+    heights = [v.Point.dot(n) for v in shape.Vertexes]
+    if not heights or max(heights) - min(heights) > thickness + 1e-3:
+        return volume
+    best = 0.0
+    for face in shape.Faces:
+        if face.Surface.TypeId != "Part::GeomPlane":
+            continue
+        fn = face.normalAt(0, 0)
+        if abs(abs(fn.dot(n)) - 1.0) > 1e-6:
+            continue
+        best = max(best, face.Area)
+    if best <= 0.0:
+        return volume
+    plate = best * thickness
+    if abs(plate - volume) > PLATE_VOLUME_AGREE * max(plate, volume):
+        return volume
+    return plate
 
 
 def flat_problem(shape, normal, bends, thickness, source_bends, source_volume=None,
@@ -325,11 +360,12 @@ def flat_problem(shape, normal, bends, thickness, source_bends, source_volume=No
                 % (len(bends), source_bends))
     if source_volume and thickness:
         expected = expected_bend_volume_change(bends) + volume_offset
-        residual = abs((shape.Volume - source_volume) - expected)
+        flat_volume = flat_plate_volume(shape, normal, thickness)
+        residual = abs((flat_volume - source_volume) - expected)
         if residual > VOLUME_RESIDUAL * source_volume:
             msg = ("The flat's volume differs from the part's by %.2f mm3 where its bends explain "
                    "%.2f mm3 (residual %.2f mm3), so the flat does not match the part's bends"
-                   % (shape.Volume - source_volume, expected, residual))
+                   % (flat_volume - source_volume, expected, residual))
             return msg + (": material was added or removed that the bends do not account for "
                           "(for example a non-sheet-metal feature that was not unfolded "
                           "correctly).")
