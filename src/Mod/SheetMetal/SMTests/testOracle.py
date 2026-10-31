@@ -130,8 +130,9 @@ BASE_CASES = [
     Case("b14_table_45_T1_R1.5T", 1.0, 1.5, None, [30.0, 30.0], [45.0], TABLE),
 ]
 
-# Table case the new unfolder gets wrong (see test_new_unfolder_table_interpolation_defect).
-NEW_UNFOLDER_KNOWN_BAD = {"b13_table_135_T3_R3T"}
+# Table case the new unfolder used to get wrong (inverted interpolation loop, fixed in run 026);
+# test_new_unfolder_table_interpolation runs it on its own as well as inside the base cases.
+TABLE_INTERP_CASE = {"b13_table_135_T3_R3T"}
 
 # Fold cases: flat plate (length PL, T) folded at the middle with Fold(R, angle, K); the
 # unfolded part must be as long as the plate (the fold consumes exactly BA of flat length).
@@ -387,20 +388,17 @@ class TestFlatPatternOracle(unittest.TestCase):
 
     @unittest.skipUnless(HAVE_NEW, "networkx is not installed; the new unfolder needs it")
     def test_base_cases_new_unfolder(self):
-        self._check_cases([c for c in BASE_CASES if c.name not in NEW_UNFOLDER_KNOWN_BAD], "new")
+        self._check_cases(BASE_CASES, "new")
 
     @unittest.skipUnless(HAVE_NEW, "networkx is not installed; the new unfolder needs it")
-    @unittest.expectedFailure
-    def test_new_unfolder_table_interpolation_defect(self):
-        """KNOWN DEFECT in the vendored SheetMetalNewUnfolder.BendAllowanceCalculator.get_k_factor.
+    def test_new_unfolder_table_interpolation(self):
+        """get_k_factor interpolates piecewise linearly in R/T (fixed in run 026).
 
-        Between the second and later table knots the interpolation loop starts from the wrong
-        segment (`while r_over_t <= values[i]` should be `>`), so R/T = 3 on the table
-        (1: .33, 2: .42, 99: .5) gives K = .33 + .09 * 2 = .51 on the way to a lookup of
-        .4208 (measured flat length 0.71 mm too long on b13). Tracked for the API-alignment
-        slice; remove expectedFailure when fixed.
+        The vendored loop `while r_over_t <= values[i]` started from the wrong segment, so
+        R/T = 3 on the table (1: .33, 2: .42, 99: .5) gave K = .51 instead of the correct
+        .4208 (flat length 0.71 mm too long on b13).
         """
-        self._check_cases([c for c in BASE_CASES if c.name in NEW_UNFOLDER_KNOWN_BAD], "new")
+        self._check_cases([c for c in BASE_CASES if c.name in TABLE_INTERP_CASE], "new")
 
     def test_din_halving(self):
         """KFactorStandard "din" takes a table value of 2 * K_ANSI: DIN 0.66 equals ANSI 0.33."""

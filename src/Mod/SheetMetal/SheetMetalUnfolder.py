@@ -446,6 +446,11 @@ class Simple_node(object):
 
     @property
     def k_Factor(self):
+        if hasattr(self.k_factor_lookup, "k_factor_for_bend"):
+            # A bend table (SheetMetalBendTable.BendTableLookup): the K-factor, ANSI, that gives
+            # the table's allowance for this bend's inside radius and angle.
+            return self.k_factor_lookup.k_factor_for_bend(
+                self.thickness, self.innerRadius, math.degrees(abs(self.bend_angle)))
         k = get_val_from_range(self.k_factor_lookup, self.innerRadius / self.thickness)
         return k if KFACTORSTANDARD == "ansi" else k / 2
 

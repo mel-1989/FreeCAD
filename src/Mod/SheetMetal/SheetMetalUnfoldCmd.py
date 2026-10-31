@@ -33,6 +33,7 @@ import Part
 import SheetMetalLookup
 
 import SheetMetalBendCuts
+import SheetMetalBendTable
 import SheetMetalKfactor
 import SheetMetalTools
 import SheetMetalUnfolder
@@ -373,6 +374,10 @@ class SMUnfold:
         FreeCAD.Console.PrintMessage("Using V2 unfolding system\n")
         if obj.MaterialSheet in ["_manual", "_none"]:
             bac = BendAllowanceCalculator.from_single_value(obj.KFactor, obj.KFactorStandard)
+        elif SheetMetalBendTable.is_bend_table_ref(obj.MaterialSheet):
+            # A bend allowance / bend deduction table instead of a K-factor.
+            bac = BendAllowanceCalculator.from_bend_table(
+                SheetMetalBendTable.lookup_from_ref(obj.MaterialSheet))
 #NEU
         elif obj.MaterialSheet.startswith("csv_"):
             # Wenn eine externe CSV-Datei gewählt wurde:
@@ -535,7 +540,10 @@ class SMUnfold:
         """
         FreeCAD.Console.PrintMessage("Using V1 unfolding system\n")
         kFactorTable = {1: obj.KFactor}
-        if obj.MaterialSheet != "_manual" and obj.MaterialSheet != "_none":
+        if SheetMetalBendTable.is_bend_table_ref(obj.MaterialSheet):
+            # The old unfolder asks this object for the K-factor of each bend.
+            kFactorTable = SheetMetalBendTable.lookup_from_ref(obj.MaterialSheet)
+        elif obj.MaterialSheet != "_manual" and obj.MaterialSheet != "_none":
             lookupTable = SheetMetalKfactor.KFactorLookupTable(obj.MaterialSheet)
             kFactorTable = lookupTable.k_factor_lookup
 

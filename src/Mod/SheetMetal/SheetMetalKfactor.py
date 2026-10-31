@@ -29,6 +29,7 @@ import FreeCAD
 import os
 import csv
 import SheetMetalTools
+import SheetMetalBendTable
 
 def findObjectsByTypeRecursive(doc, tp):
     return _find_objects(doc.Objects, lambda obj: obj and obj.isDerivedFrom(tp))
@@ -105,7 +106,18 @@ def getSpreadSheetNames():
             # Uses the Wrapper-Object with attribute .Label
             availableMdsObjects.append(CSVMaterialItem(mat_name, full_path))
 
+    # 3. Bend allowance / bend deduction tables (BendTables/*.csv), one entry per material
+    for ref in SheetMetalBendTable.list_refs():
+        availableMdsObjects.append(BendTableItem(ref))
+
     return availableMdsObjects
+
+
+class BendTableItem:
+    """A bend table entry for the material list; the Label is the ``bt_<table>/<material>`` reference."""
+    def __init__(self, ref):
+        self.Label = ref
+        self.Name = ref
 
 
 class KFactorLookupTable:

@@ -721,29 +721,51 @@ class BendAllowanceCalculator:
         return instance
 
     def get_k_factor(self, radius: float, thickness: float) -> float:
-        # If we are below the lowest tabulated value for the radius over
-        # thickness relation, return the smallest noted k-factor.
+        """K-factor (ANSI) for a bend with the given INSIDE radius.
+
+        The table is keyed by inside radius over thickness, clamped to its first and last
+        entries outside the tabulated range and piecewise linear in between. Callers holding
+        a face radius must convert it to the inside radius first (see get_bend_allowance).
+        """
         r_over_t = radius / thickness
-        if r_over_t <= self.radius_thickness_values[0]:
-            kf_val = self.k_factor_values[0]
-        # Apply similar logic to radius:thickness values greater than
-        # the largest available.
-        elif r_over_t >= self.radius_thickness_values[-1]:
-            kf_val = self.k_factor_values[-1]
-        # If we are within the range of specified radius: thickness
-        # values, perform piecewise linear interpolation.
+        rts = self.radius_thickness_values
+        kfs = self.k_factor_values
+        if r_over_t <= rts[0]:
+            kf_val = kfs[0]
+        elif r_over_t >= rts[-1]:
+            kf_val = kfs[-1]
         else:
+            # Find the segment rts[i] <= r_over_t < rts[i + 1].
             i = 0
-            while r_over_t <= self.radius_thickness_values[i]:
+            while r_over_t >= rts[i + 1]:
                 i += 1
-            kf1 = self.k_factor_values[i]
-            kf2 = self.k_factor_values[i + 1]
-            rt1 = self.radius_thickness_values[i]
-            rt2 = self.radius_thickness_values[i + 1]
-            kf_val = kf1 + (kf2 - kf1) * ((r_over_t - rt1) / (rt2 - rt1))
+            kf_val = kfs[i] + (kfs[i + 1] - kfs[i]) * ((r_over_t - rts[i]) / (rts[i + 1] - rts[i]))
         # We use the ansi definition of the k-factor everywhere
         # internally.
         return self._convert_to_ansi_kfactor(kf_val)
+
+    @classmethod
+    def from_bend_table(cls, bend_table):
+        """Allowance straight from a BendTable lookup (SheetMetalBendTable.BendTableLookup)."""
+        instance = cls()
+        instance.k_factor_standard = cls.KFactorStandard.ANSI
+        instance.radius_thickness_values = [1.0]
+        instance.k_factor_values = [0.5]
+        instance.bend_table = bend_table
+        return instance
+
+    bend_table = None
+
+    @staticmethod
+    def inside_radius(bend_direction: "BendDirection", radius: float, thickness: float) -> float:
+        """Inside radius of a bend from the radius of the cylindrical face the unfolder met.
+
+        The face next to the chosen root face is the inner surface of an UP bend and the outer
+        surface of a DOWN bend, so the inside radius is the face radius or that minus T.
+        """
+        if bend_direction == BendDirection.DOWN:
+            return radius - thickness
+        return radius
 
     def get_bend_allowance(
         self,
@@ -752,11 +774,13 @@ class BendAllowanceCalculator:
         thickness: float,
         bend_angle: float,
     ) -> float:
-        factor = self.get_k_factor(radius, thickness)
-        if bend_direction == BendDirection.DOWN:
-            factor -= 1
-        bend_allowance = (radius + factor * thickness) * bend_angle
-        return bend_allowance
+        """Bend allowance for a bend of `bend_angle` radians on a face of radius `radius`."""
+        inside = self.inside_radius(bend_direction, radius, thickness)
+        if self.bend_table is not None:
+            return self.bend_table.allowance(thickness, inside, degrees(bend_angle))
+        # Neutral axis at inside + K * T from the centre, whichever face the root is on.
+        factor = self.get_k_factor(inside, thickness)
+        return (inside + factor * thickness) * bend_angle
 
     class KFactorStandard(Enum):
         ANSI = auto()
