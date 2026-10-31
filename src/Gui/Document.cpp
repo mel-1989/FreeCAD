@@ -2548,6 +2548,19 @@ bool Document::canClose(bool checkModify, bool checkLink)
     if (d->_isClosing) {
         return true;
     }
+    // A transaction, recompute or agent turn is mid-way on the document (App::Application::closeRefusal):
+    // veto the close before anything is asked, or the window would go while the document stays
+    // open (App.closeDocument and Application::closeDocument refuse it). Non-modal on purpose:
+    // a message in the report view and the status bar, never a dialog that blocks the caller.
+    if (const std::string why = App::GetApplication().closeRefusal(getDocument()->getName());
+        !why.empty()) {
+        const QString text = QObject::tr("Cannot close document '%1' now: %2")
+                                 .arg(QString::fromStdString(getDocument()->Label.getStrValue()),
+                                      QString::fromStdString(why));
+        Base::Console().warning("{}\n", text.toStdString());
+        getMainWindow()->showMessage(text, 8000);
+        return false;
+    }
     if (!getDocument()->isClosable()) {
         QMessageBox::warning(
             getActiveView(),
