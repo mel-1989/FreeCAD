@@ -21,7 +21,7 @@ import SheetMetalFlatPattern as FP
 import SheetMetalTools
 import SheetMetalUnfoldCmd as UC
 from SMTests import flat_dxf_cases as C
-from SMTests.testOracle import HAVE_NEW, LEN_TOL, Case, build_base, unfold_target_face
+from SMTests.testOracle import HAVE_NEW, LEN_TOL, WIDTH, Case, build_base, measure, unfold_target_face
 from SMTests.testUnfoldFeature import feature_unfold
 
 GOLDEN_TOL = 1e-6
@@ -304,6 +304,13 @@ class TestFlatDxf(Doc):
         err_b = max(abs(g - w) for g, w in zip(got, mirrored))
         err = min(err_a, err_b)
         self.assertLess(err, LEN_TOL, "bend positions %s vs formula %s" % (got, want))
+        if "signs" in exp:  # consecutive bends share a layer exactly when their turns share a sign
+            seq = sorted((perp_coordinate(a, d), e["layer"]) for e, (a, _b) in
+                         [(e, line_ends(e)) for e in ents if e["layer"] in ("BEND_UP", "BEND_DOWN")])
+            layers_seq = [layer for _p, layer in seq]
+            for i in range(1, len(layers_seq)):
+                self.assertEqual(layers_seq[i] == layers_seq[i - 1], exp["signs"][i] == exp["signs"][i - 1],
+                                 "UP/DOWN pattern %s for turns %s" % (layers_seq, exp["signs"]))
         if exp.get("hole"):
             self.check_hole(ents, d, lo, got)
         return err
@@ -333,6 +340,87 @@ class TestFlatDxf(Doc):
         ys = [v for e in outline for v in (e["codes"][20], e["codes"][21])]
         self.assertAlmostEqual(min(xs), 0.0, delta=1e-9)
         self.assertAlmostEqual(min(ys), 0.0, delta=1e-9)
+
+    def test_rotated_part_gives_the_same_dxf(self):
+        for index in (2, 10, 14, 16):  # strip, hole and slot, tray, zigzag
+            case = C.all_cases()[index]
+            with self.subTest(case=case.name):
+                feat, _exp = C.build_flat(self.doc, case)
+                bends, normal, _p = FP.bends_and_problem_from_json(feat.BendData)
+                a = self.path("a.dxf")
+                with open(a, "w") as fh:
+                    fh.write(FP.flat_dxf_text(feat.Shape, normal, bends))
+                pl = FreeCAD.Placement(FreeCAD.Vector(13, -7, 5), FreeCAD.Rotation(FreeCAD.Vector(1, 2, 3), 71))
+                shape = feat.Shape.copy()
+                shape.transformShape(pl.toMatrix())
+                b = self.path("b.dxf")
+                with open(b, "w") as fh:
+                    fh.write(FP.flat_dxf_text(shape, pl.Rotation.multVec(normal),
+                                              [x.transformed(pl) for x in bends]))
+                worst, problems = compare_entities(entities(a), entities(b))
+                self.assertEqual(problems, [])
+
+    def test_text_height_is_validated(self):
+        feat, _exp = C.build_flat(self.doc, C.all_cases()[0])
+        for bad in (0, -1.0, float("nan"), float("inf"), None, "2"):
+            with self.subTest(text_height=bad):
+                with self.assertRaises(ValueError) as cm:
+                    UC.export_flat_dxf(feat, self.path("t.dxf"), text_height=bad)
+                self.assertIn("text_height", str(cm.exception))
+        self.assertFalse(os.path.exists(self.path("t.dxf")))
+
+    def test_bend_interrupted_by_a_cutout_is_one_bend(self):
+        import Part
+        case = Case("cutb", 2.0, 1.0, 0.42, [40.0, 40.0], [90.0])
+        base = build_base(self.doc, case)
+        cyl = min((f for f in base.Shape.Faces if f.Surface.TypeId == "Part::GeomCylinder"),
+                  key=lambda f: f.Surface.Radius)
+        ax = FreeCAD.Vector(cyl.Surface.Axis)
+        ax.normalize()
+        com = cyl.CenterOfMass
+        foot = FreeCAD.Vector(cyl.Surface.Center) + ax * (com - cyl.Surface.Center).dot(ax)
+        radial = com - foot
+        radial.normalize()
+        tang = ax.cross(radial)
+        p = foot + radial * 3.0
+        poly = Part.makePolygon([p + tang * 4 + radial * 6, p - tang * 4 + radial * 6,
+                                 p - tang * 4 - radial * 6, p + tang * 4 - radial * 6,
+                                 p + tang * 4 + radial * 6])
+        cutter = Part.Face(poly).extrude(ax * 30.0)
+        cutter.translate(ax * -15.0)
+        cut = self.doc.addObject("Part::Feature", "Cut")
+        cut.Shape = base.Shape.cut(cutter)
+        self.doc.recompute()
+        feat = feature_unfold(self.doc, cut, unfold_target_face(cut.Shape), k=0.42, old=None)
+        self.assertNotIn("Invalid", feat.State)
+        bends = UC.get_bend_lines(feat)
+        self.assertEqual(len(bends), 1)
+        self.assertEqual(len(feat.BendNotes), 1)
+        self.assertEqual(len(bends[0].segments), 2)
+        path = self.path("cut.dxf")
+        UC.export_flat_dxf(feat, path)
+        ents = entities(path)
+        self.assertEqual(sum(e["layer"].startswith("BEND") for e in ents), 2)
+        self.assertEqual(sum(e["type"] == "TEXT" for e in ents), 1)
+
+    def test_partial_unfold_is_refused(self):
+        for angles in ([60.0, -90.0], [60.0, 90.0]):
+            with self.subTest(angles=angles):
+                case = Case("zm", 2.0, 1.0, 0.42, [30.0, 40.0, 50.0], angles)
+                base = build_base(self.doc, case)
+                feat = feature_unfold(self.doc, base, unfold_target_face(base.Shape), k=0.42, old=None)
+                path = self.path("zm.dxf")
+                complete = False
+                try:
+                    UC.export_flat_dxf(feat, path)
+                    complete = True
+                except ValueError as exc:
+                    self.assertIn("bends", str(exc))
+                if complete:  # then the unfold really is the full flat: length must match
+                    _v, flat_len, _vol = measure(feat.Shape, 2.0, WIDTH)
+                    self.assertAlmostEqual(flat_len, case.developed_length(), delta=LEN_TOL)
+                else:
+                    self.assertFalse(os.path.exists(path))
 
     def test_zz_report(self):
         for name, n, worst, err in self.report:

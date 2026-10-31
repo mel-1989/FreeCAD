@@ -124,17 +124,95 @@ class FlatBend:
         return "<FlatBend %s>" % self.note
 
 
-def bends_to_json(bends, normal):
-    return json.dumps({"version": 1, "normal": list(normal),
+def merge_bends(bends):
+    """Merge bends that are one physical bend cut into pieces (a cutout across the bend): same
+    direction, angle, radius and allowance, and collinear centrelines. The pieces become the
+    segments of one FlatBend, so there is one note per bend."""
+    out = []
+    for b in bends:
+        for m in out:
+            if (m.direction == b.direction and abs(m.angle - b.angle) < 1e-6
+                    and abs(m.inside_radius - b.inside_radius) < 1e-6
+                    and abs(m.allowance - b.allowance) < 1e-6
+                    and all(_collinear(m.segments[0], seg) for seg in b.segments)):
+                m.segments.extend(b.segments)
+                break
+        else:
+            out.append(FlatBend(b.direction, b.angle, b.inside_radius, b.allowance, b.k_factor,
+                                b.thickness, list(b.segments)))
+    return out
+
+
+def _collinear(ref, seg, tol=1e-4):
+    d = ref[1] - ref[0]
+    if d.Length < 1e-12:
+        return False
+    d.normalize()
+    for p in seg:
+        if (p - ref[0]).cross(d).Length > tol:
+            return False
+    return True
+
+
+def source_bend_count(shape, thickness):
+    """Number of bends in the folded sheet-metal part: distinct cylinder axes that carry two
+    cylinders whose radii differ by the sheet thickness (the inside and outside of a bend)."""
+    groups = {}
+    for f in shape.Faces:
+        if f.Surface.TypeId != "Part::GeomCylinder":
+            continue
+        ax = Vector(f.Surface.Axis)
+        ax.normalize()
+        for c in (ax.x, ax.y, ax.z):
+            if abs(c) > 1e-9:
+                if c < 0:
+                    ax = ax * -1.0
+                break
+        centre = Vector(f.Surface.Center)
+        perp = centre - ax * centre.dot(ax)
+        key = tuple(round(v, 3) + 0.0 for v in (ax.x, ax.y, ax.z, perp.x, perp.y, perp.z))
+        groups.setdefault(key, set()).add(round(f.Surface.Radius, 6))
+    count = 0
+    for radii in groups.values():
+        rs = sorted(radii)
+        if any(abs((b - a) - thickness) < 1e-4 for a in rs for b in rs if b > a):
+            count += 1
+    return count
+
+
+def flat_problem(shape, normal, bends, thickness, source_bends):
+    """A readable reason why `shape` is not a complete flat pattern, or "" when it is."""
+    n = Vector(normal)
+    n.normalize()
+    if thickness:
+        heights = [v.Point.dot(n) for v in shape.Vertexes]
+        extent = max(heights) - min(heights)
+        if extent > thickness + 1e-3:
+            return ("The unfold is not flat: it is %.3f mm deep along its normal for a %.3f mm "
+                    "sheet, so some bends were not unfolded." % (extent, thickness))
+    if len(bends) < source_bends:
+        return ("The unfold recorded %d of the part's %d bends, so it is only partly flattened."
+                % (len(bends), source_bends))
+    return ""
+
+
+def bends_to_json(bends, normal, problem=""):
+    return json.dumps({"version": 1, "normal": list(normal), "problem": problem,
                        "bends": [b.to_dict() for b in bends]}, sort_keys=True)
 
 
 def bends_from_json(text):
     """(bends, normal) from the JSON stored on the Unfold object; ([], None) when empty."""
+    bends, normal, _problem = bends_and_problem_from_json(text)
+    return bends, normal
+
+
+def bends_and_problem_from_json(text):
     if not text:
-        return [], None
+        return [], None, ""
     data = json.loads(text)
-    return [FlatBend.from_dict(b) for b in data["bends"]], Vector(*data["normal"])
+    return ([FlatBend.from_dict(b) for b in data["bends"]], Vector(*data["normal"]),
+            data.get("problem", ""))
 
 
 ###################################################################################################
@@ -362,15 +440,40 @@ def _write_dxf(layers_entities, texts, extents):
     return d.text()
 
 
-def flat_dxf_text(shape, normal, bends, text_height=2.5, notes=True):
-    """DXF R12 text of a flat pattern.
+def _check_text_height(text_height):
+    if not isinstance(text_height, (int, float)) or isinstance(text_height, bool) \
+            or not math.isfinite(text_height) or text_height <= 0.0:
+        raise ValueError("text_height must be a finite number greater than 0, got %r" % (text_height,))
 
-    shape   the unfolded solid (SMUnfold's Shape); normal the sketch-plane normal; bends a
-    list of FlatBend in the same coordinates as `shape`.
-    """
-    n = Vector(normal)
-    n.normalize()
-    frame = Frame2D(n)
+
+def _frame_axes(shape_faces, normal, bends, plane_edges):
+    """Candidate x axes (unit vectors in the sketch plane): along the longest bend line (every
+    longest line and both senses when several tie), or along the longest straight outline edge
+    when there are no bends. Choosing the best of these by content makes the DXF independent
+    of how the part sits in space."""
+    cands = []
+    segs = [(b - a) for bend in bends for a, b in bend.segments]
+    if not segs:
+        segs = [e.Vertexes[-1].Point - e.Vertexes[0].Point for e in plane_edges
+                if isinstance(e.Curve, Part.Line)]
+    flat = []
+    for d in segs:
+        d = d - normal * d.dot(normal)
+        if d.Length > 1e-9:
+            flat.append(d)
+    if not flat:
+        return [None]
+    longest = max(d.Length for d in flat)
+    for d in flat:
+        if d.Length > longest - 1e-6:
+            u = Vector(d)
+            u.normalize()
+            cands.extend([u, u * -1.0])
+    return cands
+
+
+def _build(shape, n, bends, text_height, notes, ex):
+    frame = Frame2D(n, ex=ex)
     faces = _planar_faces(shape, n)
     outline, inner = [], []
     for face in faces:
@@ -382,7 +485,6 @@ def flat_dxf_text(shape, normal, bends, text_height=2.5, notes=True):
         raise ValueError("The flat pattern has no outline.")
     bounds = [_entity_bounds(e) for e in outline]
     frame.shift = (-min(b[0] for b in bounds), -min(b[1] for b in bounds))
-    # Re-derive in the shifted frame (the shift is a pure translation of every entity).
     sx, sy = frame.shift
 
     def moved(ent):
@@ -418,11 +520,33 @@ def flat_dxf_text(shape, normal, bends, text_height=2.5, notes=True):
     for layer in list(layers):
         layers[layer] = sorted((_canonical(e) for e in layers[layer]), key=_sort_key)
     texts.sort(key=lambda t: (round(t[0][0], ROUND), round(t[0][1], ROUND), t[3]))
-
+    key = (tuple((k, tuple(_sort_key(e) for e in layers[k])) for k in sorted(layers)),
+           tuple((round(t[0][0], ROUND), round(t[0][1], ROUND), round(t[2], 3), t[3]) for t in texts))
     all_ents = [e for ents in layers.values() for e in ents]
     all_bounds = [_entity_bounds(e) for e in all_ents]
     extents = (min(b[0] for b in all_bounds), min(b[1] for b in all_bounds),
                max(b[2] for b in all_bounds), max(b[3] for b in all_bounds))
+    return key, layers, texts, extents
+
+
+def flat_dxf_text(shape, normal, bends, text_height=2.5, notes=True):
+    """DXF R12 text of a flat pattern.
+
+    shape   the unfolded solid (SMUnfold's Shape); normal the sketch-plane normal; bends a
+    list of FlatBend in the same coordinates as `shape`. The x axis follows the longest bend
+    line (the longest straight outline edge without bends); of the candidate senses the one
+    with the smallest sorted entity list wins, so a rotated part gives the same file.
+    """
+    _check_text_height(text_height)
+    n = Vector(normal)
+    n.normalize()
+    edges = [e for f in _planar_faces(shape, n) for e in f.OuterWire.Edges]
+    best = None
+    for ex in _frame_axes(None, n, bends, edges):
+        result = _build(shape, n, bends, text_height, notes, ex)
+        if best is None or result[0] < best[0]:
+            best = result
+    _key, layers, texts, extents = best
     return _write_dxf(layers, texts if notes else [], extents)
 
 

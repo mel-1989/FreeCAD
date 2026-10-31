@@ -109,12 +109,22 @@ KFACTOR = 0.40
 # Helper functions
 ###################################################################################################
 
-def _store_bends(obj, bend_records, norm):
-    """Keep the flat pattern's bend lines on the Unfold feature (BendData, BendNotes)."""
+def _store_bends(obj, bend_records, norm, shape=None, source=None, thickness=None):
+    """Keep the flat pattern's bend lines on the Unfold feature (BendData, BendNotes). Pieces of
+    one bend cut by a cutout are merged; a flat that is not flat or has fewer bends than the
+    part is flagged in BendData and reported, and the DXF export then refuses it."""
     if not hasattr(obj, "BendData"):
         return
-    bends = [SheetMetalFlatPattern.FlatBend.from_record(r) for r in bend_records]
-    obj.BendData = SheetMetalFlatPattern.bends_to_json(bends, norm)
+    bends = SheetMetalFlatPattern.merge_bends(
+        [SheetMetalFlatPattern.FlatBend.from_record(r) for r in bend_records])
+    problem = ""
+    if shape is not None and source is not None and thickness:
+        problem = SheetMetalFlatPattern.flat_problem(
+            shape, norm, bends, thickness,
+            SheetMetalFlatPattern.source_bend_count(source.Shape, thickness))
+    if problem:
+        FreeCAD.Console.PrintWarning("%s: %s\n" % (getattr(obj, "Label", "Unfold"), problem))
+    obj.BendData = SheetMetalFlatPattern.bends_to_json(bends, norm, problem)
     obj.BendNotes = [b.note for b in bends]
 
 
@@ -140,10 +150,14 @@ def export_flat_dxf(unfold_obj, path, text_height=2.5, notes=True):
     Layers OUTLINE, INNER, BEND_UP, BEND_DOWN and NOTES (see SheetMetalFlatPattern). Returns
     the bends that were drawn. Raises ValueError when the feature has no V1 bend data.
     """
-    bends, normal = SheetMetalFlatPattern.bends_from_json(getattr(unfold_obj, "BendData", ""))
+    SheetMetalFlatPattern._check_text_height(text_height)
+    bends, normal, problem = SheetMetalFlatPattern.bends_and_problem_from_json(
+        getattr(unfold_obj, "BendData", ""))
     if normal is None:
         raise ValueError("%s has no bend data: recompute it with the default (V1) unfolder."
                          % unfold_obj.Label)
+    if problem:
+        raise ValueError("%s cannot be exported: %s" % (unfold_obj.Label, problem))
     placement = unfold_obj.Placement
     if not placement.isIdentity():
         bends = [b.transformed(placement) for b in bends]
@@ -616,11 +630,12 @@ class SMUnfold:
             lookupTable = SheetMetalKfactor.KFactorLookupTable(obj.MaterialSheet)
             kFactorTable = lookupTable.k_factor_lookup
 
-        bend_records = []
+        bend_records, meta = [], {}
         shape, foldComp, norm, _thename, _err_cd, _fSel, _obN = SheetMetalUnfolder.getUnfold(
-                kFactorTable, baseObject, baseFace, obj.KFactorStandard, bend_out=bend_records)
+                kFactorTable, baseObject, baseFace, obj.KFactorStandard, bend_out=bend_records,
+                meta_out=meta)
         if shape is not None:
-            _store_bends(obj, bend_records, norm)
+            _store_bends(obj, bend_records, norm, shape, baseObject, meta.get("thickness"))
 
         sketches = []
         if obj.GenerateSketch and shape is not None:

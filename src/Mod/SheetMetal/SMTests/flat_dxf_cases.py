@@ -41,6 +41,14 @@ class FlatCase:
         self.name, self.build, self.expect, self.group = name, build, expect, group
 
 
+def _setback(case, i):
+    """Setback of bend i from the profile's mould-line corner. The profile sketch is the mould
+    line on the side the material lies on; for a turn the other way the sketch line is the
+    outside of the bend, so the setback is tan(theta / 2) * (R + T) instead of R."""
+    r = case.R if case.angles[i] > 0 else case.R + case.T
+    return r * math.tan(math.radians(abs(case.angles[i])) / 2.0)
+
+
 def _strip_expect(case, mode="step", ba_override=None):
     """Bend centreline positions from the start of the profile for a base-flange Case."""
     pos, total = [], 0.0
@@ -48,17 +56,18 @@ def _strip_expect(case, mode="step", ba_override=None):
     for i, seg in enumerate(case.segs):
         s = seg
         if i > 0:
-            s -= case.R * math.tan(math.radians(case.angles[i - 1]) / 2.0)
+            s -= _setback(case, i - 1)
         if i < len(case.angles):
-            s -= case.R * math.tan(math.radians(case.angles[i]) / 2.0)
+            s -= _setback(case, i)
         total += s
         if i < len(case.angles):
             ba = (ba_override[i] if ba_override else
-                  math.radians(case.angles[i]) * (case.R + case.k_for(mode) * case.T))
+                  math.radians(abs(case.angles[i])) * (case.R + case.k_for(mode) * case.T))
             bas.append(ba)
             pos.append(total + ba / 2.0)
             total += ba
-    return dict(strip=pos, length=total, angles=list(case.angles), ba=bas, radius=case.R)
+    return dict(strip=pos, length=total, angles=[abs(a) for a in case.angles], ba=bas,
+                radius=case.R, signs=[1 if a > 0 else -1 for a in case.angles])
 
 
 def base_case(name, case, group="base", hole=False, root="largest", material="_manual",
@@ -72,7 +81,7 @@ def base_case(name, case, group="base", hole=False, root="largest", material="_m
 
     def expect(doc):
         if lookup is not None:
-            ba = [lookup.allowance(case.T, case.R, a) for a in case.angles]
+            ba = [lookup.allowance(case.T, case.R, abs(a)) for a in case.angles]
             exp = _strip_expect(case, ba_override=ba)
         else:
             exp = _strip_expect(case)
@@ -180,6 +189,8 @@ _FLANGE90 = next(c for c in TEF.CASES if c["name"] == "c05_90_T2_R2T")
 _HEM_CLOSED = next(c for c in THM.CASES if c["name"] == "h02_closed_T2")
 _HEM_OPEN = next(c for c in THM.CASES if c["name"] == "h05_open_T2_g1T")
 _TRAY = next(c for c in TCS.CASES if c["name"] == "tray_T1_R1T_g.5R_in")
+_ZIG = Case("m01_zigzag_T2_R1T", 2.0, 1.0, 0.42, [20.0, 30.0, 20.0], [90.0, -90.0])
+_HAT = Case("m02_hat_T2_R1T", 2.0, 1.0, 0.42, [20.0, 30.0, 40.0, 30.0, 20.0], [90.0, -90.0, -90.0, 90.0])
 _L = next(c for c in TCS.CASES if c["name"] == "L_T1_R.5T_in")
 _U = next(c for c in TCS.CASES if c["name"] == "U_T3_R3T_in")
 
@@ -202,6 +213,8 @@ def all_cases():
         convert_case("g13_convert_solid_l", _L),
         convert_case("g14_convert_solid_u", _U),
         convert_case("g15_convert_solid_tray", _TRAY),
+        base_case("g16_mixed_updown_zigzag", _ZIG, group="mixed"),
+        base_case("g17_mixed_updown_hat", _HAT, group="mixed"),
     ]
 
 

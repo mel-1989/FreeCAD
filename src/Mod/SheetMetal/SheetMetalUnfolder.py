@@ -2956,7 +2956,7 @@ def sew_Shape(obj):
     return None
 
 
-def getUnfold(k_factor_lookup, solid, facename, kFactorStandard, bend_out=None):
+def getUnfold(k_factor_lookup, solid, facename, kFactorStandard, bend_out=None, meta_out=None):
     global KFACTORSTANDARD
     KFACTORSTANDARD = kFactorStandard
 
@@ -2993,6 +2993,8 @@ def getUnfold(k_factor_lookup, solid, facename, kFactorStandard, bend_out=None):
                 debug_print("time to run the unfold: " + str(unfoldTime - endzeit))
                 folds = Part.Compound(foldLines)
                 # Part.show(folds, 'Fold_Lines')
+                if meta_out is not None:
+                    meta_out["thickness"] = TheTree._SheetTree__thickness
                 if bend_out is not None:
                     # cad-fork G07: one plain dict per bend, root side first.
                     for rec in reversed(TheTree.bend_records):
