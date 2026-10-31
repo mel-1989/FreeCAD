@@ -595,6 +595,34 @@ class TestLoftedRefusals(Doc):
         self.refused(feat, "folds over")
         self.assertNotIn("Invalid", self.make(a, b, alignment="auto").State)
 
+    # run 028 verifier finding MEDIUM-1: a twisted loft with a self-intersecting mid-surface was
+    # accepted at any thickness because the only guard was a prism-overlap limit scaling with T
+    def test_twisted_start_angle_is_refused_at_any_thickness(self):
+        for start in (315.0, 0.0, 45.0, 90.0, 135.0):
+            for t in (0.2, 2.0):
+                feat = self.make(open_rect(100, 100, 0), open_round(40, 100, start=start),
+                                 thickness=t)
+                self.refused(feat, "intersects itself", "start point")
+                self.doc.removeObject(feat.Name)
+
+    def test_untwisted_start_angles_are_accepted(self):
+        for start in (225.0, 270.0, 180.0):
+            for t in (0.2, 2.0):
+                feat = self.make(open_rect(100, 100, 0), open_round(40, 100, start=start),
+                                 thickness=t)
+                self.assertNotIn("Invalid", feat.State, (start, t))
+                self.assertTrue(feat.Shape.isValid())
+
+    def test_reversed_alignment_and_clockwise_rectangle_are_refused(self):
+        feat = self.make(open_rect(100, 100, 0), open_round(40, 100), thickness=0.2,
+                         alignment="reversed")
+        self.refused(feat, "intersects itself", "alignment")
+        cw = Part.Compound([Part.makeLine(V(x0, y0, 0), V(x1, y1, 0)) for (x0, y0), (x1, y1) in [
+            ((-50, 50), (50, 50)), ((50, 50), (50, -50)), ((50, -50), (-50, -50)),
+            ((-50, -50), (-50, 48))]])
+        feat = self.make(cw, open_round(40, 100), thickness=0.2, alignment="same")
+        self.refused(feat, "intersects itself")
+
     def test_thickness_too_large_inverts_a_facet(self):
         feat = self.make(open_rect(100, 100, 0), open_rect(60, 60, 80), thickness=60.0,
                          side="inside")
