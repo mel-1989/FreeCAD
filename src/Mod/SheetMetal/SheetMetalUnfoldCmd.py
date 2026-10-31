@@ -33,6 +33,7 @@ import Part
 import SheetMetalLookup
 
 import SheetMetalBendCuts
+import SheetMetalBendTable
 import SheetMetalKfactor
 import SheetMetalTools
 import SheetMetalUnfolder
@@ -205,7 +206,7 @@ class SMUnfold:
         unchanged = [(name, factor) for name, initial, factor in defaults
                      if abs(getattr(obj, name).Value - initial) < SheetMetalBendCuts.eps
                      and name not in expressions]
-        if not unchanged or not NewUnfolderAvailable:
+        if not unchanged or not NewUnfolderAvailable or SheetMetalTools.use_old_unfolder():
             return
         base, face_name = SheetMetalTools.smGetSubElementName(obj.baseObject[1][0])
         shape = (base if base is not None else obj.baseObject[0]).Shape
@@ -373,6 +374,10 @@ class SMUnfold:
         FreeCAD.Console.PrintMessage("Using V2 unfolding system\n")
         if obj.MaterialSheet in ["_manual", "_none"]:
             bac = BendAllowanceCalculator.from_single_value(obj.KFactor, obj.KFactorStandard)
+        elif SheetMetalBendTable.is_bend_table_ref(obj.MaterialSheet):
+            # A bend allowance / bend deduction table instead of a K-factor.
+            bac = BendAllowanceCalculator.from_bend_table(
+                SheetMetalBendTable.lookup_from_ref(obj.MaterialSheet))
 #NEU
         elif obj.MaterialSheet.startswith("csv_"):
             # Wenn eine externe CSV-Datei gewählt wurde:
@@ -390,9 +395,16 @@ class SMUnfold:
             if sheet is None:
                 sheet = FreeCAD.ActiveDocument.getObjectsByLabel(obj.MaterialSheet)[0]
             bac = BendAllowanceCalculator.from_spreadsheet(sheet)
-        sel_face, unfolded_shape, bend_lines, root_normal, bend_infodata = SheetMetalNewUnfolder.getUnfold(
-            bac, baseObject, baseFace
-        )
+        try:
+            sel_face, unfolded_shape, bend_lines, root_normal, bend_infodata = SheetMetalNewUnfolder.getUnfold(
+                bac, baseObject, baseFace
+            )
+        except SheetMetalNewUnfolder.SheetNeedsV1Error as exc:
+            # The V1 unfolder was the default before the new one and flattens parts whose bends
+            # are all sharp, or whose bend radii are slightly off (imported STEP). Say so.
+            FreeCAD.Console.PrintWarning(
+                "Falling back to the V1 unfolder for %s: %s\n" % (obj.Label, exc))
+            return self.oldUnfolder(obj, baseObject, baseFace)
 
         sketches = []
         if obj.GenerateSketch and unfolded_shape is not None:
@@ -535,7 +547,10 @@ class SMUnfold:
         """
         FreeCAD.Console.PrintMessage("Using V1 unfolding system\n")
         kFactorTable = {1: obj.KFactor}
-        if obj.MaterialSheet != "_manual" and obj.MaterialSheet != "_none":
+        if SheetMetalBendTable.is_bend_table_ref(obj.MaterialSheet):
+            # The old unfolder asks this object for the K-factor of each bend.
+            kFactorTable = SheetMetalBendTable.lookup_from_ref(obj.MaterialSheet)
+        elif obj.MaterialSheet != "_manual" and obj.MaterialSheet != "_none":
             lookupTable = SheetMetalKfactor.KFactorLookupTable(obj.MaterialSheet)
             kFactorTable = lookupTable.k_factor_lookup
 
@@ -871,8 +886,8 @@ if SheetMetalTools.isGuiLoaded():
                 # Sichere Ermittlung des Namens/Labels, egal ob mds ein Spreadsheet-Objekt oder ein String ist
                 label_name = mds.Label if hasattr(mds, "Label") else str(mds)
 
-                # Fügt sowohl 'material_' Spreadsheets als auch 'csv_' Tabellen hinzu
-                if label_name.startswith("material_") or label_name.startswith("csv_"):
+                # material_ spreadsheets, csv_ K-factor files and bt_ bend tables
+                if label_name.startswith(("material_", "csv_", SheetMetalBendTable.PREFIX)):
                     self.form.availableMds.addItem(label_name)
 
             self.form.availableMds.addItem(translate("SheetMetal", "Manual K-Factor"))

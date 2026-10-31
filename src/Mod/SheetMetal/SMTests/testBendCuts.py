@@ -17,6 +17,21 @@ needs_networkx = unittest.skipUnless(
 
 
 class TestBendCuts(unittest.TestCase):
+    # These tests exercise the opt-in new unfolder (the fork default is V1): set the parameter for
+    # the class and put it back afterwards, removing it if it was not set before.
+    @classmethod
+    def setUpClass(cls):
+        cls._param_existed = "UseOldUnfolder" in SheetMetalTools.params.GetBools()
+        cls._param_previous = SheetMetalTools.params.GetBool("UseOldUnfolder", True)
+        SheetMetalTools.params.SetBool("UseOldUnfolder", False)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._param_existed:
+            SheetMetalTools.params.SetBool("UseOldUnfolder", cls._param_previous)
+        else:
+            SheetMetalTools.params.RemBool("UseOldUnfolder")
+
     def test_wave_contours(self):
         edge = Part.makeLine(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(100, 0, 0))
         cuts = build_wave_cuts(edge, 10, 1, 5, 0.6, 1)

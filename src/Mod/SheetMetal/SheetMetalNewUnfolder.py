@@ -175,16 +175,99 @@ class EstimateThickness:
         )
 
     @staticmethod
+    def from_ray(shape: Part.Shape, selected_face: int, samples: int = 4) -> float:
+        """Thickness measured through the selected face: how far a ray from a point of the
+        face, pointing into the material, travels before it leaves the solid again.
+
+        Several points on the face are tried and the modal length wins, so a hole or a
+        counterbore under some of the points does not matter. Bend cylinders, hole walls and
+        the other legs of a U never enter the measurement. Returns 0.0 when no point works.
+        """
+        lengths = ray_lengths(shape, shape.Faces[selected_face], samples)
+        return modal_length(lengths)
+
+    @staticmethod
     def using_best_method(shape: Part.Shape, selected_face: int) -> float:
-        thickness = EstimateThickness.from_normal_edges(shape, selected_face)
+        # The ray through the selected face is the primary estimate. The older estimates (the
+        # modal normal edge, the area-closest parallel face, any concentric cylinder pair)
+        # were each fooled by some part (a symmetric U, counterbores) and only serve when the
+        # ray finds nothing. check_sheet_consistency() cross-checks the result against the
+        # bend cylinders.
+        thickness = EstimateThickness.from_ray(shape, selected_face)
+        if not thickness:
+            thickness = EstimateThickness.from_normal_edges(shape, selected_face)
         if not thickness:
             thickness = EstimateThickness.from_face(shape, selected_face)
-        if not thickness:
-            thickness = EstimateThickness.from_cylinders(shape)
         if not thickness:
             errmsg = "Couldn't estimate thickness for shape!"
             raise RuntimeError(errmsg)
         return thickness
+
+
+LEN_TOL = 1e-4  # mm: one tolerance for thickness, radius differences and concentricity
+
+
+def ray_lengths(shape: Part.Shape, face: Part.Face, samples: int = 4) -> list:
+    """Lengths of the material segments that start on `face` and run against its outward
+    normal, from a samples x samples grid of points inside the face."""
+    lengths = []
+    try:
+        umin, umax, vmin, vmax = face.ParameterRange
+    except Exception:
+        return lengths
+    reach = shape.BoundBox.DiagonalLength * 1.1 + 1.0
+    points = []
+    for i in range(1, samples + 1):
+        for j in range(1, samples + 1):
+            points.append((umin + (umax - umin) * i / (samples + 1), vmin + (vmax - vmin) * j / (samples + 1)))
+    for u, v in points:
+        try:
+            pt = face.valueAt(u, v)
+            if not face.isInside(pt, 1e-7, True):
+                continue
+            normal = face.normalAt(u, v)
+        except Exception:
+            continue
+        segment = Part.makeLine(pt, pt - normal * reach)
+        try:
+            common = shape.common(segment)
+        except Exception:
+            continue
+        best = None
+        for edge in common.Edges:
+            if min(vx.Point.distanceToPoint(pt) for vx in edge.Vertexes) < 1e-6:
+                best = edge.Length if best is None else max(best, edge.Length)
+        if best is not None:
+            lengths.append(best)
+    return lengths
+
+
+def modal_length(lengths: list) -> float:
+    """Mean of the most common length (lengths bucketed to LEN_TOL); 0.0 for an empty list."""
+    if not lengths:
+        return 0.0
+    buckets = {}
+    for value in lengths:
+        buckets.setdefault(round(value / LEN_TOL), []).append(value)
+    best = max(buckets.values(), key=len)
+    return sum(best) / len(best)
+
+
+class SheetConsistencyError(RuntimeError):
+    """The part is not a sheet the unfolder can flatten correctly (thickness disagrees with the
+    bends, a bend has only one cylinder face, sharp and round bends are mixed). Neither
+    unfolder gets these right, so the unfold is refused."""
+
+
+class SheetNeedsV1Error(SheetConsistencyError):
+    """Every bend is sharp (no bend cylinders at all). The new unfolder needs cylindrical bend
+    faces; the V1 unfolder handles this case, so the Unfold feature falls back to it."""
+
+
+class RootFaceError(RuntimeError):
+    """The selected root face is not one of the two large faces of the sheet."""
+
+
 
 
 class TangentFaces:
@@ -721,29 +804,51 @@ class BendAllowanceCalculator:
         return instance
 
     def get_k_factor(self, radius: float, thickness: float) -> float:
-        # If we are below the lowest tabulated value for the radius over
-        # thickness relation, return the smallest noted k-factor.
+        """K-factor (ANSI) for a bend with the given INSIDE radius.
+
+        The table is keyed by inside radius over thickness, clamped to its first and last
+        entries outside the tabulated range and piecewise linear in between. Callers holding
+        a face radius must convert it to the inside radius first (see get_bend_allowance).
+        """
         r_over_t = radius / thickness
-        if r_over_t <= self.radius_thickness_values[0]:
-            kf_val = self.k_factor_values[0]
-        # Apply similar logic to radius:thickness values greater than
-        # the largest available.
-        elif r_over_t >= self.radius_thickness_values[-1]:
-            kf_val = self.k_factor_values[-1]
-        # If we are within the range of specified radius: thickness
-        # values, perform piecewise linear interpolation.
+        rts = self.radius_thickness_values
+        kfs = self.k_factor_values
+        if r_over_t <= rts[0]:
+            kf_val = kfs[0]
+        elif r_over_t >= rts[-1]:
+            kf_val = kfs[-1]
         else:
+            # Find the segment rts[i] <= r_over_t < rts[i + 1].
             i = 0
-            while r_over_t <= self.radius_thickness_values[i]:
+            while r_over_t >= rts[i + 1]:
                 i += 1
-            kf1 = self.k_factor_values[i]
-            kf2 = self.k_factor_values[i + 1]
-            rt1 = self.radius_thickness_values[i]
-            rt2 = self.radius_thickness_values[i + 1]
-            kf_val = kf1 + (kf2 - kf1) * ((r_over_t - rt1) / (rt2 - rt1))
+            kf_val = kfs[i] + (kfs[i + 1] - kfs[i]) * ((r_over_t - rts[i]) / (rts[i + 1] - rts[i]))
         # We use the ansi definition of the k-factor everywhere
         # internally.
         return self._convert_to_ansi_kfactor(kf_val)
+
+    @classmethod
+    def from_bend_table(cls, bend_table):
+        """Allowance straight from a BendTable lookup (SheetMetalBendTable.BendTableLookup)."""
+        instance = cls()
+        instance.k_factor_standard = cls.KFactorStandard.ANSI
+        instance.radius_thickness_values = [1.0]
+        instance.k_factor_values = [0.5]
+        instance.bend_table = bend_table
+        return instance
+
+    bend_table = None
+
+    @staticmethod
+    def inside_radius(bend_direction: "BendDirection", radius: float, thickness: float) -> float:
+        """Inside radius of a bend from the radius of the cylindrical face the unfolder met.
+
+        The face next to the chosen root face is the inner surface of an UP bend and the outer
+        surface of a DOWN bend, so the inside radius is the face radius or that minus T.
+        """
+        if bend_direction == BendDirection.DOWN:
+            return radius - thickness
+        return radius
 
     def get_bend_allowance(
         self,
@@ -752,11 +857,13 @@ class BendAllowanceCalculator:
         thickness: float,
         bend_angle: float,
     ) -> float:
-        factor = self.get_k_factor(radius, thickness)
-        if bend_direction == BendDirection.DOWN:
-            factor -= 1
-        bend_allowance = (radius + factor * thickness) * bend_angle
-        return bend_allowance
+        """Bend allowance for a bend of `bend_angle` radians on a face of radius `radius`."""
+        inside = self.inside_radius(bend_direction, radius, thickness)
+        if self.bend_table is not None:
+            return self.bend_table.allowance(thickness, inside, degrees(bend_angle))
+        # Neutral axis at inside + K * T from the centre, whichever face the root is on.
+        factor = self.get_k_factor(inside, thickness)
+        return (inside + factor * thickness) * bend_angle
 
     class KFactorStandard(Enum):
         ANSI = auto()
@@ -1345,6 +1452,187 @@ def compute_unbend_transform(
     overall_transform.transform(Vector(), alignment_transform)
     return alignment_transform, overall_transform, uvref
 
+def check_sheet_consistency(shape: Part.Shape, root_index: int, thickness: float, how: str = "measured through the root face") -> None:
+    """Refuse to unfold a part whose sheet the new unfolder cannot establish.
+
+    Raises RootFaceError when the root is an end face or side wall. Raises
+    SheetConsistencyError when (a) a bend cylinder has no concentric partner one thickness
+    away in radius, so the thickness estimate or the bend is not the uniform sheet the unfold
+    assumes (a bend with only one cylinder face, for instance), or (b) two sheet faces meet at
+    an angle with no radius between them (a sharp bend), which needs the V1 unfolder. Every
+    bend cylinder of the shape is checked, not only those reachable from the root. Bend
+    cylinders are the cylindrical faces whose material ray is one thickness long; hole and
+    counterbore walls are not.
+    """
+    faces = list(shape.Faces)
+    tol = LEN_TOL
+    root = faces[root_index]
+    def is_flat_or_cylinder(f):
+        if f.Surface.TypeId in ("Part::GeomPlane", "Part::GeomCylinder"):
+            return True
+        try:  # a flat face carried by a spline surface (some imported or swept parts)
+            return f.findPlane() is not None
+        except Exception:
+            return False
+
+    odd = [i for i, f in enumerate(faces) if not is_flat_or_cylinder(f)]
+    if odd:
+        kinds = sorted({faces[i].Surface.TypeId.replace("Part::Geom", "").lower() for i in odd})
+        raise SheetNeedsV1Error(
+            f"the part has {', '.join(kinds)} faces (Face{odd[0] + 1}, for instance: countersinks, "
+            "embosses or other formed features) that the new unfolder does not flatten"
+        )
+    cylinders = [(i, f) for i, f in enumerate(faces) if f.Surface.TypeId == "Part::GeomCylinder"]
+    # Thicknesses the bends themselves show: radius gaps of concentric cylinder pairs that meet a
+    # planar face along a straight edge parallel to their axis (hole and counterbore walls do not).
+    gaps = []
+    for ci, cf in cylinders:
+        axis = cf.Surface.Axis
+        joined = any(
+            e.Curve.TypeId == "Part::GeomLine" and e.Curve.Direction.cross(axis).Length < 1e-6
+            and any(o.Surface.TypeId == "Part::GeomPlane" for o in shape.ancestorsOfType(e, Part.Face))
+            for e in cf.Edges
+        )
+        if not joined:
+            continue
+        for cj, cg in cylinders:
+            if cj > ci and cg.Surface.Axis.cross(axis).Length < 1e-5 \
+                    and (cg.Surface.Center - cf.Surface.Center).cross(axis).Length < 0.2 * max(thickness, 1e-9):
+                gaps.append(abs(cg.Surface.Radius - cf.Surface.Radius))
+    longest = max((e.Length for e in root.Edges), default=0.0)
+    if gaps:
+        root_ok = any(abs(g - thickness) <= 0.1 * thickness for g in gaps)
+    else:
+        root_ok = longest <= 0 or root.Area / longest >= thickness - tol
+    if root.Surface.TypeId != "Part::GeomPlane" or not root_ok:
+        raise RootFaceError(
+            f"Face{root_index + 1} is not one of the two large faces of the sheet (the thickness "
+            f"measured through it is {thickness:.9g} mm, which the bends of the part do not show). "
+            "Select a large sheet face as the root of the unfold."
+        )
+    sheet_cache = {}
+
+    def is_sheet(i):
+        if i not in sheet_cache:
+            sheet_cache[i] = (
+                faces[i].Surface.TypeId == "Part::GeomPlane"
+                and abs(modal_length(ray_lengths(shape, faces[i], 3)) - thickness) < tol
+            )
+        return sheet_cache[i]
+
+    def joins_a_sheet_face_along_the_axis(face):
+        """A bend meets a sheet face along a straight edge parallel to its axis; a hole,
+        a corner fillet or a counterbore wall does not (its edges to sheet faces are arcs)."""
+        axis = face.Surface.Axis
+        for edge in face.Edges:
+            if edge.Curve.TypeId != "Part::GeomLine" or edge.Curve.Direction.cross(axis).Length > 1e-6:
+                continue
+            for other in shape.ancestorsOfType(edge, Part.Face):
+                if not other.isSame(face) and is_sheet(next(k for k, f in enumerate(faces) if f.isSame(other))):
+                    return True
+        return False
+
+    has_bend_cylinders = False
+    for idx, face in cylinders:
+        surf = face.Surface
+
+        def has_partner(gap):
+            return any(
+                j != idx
+                and other.Surface.TypeId == "Part::GeomCylinder"
+                and abs(abs(other.Surface.Radius - surf.Radius) - gap) < tol
+                and other.Surface.Axis.cross(surf.Axis).Length < 1e-5
+                # the centres of two offset fillets differ by sqrt(2) times the radius offset
+                and (other.Surface.Center - surf.Center).cross(surf.Axis).Length < 2.0 * tol
+                for j, other in cylinders
+            )
+
+        if joins_a_sheet_face_along_the_axis(face):
+            has_bend_cylinders = True
+            if not has_partner(thickness):
+                near = [
+                    (abs(other.Surface.Radius - surf.Radius) - thickness, j)
+                    for j, other in cylinders
+                    if j != idx
+                    and abs(abs(other.Surface.Radius - surf.Radius) - thickness) <= 0.1 * thickness
+                    and other.Surface.Axis.cross(surf.Axis).Length < 1e-5
+                    and (other.Surface.Center - surf.Center).cross(surf.Axis).Length <= 0.2 * thickness
+                ]
+                if near:
+                    # Imported (STEP) bends whose radii are a little off: V1 flattens these exactly.
+                    miss, j = min(near, key=lambda m: abs(m[0]))
+                    raise SheetNeedsV1Error(
+                        f"the bend Face{idx + 1} (radius {surf.Radius:.9g} mm) and its partner "
+                        f"Face{j + 1} differ in radius by {thickness + miss:.9g} mm, which is "
+                        f"{miss:+.3g} mm from the sheet thickness {thickness:.9g} mm ({how}), "
+                        f"beyond the {tol:g} mm tolerance of the new unfolder"
+                    )
+                vmin_, vmax_ = face.ParameterRange[2], face.ParameterRange[3]
+                if abs((vmax_ - vmin_) - thickness) < 1e-3 * max(1.0, thickness):
+                    # A wall only as long as the sheet is thick (a window or tab corner), not a bend.
+                    raise SheetNeedsV1Error(
+                        f"Face{idx + 1} (radius {surf.Radius:.9g} mm) is a rounded wall exactly one "
+                        f"thickness ({thickness:.9g} mm) tall, as at a window or tab border; the new "
+                        "unfolder does not flatten these"
+                    )
+                raise SheetConsistencyError(
+                    f"Cannot unfold: the sheet thickness {thickness:.9g} mm ({how}) does not match "
+                    f"the bend Face{idx + 1} (radius {surf.Radius:.9g} mm), which has no concentric "
+                    f"bend face {thickness:.9g} mm (+/- {tol:g}) away in radius. The bend has only "
+                    "one cylinder face, or the part is not a uniform-thickness sheet."
+                )
+            continue
+        # Not next to a sheet face of this thickness: a hole or counterbore wall, unless it is a
+        # bend of some other thickness (the estimate is then wrong).
+        try:
+            umin, umax, vmin, vmax = face.ParameterRange
+            ray = ray_lengths_at(shape, face, 0.5 * (umin + umax), 0.5 * (vmin + vmax))
+        except Exception:
+            continue
+        if ray is not None and abs(ray - thickness) > tol and has_partner(ray):
+            raise SheetConsistencyError(
+                f"Cannot unfold: the sheet thickness {thickness:.9g} mm ({how}) does not match "
+                f"the bend Face{idx + 1} (radius {surf.Radius:.9g} mm), which is {ray:.9g} mm thick. "
+                "The part is not a uniform-thickness sheet."
+            )
+    # Sharp bends: two sheet faces sharing an edge at an angle.
+    for edge in shape.Edges:
+        pair = shape.ancestorsOfType(edge, Part.Face)
+        if len(pair) != 2:
+            continue
+        i, j = (next(k for k, f in enumerate(faces) if f.isSame(p)) for p in pair)
+        fa, fb = faces[i], faces[j]
+        if fa.Surface.TypeId != "Part::GeomPlane" or fb.Surface.TypeId != "Part::GeomPlane":
+            continue
+        if fa.Surface.Axis.cross(fb.Surface.Axis).Length < 1e-6:
+            continue
+        if is_sheet(i) and is_sheet(j):
+            if has_bend_cylinders:
+                raise SheetNeedsV1Error(
+                    f"Face{i + 1} and Face{j + 1} are sheet faces that meet at an angle with no "
+                    "bend radius (a sharp edge or a wall as wide as the sheet) in a part that also "
+                    "has round bends"
+                )
+            raise SheetNeedsV1Error(
+                f"Cannot unfold with the new unfolder: Face{i + 1} and Face{j + 1} are sheet "
+                "faces that meet at an angle with no bend radius (a sharp bend). The new "
+                "unfolder needs cylindrical bend faces."
+            )
+
+
+def ray_lengths_at(shape: Part.Shape, face: Part.Face, u: float, v: float):
+    """Material segment length from the point (u, v) of `face` against its outward normal."""
+    pt = face.valueAt(u, v)
+    normal = face.normalAt(u, v)
+    reach = shape.BoundBox.DiagonalLength * 1.1 + 1.0
+    common = shape.common(Part.makeLine(pt, pt - normal * reach))
+    best = None
+    for edge in common.Edges:
+        if min(vx.Point.distanceToPoint(pt) for vx in edge.Vertexes) < 1e-6:
+            best = edge.Length if best is None else max(best, edge.Length)
+    return best
+
+
 def unfold(
     shape: Part.Shape, root_face_index: int, bac: BendAllowanceCalculator
 ) -> tuple[list[Part.Edge], list[BendInfo]]:
@@ -1356,6 +1644,8 @@ def unfold(
     thickness = EstimateThickness.using_best_method(shape, root_face_index)
     # Also build a list of all seam edges, to be filtered out from the
     # unfolded shape.
+    this_shape_faces = list(shape.Faces)
+    check_sheet_consistency(shape, root_face_index, thickness)
     seam_edges_list = []
     this_shape_edges = list(shape.Edges)
     for _, _, edata in graph_of_sheet_faces.edges(data=True):
@@ -1382,7 +1672,6 @@ def unfold(
     # The digraph should now have everything we need to unfold the shape,
     # For every edge f1--e1-->f2 where f2 is a cylindrical face, feed f1
     # through our unbending functions with e1 as the stationary edge.
-    this_shape_faces = list(shape.Faces)
     for e in [
         e for e in dg.edges if this_shape_faces[e[1]].Surface.TypeId == "Part::GeomCylinder"
     ]:
