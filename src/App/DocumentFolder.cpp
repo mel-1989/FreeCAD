@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <cctype>
+#include <cstdlib>
 #include <iterator>
 #include <map>
 #include <set>
@@ -26,6 +27,7 @@
 #include <Base/Writer.h>
 
 #include "Application.h"
+#include "PropertyFile.h"
 #include "Document.h"
 
 namespace fs = std::filesystem;
@@ -276,7 +278,28 @@ void normaliseStaging(const fs::path& staging, const std::vector<std::string>& f
 class RecordingWriter: public Base::FileWriter
 {
 public:
-    using Base::FileWriter::FileWriter;
+    explicit RecordingWriter(const char* dir)
+        : Base::FileWriter(dir)
+    {
+        // Names the folder format owns. An attachment (PropertyFileIncluded) with one of them is
+        // given a unique name by the Writer, which the property stores in Document.xml and the
+        // reader resolves, so the attachment survives under e.g. "Document1.xml".
+        for (const char* reserved : {"Document.xml", "FCStdFolder.txt", ".backup"}) {
+            FileNameManager.addExactName(reserved);
+        }
+    }
+
+    /// True when an attachment holds the fixed name the GUI document is read back from
+    bool attachmentTakesGuiName() const
+    {
+        for (const auto& entry : FileList) {
+            if (entry.FileName == "GuiDocument.xml"
+                && dynamic_cast<const App::PropertyFileIncluded*>(entry.Object)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     std::vector<std::string> requestedNames() const
     {
@@ -286,6 +309,14 @@ public:
         }
         return names;
     }
+};
+
+// Thrown when an undo move failed: the staging directory then holds the only copy of some old
+// files and must stay on disk.
+class RollbackFailed: public Base::FileException
+{
+public:
+    using Base::FileException::FileException;
 };
 
 // One file move done by commitFolder, so a failure can be undone
@@ -348,12 +379,38 @@ void commitFolder(const fs::path& staging,
 
     std::vector<Move> done;
     std::vector<fs::path> created;
+    // Test hook: FREECAD_FOLDER_TEST_FAULT=undo fails the commit after the new files are in
+    // place and makes every undo move fail, to check that nothing is deleted then.
+    const char* faultEnv = std::getenv("FREECAD_FOLDER_TEST_FAULT");
+    const bool faultUndo = faultEnv && std::string(faultEnv) == "undo";
     auto undo = [&]() {
+        std::size_t failed = 0;
         for (auto it = created.rbegin(); it != created.rend(); ++it) {
-            fs::remove(*it, ec);
+            std::error_code e3;
+            if (faultUndo) {
+                ++failed;
+            }
+            else {
+                fs::remove(*it, e3);
+                failed += e3 ? 1 : 0;
+            }
         }
         for (auto it = done.rbegin(); it != done.rend(); ++it) {
-            fs::rename(it->to, it->from, ec);
+            std::error_code e3;
+            if (faultUndo) {
+                e3 = std::make_error_code(std::errc::io_error);
+            }
+            else {
+                fs::rename(it->to, it->from, e3);
+            }
+            failed += e3 ? 1 : 0;
+        }
+        if (failed) {
+            throw RollbackFailed("The folder save failed and could not be fully undone ("
+                                     + std::to_string(failed)
+                                     + " moves). The previous files are kept in '"
+                                     + fromPath(backup) + "'; copy them back by hand",
+                                 fromPath(staging).c_str());
         }
     };
     try {
@@ -377,6 +434,9 @@ void commitFolder(const fs::path& staging,
             fs::create_directories(dst.parent_path());
             fs::rename(staging / toPath(f), dst);
             created.push_back(dst);
+        }
+        if (faultUndo) {
+            throw Base::RuntimeError("injected fault after placing the new files");
         }
     }
     catch (...) {
@@ -483,6 +543,12 @@ bool Document::saveToFolder(const char* dirname) const
             signalSaveDocument(writer);
             writer.writeFiles();
             writer.close();
+            if (writer.attachmentTakesGuiName()) {
+                throw Base::FileException(
+                    "An attached file is named GuiDocument.xml, which a folder document reserves "
+                    "for the GUI state; rename the attachment",
+                    dirname);
+            }
             requested = writer.requestedNames();
             requested.emplace_back("Document.xml");
             if (writer.hasErrors()) {
@@ -506,7 +572,7 @@ bool Document::saveToFolder(const char* dirname) const
         std::map<std::string, std::string> folded;
         for (const auto& f : requested) {
             const auto [it, fresh] = folded.emplace(foldCase(f), f);
-            if (!fresh && it->second != f) {
+            if (!fresh) {
                 throw Base::FileException(
                     "Folder documents need file names that differ by more than case, but '"
                         + it->second + "' and '" + f
@@ -536,6 +602,9 @@ bool Document::saveToFolder(const char* dirname) const
 
         fs::create_directories(target);
         commitFolder(staging, target, files, readManifest(target));
+    }
+    catch (const RollbackFailed&) {
+        throw;  // keep the staging directory: it holds the backup of the previous state
     }
     catch (...) {
         fs::remove_all(staging, ec);

@@ -520,6 +520,72 @@ class TestFolderRepair(unittest.TestCase):
             doc.save()  # raised before the fix when an attachment name contained ".."
             App.closeDocument(doc.Name)
 
+    def test_reserved_attachment_names_are_renamed_not_overwritten(self):
+        import Part
+        src = self.p("att")
+        os.makedirs(src)
+        contents = {"Document.xml": "<notes>my attachment</notes>", "FCStdFolder.txt": "mine\n"}
+        doc = shape_doc("res", Box=Part.makeBox(1, 2, 3))
+        target = self.p("res.FCStd.d")
+        doc.saveAsFolder(target)
+        for i, (n, c) in enumerate(contents.items()):
+            with open(os.path.join(src, n), "w") as fh:
+                fh.write(c)
+            o = doc.addObject("App::DocumentObjectGroup", "G%d" % i)
+            o.addProperty("App::PropertyFileIncluded", "Inc")
+            o.Inc = os.path.join(src, n)
+        doc.save()
+        again = tree_text(target)
+        doc.save()
+        self.assertEqual(tree_text(target), again)  # deterministic renaming
+        self.assertTrue(again["Document.xml"].startswith(b"<?xml"))
+        App.closeDocument(doc.Name)
+        doc = App.openDocument(target)
+        self.assertEqual(len(doc.Objects), 3)
+        self.assertAlmostEqual(doc.Box.Shape.Volume, 6.0)
+        for i, (n, c) in enumerate(contents.items()):
+            f = doc.getObject("G%d" % i).Inc
+            self.assertEqual(open(f).read(), c, n)
+        doc.save()  # and it saves again
+
+    def test_attachment_named_like_gui_document_is_refused(self):
+        import Part
+        src = self.p("att2")
+        os.makedirs(src)
+        open(os.path.join(src, "GuiDocument.xml"), "w").write("x")
+        doc = shape_doc("gui", Box=Part.makeBox(1, 1, 1))
+        o = doc.addObject("App::DocumentObjectGroup", "G")
+        o.addProperty("App::PropertyFileIncluded", "Inc")
+        o.Inc = os.path.join(src, "GuiDocument.xml")
+        with self.assertRaises(Exception) as cm:
+            doc.saveAsFolder(self.p("g.FCStd.d"))
+        self.assertIn("GuiDocument.xml", str(cm.exception))
+
+    def test_failed_undo_keeps_the_backup(self):
+        import Part
+        doc = shape_doc("undo", Aaa=Part.makeBox(1, 1, 1), Zzz=Part.makeBox(2, 2, 2))
+        target = self.p("u.FCStd.d")
+        doc.saveAsFolder(target)
+        old = tree_text(target)
+        doc.Aaa.Shape = Part.makeBox(3, 3, 3)
+        doc.Zzz.Shape = Part.makeBox(4, 4, 4)
+        os.environ["FREECAD_FOLDER_TEST_FAULT"] = "undo"
+        try:
+            with self.assertRaises(Exception) as cm:
+                doc.save()
+        finally:
+            del os.environ["FREECAD_FOLDER_TEST_FAULT"]
+        msg = str(cm.exception)
+        self.assertIn(".saving-", msg)
+        kept = [f for f in os.listdir(self.tmp) if ".saving-" in f]
+        self.assertEqual(len(kept), 1, kept)
+        backup = self.p(kept[0], ".backup")
+        self.assertTrue(os.path.isdir(backup))
+        # every file that the failed save replaced is still there in the backup, byte for byte
+        for name in ("Aaa.Shape.brp", "Zzz.Shape.brp"):
+            with open(os.path.join(backup, name), "rb") as fh:
+                self.assertEqual(fh.read(), old[name])
+
     def test_save_as_folder_forces_folder_mode(self):
         import Part
         doc = shape_doc("plain", Box=Part.makeBox(1, 1, 1))
