@@ -142,6 +142,11 @@ class RemoteVault(V.Vault):
         """``{user, role}`` as the server sees the token (the role is admin, writer or reader)."""
         return self.api.ok("GET", "/whoami")
 
+    def _role(self):
+        """Effective role (viewer, engineer, approver, admin) as the server computes it from the host's permission and
+        the vault's ``roles.json``."""
+        return self.api.ok("GET", "/access")["role"]
+
     def _check_identity(self):
         if not self._identity_checked:
             me = self.whoami()
@@ -215,7 +220,8 @@ class RemoteVault(V.Vault):
         if "could not be asked" in err:  # the hook failed closed because the PDM server is down
             raise ServerUnavailable(f"the PDM server is unreachable, so the vault refused the push: {err}")
         if "pre-receive hook declined" in err or "remote rejected" in err or "denied" in err or "403" in err:
-            if "non-fast-forward" in err or "fetch first" in err:
+            if ("non-fast-forward" in err or "fetch first" in err or "incorrect old value" in err
+                    or "cannot lock ref" in err):  # lost a race for the branch (the host's own compare-and-swap)
                 return False
             raise PermissionDenied(f"the vault refused the push: {err}")
         if "401" in err or "Authentication failed" in err:

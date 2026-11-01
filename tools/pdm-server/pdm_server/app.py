@@ -2,6 +2,7 @@
 """PDM server: FastAPI app (``uvicorn pdm_server.app:app``). See ../README.md."""
 
 import datetime
+import re
 import threading
 import uuid
 
@@ -100,6 +101,8 @@ def _doc(name):
 @app.post("/locks/{name}")
 async def acquire(name: str, request: Request, user: User = Depends(auth)):
     need(user, "writer", "admin")
+    if access(user)["role"] == "viewer":
+        raise HTTPException(403, f"{user.login} is a viewer on this vault; viewers change nothing")
     _doc(name)
     body = await request.json()
     payload = {k: body.get(k) for k in ("host", "workdir", "client", "new_revision", "nonce")}
@@ -142,6 +145,66 @@ def break_lock(name: str, user: User = Depends(auth)):
         return {"broken": False}
     db.release(name, None, user.login, action="break", detail={"former_holder": cur["holder"], "former_lock": cur})
     return {"broken": True, "former": cur}
+
+
+def _eco_mod(st):
+    import importlib
+    return importlib.import_module(st["mirror"].V.__name__.rsplit(".", 1)[0] + ".eco")
+
+
+@app.get("/access")
+def access(user: User = Depends(auth)):
+    """The caller's effective role (viewer, engineer, approver, admin): the host's permission on the repository,
+    narrowed or widened by the vault's own ``plm/roles.json`` (see PDM/eco.py). ``/whoami`` keeps the host's role."""
+    st = S()
+    E = _eco_mod(st)
+    with st["mirror"].lock:
+        v, head = st["mirror"].sync()
+        grants = E.read_roles(v, head)
+    return {"user": user.login, "base": user.role, "role": E.effective_role(user.role, grants, user.login)}
+
+
+@app.get("/roles")
+def roles(user: User = Depends(auth)):
+    st = S()
+    E = _eco_mod(st)
+    with st["mirror"].lock:
+        v, head = st["mirror"].sync()
+        return E.read_roles(v, head)
+
+
+@app.get("/ecos")
+def list_ecos(state: str = "", user: User = Depends(auth)):
+    """Every ECO of the vault (read from the service's clone of the vault branch; the rules are PDM/eco.py)."""
+    st = S()
+    E = _eco_mod(st)
+    with st["mirror"].lock:
+        v, head = st["mirror"].sync()
+        ecos = E.read_all(v, head)
+    return [{"number": n, "title": r["title"], "state": r["state"], "author": r["author"], "documents": r["documents"]}
+            for n, r in sorted(ecos.items()) if not state or r["state"] == state]
+
+
+def _eco_or_404(st, number):
+    E = _eco_mod(st)
+    if not re.fullmatch(E.NUM_RE, number):
+        raise HTTPException(400, f"bad ECO number {number!r}")
+    with st["mirror"].lock:
+        v, head = st["mirror"].sync()
+        rec = E.load(v, head, number)
+    if rec is None:
+        raise HTTPException(404, f"no ECO {number}")
+    return rec
+
+
+@app.get("/ecos/{number}")
+def get_eco(number: str, user: User = Depends(auth)):
+    return _eco_or_404(S(), number)
+
+
+@app.get("/ecos/{number}/history")
+def eco_history(number: str, user: User = Depends(auth)):
+    return _eco_or_404(S(), number)["history"]
 
 
 @app.get("/audit")
@@ -214,6 +277,7 @@ async def pre_receive(request: Request, x_pdm_hook_secret: str = Header(default=
         except Exception:
             v, head = None, None
         reason = None
+        notes = []
         if pinned is None:
             # Not initialised yet: only an admin's init push onto an empty repository may go through (policy).
             if v is not None:
@@ -237,7 +301,8 @@ async def pre_receive(request: Request, x_pdm_hook_secret: str = Header(default=
                       f"({pinned[:10]}); an admin must recover it (see README, Recovery)")
         if reason is None:
             reason = policy.check_push(mirror.V, db, v, pusher, role, body["updates"], pinned=pinned,
-                                       emails={f"{pusher}@pdm.local", st["fj"].email_of(pusher)} - {None})
+                                       emails={f"{pusher}@pdm.local", st["fj"].email_of(pusher)} - {None},
+                                       notes=notes)
         if reason is None:
             new = [u["new"] for u in body["updates"] if u["ref"] == f"refs/heads/{mirror.V.BRANCH}"]
             if new:
@@ -245,4 +310,6 @@ async def pre_receive(request: Request, x_pdm_hook_secret: str = Header(default=
     if reason:
         st["db"].log(pusher, "push-refused", None, {"reason": reason})
         return {"allow": False, "reason": reason}
+    for action, document, detail in notes:  # ECO steps, role changes and admin overrides of the push just approved
+        st["db"].log(pusher, action, document, detail)
     return {"allow": True}

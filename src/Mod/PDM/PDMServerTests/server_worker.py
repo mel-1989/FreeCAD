@@ -4,7 +4,7 @@
 Same protocol as ``PDMTests/client_worker.py`` (it is imported and extended here): ops from the JSON file named by
 ``PDM_OPS_FILE``, one ``PDMRESULT:`` line out. ``PDM_SERVER_URL`` and ``PDM_TOKEN`` in the environment say which
 server and which user's token this process acts with. Extra ops: ``race_loop``, ``raw_push``, ``outage_checkin``,
-``http``, ``whoami``.
+``http``, ``whoami``; for the ECO scenarios (slice 6a) ``barrier``, ``append_xml``, ``eco_call``, ``eco_forge``, ``bare_release``.
 """
 
 import importlib.util
@@ -28,6 +28,35 @@ def run(op):
     v = cw.STATE.get("v")
     if kind == "whoami":
         return {"ok": True, "value": v.whoami()}
+    if kind == "barrier":
+        cw.barrier(op["dir"], op["tag"], v.user, op["n"])
+        return {"ok": True}
+    if kind == "append_xml":
+        d = v.doc_path(op["name"])
+        if not os.path.isdir(d):
+            return {"ok": False}
+        with open(os.path.join(d, "Document.xml"), "a") as f:
+            f.write(op["text"])
+        return {"ok": True}
+    if kind == "eco_call":
+        # Vault ECO method on the open ECO that holds document ``doc`` (its number is found, not known to the test).
+        try:
+            num = [e["number"] for e in v.eco_list() if e["state"] != "Released"
+                   and op["doc"] in [d["name"] for d in e["documents"]]][-1]
+            return {"ok": True, "value": getattr(v, op["m"])(num, *op.get("a", []), **op.get("k", {})), "number": num}
+        except V.PDMError as e:
+            return cw.err(e)
+    if kind == "bare_release":
+        # A plain transition commit to Released, as a client that skips Vault.transition would push it.
+        v._fetch()
+        cur = v._records(op["name"])[0]
+        _t, tip = v._commit(v._head(), op["name"], "bare", cur["revision"], "Released", "transition", True, None)
+        try:
+            return {"ok": True, "pushed": v._push_main(tip)}
+        except V.PDMError as e:
+            return cw.err(e)
+    if kind == "eco_forge":
+        return _eco_forge(v, op)
     if kind == "race_loop":
         # Per trial: all clients try to lock the same document together; the winner releases before the next.
         won = []
@@ -131,6 +160,42 @@ def run(op):
         finally:
             v._push_main = orig
     return _base_run(op)
+
+
+def _eco_forge(v, op):
+    """A client that skips the library's ECO rules: hand-built ECO commits pushed straight to the vault host.
+
+    ``entry``: append that history entry to ECO ``number`` and set its state, no questions asked; ``partial_release``:
+    the release chain of an Approved ECO with only its first document's transition; ``roles``: a roles.json commit."""
+    import copy
+    from PDM import eco
+    v._fetch()
+    head = v._head()
+    try:
+        if op.get("roles") is not None:
+            data = eco._dump(op["roles"])
+            tip = eco._put(v, head, eco.ROLES_PATH, data, "forged roles", "roles",
+                           [("Roles-User", op.get("user", "bob")), ("Roles-Role", op.get("role", "approver"))])
+            return {"ok": True, "pushed": v._push_main(tip)}
+        rec = copy.deepcopy(eco.load(v, head, op["number"]))
+        e = dict({"seq": len(rec["history"]) + 1, "action": op["action"], "from": rec["state"], "to": op["state"],
+                  "actor": v.user, "role": op.get("role", "engineer"), "at": eco._now(), "override": False,
+                  "comment": op.get("comment", "")}, **op.get("entry", {}))
+        rec["history"].append(e)
+        rec["state"] = op["state"]
+        if op["action"] == "release":
+            rec["released_at"] = e["at"]
+        tip = eco._put(v, head, f"{eco.ECO_DIR}{op['number']}.json", eco._dump(rec), "forged", "eco",
+                       [("Eco", op["number"]), ("Eco-Action", op["action"])])
+        if op.get("partial_release"):
+            for d in rec["documents"][:1]:
+                cur = v._records(d["name"])[0]
+                for step in (("InReview", "Released") if cur["state"] == "WIP" else ("Released",)):
+                    _t, tip = v._commit(tip, d["name"], "partial", cur["revision"], step, "transition",
+                                        step == "Released", None, extra=[("Eco", op["number"])])
+        return {"ok": True, "pushed": v._push_main(tip)}
+    except V.PDMError as e:
+        return cw.err(e)
 
 
 cw.run = run

@@ -9,6 +9,8 @@ through a merge or a symlink, sign as someone else, or force a lifecycle step or
 never make."""
 
 import base64
+import importlib
+import json
 import re
 
 ZERO = "0" * 40
@@ -46,10 +48,20 @@ def rewrite_mismatch(V, c, old, new, need_change, unreadable_stays=False):
     return None
 
 
-def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=()):
-    """Return None when the push is allowed, else the reason (one line) it is refused."""
+def _blob(c, path, i):
+    pair = (c.get("blobs") or {}).get(path)
+    if not pair or pair[i] is None:
+        return None
+    return base64.b64decode(pair[i])
+
+
+def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(), notes=None):
+    """Return None when the push is allowed, else the reason (one line) it is refused. ``notes``, if given, collects
+    ``(action, document, detail)`` audit records for the pushes it allows (ECO steps, role changes, admin overrides)."""
     if role not in ("admin", "writer"):
         return f"{pusher} has the {role or 'no'} role on this vault; writing needs writer or admin"
+    E = importlib.import_module(V.__name__.rsplit(".", 1)[0] + ".eco")
+    notes = notes if notes is not None else []
     suffix = V.DOC_SUFFIX
 
     for u in updates:
@@ -67,6 +79,12 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
             return "non-fast-forward pushes are refused (the vault history is append-only)"
         if old != ZERO and mirror_vault is None:
             return "the service cannot read the vault head, so it cannot check this push; try again"
+        grants = E.read_roles(mirror_vault, old) if (mirror_vault is not None and old != ZERO) else {}
+        eff = E.effective_role(role, grants, pusher)  # viewer, engineer, approver or admin
+        if eff == "viewer":
+            return f"{pusher} is a viewer on this vault; a viewer reads and changes nothing"
+        ecos = None     # number -> ECO record at the head being checked, kept current across the commits of this push
+        pending = {}    # ECO number -> {document: target revision} still to be released by later commits of this push
         docs = set()    # documents in the tree before the commit being checked (case kept)
         last = {}       # document -> latest record {revision, state, released} before this commit
         if old != ZERO and mirror_vault is not None:
@@ -79,6 +97,12 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
             if any(t.lower() == doc.lower() for t in touched):
                 return True
             return mirror_vault is not None and old != ZERO and bool(mirror_vault._records(doc, ref=old))
+
+        def all_ecos():
+            nonlocal ecos
+            if ecos is None:
+                ecos = E.read_all(mirror_vault, old) if (mirror_vault is not None and old != ZERO) else {}
+            return ecos
 
         def record(doc):
             if doc not in last:
@@ -108,20 +132,25 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                 if len(set(lowered)) != len(lowered):
                     return f"commit {short}: two documents differ only by case"
                 for n in top:
-                    ok = n.endswith(suffix)
-                    if ok:
+                    ok = n.endswith(suffix) or n == "plm"
+                    if ok and n != "plm":
                         try:
                             V._check_name(n[:-len(suffix)])
                         except Exception:
                             ok = False
                     if not ok:
-                        return f"commit {short}: the vault root may hold only <name>{suffix} folders, not {n[:60]!r}"
+                        return f"commit {short}: the vault root may hold only <name>{suffix} folders and plm/, not {n[:60]!r}"
             if c.get("author_email") is not None and event != "init" and (
                     c["author_email"] not in emails or c["committer_email"] not in emails):
                 return f"commit {short}: author or committer e-mail is not one of {pusher}'s ({', '.join(sorted(emails))})"
             if event == "init":
                 if c["changes"] or after:
                     return f"commit {short}: the init commit must be empty"
+                continue
+            if event in ("eco", "roles"):
+                bad = eco_commit(V, E, db, c, event, meta, short, pusher, eff, all_ecos(), pending, record, notes)
+                if bad:
+                    return bad
                 continue
             try:
                 V._check_name(doc)
@@ -215,6 +244,21 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                 released = prev["released"] or after_state == "Released"
                 if meta.get("Revision") != prev["revision"] or meta.get("Released") != ("1" if released else "0"):
                     return f"commit {short} (transition {doc}): Revision/Released trailers do not match the lifecycle rule"
+                eco_no = meta.get("Eco")
+                if eco_no:
+                    todo = pending.get(eco_no)
+                    if todo is None or doc not in todo or todo[doc] != prev["revision"]:
+                        return (f"commit {short} (transition {doc}): {eco_no} does not release {doc} at "
+                                f"{prev['revision']} in this push")
+                    if after_state == "Released":
+                        del todo[doc]
+                        if not todo:
+                            del pending[eco_no]
+                elif after_state == "Released":
+                    held = E.open_docs(all_ecos()).get(doc) or next((n for n, t in pending.items() if doc in t), None)
+                    if held:
+                        return (f"commit {short} (transition {doc}): {doc} is part of the open {held}; "
+                                "it is released by releasing the ECO")
             else:
                 return f"commit {short}: unknown PDM-Event {event!r}"
             extra = changed - allowed
@@ -237,4 +281,68 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                          "released": meta.get("Released") == "1"}
             if event == "move":
                 last.pop(src, None)
+        if pending:
+            n0 = sorted(pending)[0]
+            return (f"the push releases {n0} but not every affected document ({', '.join(sorted(pending[n0]))} "
+                    "left); an ECO release is all of its documents or nothing")
+    return None
+
+
+def eco_commit(V, E, db, c, event, meta, short, pusher, eff, ecos, pending, record, notes):
+    """Check one ``eco`` or ``roles`` commit against what it really changes; None when it is allowed. Updates ``ecos``
+    and ``pending`` (the release chain the following ``transition`` commits must complete)."""
+    changes = c["changes"]
+    if event == "roles":
+        if [ch[1] for ch in changes] != [E.ROLES_PATH] or changes[0][2] != "100644":
+            return f"commit {short} (roles) may change only {E.ROLES_PATH}"
+        if eff != "admin":
+            return f"commit {short}: {pusher} is {eff}; changing roles needs admin"
+        raw = _blob(c, E.ROLES_PATH, 1)
+        try:
+            new = E.parse_roles(raw)
+            old = E.parse_roles(_blob(c, E.ROLES_PATH, 0)) if _blob(c, E.ROLES_PATH, 0) is not None else {}
+        except Exception as e:
+            return f"commit {short} (roles): {e}"
+        user, role = meta.get("Roles-User", ""), meta.get("Roles-Role", "")
+        want = dict(old)
+        if role:
+            want[user] = role
+        else:
+            want.pop(user, None)
+        if want != new or new == old:
+            return f"commit {short} (roles): the file is not the old one with the single change {user} -> {role or 'default'}"
+        notes.append(("roles", None, {"actor": pusher, "user": user, "role": role or None}))
+        return None
+    number, action = meta.get("Eco", ""), meta.get("Eco-Action", "")
+    if not re.fullmatch(E.NUM_RE, number):
+        return f"commit {short}: missing or invalid PDM-Eco trailer"
+    path = f"{E.ECO_DIR}{number}.json"
+    if [ch[1] for ch in changes] != [path] or changes[0][2] != "100644":
+        return f"commit {short} (eco {number}) may change only {path}"
+    try:
+        raw_old, raw_new = _blob(c, path, 0), _blob(c, path, 1)
+        if raw_new is None:
+            return f"commit {short} (eco {number}): the record could not be read"
+        old = json.loads(raw_old) if raw_old is not None else None
+        new = json.loads(raw_new)
+    except ValueError:
+        return f"commit {short} (eco {number}): the record is not valid JSON"
+    if (changes[0][0] == "A") != (old is None) or old != ecos.get(number) or new.get("number") != number:
+        return f"commit {short} (eco {number}): the record's base is not the vault's current one"
+    bad, act, entry = E.verify_change(old, new, pusher, eff)
+    if bad:
+        return f"commit {short} (eco {number}): {bad}"
+    if act != action:
+        return f"commit {short} (eco {number}): PDM-Eco-Action {action!r} is not the {act!r} the record records"
+    names = [d["name"] for d in new["documents"]]
+    try:
+        E.check_context(act, new, {n: record(n) for n in names}, {n: db.lock(n) for n in names},
+                        E.open_docs(ecos, exclude=number))
+    except V.PDMError as e:
+        return f"commit {short} (eco {number}): {e}"
+    if act == "release":
+        pending[number] = {d["name"]: d["revision"] for d in new["documents"]}
+    ecos[number] = new
+    detail = {"actor": pusher, "role": eff, "action": act, "to": new["state"], "override": entry["override"]}
+    notes.append(("eco-override" if entry["override"] else "eco", number, dict(detail, comment=entry["comment"])))
     return None

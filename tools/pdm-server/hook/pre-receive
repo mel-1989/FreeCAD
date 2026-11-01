@@ -75,7 +75,18 @@ def commit_info(sha):
         old = new = None
     if old is not None and new is not None:
         xml_pair = [base64.b64encode(old).decode(), base64.b64encode(new).decode()]
-    return {"sha": sha, "meta": meta, "parents": parents, "author": author, "committer": committer,
+    # ECO records and the roles file: the old and new bytes of every changed path under plm/ (the server replays the
+    # ECO rules on them; objects of a push in flight are not in the server's own clone).
+    blobs = {}
+    for ch in changes:
+        if ch[1].startswith("plm/"):
+            b_old = blob(parents[0], ch[1]) if parents else None
+            b_new = blob(sha, ch[1])
+            if (b_old or b"") and len(b_old) > 262144 or (b_new or b"") and len(b_new) > 262144:
+                continue
+            blobs[ch[1]] = [None if b_old is None else base64.b64encode(b_old).decode(),
+                            None if b_new is None else base64.b64encode(b_new).decode()]
+    return {"sha": sha, "meta": meta, "blobs": blobs, "parents": parents, "author": author, "committer": committer,
             "author_email": aemail, "committer_email": cemail, "changes": changes, "top": top,
             "move_equal": move_equal, "xml_pair": xml_pair}
 

@@ -36,9 +36,17 @@ The repository carries a `pre-receive` hook (`hook/pre-receive`, installed by `i
 - The hook verifies trailers and changed paths, not the content of the document folder: a lock holder can publish any bytes for the document they hold (as they can in any vault).
 - Lock expiry and stale-lock policy do not exist; an admin breaks a lock by hand.
 - Forgejo lets a user register someone else's `<name>@pdm.local` address; that only affects how Forgejo displays commit-to-login links, not the policy (which binds author, committer and e-mail to the authenticated pusher).
-- Access is per repository (three roles), not per document or per project; ECO approval is not part of this slice.
+- Access is per repository, not per document or per project.
 - Client access tokens travel over plain HTTP in the tests (127.0.0.1). A deployment needs TLS in front of Forgejo and the service.
 - The service runs one process with a short-lived database connection per request, and serialises pushes and index rebuilds behind one mutex; it is sized for a small team.
+
+## ECOs and roles (G03 slice 6a)
+
+An engineering change order is a JSON record in the vault (`plm/eco/ECO-<n>.json` on `main`), not a database row, so the library-only vault supports it too. The rules are one module, `src/Mod/PDM/PDM/eco.py`: the library builds a record with `apply_action`, and this service's pre-receive policy replays the same function on the old record and refuses a push whose record is not exactly its result (so a client that skips the library cannot self-approve, claim a role or edit the history). The service holds no ECO state of its own: `GET /ecos`, `/ecos/{number}` and `/ecos/{number}/history` read its clone of the vault branch, and a restart loses nothing.
+
+- **Commit kinds.** `PDM-Event: eco` (one ECO file, with `PDM-Eco` and `PDM-Eco-Action`) and `roles` (`plm/roles.json`, admin only); the single-document rule for every other kind is untouched. A release is one push holding the ECO commit (state Released) followed by the `transition` commit of each affected document (WIP is taken through InReview), each carrying `PDM-Eco`. The policy keeps the list of documents the ECO commit promised and refuses the push if any is missing, if a transition names a document or revision the ECO does not, or if any ordinary lifecycle, lock or revision rule fails. A plain `transition` to Released of a document held by an open ECO is refused, by `Vault.transition` and by the policy.
+- **Roles.** viewer, engineer, approver, admin. The host's `reader` is a viewer, `writer` an engineer, `admin` an admin; `plm/roles.json` (admin only) can narrow a writer to viewer or widen one to approver, and never raises anyone above their host permission. `GET /access` returns `{user, base, role}`; `GET /whoami` still returns the host role. An engineer creates, edits, submits and releases; an approver (or admin) approves and rejects, never their own ECO (two-person rule); an admin may pass `override=True` with a comment to act outside the two-person rule or the author-only rule, which is flagged in the history entry and logged in `/audit` as `eco-override`.
+- **Audit.** Each accepted ECO step and role change is logged (`eco`, `eco-override`, `roles`) when the hook approves the push.
 
 ## Recovery (administrator)
 
