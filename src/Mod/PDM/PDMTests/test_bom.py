@@ -215,8 +215,8 @@ class TestDiff(FixtureCase):
         want = {
             "Sub": {"quantity": [2, 3], "revision": ["A.1", "A.2"]},
             "Sub/Plate": {"revision": ["A.1", "A.2"]},
-            "Sub/bracket": {"revision": ["A.1", "A.2"]},
-            "bracket": {"revision": ["A.1", "A.2"]},
+            "Sub/bracket:Body": {"revision": ["A.1", "A.2"]},
+            "bracket:Body": {"revision": ["A.1", "A.2"]},
         }
         self.assertEqual({c["path"]: c["changes"] for c in r["bom"]["changed"]}, want)
 
@@ -242,6 +242,32 @@ class TestDiff(FixtureCase):
 
 def rows(r):
     return [(x["level"], x["name"], x["kind"], x["quantity"]) for x in r]
+
+
+class TestEcoDiff(FixtureCase):
+    """Check 4, last sentence: an ECO shows the diff of every document it changes."""
+
+    def test_eco_diff_is_vault_diff_per_document_from_the_last_released_revision(self):
+        v = self.v
+        v.transition("bracket", "InReview")
+        v.transition("bracket", "Released")  # bracket A.3 is Released
+        v.checkout("bracket", new_revision=True)
+        doc = App.openDocument(v.doc_path("bracket"))
+        doc.getObject("BodyPad").Length = 25.0
+        doc.recompute()
+        doc.save()
+        self.assertEqual(v.checkin("bracket", "longer again")["revision"], "B.1")
+        F.close_all()
+        eco = v.eco_create("longer bracket, newer machine", "fit", {"bracket": "B.1", "machine": "A.2"})
+        res = v.eco_diff(eco["number"])
+        self.assertEqual([(r["document"], r["from"], r["to"]) for r in res],
+                         [("bracket", "A.3", "B.1"), ("machine", "A.1", "A.2")])  # machine was never released: its first revision
+        self.assertEqual(res[0]["diff"], v.diff("bracket", "A.3", "B.1"))
+        self.assertEqual(res[1]["diff"], v.diff("machine", "A.1", "A.2"))
+        self.assertEqual([(p["object"], p["property"], p["before"]["value"], p["after"]["value"])
+                          for p in res[0]["diff"]["properties"]], [("BodyPad", "Length", 15.0, 25.0)])
+        self.assertTrue({"Cover", "SubC"} <= {o["name"] for o in res[1]["diff"]["objects"]["added"]})
+        json.dumps(res)
 
 
 class TestBOMLinkEdgeCases(unittest.TestCase):
@@ -404,6 +430,44 @@ class TestBOMLinkEdgeCases(unittest.TestCase):
         self.assertEqual(rows(r), [(0, "mach2", "assembly", 1), (1, "lib2:Axle", "part", 1), (1, "lib2:Bearing", "part", 3)])
         flat = self.v.bom_flat("mach2")
         self.assertEqual([(x["name"], x["quantity"]) for x in flat], [("lib2:Axle", 1), ("lib2:Bearing", 3)])
+
+    def test_sub_object_link_with_element_count_counts_each_element_once(self):
+        d = self.newdoc("sub2")
+        p, inner = d.addObject("App::Part", "P"), d.addObject("App::Part", "Inner")
+        p.addObject(inner)
+        inner.addObject(self.box(d, "X"))
+        inner.addObject(self.box(d, "Z"))
+        ls = d.addObject("App::Link", "LS")
+        ls.setLink(p, "Inner.X.")
+        ls.ElementCount = 4  # creates LinkElements LS_i0..3, which are the link's own, not components
+        self.commit("sub2")
+        self.assertEqual(rows(self.v.bom("sub2")), [(0, "sub2", "assembly", 1), (1, "P", "assembly", 1),
+                                                   (2, "Inner", "assembly", 1), (3, "X", "part", 1),
+                                                   (3, "Z", "part", 1), (1, "X", "part", 4)])
+        self.assertEqual({x["name"]: x["quantity"] for x in self.v.bom_flat("sub2")}, {"X": 5, "Z": 1})
+
+    def test_adding_a_sibling_part_reports_only_the_addition(self):
+        lib = self.newdoc("lib3")
+        self.box(lib, "Bolt")
+        self.box(lib, "Nut")
+        m = self.newdoc("main3")
+        m.addObject("App::Link", "L").LinkedObject = lib.getObject("Bolt")
+        self.commit("lib3", "main3")
+
+        def add_nut(doc):
+            lib_doc = App.openDocument(self.v.doc_path("lib3"))
+            doc.addObject("App::Link", "L2").LinkedObject = lib_doc.getObject("Nut")
+        self.v.checkout("main3")
+        doc = App.openDocument(self.v.doc_path("main3"))
+        add_nut(doc)
+        doc.recompute()
+        doc.save()
+        self.v.checkin("main3", "add nut")
+        F.close_all()
+        d = self.v.diff("main3", "A.1", "A.2")["bom"]
+        self.assertEqual([r["name"] for r in d["added"]], ["lib3:Nut"])
+        self.assertEqual(d["removed"], [])
+        self.assertEqual(d["changed"], [])
 
     def test_flat_grouping_keeps_object_identity(self):
         rws = [{"level": 0, "name": "r", "kind": "assembly", "revision": "A.1", "quantity": 1, "material": "",

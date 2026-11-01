@@ -41,7 +41,7 @@ BRANCH = "main"
 LOCK_NS = "refs/locks/"
 LOCK_MIRROR = "refs/pdm-locks/"
 DOC_SUFFIX = ".FCStd.d"
-FAULT_ENV = "PDM_TEST_FAULT"  # read only here; values: "before_push", "after_commit"
+FAULT_ENV = "PDM_TEST_FAULT"  # read only here; values: "before_push", "after_commit", "eco_between"
 _NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,63}")  # no leading "-": never an option to git
 _TRAILER = "PDM-"
 CONTENT_EVENTS = ("add", "checkin", "move", "relink")  # commits whose tree is a full revision of the document
@@ -160,6 +160,8 @@ def _fault(point):
 
 class Vault:
     """A client's handle on a vault: ``Vault.create`` makes the bare repo, ``Vault.clone`` a working copy."""
+
+    remote = False  # True for a vault behind a PDM server (the server's hook enforces what the library alone cannot)
 
     def __init__(self, workdir, user, vault_path=None, git_env=None):
         self.workdir = os.path.abspath(workdir)
@@ -710,6 +712,9 @@ class Vault:
             lk = self.lock_info(name, refresh=False)
             if lk is not None:
                 raise LockError(f"{name} is checked out by {lk['holder']}; transitions need the document unlocked", lk["holder"])
+            if new_state == "Released":
+                from PDM import eco
+                eco.guard_direct_release(self, name)  # a document in an open ECO is released by the ECO
             released = cur["released"] or new_state == "Released"
             subject = message or f"{cur['state']} -> {new_state}"
             _tree, sha = self._commit(self._head(), name, subject, cur["revision"], new_state, "transition", released, None)
@@ -717,6 +722,72 @@ class Vault:
             if self._push_main(sha):
                 return {"revision": cur["revision"], "state": new_state, "sha": sha}
         raise GitError("vault kept moving; transition gave up after 8 attempts")
+
+    # ---- ECO workflow and roles (slice 6a; the rules are in PDM/eco.py) -----------------------
+
+    def role(self):
+        """Effective role of this user on the vault: viewer, engineer, approver or admin."""
+        self._fetch()
+        return self._role()
+
+    def _role(self):
+        from PDM import eco
+        return eco.local_role(self)  # a server-backed vault asks the server instead
+
+    def roles(self):
+        """The vault's role grants (``plm/roles.json``) as {user: role}."""
+        from PDM import eco
+        self._fetch()
+        return eco.read_roles(self, self._head())
+
+    def set_role(self, user, role, comment=None):
+        from PDM import eco
+        return eco.set_role(self, user, role, comment)
+
+    def eco_create(self, title, reason, documents, comment=None):
+        from PDM import eco
+        return eco.create(self, title, reason, documents, comment)
+
+    def eco_edit(self, number, title=None, reason=None, documents=None, comment=None, override=False):
+        from PDM import eco
+        return eco.edit(self, number, title, reason, documents, comment, override)
+
+    def eco_submit(self, number, comment=None, override=False):
+        from PDM import eco
+        return eco.write(self, number, "submit", comment, override)
+
+    def eco_withdraw(self, number, comment, override=False):
+        from PDM import eco
+        return eco.write(self, number, "withdraw", comment, override)
+
+    def eco_approve(self, number, comment=None, override=False):
+        from PDM import eco
+        return eco.write(self, number, "approve", comment, override)
+
+    def eco_reject(self, number, comment, override=False):
+        from PDM import eco
+        return eco.write(self, number, "reject", comment, override)
+
+    def eco_release(self, number, comment=None):
+        """Release every affected document revision of an Approved ECO in one push, or none of them."""
+        from PDM import eco
+        return eco.write(self, number, "release", comment)
+
+    def eco_get(self, number):
+        from PDM import eco
+        return eco.get(self, number)
+
+    def eco_history(self, number):
+        return self.eco_get(number)["history"]
+
+    def eco_diff(self, number):
+        """The diff of every document the ECO changes, from its last Released revision (or first) to the ECO's target."""
+        from PDM import eco
+        return eco.eco_diff(self, number)
+
+    def eco_list(self, state=None):
+        from PDM import eco
+        return eco.list_ecos(self, state)
 
     # ---- where-used and move (slice 3) ---------------------------------------------------------
 
@@ -874,6 +945,8 @@ class Vault:
                 names = self._doc_names_at(head)
                 if old not in names:
                     raise DocumentError(f"no document {old!r} in the vault")
+                from PDM import eco
+                eco.guard_move(self, old)  # an open ECO names the document; renaming it would strand the ECO
                 for n in names:
                     if n.lower() == new.lower():
                         raise DocumentError(f"cannot move to {new!r}: document {n!r} already exists (names are case-insensitive)")
