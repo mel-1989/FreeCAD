@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # AISC W shapes, SI values (mm, mm^2, kg/m) of the AISC Shapes Database v15.0 (v16.0 download is behind a Cloudflare challenge for scripts; the W-shape dimensions are unchanged), labels from the US-customary sheet.
+# Data route: the values were read from the ambaker1/aisc-csv GitHub mirror (https://github.com/ambaker1/aisc-csv, MIT licence) of the AISC Shapes Database v15.0; the AISC page below is the authoritative publication of the same database.
 # h=d, b=bf, tw, tf; root radius r = kdes - tf (AISC design k). area_mm2 = database A. mass_kg_m = database W (SI).
 family,size,kind,h,b,tw,tf,r,t,ro,ri,d,r1,r2,area_mm2,mass_kg_m,source
 AISC W,W44X335,I,1120,404,26.2,45,20,,,,,,,63500,499,https://www.aisc.org/publications/steel-construction-manual-resources/15th-ed-steel-construction-manual/shapes-database-v15.0

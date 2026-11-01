@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # AISC single angles (SI), Shapes Database v15.0 as above. h=d, b, t; root radius r1 = kdes - t. The database lists no toe radius; toe radius r2 = min(r1/2, 0.95 t): r1/2 is the EN 10056-1 ratio, capped so the toe round fits the leg end.
+# Data route: the values were read from the ambaker1/aisc-csv GitHub mirror (https://github.com/ambaker1/aisc-csv, MIT licence) of the AISC Shapes Database v15.0; the AISC page below is the authoritative publication of the same database.
+# The 1 % rule below is the table-wide filter: a row is kept only when the geometry's analytic area agrees with the published area within 1 %.
 # Dropped (geometry from the printed radii and the printed area disagree by more than 1 %; the sources print radii to 3 significant figures or whole mm): L6X4X5/16 (1.09 %), L5X3X1/4 (1.07 %), L4X4X5/8 (1.03 %), L4X4X7/16 (0.99 %), L4X4X5/16 (1.07 %), L4X4X1/4 (1.19 %), L4X3-1/2X1/4 (1.00 %), L4X3X1/4 (1.01 %), L3X3X3/16 (1.50 %), L3X2-1/2X3/16 (1.25 %)
 family,size,kind,h,b,tw,tf,r,t,ro,ri,d,r1,r2,area_mm2,mass_kg_m,source
 AISC L,L12X12X1-3/8,L,305,305,,,,35.1,,,,18,9,20100,156,https://www.aisc.org/publications/steel-construction-manual-resources/15th-ed-steel-construction-manual/shapes-database-v15.0

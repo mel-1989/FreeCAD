@@ -18,6 +18,9 @@ Public API (frozen):
     Profile.face()  Part.Face in the XY plane, area centroid at the origin
     Profile.bbox()  (xmin, xmax, ymin, ymax) of face() in the centred frame
 
+Mass note for AISC HSS (``05_aisc_hss.csv``): the face is built on the design wall ``tdes`` while
+``mass_kg_m`` is the database's nominal-wall mass, so it is 4.5 to 8 % above area x 7850 kg/m^3.
+
 Section conventions (all lengths in mm):
 
 * ``I``: parallel flanges, root radius ``r`` at the four web-to-flange junctions,
@@ -32,6 +35,7 @@ Section conventions (all lengths in mm):
 """
 
 import csv
+import difflib
 import math
 import os
 
@@ -279,6 +283,8 @@ def get(family, size):
         raise KeyError("unknown profile family %r; known families: %s" %
                        (family, ", ".join(tab)))
     if size not in tab[family]:
-        raise KeyError("unknown size %r in family %r; known sizes: %s" %
-                       (size, family, ", ".join(tab[family])))
+        names = list(tab[family])
+        near = difflib.get_close_matches(str(size), names, n=5, cutoff=0.0)
+        raise KeyError("unknown size %r in family %r (%d sizes); nearest: %s" %
+                       (size, family, len(names), ", ".join(near)))
     return tab[family][size]

@@ -2,6 +2,7 @@
 # EN 10056-1 equal angles. Rows with source EA-datasheet are British Steel's public datasheet (columns h,b,t,r1,r2 are its depth, width, thickness, root radius, toe radius; area cm^2 times 100).
 # Rows with source stad.fr are the stockholder's public technical-data table (depth H, width B, thickness Tw=Tf, root radius R, area in cm^2 times 100, mass G kg/m); it prints no toe radius, so r2 = r1/2, the EN 10056-1 ratio that every British Steel row shows (capped at t/2 so the toe round fits the leg end; only 90x90x5 is affected).
 # Dropped: stad 80x80x5 (published area 786 mm^2 is 1.06 % off the geometry for the R=5 it prints, so the row is internally inconsistent; no EN 10056-1 size).
+# The 1 % rule below is the table-wide filter: a row is kept only when the geometry's analytic area agrees with the published area within 1 %.
 # Dropped (geometry from the printed radii and the printed area disagree by more than 1 %; the sources print radii to 3 significant figures or whole mm): 20x20x3 (1.31 %), 25x25x3 (1.03 %), 50x50x4 (0.98 %), 75x75x6 (0.98 %), 90x90x5 (1.16 %), 90x90x7 (0.96 %), 100x100x7 (-1.00 %), 300x300x25 (0.98 %)
 family,size,kind,h,b,tw,tf,r,t,ro,ri,d,r1,r2,area_mm2,mass_kg_m,source
 EN L,120x120x8,L,120,120,,,,8,,,,13,6.5,1870,14.7,https://www.britishsteel.co.uk/wp-content/uploads/2026/07/EA-datasheet-21.07.26.pdf

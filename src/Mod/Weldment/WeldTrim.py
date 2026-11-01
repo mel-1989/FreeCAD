@@ -11,8 +11,10 @@ Kinds:
 
 * ``Mitre``: cut on the plane that bisects the joint angle (the other member is named by
   Other, OtherSegment, OtherEnd).
-* ``Butt``: extend or trim to the outer envelope of the other member's segment body.
-* ``Face``: extend or trim to a planar face (Other, OtherSub = "FaceN").
+* ``Butt``: extend or trim to the outer envelope of the other member's segment body; refused
+  when the section is not fully seated on it (it would leave legs beside the other member).
+* ``Face``: extend or trim to a planar face (Other, OtherSub = "FaceN"); refused when the
+  section does not lie within the face.
 * ``Body``: extend or trim to the solid of Other (the whole shape, or its solid OtherSegment).
 
 A member whose axis cannot reach the face or body (parallel, behind the member, outside the
@@ -29,6 +31,8 @@ from WeldGeom import (
     WeldmentError,
     body_cut,
     build_segment,
+    check_on_face,
+    check_seated,
     mitre_cut,
     plane_cut,
 )
@@ -96,7 +100,9 @@ def resolve(trim, spec):
         if kind == "Mitre":
             cut = mitre_cut(spec, which, o, trim.OtherEnd)
         else:
-            cut = body_cut(spec, which, "butt", o.envelope())
+            env = o.envelope()
+            cut = body_cut(spec, which, "butt", env)
+            check_seated(spec, which, env, "butt")
     elif kind == "Face":
         if other is None or not trim.OtherSub.startswith("Face"):
             raise WeldmentError("%s: Face needs Other and OtherSub = 'FaceN'" % trim.Name)
@@ -110,6 +116,7 @@ def resolve(trim, spec):
                 "%s: the member axis meets the plane of %s.%s %.4g mm outside the face; the path does "
                 "not reach it" % (trim.Name, other.Name, trim.OtherSub, gap)
             )
+        check_on_face(spec, which, face, q, cut.n_keep, "%s: face trim" % trim.Name)
     elif kind == "Body":
         if other is None:
             raise WeldmentError("%s: Body needs Other" % trim.Name)

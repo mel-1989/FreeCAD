@@ -183,6 +183,58 @@ def _half_space(cut, size):
     return box
 
 
+def _target(kind):
+    return "the other member" if kind == "butt" else "the target body"
+
+
+#: how far inside the outline the seating probes sit (relative to the section radius)
+_INSET = 1e-6
+
+
+def outline_points(spec, per_edge=40):
+    """Points on the outer outline of the section at s = 0, pulled 1e-6 of the section radius
+    towards the centroid so a section flush with its seat is not refused on rounding noise."""
+    pts = []
+    for e in spec.section(0.0, outer_only=True).OuterWire.Edges:
+        pts.extend(e.discretize(Number=per_edge))
+    return [spec.c0 + (p - spec.c0) * (1.0 - _INSET) for p in pts]
+
+
+def check_seated(spec, which, body, what):
+    """Refuse when the section overhangs ``body``: some point of its outline, followed along the
+    axis, never meets the body (the rest of the section would hang beside it)."""
+    far = spec.length + 4.0 * (body.BoundBox.DiagonalLength + spec.length) + 1000.0
+    sgn = 1.0 if which == "End" else -1.0
+    s0 = 0.0 if which == "End" else spec.length
+    for p in outline_points(spec):
+        a = p + spec.u * s0
+        b = a + spec.u * (sgn * far)
+        if not body.common(Part.makeLine(a, b)).Edges:
+            raise WeldmentError(
+                "%s at the %s of segment %d: the section is not fully seated on %s; its outline overhangs "
+                "the other member (point %.4g, %.4g, %.4g has nothing to meet). Choose a mitre or "
+                "trim to a face of the member that spans the whole section"
+                % (what, which, spec.index, "the other member" if what == "butt" else "the body",
+                   p.x, p.y, p.z)
+            )
+
+
+def check_on_face(spec, which, face, q, n, what):
+    """Refuse when the section, projected along the axis onto the plane of ``face``, leaves it."""
+    s0 = 0.0 if which == "End" else spec.length
+    un = spec.u.dot(n)
+    for p in outline_points(spec):
+        a = p + spec.u * s0
+        hit = a + spec.u * ((q - a).dot(n) / un)
+        gap = Part.Vertex(hit).distToShape(face)[0]
+        if gap > 1e-6:
+            raise WeldmentError(
+                "%s at the %s of segment %d: the section does not lie within the face (its outline "
+                "projects %.4g mm outside it), so the member would overhang; use a face at least as "
+                "large as the section" % (what, which, spec.index, gap)
+            )
+
+
 def build_segment(spec, start=None, end=None):
     """The segment solid with an optional PlaneCut/BodyCut at each end (None keeps it square)."""
     L = spec.length
@@ -233,11 +285,11 @@ def build_segment(spec, start=None, end=None):
         if isinstance(cut, BodyCut):
             common = solid.common(cut.solid).Volume
             if common > 1e-9 * solid.Volume:
-                raise WeldmentError("segment %d: trimmed member still overlaps the %s body" % (spec.index, cut.kind))
+                raise WeldmentError("segment %d: trimmed member still overlaps %s" % (spec.index, _target(cut.kind)))
             if solid.distToShape(cut.solid)[0] > 1e-6:
                 raise WeldmentError(
-                    "segment %d: the trimmed member does not reach the %s body (gap %.4g mm)"
-                    % (spec.index, cut.kind, solid.distToShape(cut.solid)[0])
+                    "segment %d: the trimmed member does not reach %s (gap %.4g mm)"
+                    % (spec.index, _target(cut.kind), solid.distToShape(cut.solid)[0])
                 )
     return solid
 

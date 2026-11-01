@@ -46,6 +46,15 @@ def line_segments(path):
         else:
             edges = [("Edge%d" % (i + 1), e) for i, e in enumerate(shape.Edges)]
         for name, e in edges:
+            try:
+                elen = e.Length
+            except Exception:    # a degenerate edge cannot even report its length
+                elen = 0.0
+            if elen < 1e-6:
+                raise WeldmentError(
+                    "path edge %s.%s has zero length (%.3g mm); a member needs a path segment longer than "
+                    "1e-6 mm" % (obj.Name, name, elen)
+                )
             p0 = e.valueAt(e.FirstParameter)
             p1 = e.valueAt(e.LastParameter)
             chord = (p1 - p0).Length
@@ -60,9 +69,10 @@ def line_segments(path):
 def get_profile(family, size):
     try:
         return Profiles.get(family, size)
-    except KeyError:
+    except KeyError as e:
         raise WeldmentError(
-            "unknown profile %r %r; families: %s" % (family, size, ", ".join(Profiles.families()))
+            "unknown profile (%s); families: %s" % (e.args[0] if e.args else "%r %r" % (family, size),
+                                  ", ".join(Profiles.families()))
         )
 
 
