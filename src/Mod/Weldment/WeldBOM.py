@@ -33,6 +33,11 @@ Failed features: ``bom_rows`` (like ``WeldCutList.cut_list`` and ``WeldBead.weld
 ``WeldmentError`` naming every invalid member, trim, gusset, end cap or bead (State holds Invalid or
 Error) instead of returning rows that omit the part or carry its stale shape.
 
+Touched features: a feature that is only Touched (a parameter edited, not yet recomputed) is read
+from its last computed shape, so callers recompute the document first; it is not refused, because a
+freshly opened file must work. A bead's bodies and a plate's members are checked as well as the bead
+or plate itself (an up-to-date bead whose body failed is refused).
+
 Reopened documents: a document reopened from a vault gives the same rows as the original in text,
 counts and keys exactly and in every number within 1e-6 (mm, degrees, kg), because shapes reload
 from BREP with last-digit noise.

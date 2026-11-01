@@ -135,6 +135,18 @@ def build_cap(spec, solid, which, mode, thickness, recess, chamfer):
     cosa = abs(n.dot(spec.u))
     if mode == "Inset":
         depth = max((q - v.Point).dot(n) for v in solid.Vertexes)
+        far = planes[0] if which == "End" else planes[1]
+        if far is not None:
+            # the far end may be cut at a slant: the room is the smallest depth over the bore outline,
+            # measured along the lines parallel to the axis through its points (square to the near plane)
+            qf, nf, _ = far
+            gaps = []
+            for e in outline_face(spec, "Inset", 0.0).Edges:
+                for p in e.discretize(Number=40):
+                    s_near = (q - p).dot(n) / n.dot(spec.u)
+                    s_far = (qf - p).dot(nf) / nf.dot(spec.u)
+                    gaps.append(abs(s_far - s_near) * cosa)
+            depth = min(gaps)
         if recess + thickness > depth + 1e-9:
             raise WeldmentError(
                 "end cap: recess %.6g + thickness %.6g = %.6g mm reaches past the other end of the member "

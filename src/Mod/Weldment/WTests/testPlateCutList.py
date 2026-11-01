@@ -259,3 +259,54 @@ class TestInvalidFeaturesRefused(unittest.TestCase):
         doc.removeObject("BadBead")
         self.assertEqual(sum(r["quantity"] for r in CL.plate_list([good, bad])), 2)
         self.assertTrue(WeldBOM.bom_rows(doc))
+
+
+class TestInvalidDependencies(unittest.TestCase):
+    """A bead or plate that is itself up to date but stands on an invalid body is refused too."""
+
+    def tearDown(self):
+        for n in list(FreeCAD.listDocuments()):
+            FreeCAD.closeDocument(n)
+
+    def test_bead_on_invalid_gusset_and_cap_on_invalid_member(self):
+        import WeldBOM
+        from WeldGeom import WeldmentError
+
+        doc = FreeCAD.newDocument("D")
+        fr = frames.Frame(doc)
+        _joint(fr, "P", 0.0, 90)
+        fr.add("M", "EN SHS", frames.pick("EN SHS", 0.5), [((3000, 0, 0), (3000, 0, 1200))])
+        doc.recompute()
+        g = WeldGusset.make_gusset(doc, fr.members["PA"], 0, "Start", fr.members["PB"], 0, "Start", 200.0, 200.0, 10.0, name="Gus")
+        doc.recompute()
+        edge = next("Edge%d" % (i + 1) for i, e in enumerate(g.Shape.Edges) if abs(e.Length - 200.0) < 1e-6)
+        bead = WeldBead.make_bead(doc, fr.members["PA"], g, [(g, edge)], 5.0, name="Bd")
+        cap = WeldEndCap.make_end_cap(doc, fr.members["M"], 0, "End", 8.0, name="Cap")
+        doc.recompute()
+        for o in (g, bead, cap):
+            self.assertNotIn("Invalid", o.State, o.getStatusString())
+        self.assertTrue(WeldBead.weld_summary(doc) and WeldBOM.bom_rows(doc))
+        # the gusset fails (leg too long); the bead is not recomputed with an error of its own
+        g.Leg1 = 5000.0
+        doc.recompute()
+        self.assertIn("Invalid", g.State)
+        self.assertNotIn("Invalid", bead.State)
+        for call in (lambda: WeldBead.weld_summary(doc), lambda: WeldBOM.bom_rows(doc),
+                     lambda: CL.cut_list([bead]), lambda: CL.plate_list([g])):
+            with self.assertRaises(WeldmentError) as cm:
+                call()
+            self.assertIn("Gus", str(cm.exception))
+        # a cap on a member that fails
+        g.Leg1 = 200.0
+        fr.members["M"].Size = "no such size"
+        doc.recompute()
+        self.assertIn("Invalid", fr.members["M"].State)
+        with self.assertRaises(WeldmentError) as cm:
+            CL.plate_list([cap])
+        self.assertIn("M", str(cm.exception))
+        # touched-only features are read, not refused
+        fr.members["M"].Size = frames.pick("EN SHS", 0.5)
+        doc.recompute()
+        g.Thickness = 12.0   # touched, not recomputed
+        self.assertIn("Touched", g.State)
+        self.assertTrue(WeldBOM.bom_rows(doc))
