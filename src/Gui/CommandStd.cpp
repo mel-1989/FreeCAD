@@ -572,6 +572,31 @@ void StdCmdCommandLine::activated(int iMsg)
 }
 
 //===========================================================================
+// Std_CommandPalette
+//===========================================================================
+
+DEF_STD_CMD(StdCmdCommandPalette)
+
+StdCmdCommandPalette::StdCmdCommandPalette()
+    : Command("Std_CommandPalette")
+{
+    sGroup = "Tools";
+    sMenuText = QT_TR_NOOP("Command palette...");
+    sToolTipText = QT_TR_NOOP("Search every command of every workbench by name, description or task and run it");
+    sWhatsThis = "Std_CommandPalette";
+    sStatusTip = sToolTipText;
+    sAccel = "Ctrl+Shift+K";
+    eType = 0;
+}
+
+void StdCmdCommandPalette::activated(int iMsg)
+{
+    Q_UNUSED(iMsg);
+    // The palette (index, ranking, widget) is Python in AgentCore.palette; this command is its menu and shortcut entry.
+    runCommand(Gui, "import AgentCore.palette.widget as _cp; _cp.open_palette()");
+}
+
+//===========================================================================
 // Std_OnlineHelp
 //===========================================================================
 
@@ -1107,6 +1132,7 @@ void CreateStdCommands()
     rcCmdMgr.addCommand(new StdCmdWhatsThis());
     rcCmdMgr.addCommand(new StdCmdRestartInSafeMode());
     rcCmdMgr.addCommand(new StdCmdPythonHelp());
+    rcCmdMgr.addCommand(new StdCmdCommandPalette());
     rcCmdMgr.addCommand(new StdCmdOnlineHelp());
     rcCmdMgr.addCommand(new StdCmdOnlineHelpWebsite());
     rcCmdMgr.addCommand(new StdCmdFreeCADWebsite());
