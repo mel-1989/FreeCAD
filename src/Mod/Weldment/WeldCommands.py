@@ -6,6 +6,7 @@ import FreeCADGui as Gui
 
 import Profiles
 import WeldCutList
+import WeldBead
 import WeldEndCap
 import WeldGusset
 import WeldMember
@@ -117,8 +118,36 @@ class _EndCap:
         doc.recompute()
 
 
+class _WeldBead:
+    def GetResources(self):
+        return {"MenuText": "Weld bead", "ToolTip": "Select two bodies, then the straight edges where they meet (Ctrl-click edges), and add a fillet weld bead; asks for the leg size"}
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and len(Gui.Selection.getSelectionEx()) >= 2
+
+    def Activated(self):
+        from PySide import QtWidgets
+
+        doc = _doc()
+        sel = Gui.Selection.getSelectionEx()
+        # the edges are the sub-elements picked on any selected object; the bodies are the first two objects
+        edges = [(s.Object, n) for s in sel for n in s.SubElementNames if n.startswith("Edge")]
+        bodies = [s.Object for s in sel]
+        if len(bodies) < 2 or not edges:
+            FreeCAD.Console.PrintError("Weld bead: select two bodies and the edges where they meet\n")
+            return
+        size, ok = QtWidgets.QInputDialog.getDouble(None, "Weld bead", "Leg size z (mm):", 5.0, 0.1, 100.0, 2)
+        if not ok:
+            return
+        doc.openTransaction("Weld bead")
+        WeldBead.make_bead(doc, bodies[0], bodies[1], edges, size)
+        doc.commitTransaction()
+        doc.recompute()
+
+
 Gui.addCommand("Weldment_Member", _Member())
 Gui.addCommand("Weldment_Mitre", _Mitre())
 Gui.addCommand("Weldment_CutList", _CutList())
 Gui.addCommand("Weldment_Gusset", _Gusset())
 Gui.addCommand("Weldment_EndCap", _EndCap())
+Gui.addCommand("Weldment_WeldBead", _WeldBead())

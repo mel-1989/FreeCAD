@@ -17,6 +17,8 @@ import FreeCAD
 
 import WeldBOM
 import WeldCutList
+import WeldEndCap
+import WeldGusset
 from PDM import vault as V
 from WTests import frames
 from WTests.testBead import edges_at
@@ -27,7 +29,11 @@ P = FreeCAD.Vector
 
 def build(doc):
     """Portal frame (mitres and butts) plus a beam with two posts standing on it, each welded."""
-    frames.portal_frame(doc)
+    portal = frames.portal_frame(doc)
+    doc.recompute()
+    WeldGusset.make_gusset(doc, portal.heads["Columns"], 0, "End", portal.heads["Rafters"], 0, "Start",
+                           300.0, 250.0, 10.0, 20.0, name="Eave")
+    WeldEndCap.make_end_cap(doc, portal.heads["Columns"], 0, "Start", 8.0, name="Base")
     fr = frames.Frame(doc)
     fam = "EN SHS"
     beam = fr.add("Beam", fam, frames.pick(fam, 0.9), [((10000, 0, 0), (14000, 0, 0))], anchor="Top")
@@ -90,7 +96,7 @@ class TestBOM(unittest.TestCase):
         kinds = [r["kind"] for r in rows]
         self.assertEqual(kinds, sorted(kinds, key=["member", "plate", "weld"].index))
         # members: the cut list's rows, one for one
-        cut = WeldCutList.cut_list(WeldBOM.chain_heads(doc))
+        cut = [c for c in WeldCutList.cut_list(WeldBOM.chain_heads(doc)) if c.get("kind") != "plate"]
         members = [r for r in rows if r["kind"] == "member"]
         self.assertEqual(len(members), len(cut))
         self.assertEqual(sum(r["quantity"] for r in members), sum(c["quantity"] for c in cut))
@@ -110,8 +116,17 @@ class TestBOM(unittest.TestCase):
             self.assertAlmostEqual(r["mass_kg"], z * z / 2 * total * 7850e-9, places=12)
             self.assertEqual(r["material"], "Weld metal")
         self.assertEqual([w["leg_z_mm"] for w in weld_summary(doc)], [3.0, 4.0])
-        # no plate rows yet: the cut list has no plate items (hook in WeldBOM._plate_row)
-        self.assertNotIn("plate", kinds)
+        # plates: one gusset and one end cap, from the cut list's plate items; mass = volume x 7850 kg/m^3
+        plates = [r for r in rows if r["kind"] == "plate"]
+        self.assertEqual([(r["family"], r["size"], r["quantity"]) for r in plates],
+                         [("End cap", "t=8 mm", 1), ("Gusset", "t=10 mm", 1)])
+        for r, name in zip(plates, ("Base", "Eave")):
+            o = doc.getObject(name)
+            self.assertAlmostEqual(r["mass_kg"], o.Shape.Volume * 7850e-9, places=9)
+            self.assertAlmostEqual(r["length_mm"], o.OutlineLengthMm, places=9)
+            self.assertEqual(r["material"], "Structural steel")
+            self.assertIn("plate t=", r["description"])
+            self.assertEqual((r["start_angle_deg"], r["end_angle_deg"]), (None, None))
 
     def _client(self, name, user):
         wc = os.path.join(self.tmp, "wc-" + name)

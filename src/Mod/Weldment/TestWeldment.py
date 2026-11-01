@@ -2,7 +2,10 @@
 """Weldment test suite entry point (FreeCAD.__unit_test__ lists "TestWeldment")."""
 
 from WTests.testCutList import TestCutList  # noqa: F401
+from WTests.testBOM import TestBOM  # noqa: F401
+from WTests.testBead import TestTJoint, TestSections, TestRefusals as TestBeadRefusals, TestSummaryAndReopen  # noqa: F401
 from WTests.testEndCap import TestEndCap, TestEndCapRefusals  # noqa: F401
+from WTests.testFullCutList import TestFullCutList  # noqa: F401
 from WTests.testGusset import TestGusset, TestGussetRefusals  # noqa: F401
 from WTests.testPlateCutList import TestPlateCutList  # noqa: F401
 from WTests.testLicence import TestWeldmentLicence  # noqa: F401

@@ -12,8 +12,8 @@ class WeldmentWorkbench(Gui.Workbench):
     def Initialize(self):
         import WeldCommands  # noqa: F401  (registers the commands)
 
-        self.appendToolbar("Weldment", ["Weldment_Member", "Weldment_Mitre", "Weldment_Gusset", "Weldment_EndCap", "Weldment_CutList"])
-        self.appendMenu("Weldment", ["Weldment_Member", "Weldment_Mitre", "Weldment_Gusset", "Weldment_EndCap", "Weldment_CutList"])
+        self.appendToolbar("Weldment", ["Weldment_Member", "Weldment_Mitre", "Weldment_Gusset", "Weldment_EndCap", "Weldment_WeldBead", "Weldment_CutList"])
+        self.appendMenu("Weldment", ["Weldment_Member", "Weldment_Mitre", "Weldment_Gusset", "Weldment_EndCap", "Weldment_WeldBead", "Weldment_CutList"])
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"

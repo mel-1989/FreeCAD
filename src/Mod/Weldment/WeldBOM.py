@@ -37,11 +37,11 @@ Sources: members come from ``WeldCutList.cut_list`` (unchanged; it is called on 
 the document: every Member or EndTrim that no EndTrim uses as its Base). Welds come from
 ``WeldBead.weld_summary``.
 
-Plate hook: ``WeldCutList.cut_list`` currently returns member rows only and no ``kind`` field.
-When it starts returning plate items (gussets, end caps), give those rows ``"kind": "plate"`` and
-the keys read in ``_plate_row`` (``family``, ``size``, ``material``, ``length_mm`` or
-``cut_length_mm``, ``quantity``, ``mass_each_kg``, optionally ``description``); they are then
-picked up here without changes to this module. Until then no plate rows are produced.
+Plates: gussets and end caps (``WeldGusset``, ``WeldEndCap``) come from ``WeldCutList.cut_list``
+plate rows (``kind == "plate"``). A plate line has ``family`` = the plate type (``Gusset`` or
+``End cap``), ``size`` = ``t=<thickness> mm``, ``length_mm`` = the long side of its outline,
+``description`` = ``<type> plate t=.. mm, outline L x W mm``, ``material`` from the plate's Material
+property and mass from its Density property (kg/m^3, default 7850).
 
 Public sources: none beyond the cut-list and weld definitions cited in ``WeldCutList`` and
 ``WeldBead``. Clean room: no FrameForge, old Weldment add-on or other weldment workbench source
@@ -64,11 +64,17 @@ def _is_member(obj):
     return getattr(obj, "Proxy", None).__class__.__name__ == "Member"
 
 
+def _is_plate(obj):
+    return WeldCutList.is_plate(obj)
+
+
 def chain_heads(doc):
-    """Members and EndTrims of the document that no EndTrim builds on (the cut list's inputs)."""
+    """Members and EndTrims of the document that no EndTrim builds on, and its gussets and end caps
+    (the cut list's inputs)."""
     objs = [o for o in doc.Objects if _is_member(o) or is_trim(o)]
     used = {t.Base.Name for t in objs if is_trim(t) and t.Base is not None}
-    return sorted((o for o in objs if o.Name not in used), key=lambda o: o.Name)
+    plates = [o for o in doc.Objects if _is_plate(o)]
+    return sorted([o for o in objs if o.Name not in used] + plates, key=lambda o: o.Name)
 
 
 def _fmt(v):
@@ -88,12 +94,13 @@ def _member_row(r, doc):
 
 
 def _plate_row(r, doc):
-    """HOOK: used only when the cut list returns rows with kind == 'plate' (see module docstring)."""
-    length = r.get("length_mm", r.get("cut_length_mm"))
+    """A plate line from a cut-list plate row (see module docstring)."""
+    length = r["length_mm"]
     each = r["mass_each_kg"]
     return {
-        "kind": "plate", "description": r.get("description") or "%s %s" % (r["family"], r["size"]),
-        "family": r["family"], "size": r["size"], "length_mm": length,
+        "kind": "plate",
+        "description": "%s plate t=%.6g mm, outline %.3f x %.3f mm" % (r["type"], r["thickness_mm"], r["length_mm"], r["width_mm"]),
+        "family": r["type"], "size": "t=%.6g mm" % r["thickness_mm"], "length_mm": length,
         "total_length_mm": length * r["quantity"], "quantity": r["quantity"], "mass_each_kg": each,
         "mass_kg": each * r["quantity"], "material": r["material"], "start_angle_deg": None,
         "end_angle_deg": None,

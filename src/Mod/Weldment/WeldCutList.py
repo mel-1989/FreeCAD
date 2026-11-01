@@ -35,6 +35,7 @@ import math
 import FreeCAD
 import Part
 
+import WeldBead
 from WeldGeom import WeldmentError
 from WeldMember import get_profile, segment_specs
 from WeldTrim import is_trim, root_member, treatments
@@ -459,6 +460,8 @@ PLATE_COLUMNS = [
     "mass_each_kg",
     "mass_total_kg",
 ]
+#: Weld summary section of the CSV, written only when weld beads exist (one row per leg size).
+WELD_COLUMNS = ["leg_z_mm", "throat_a_mm", "bead_count", "total_length_mm", "mass_kg"]
 #: tolerance for two plates being identical: thickness and outline sizes (mm) and area (relative)
 TOL_PLATE = 1e-6
 
@@ -523,6 +526,7 @@ def plate_list(objs, first_item=1):
             {
                 "item": n,
                 "quantity": len(ps),
+                "kind": "plate",
                 "type": p["type"],
                 "thickness_mm": p["thickness"],
                 "length_mm": p["length"],
@@ -538,20 +542,30 @@ def plate_list(objs, first_item=1):
     return rows
 
 
+def weld_list(beads, first_item=1):
+    """Weld summary rows (kind "weld", ascending leg size) for WeldBead objects; weld metal at 7850 kg/m^3."""
+    rows = []
+    for n, w in enumerate(WeldBead.weld_summary(beads), first_item):
+        rows.append({"item": n, "kind": "weld", **{k: w[k] for k in WELD_COLUMNS}})
+    return rows
+
+
 def cut_list(objs):
     """Grouped cut list (list of dicts, deterministic order) for Members and EndTrim chain heads.
 
     Gusset and EndCap objects among ``objs`` follow the member rows as plate items (rows with a
-    ``type`` key; see ``plate_list``); a list without plates is exactly the member rows.
+    ``type`` and ``kind == "plate"``; see ``plate_list``) and WeldBead objects as weld rows
+    (``kind == "weld"``; see ``weld_list``); a list with neither is exactly the member rows.
 
     Pieces are sorted by value, then each joins the first group whose first member matches it to
     tolerance (a clustering, not a rounding: values straddling a rounding boundary still merge).
     """
     objs = list(objs)
     plates = [o for o in objs if is_plate(o)]
+    beads = [o for o in objs if WeldBead.is_bead(o)]
     pieces = []
     for o in objs:
-        if not is_plate(o):
+        if not is_plate(o) and not WeldBead.is_bead(o):
             pieces.extend(segment_pieces(o))
     pieces.sort(key=_sort_key)
     groups = []
@@ -591,7 +605,8 @@ def cut_list(objs):
                 "marks": sorted(q["mark"] for q in ps),
             }
         )
-    return rows + plate_list(plates, len(rows) + 1)
+    rows = rows + plate_list(plates, len(rows) + 1)
+    return rows + weld_list(beads, len(rows) + 1)
 
 
 def _fmt(col, v):
@@ -605,6 +620,8 @@ def _fmt(col, v):
         return "%.6f" % v
     if col == "area_mm2":
         return "%.4f" % v
+    if col in ("leg_z_mm", "throat_a_mm", "total_length_mm"):
+        return "%.6f" % v
     if col == "density_kg_m3":
         return "%.1f" % v
     return str(v)
@@ -621,12 +638,17 @@ def to_csv(rows):
             cells = ['"%s"' % c if "," in c else c for c in cells]
             lines.append(",".join(cells))
 
-    emit(COLUMNS, [r for r in rows if "type" not in r])
+    emit(COLUMNS, [r for r in rows if "type" not in r and r.get("kind") != "weld"])
     plates = [r for r in rows if "type" in r]
+    welds = [r for r in rows if r.get("kind") == "weld"]
     if plates:
         lines.append("")
         lines.append(",".join(PLATE_COLUMNS))
         emit(PLATE_COLUMNS, plates)
+    if welds:
+        lines.append("")
+        lines.append(",".join(WELD_COLUMNS))
+        emit(WELD_COLUMNS, welds)
     return "\n".join(lines) + "\n"
 
 
