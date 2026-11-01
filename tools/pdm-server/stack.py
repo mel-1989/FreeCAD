@@ -4,7 +4,10 @@
 
 Everything binds to 127.0.0.1 on free high ports and lives in one temporary directory; nothing is installed as a
 service (no brew services, no launchd). ``Stack.stop()`` (or leaving the ``with`` block) kills what ``start()``
-started and removes the directory. Users and tokens are generated on every start and never written anywhere but
+started and removes the directory. Every process runs in its own process group, is recorded in ``<dir>/stack.json``
+and is stopped again at interpreter exit and on SIGTERM/SIGHUP, so an aborted run leaves nothing behind. After a SIGKILL
+(which no handler can see) run ``python3 stack.py sweep`` to remove such leftovers; the test suites do it on start-up.
+Only stacks with a marker file in a ``/tmp/pdms*`` directory whose owner process is gone are touched. Users and tokens are generated on every start and never written anywhere but
 that directory.
 
     python3 stack.py up        # start, print the environment a client needs, wait for Ctrl-C
@@ -13,7 +16,9 @@ Binaries are found from ``PDM_PG_BIN`` (default: Homebrew's postgresql@17), ``PD
 forgejo) and ``PDM_SERVER_VENV`` (the venv holding requirements.txt, default ~/src/cad-fork/venvs/pdm-server).
 """
 
+import atexit
 import contextlib
+import glob
 import json
 import os
 import secrets
@@ -23,6 +28,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -33,6 +39,73 @@ FORGEJO = os.environ.get("PDM_FORGEJO", "/opt/homebrew/opt/forgejo/bin/forgejo")
 VENV = os.environ.get("PDM_SERVER_VENV", os.path.expanduser("~/src/cad-fork/venvs/pdm-server"))
 OWNER, REPO = "pdmadmin", "vault"
 USERS = {"alice": "write", "bob": "write", "carol": "read", "dora": "admin"}  # Forgejo collaborator permission
+
+
+PREFIX = "pdms"
+MARKER = "stack.json"
+_LIVE = set()
+_LIVE_LOCK = threading.Lock()
+_HANDLERS_DONE = []
+
+
+def _lstart(pid):
+    """The start time of ``pid`` as ``ps`` prints it, or None when there is no such process. Together with the pid it
+    identifies a process for good: a recycled pid never has the same start time."""
+    p = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    out = p.stdout.strip()
+    return out or None
+
+
+def _kill_group(pgid, grace=10):
+    """SIGTERM a process group, then SIGKILL it if it is still there after ``grace`` seconds. Idempotent."""
+    if pgid <= 1 or pgid == os.getpgrp():
+        return  # never our own group
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 5)):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        end = time.time() + wait
+        while time.time() < end:
+            try:
+                os.killpg(pgid, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+            time.sleep(0.05)
+
+
+def _stop_all():
+    with _LIVE_LOCK:
+        stacks = list(_LIVE)
+    for st in stacks:
+        with contextlib.suppress(Exception):
+            st.stop()
+
+
+def _on_signal(signum, frame):
+    _stop_all()
+    prev = _HANDLERS_DONE and dict(_HANDLERS_DONE).get(signum)
+    signal.signal(signum, prev if callable(prev) else signal.SIG_DFL)
+    if callable(prev):
+        prev(signum, frame)
+    else:
+        os.kill(os.getpid(), signum)  # die of the signal as before, with the stack gone
+
+
+def _install_handlers():
+    """Stop live stacks on SIGTERM/SIGHUP. Only from the main thread, and only where the handler is the default (or ours)."""
+    if threading.current_thread() is not threading.main_thread() or _HANDLERS_DONE:
+        return
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        prev = signal.getsignal(sig)
+        if prev in (signal.SIG_DFL, None) or callable(prev):
+            signal.signal(sig, _on_signal)
+            _HANDLERS_DONE.append((sig, prev))
+    if not _HANDLERS_DONE:
+        _HANDLERS_DONE.append((0, None))
+
+
+atexit.register(_stop_all)
 
 
 def missing():
@@ -88,8 +161,15 @@ class Stack:
         ``extra_env``: more environment for the service (e.g. ``PDM_FREECAD_CMD`` for the web UI's worker)."""
         self.vault_lib = vault_lib
         self.extra_env = dict(extra_env or {})
-        self.root = tempfile.mkdtemp(prefix="pdms", dir="/tmp")
+        self.root = tempfile.mkdtemp(prefix=PREFIX, dir="/tmp")
         self.procs = {}
+        self.stopped = False
+        self._marks = {}  # name -> {"pid", "pgid", "lstart"}
+        self._stop_lock = threading.RLock()
+        with _LIVE_LOCK:
+            _LIVE.add(self)
+        _install_handlers()
+        self._write_marker()
         self.tokens = {}
         self.hook_secret = secrets.token_hex(16)
         self.pg_port, self.fj_port, self.svc_port = free_port(), free_port(), free_port()
@@ -111,23 +191,36 @@ class Stack:
         self.stop()
 
     def start(self):
-        self.start_pg(initialise=True)
-        self.start_forgejo()
-        self.bootstrap_forgejo()
-        self.start_service()
-        self.push_init_commit()
-        self.verify_hook_enforces()
+        try:
+            self.start_pg(initialise=True)
+            self.start_forgejo()
+            self.bootstrap_forgejo()
+            self.start_service()
+            self.push_init_commit()
+            self.verify_hook_enforces()
+        except BaseException:
+            self.stop()  # what was already started does not outlive a failed start
+            raise
 
     def stop(self):
-        for name in [n for n in self.procs if n not in ("forgejo", "postgres")] + ["forgejo"]:
-            self._kill(name)
-        with contextlib.suppress(Exception):
-            self.stop_pg()
-        self._kill("postgres")
-        shutil.rmtree(self.root, ignore_errors=True)
+        """Stop everything this stack started and remove its directory. Safe to call again, at exit or from a signal."""
+        with self._stop_lock:
+            if self.stopped:
+                return
+            self.stopped = True
+            for name in [n for n in list(self._marks) if n not in ("forgejo", "postgres")] + ["forgejo"]:
+                self._kill(name)
+            with contextlib.suppress(Exception):
+                self.stop_pg()
+            self._kill_pg_group()
+            self._kill("postgres")
+            shutil.rmtree(self.root, ignore_errors=True)
+            with _LIVE_LOCK:
+                _LIVE.discard(self)
 
     def _kill(self, name):
         p = self.procs.pop(name, None)
+        mark = self._marks.pop(name, None)
         if p and p.poll() is None:
             p.terminate()
             try:
@@ -135,6 +228,37 @@ class Stack:
             except subprocess.TimeoutExpired:
                 p.kill()
                 p.wait()
+        if mark:  # the rest of its process group (git children of forgejo, workers of the service)
+            _kill_group(mark["pgid"], grace=2)
+
+    def _write_marker(self):
+        data = {"owner": os.getpid(), "owner_lstart": _lstart(os.getpid()), "root": self.root, "procs": self._marks}
+        tmp = os.path.join(self.root, MARKER + ".tmp")
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, os.path.join(self.root, MARKER))
+
+    def _mark(self, name, pid):
+        try:
+            pgid = os.getpgid(pid)
+        except ProcessLookupError:
+            return
+        self._marks[name] = {"pid": pid, "pgid": pgid, "lstart": _lstart(pid)}
+        self._write_marker()
+
+    def _pg_pid(self):
+        try:
+            with open(os.path.join(self.root, "pgdata", "postmaster.pid")) as f:
+                return int(f.readline())
+        except (OSError, ValueError):
+            return None
+
+    def _kill_pg_group(self):
+        """Fallback after a failed ``pg_ctl stop``: kill the postmaster's group (it runs in its own session)."""
+        pid = self._pg_pid() or self._marks.get("postgres", {}).get("pid")
+        if pid:
+            with contextlib.suppress(OSError):
+                _kill_group(os.getpgid(pid), grace=3)
 
     # ---- postgres ----------------------------------------------------------------------------
 
@@ -146,7 +270,7 @@ class Stack:
         # PostgreSQL on macOS aborts at start-up ("became multithreaded") unless the locale is valid.
         env = dict(os.environ, LC_ALL="en_US.UTF-8", LANG="en_US.UTF-8")
         return subprocess.run([os.path.join(PG_BIN, name)] + list(args), check=True, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, text=True, env=env, **kw)
+                              stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True, **kw)
 
     def start_pg(self, initialise=False):
         data = os.path.join(self.root, "pgdata")
@@ -154,9 +278,14 @@ class Stack:
             self._pg("initdb", "-D", data, "-U", "pdm", "--auth=trust", "-E", "UTF8", "--no-sync")
         sock = os.path.join(self.root, "pgsock")
         os.makedirs(sock, exist_ok=True)
-        self._pg("pg_ctl", "-D", data, "-w", "-l", os.path.join(self.root, "pg.log"), "-o",
-                 f"-p {self.pg_port} -c listen_addresses=127.0.0.1 -c unix_socket_directories={sock} -c fsync=on",
-                 "start")
+        try:
+            self._pg("pg_ctl", "-D", data, "-w", "-l", os.path.join(self.root, "pg.log"), "-o",
+                     f"-p {self.pg_port} -c listen_addresses=127.0.0.1 -c unix_socket_directories={sock} -c fsync=on",
+                     "start")
+        finally:  # a postmaster that came up too slowly for -w is still ours
+            pid = self._pg_pid()
+            if pid:
+                self._mark("postgres", pid)
         if initialise:
             self._pg("createdb", "-h", "127.0.0.1", "-p", str(self.pg_port), "-U", "pdm", "pdm")
 
@@ -224,7 +353,9 @@ SHOW_FOOTER_VERSION = false
         env = dict(os.environ, HOME=self.root, GITEA_WORK_DIR=base)
         self.procs["forgejo"] = subprocess.Popen(
             [FORGEJO, "web", "--config", os.path.join(base, "app.ini"), "--work-path", base], env=env,
-            stdin=subprocess.DEVNULL, stdout=open(os.path.join(self.root, "forgejo.out"), "w"), stderr=subprocess.STDOUT)
+            stdin=subprocess.DEVNULL, stdout=open(os.path.join(self.root, "forgejo.out"), "w"), stderr=subprocess.STDOUT,
+            start_new_session=True)
+        self._mark("forgejo", self.procs["forgejo"].pid)
         wait_http(f"{self.fj_url}/api/v1/version")
 
     def bootstrap_forgejo(self):
@@ -294,7 +425,9 @@ SHOW_FOOTER_VERSION = false
         self.procs[name] = subprocess.Popen(
             [os.path.join(VENV, "bin", "python"), "-m", "uvicorn", "pdm_server.app:app", "--host", "127.0.0.1",
              "--port", str(port), "--log-level", "warning"], cwd=src, env=env, stdin=subprocess.DEVNULL,
-            stdout=open(os.path.join(self.root, name + ".out"), "a"), stderr=subprocess.STDOUT)
+            stdout=open(os.path.join(self.root, name + ".out"), "a"), stderr=subprocess.STDOUT,
+            start_new_session=True)
+        self._mark(name, self.procs[name].pid)
         url = f"http://127.0.0.1:{port}"
         wait_http(f"{url}/health")
         return url
@@ -311,7 +444,40 @@ SHOW_FOOTER_VERSION = false
         return {"PDM_SERVER_URL": self.url, "PDM_TOKEN": self.tokens[user]}
 
 
-if __name__ == "__main__" and sys.argv[1:] == ["up"]:
+def sweep(tmp="/tmp", log=print):
+    """Remove stacks left behind by a run that was SIGKILLed (or lost its machine's power): every ``<tmp>/pdms*``
+    directory holding a ``stack.json`` whose owner process no longer exists. Its recorded processes are stopped only
+    when pid and start time both still match, so nothing that is not ours is ever signalled; PostgreSQL gets a
+    ``pg_ctl stop -m immediate`` first. Directories without a marker, and stacks whose owner is alive, are left alone.
+    Returns the list of removed directories."""
+    removed = []
+    for d in sorted(glob.glob(os.path.join(tmp, PREFIX + "*"))):
+        try:
+            with open(os.path.join(d, MARKER)) as f:
+                m = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if m.get("root") != d or (m.get("owner_lstart") and _lstart(m["owner"]) == m["owner_lstart"]):
+            continue  # not a stack of ours, or its owner is still running
+        procs = m.get("procs", {})
+        for name in [n for n in procs if n != "postgres"] + (["postgres"] if "postgres" in procs else []):
+            mark = procs[name]
+            if _lstart(mark["pid"]) != mark["lstart"]:
+                continue  # gone, or the pid belongs to something else now
+            if name == "postgres":
+                subprocess.run([os.path.join(PG_BIN, "pg_ctl"), "-D", os.path.join(d, "pgdata"), "-m", "immediate", "-w", "stop"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            if _lstart(mark["pid"]) == mark["lstart"]:
+                _kill_group(mark["pgid"], grace=3)
+            log(f"sweep: stopped {name} (pid {mark['pid']}) of {d}")
+        shutil.rmtree(d, ignore_errors=True)
+        removed.append(d)
+    return removed
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["sweep"]:
+    print(f"removed {len(sweep())} stale stack(s)")
+elif __name__ == "__main__" and sys.argv[1:] == ["up"]:
     reason = missing()
     if reason:
         sys.exit(f"cannot start: {reason}")

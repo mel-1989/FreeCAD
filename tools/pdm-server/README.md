@@ -96,7 +96,7 @@ If the vault branch was renamed, deleted or reset (pushes then fail with "an adm
 | `PDM_GIT_URL` | service | optional, the git URL clients are told to use (default `<forgejo>/<repo>.git`) |
 | `PDM_FREECAD_CMD`, `PDM_CACHE_DIR` | service | optional, the web UI's worker and cache (see Web UI) |
 
-Run the service from this directory: `python -m uvicorn pdm_server.app:app --host 127.0.0.1 --port 8000`. Install the hook once per repository: `python install_hook.py <repo>.git <service url> <PDM_HOOK_SECRET> <python>`.
+Run the service from this directory: `python -m uvicorn pdm_server.app:app --host 127.0.0.1 --port 8000 --no-proxy-headers`. Keep `--no-proxy-headers` unless `PDM_TRUST_PROXY` is set behind a proxy you trust: uvicorn's default honours `X-Forwarded-Proto` and `X-Forwarded-For` from loopback, so a local client could otherwise spoof them. Install the hook once per repository: `python install_hook.py <repo>.git <service url> <PDM_HOOK_SECRET> <python>`.
 
 A client opens a vault with `Vault.clone(<server url>, workdir, user)` (a URL instead of a path selects the remote backend) and later `Vault.open(workdir, user)`; the PDM workbench's Connect dialog accepts the URL the same way. With no `PDM_SERVER_URL` and no server working copy, nothing changes from the local vault.
 
@@ -114,3 +114,7 @@ python3 -I harness/run_tests.py --suites TestPDMServer --skip-ctest
 ```
 
 Overrides: `PDM_PG_BIN` (directory with `initdb`, `pg_ctl`, `createdb`), `PDM_FORGEJO` (the binary), `PDM_SERVER_VENV`, `PDM_SERVER_SRC` (this directory, found from the build tree or `FC_SRC` by default). `python3 stack.py up` starts the same stack by hand and prints a token per test user.
+
+## Throwaway test stacks
+
+`stack.py` (used by the `TestPDMServer` suite and `python3 stack.py up`) runs PostgreSQL, Forgejo and the service under `/tmp/pdms*`, each in its own process group and recorded in `<dir>/stack.json`. They are stopped when the stack stops, at interpreter exit and on SIGTERM or SIGHUP, and a `start()` that fails halfway stops what it had started. Nothing can catch SIGKILL, so after a killed run use `python3 stack.py sweep`: it removes every `/tmp/pdms*` stack whose owner process is gone, signalling only processes whose pid and start time match the marker (other PostgreSQL servers are never touched). The suite runs the same sweep before it starts a stack.

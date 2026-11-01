@@ -218,9 +218,7 @@ def install(app, S, effective_role, User):
     @app.middleware("http")
     async def nosniff(request, call_next):
         resp = await call_next(request)
-        path = request.url.path
-        if path == "/" or path.startswith(("/web", "/static")):
-            resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Content-Type-Options"] = "nosniff"  # pages, static files and the REST API alike
         return resp
 
     def jobs(st):
