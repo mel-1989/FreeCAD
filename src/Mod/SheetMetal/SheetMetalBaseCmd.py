@@ -247,6 +247,7 @@ if SheetMetalTools.isGuiLoaded():
                     # The name of a svg file available in the resources.
                     "Pixmap": os.path.join(icons_path, "SheetMetal_AddBase.svg"),
                     "MenuText": translate("SheetMetal", "Make Base Wall"),
+                    "StatusTip": translate("SheetMetal", "Create the base wall of a sheet-metal part from a sketch"),
                     "Accel": "C, B",
                     "ToolTip": translate(
                         "SheetMetal",

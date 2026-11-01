@@ -1130,6 +1130,7 @@ if SheetMetalTools.isGuiLoaded():
                     # The name of a svg file available in the resources.
                     "Pixmap": os.path.join(iconPath, "SheetMetal_Unfold.svg"),
                     "MenuText": translate("SheetMetal", "Unfold"),
+                    "StatusTip": translate("SheetMetal", "Flatten the sheet-metal part"),
                     "Accel": "U",
                     "ToolTip": translate(
                         "SheetMetal",
@@ -1173,6 +1174,7 @@ if SheetMetalTools.isGuiLoaded():
                     # The name of a svg file available in the resources.
                     "Pixmap": os.path.join(iconPath, "SheetMetal_UnfoldUpdate.svg"),
                     "MenuText": translate("SheetMetal", "Unfold Update"),
+                    "StatusTip": translate("SheetMetal", "Refresh the selected unfold after the part changed"),
                     "Accel": "UU",
                     "ToolTip": translate(
                         "SheetMetal",
@@ -1201,6 +1203,7 @@ if SheetMetalTools.isGuiLoaded():
                     # The name of a svg file available in the resources.
                     "Pixmap": os.path.join(iconPath, "SheetMetal_UnfoldUnattended.svg"),
                     "MenuText": translate("SheetMetal", "Unattended Unfold"),
+                    "StatusTip": translate("SheetMetal", "Flatten the part without opening the task panel"),
                     "Accel": "U",
                     "ToolTip": translate(
                         "SheetMetal",

@@ -1,10 +1,16 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """GUI commands of the AgentCore review panel."""
 
+import os
+
+ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", "AgentCore_ReviewPending.svg")
+
 
 class ReviewPending:
     def GetResources(self):
-        return {"MenuText": "Review pending agent changes",
+        return {"Pixmap": ICON,
+                "StatusTip": "Reopen the change-set panel for the newest undecided agent turn",
+                "MenuText": "Review pending agent changes",
                 "ToolTip": "Reopen the change-set panel for the newest agent turn that has no decision yet"}
 
     def IsActive(self):

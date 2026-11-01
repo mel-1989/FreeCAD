@@ -21,6 +21,12 @@ COMMANDS = {
     "SheetMetal_Jog": ("Jog", "Select a planar face of a sheet-metal part and, with Ctrl, a sketch holding one straight line on it, then offset the sheet beyond the line", "SheetMetal_Jog"),
 }
 TOOLBAR = list(COMMANDS)
+STATUS = {
+    "SheetMetal_EdgeFlange": "Add a bend and a straight wall to the selected edges",
+    "SheetMetal_Hem": "Fold the sheet back on itself along the selected edges",
+    "SheetMetal_ConvertSolid": "Turn the selected solid into a sheet-metal part",
+    "SheetMetal_Jog": "Offset the sheet beyond the selected sketch line",
+}
 
 
 def _open(make):
@@ -40,7 +46,8 @@ class _Command:
 
     def GetResources(self):
         text, tip, icon = COMMANDS[self.name]
-        return {"Pixmap": VP.icon_path(icon), "MenuText": text, "ToolTip": tip}
+        return {"Pixmap": VP.icon_path(icon), "MenuText": text, "ToolTip": tip,
+                "StatusTip": STATUS[self.name]}
 
     def IsActive(self):
         return FreeCAD.ActiveDocument is not None and bool(Gui.Selection.getSelectionEx())

@@ -377,7 +377,7 @@ if SheetMetalTools.isGuiLoaded():
                     # The name of a svg file available in the resources.
                     "Pixmap": os.path.join(icons_path, "SheetMetal_Extrude.svg"),
                     "MenuText": translate("SheetMetal", "Extend Face"),
-                    "Accel": "E",
+                    "StatusTip": translate("SheetMetal", "Extend the selected faces on a sheet-metal part"),
                     "ToolTip": translate(
                         "SheetMetal",
                         "Extends one or more face, on existing sheet metal.\n"
@@ -419,7 +419,7 @@ if SheetMetalTools.isGuiLoaded():
                     # The name of a svg file available in the resources.
                     "Pixmap": os.path.join(icons_path, "SheetMetal_ExtendBySketch.svg"),
                     "MenuText": translate("SheetMetal", "Extend by Sketch"),
-                    "Accel": "T",
+                    "StatusTip": translate("SheetMetal", "Extend a side face using a sketch"),
                     "ToolTip": translate(
                         "SheetMetal",
                         "Extends a side face using a sketch.\n"

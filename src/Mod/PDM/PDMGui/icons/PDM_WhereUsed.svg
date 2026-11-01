@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Original geometric icon drawn for the cad-fork PDM workbench (cad-fork G08a slice 3). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<rect x="22" y="6" width="20" height="14" fill="#6c9bd1" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="6" y="44" width="20" height="14" fill="#6c9bd1" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="38" y="44" width="20" height="14" fill="#e8892b" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M32 20 V32 M16 44 V32 H48 V44" fill="none" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

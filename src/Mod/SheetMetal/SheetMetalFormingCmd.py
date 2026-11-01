@@ -368,6 +368,7 @@ if SheetMetalTools.isGuiLoaded():
         def GetResources(self):
             return {"Pixmap": os.path.join(icons_path, "SheetMetal_Forming.svg"),
                     "MenuText": translate("SheetMetal", "Make Forming in Wall"),
+                    "StatusTip": translate("SheetMetal", "Press a forming tool into a wall"),
                     "Accel": "M, F",
                     "ToolTip": translate(
                         "SheetMetal", "Make a forming using tool in metal sheet\n"

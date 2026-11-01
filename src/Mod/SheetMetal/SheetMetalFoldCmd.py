@@ -356,6 +356,7 @@ if SheetMetalTools.isGuiLoaded():
                     # The name of a svg file available in the resources.
                     "Pixmap": os.path.join(icons_path, "SheetMetal_AddFoldWall.svg"),
                     "MenuText": FreeCAD.Qt.translate("SheetMetal", "Fold a Wall"),
+                    "StatusTip": FreeCAD.Qt.translate("SheetMetal", "Fold a wall along a sketch line"),
                     "Accel": "C, F",
                     "ToolTip": FreeCAD.Qt.translate(
                         "SheetMetal",

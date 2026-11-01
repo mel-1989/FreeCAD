@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# AgentCore: the cad-fork AI-agent layer (headless). Every .py and .json file
+# AgentCore: the cad-fork AI-agent layer (headless). Every .py, .json and .svg file
 # under this directory is copied, so sub-packages can add files without
 # editing this list.
 
 file(GLOB_RECURSE AgentCore_SRCS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.svg"
 )
 SOURCE_GROUP("" FILES ${AgentCore_SRCS})
 

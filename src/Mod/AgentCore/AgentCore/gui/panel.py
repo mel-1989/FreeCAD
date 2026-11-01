@@ -104,6 +104,26 @@ def _legend(text, color):
     return lab
 
 
+class _ReturnCloses(QtCore.QObject):
+    """Return pressed in a read-only view closes a Close-only panel, as the Close button would.
+
+    A Close button is a reject-role button, so Qt never makes it the default and the task view's Return
+    handling (it clicks the visible default button, see QDialogButtonBox in the Qt docs) has nothing to click.
+    Only the panel's own item views are filtered; buttons and editors keep their Return."""
+
+    def __init__(self, panel, views):
+        super().__init__(panel.form)
+        self.panel = panel
+        for v in views:
+            v.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.KeyPress and event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+            QtCore.QTimer.singleShot(0, self.panel.close_from_key)
+            return True
+        return False
+
+
 class ChangeSetPanel:
     """A FreeCAD task dialog (duck-typed) around a backend."""
 
@@ -171,6 +191,7 @@ class ChangeSetPanel:
         self.reject_button.clicked.connect(self._on_reject)
         lay.addLayout(buttons)
         self.form = form
+        self._return_closes = _ReturnCloses(self, [self.tree, form])   # the buttons and the tree take no focus: Return lands on the form
 
     def row_counts(self):
         return {k: len(v) for k, v in self._rows.items()}
@@ -227,6 +248,10 @@ class ChangeSetPanel:
     def getStandardButtons(self):
         close = QtWidgets.QDialogButtonBox.StandardButton.Close
         return int(getattr(close, "value", close))
+
+    def close_from_key(self):
+        if Gui.Control.activeDialog() and self.reject():
+            Gui.Control.closeDialog()
 
     def reject(self):   # the Close button: decides nothing
         self._detach()
