@@ -29,6 +29,7 @@ import Part
 
 from WeldGeom import (
     WeldmentError,
+    attach_view_provider,
     body_cut,
     build_segment,
     check_on_face,
@@ -197,8 +198,7 @@ def make_trim(doc, base, segment, end, kind, other=None, other_sub="", other_seg
     obj.OtherSub = other_sub
     obj.OtherSegment = other_segment
     obj.OtherEnd = other_end
-    if FreeCAD.GuiUp:
-        obj.ViewObject.Proxy = 0
+    attach_view_provider(obj)
     return obj
 
 

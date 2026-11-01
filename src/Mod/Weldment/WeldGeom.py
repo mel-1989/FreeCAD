@@ -46,6 +46,23 @@ class WeldmentError(ValueError):
 _DEPENDS = ("Body1", "Body2", "MemberA", "MemberB", "Base", "Other")
 
 
+def attach_view_provider(obj):
+    """Give a new feature its task-panel view provider when the GUI is up (WeldViewProviders).
+
+    Documents saved before slice 6a have no view-provider proxy on these features (it was set to 0) and
+    open as before; they simply have no panel on double-click. Without the GUI nothing is attached."""
+    import FreeCAD as _fc
+
+    if not _fc.GuiUp:
+        return
+    try:
+        import WeldViewProviders
+    except ImportError:    # no PySide, e.g. a build without the GUI modules
+        obj.ViewObject.Proxy = 0
+        return
+    WeldViewProviders.attach(obj)
+
+
 def _is_bad(o):
     state = list(getattr(o, "State", []) or [])
     return "Invalid" in state or "Error" in state

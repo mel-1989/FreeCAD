@@ -36,7 +36,7 @@ import math
 import FreeCAD
 import Part
 
-from WeldGeom import WeldmentError
+from WeldGeom import WeldmentError, attach_view_provider
 from WeldMember import segment_specs
 from WeldTrim import root_member
 
@@ -350,6 +350,5 @@ def make_gusset(doc, member_a, seg_a, end_a, member_b, seg_b, end_b, leg1, leg2,
     obj.MemberB, obj.SegmentB, obj.EndB = member_b, seg_b, end_b
     obj.Leg1, obj.Leg2, obj.Thickness, obj.Chamfer = leg1, leg2, thickness, chamfer
     obj.PlatePlacement = placement
-    if FreeCAD.GuiUp:
-        obj.ViewObject.Proxy = 0
+    attach_view_provider(obj)
     return obj

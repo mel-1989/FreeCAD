@@ -35,7 +35,7 @@ import FreeCAD
 import Part
 
 from WeldCutList import _end_planes
-from WeldGeom import WeldmentError
+from WeldGeom import WeldmentError, attach_view_provider
 from WeldGusset import DEFAULT_DENSITY, outline_size
 from WeldMember import segment_specs
 from WeldTrim import root_member
@@ -242,6 +242,5 @@ def make_end_cap(doc, base, segment, end, thickness, mode="Outset", recess=0.0, 
     EndCap(obj)
     obj.Base, obj.Segment, obj.End = base, segment, end
     obj.Thickness, obj.Mode, obj.Recess, obj.Chamfer = thickness, mode, recess, chamfer
-    if FreeCAD.GuiUp:
-        obj.ViewObject.Proxy = 0
+    attach_view_provider(obj)
     return obj

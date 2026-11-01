@@ -20,7 +20,7 @@ import FreeCAD
 import Part
 
 import Profiles
-from WeldGeom import ANCHORS, SegmentSpec, WeldmentError
+from WeldGeom import ANCHORS, SegmentSpec, WeldmentError, attach_view_provider
 
 V = FreeCAD.Vector
 
@@ -125,6 +125,5 @@ def make_member(doc, family, size, path, name="Member", anchor="Centre", rotatio
     obj.Anchor = anchor
     obj.Rotation = rotation
     obj.Mirror = mirror
-    if FreeCAD.GuiUp:
-        obj.ViewObject.Proxy = 0
+    attach_view_provider(obj)
     return obj

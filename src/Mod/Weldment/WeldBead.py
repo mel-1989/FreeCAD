@@ -42,7 +42,7 @@ import math
 import FreeCAD
 import Part
 
-from WeldGeom import WeldmentError, refuse_invalid
+from WeldGeom import WeldmentError, attach_view_provider, refuse_invalid
 
 V = FreeCAD.Vector
 
@@ -256,8 +256,7 @@ def make_bead(doc, body1, body2, edges, size, mode="Leg z", name="WeldBead"):
     obj.Edges = [(e[0], [e[1]] if isinstance(e[1], str) else list(e[1])) for e in edges]
     obj.SizeMode = mode
     obj.Size = size
-    if FreeCAD.GuiUp:
-        obj.ViewObject.Proxy = 0
+    attach_view_provider(obj)
     return obj
 
 
