@@ -72,6 +72,7 @@
 
 #include "Document.h"
 #include "ElementReferenceEvents.h"
+#include "FailureMessages.h"
 #include "private/DocumentP.h"
 #include "Application.h"
 #include "AgentTurnGuard.h"
@@ -3064,6 +3065,8 @@ void Document::renameObjectIdentifiers(
     }
 }
 
+static void reportRecomputeFailure(const Document& doc, DocumentObject* obj);
+
 int Document::recompute(const std::vector<DocumentObject*>& objs,
                         bool force,
                         bool* hasError,
@@ -3262,10 +3265,7 @@ int Document::recompute(const std::vector<DocumentObject*>& objs,
         if (!testStatus(Status::IgnoreErrorOnRecompute)) {
             for (auto it : topoSortedObjects) {
                 if (it->isError()) {
-                    const char* text = getErrorDescription(it);
-                    if (text) {
-                        Base::Console().error("{}: {}\n", it->Label.getValue(), text);
-                    }
+                    reportRecomputeFailure(*this, it);
                 }
             }
         }
@@ -3495,6 +3495,26 @@ const char* Document::getErrorDescription(const DocumentObject* Obj) const
 }
 
 // call the recompute of the Feature and handle the exceptions and errors.
+// The user-facing line for a feature that failed to recompute: one sentence naming the feature
+// and what to change (App/FailureMessages.cpp). The raw error text, which stays the stored
+// status of the feature, goes to the log together with the catalogue key that matched.
+static void reportRecomputeFailure(const Document& doc, DocumentObject* obj)
+{
+    const char* raw = doc.getErrorDescription(obj);
+    if (!raw) {
+        return;
+    }
+    const FailureMessage message = describeFailure(obj, raw);
+    Base::Console().error("{}\n", message.sentence);
+    Base::Console().log(
+        "Recompute failure of {} [{}] (message key {}): {}\n",
+        obj->getFullName(),
+        obj->getTypeId().getName(),
+        message.key,
+        raw
+    );
+}
+
 int Document::_recomputeFeature(DocumentObject* Feat) // NOLINT
 {
     FC_LOG("Recomputing " << Feat->getFullName());
@@ -3522,13 +3542,31 @@ int Document::_recomputeFeature(DocumentObject* Feat) // NOLINT
         return 1;
     }
     catch (Base::Exception& e) {
-        e.reportException();
+        if (testStatus(Status::IgnoreErrorOnRecompute)) {
+            e.reportException();
+        }
+        else {
+            // The user sees one readable line per failed feature (reportRecomputeFailure);
+            // the exception with its source location goes to the log.
+            Base::Console().log(
+                "Failed to recompute {}: {}({}): {}\n",
+                Feat->getFullName(),
+                e.getFile(),
+                e.getLine(),
+                e.what()
+            );
+        }
         FC_LOG("Failed to recompute " << Feat->getFullName() << ": " << e.what());
         d->addRecomputeLog(e.what(), Feat);
         return 1;
     }
     catch (std::exception& e) {
-        FC_ERR("Exception in " << Feat->getFullName() << " thrown: " << e.what());
+        if (testStatus(Status::IgnoreErrorOnRecompute)) {
+            FC_ERR("Exception in " << Feat->getFullName() << " thrown: " << e.what());
+        }
+        else {
+            Base::Console().log("Exception in {} thrown: {}\n", Feat->getFullName(), e.what());
+        }
         d->addRecomputeLog(e.what(), Feat);
         return 1;
     }
@@ -3568,6 +3606,9 @@ bool Document::recomputeFeature(DocumentObject* feature, bool recursive)
         return !hasError;
     }
     _recomputeFeature(feature);
+    if (feature->isError() && !testStatus(Status::IgnoreErrorOnRecompute)) {
+        reportRecomputeFailure(*this, feature);
+    }
     signalRecomputedObject(*feature);
     return feature->isValid();
 }

@@ -49,6 +49,7 @@
 #include <Base/Color.h>
 #include <App/Application.h>
 #include <App/Document.h>
+#include <App/FailureMessages.h>
 #include <App/DocumentObjectGroup.h>
 #include <App/AutoTransaction.h>
 #include <App/GeoFeatureGroupExtension.h>
@@ -6575,6 +6576,14 @@ QVariant DocumentObjectItem::data(int column, int role) const
         if (!tip.isEmpty()) {
             return tip;
         }
+        // A feature that failed to recompute: one readable sentence (App/FailureMessages.cpp)
+        App::DocumentObject* obj = object()->getObject();
+        if (obj && obj->isAttachedToDocument() && obj->isError()) {
+            const char* raw = obj->getDocument()->getErrorDescription(obj);
+            if (raw) {
+                return QString::fromUtf8(App::describeFailure(obj, raw).sentence.c_str());
+            }
+        }
     }
     return QTreeWidgetItem::data(column, role);
 }
@@ -6590,6 +6599,14 @@ void DocumentObjectItem::displayStatusInfo()
 
     if (Obj->mustExecute() == 1 && !Obj->isError()) {
         info += TreeWidget::tr(" (but must be executed)");
+    }
+
+    if (Obj->isError()) {
+        // Tooltip and status bar show the readable sentence (App/FailureMessages.cpp); the stored
+        // error text of the feature is not changed
+        if (const char* raw = Obj->getDocument()->getErrorDescription(Obj)) {
+            info = QString::fromUtf8(App::describeFailure(Obj, raw).sentence.c_str());
+        }
     }
 
     QString status = TreeWidget::tr("%1, Internal name: %2")

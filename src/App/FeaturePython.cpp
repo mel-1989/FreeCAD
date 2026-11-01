@@ -25,7 +25,9 @@
 #include <sstream>
 
 #include <App/DocumentObjectPy.h>
+#include <Base/Console.h>
 #include <Base/Interpreter.h>
+#include <Base/PyTools.h>
 #include <Base/MatrixPy.h>
 #include <Base/PlacementPy.h>
 #include <Base/Tools.h>
@@ -96,7 +98,21 @@ bool FeaturePythonImp::execute()
             PyErr_Clear();
             return false;
         }
-        Base::PyException::throwException();  // extract the Python error text
+        // Extract the Python error text. The traceback goes to the log only: the user-facing
+        // line for the failed feature is written once recompute has finished (G08a, Document.cpp).
+        Base::PyException exception;
+        if (!exception.getReported()) {
+            exception.setReported(true);
+            PySys_SetObject("last_traceback", PP_last_traceback);  // post-mortem debugging
+            Base::Console().log(
+                "Python exception in {}.execute:\n{}{}: {}\n",
+                object->getFullName(),
+                exception.getStackTrace(),
+                exception.getErrorType(),
+                exception.what()
+            );
+        }
+        exception.raiseException();
     }
 
     return false;
