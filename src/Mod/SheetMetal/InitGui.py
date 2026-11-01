@@ -25,9 +25,10 @@
 #  Adapted for cad-fork core (2026-10-31) from shaise/FreeCAD_SheetMetal cbf6595.
 #  Modified for cad-fork on 2026-11-01 (LGPL-2.1 section 2a): names are imported inside the class body and methods, because FreeCAD exec()s InitGui.py with separate globals and locals; registers TestSheetMetalGui.
 #  Modified for cad-fork on 2026-11-01, run 034 (LGPL-2.1 section 2a): the edge flange, hem, convert-from-solid and jog commands are appended to the command list.
+#  Modified for cad-fork on 2026-11-01 (LGPL-2.1 section 2a, slice 6b lane B): appends the corner relief, lightening cutout, lofted bend and flat DXF export commands after the vendored ones.
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# SheetMetal workbench. Only the commands of the vendored LGPL files are registered; the edge flange,
-# hem, convert-from-solid, corner relief, junction, sketch and cutout commands arrive in later slices.
+# SheetMetal workbench: the commands of the vendored LGPL files, then the clean-room commands of slice 6b
+# (SMEdgeCommands, SMShapeCommands). Junction and sketch-on-sheet-metal have no command yet.
 
 import FreeCAD
 import FreeCADGui as Gui
@@ -58,6 +59,7 @@ class SMWorkbench(Workbench):
         import SheetMetalUnfoldCmd
         import SheetMetalUnfolder
         import SMEdgeCommands
+        import SMShapeCommands
 
         self.list = [
             "SheetMetal_AddBase",
@@ -71,6 +73,7 @@ class SMWorkbench(Workbench):
             "SheetMetal_Forming",
         ]
         self.list += SMEdgeCommands.TOOLBAR
+        self.list += SMShapeCommands.TOOLBAR
         if engineering_mode_enabled():
             self.list.insert(self.list.index("SheetMetal_Unfold") + 1, "SheetMetal_UnattendedUnfold")
 

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Original geometric icon drawn for the cad-fork SheetMetal workbench (cad-fork G07 slice 6b). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<polygon points="8,6 40,6 52,18 52,58 8,58" fill="#f4f6f8" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="40,6 40,18 52,18" fill="none" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+<rect x="16" y="26" width="28" height="22" fill="#6c9bd1" stroke="#2b4a6f" stroke-width="2"/>
+<line x1="30" y1="26" x2="30" y2="48" stroke="#e8892b" stroke-width="3" stroke-dasharray="4 3"/>
+<polygon points="48,36 60,44 48,52" fill="#e8892b" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+</svg>
