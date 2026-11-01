@@ -1124,6 +1124,28 @@ class Vault:
         import FreeCAD
         return FreeCAD.openDocument(self.export_revision(name, revision, dest))
 
+    # ---- BOM and revision diff (slice 6a; the logic is in PDM/bom.py and PDM/diff.py) ------------------
+
+    def bom(self, name, revision=None, kind="EBOM"):
+        """Indented engineering BOM of ``name`` as of ``revision`` (the vault head when None); rows as in ``PDM.bom``."""
+        from PDM import bom as _bom
+        return _bom.bom(self, name, revision, kind)
+
+    def bom_flat(self, name, revision=None, kind="EBOM"):
+        """Summed BOM: leaf parts with quantities multiplied down the tree."""
+        from PDM import bom as _bom
+        return _bom.flatten(self.bom(name, revision, kind))
+
+    def bom_csv(self, name, revision=None, kind="EBOM", flat=False):
+        """Deterministic CSV text of the indented (or flat) BOM."""
+        from PDM import bom as _bom
+        return _bom.to_csv(self.bom(name, revision, kind), flat=flat)
+
+    def diff(self, name, rev_a, rev_b):
+        """Added, removed and changed objects, properties and shapes between two revisions of ``name``, plus the BOM delta."""
+        from PDM import diff as _diff
+        return _diff.diff(self, name, rev_a, rev_b)
+
 
 def cleanup_export(path):
     """Remove a folder made by ``export_revision`` (restoring write permission first)."""
