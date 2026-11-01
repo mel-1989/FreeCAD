@@ -385,7 +385,7 @@ class TestReview031(EcoCase):
         def lose(sha, times):
             calls.append(sha)
             if len(calls) <= times:
-                raise remote.PermissionDenied("the vault refused the push: a new ECO must take the next free number ECO-0002")
+                raise remote.EcoNumberTaken("the vault refused the push: [eco-number-taken] a new ECO must take the next free number ECO-0002")
             return real(sha)
         a._push_main = lambda sha: lose(sha, 1)
         self.assertEqual(a.eco_create("t", "r", {"p1": "A.1"})["number"], "ECO-0001")
@@ -396,6 +396,21 @@ class TestReview031(EcoCase):
             a.eco_create("t2", "r", {"p2": "A.1"})
         self.assertIn("lost the race", str(cm.exception))
         self.assertEqual(len(calls), 2)
+
+    def test_the_create_retry_keys_on_the_error_type_not_the_message_text(self):
+        from PDM import remote
+        self.add("p1")
+        a = self.u("alice")
+        calls = []
+
+        def refuse(sha):
+            calls.append(sha)
+            raise remote.PermissionDenied("the vault refused the push: a new ECO must take the next free number ECO-0002")
+        a._push_main = refuse
+        with self.assertRaises(remote.PermissionDenied):  # same words, plain PermissionDenied: no retry, no rewording
+            a.eco_create("t", "r", {"p1": "A.1"})
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(issubclass(remote.EcoNumberTaken, remote.PermissionDenied))
 
     def test_an_eco_naming_a_document_that_is_no_longer_in_the_tree_is_refused(self):
         self.add("p1")

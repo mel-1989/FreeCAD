@@ -369,7 +369,7 @@ class TestEco(ServerCase):
     def test_18_forged_create_must_take_the_next_number(self):
         d = self.mkdoc()
         r = self.run_as("alice", [{"op": "eco_forge", "create": {"number": "ECO-99999999", "documents": [d]}}])
-        self.assertEqual(r[0]["error"], "PermissionDenied", r)
+        self.assertEqual(r[0]["error"], "EcoNumberTaken", r)
         self.assertIn("next free number", r[0]["message"])
         r = self.run_as("alice", [call("eco_create", "after the squat", "r", {d: "A.1"})])
         self.assertTrue(r[0]["ok"], r)
