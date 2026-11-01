@@ -191,12 +191,22 @@ def _target(kind):
 _INSET = 1e-6
 
 
+#: spacing of the seating probes along a curved outline edge (mm); straight edges use a fixed count
+#: because an overhang there is linear and shows at the corners
+_CURVE_STEP = 0.5
+
+
 def outline_points(spec, per_edge=40):
     """Points on the outer outline of the section at s = 0, pulled 1e-6 of the section radius
-    towards the centroid so a section flush with its seat is not refused on rounding noise."""
+    towards the centroid so a section flush with its seat is not refused on rounding noise.
+    Curved edges are sampled at least every ``_CURVE_STEP`` mm, so an overhang a fraction of a
+    millimetre deep on a tube is still met."""
     pts = []
     for e in spec.section(0.0, outer_only=True).OuterWire.Edges:
-        pts.extend(e.discretize(Number=per_edge))
+        n = per_edge
+        if e.Curve.TypeId != "Part::GeomLine":
+            n = max(per_edge, int(math.ceil(e.Length / _CURVE_STEP)) + 1)
+        pts.extend(e.discretize(Number=n))
     return [spec.c0 + (p - spec.c0) * (1.0 - _INSET) for p in pts]
 
 
@@ -206,17 +216,30 @@ def check_seated(spec, which, body, what):
     far = spec.length + 4.0 * (body.BoundBox.DiagonalLength + spec.length) + 1000.0
     sgn = 1.0 if which == "End" else -1.0
     s0 = 0.0 if which == "End" else spec.length
-    for p in outline_points(spec):
-        a = p + spec.u * s0
-        b = a + spec.u * (sgn * far)
-        if not body.common(Part.makeLine(a, b)).Edges:
-            raise WeldmentError(
-                "%s at the %s of segment %d: the section is not fully seated on %s; its outline overhangs "
-                "the other member (point %.4g, %.4g, %.4g has nothing to meet). Choose a mitre or "
-                "trim to a face of the member that spans the whole section"
-                % (what, which, spec.index, "the other member" if what == "butt" else "the body",
-                   p.x, p.y, p.z)
-            )
+    pts = outline_points(spec)
+    lines = [Part.makeLine(p + spec.u * s0, p + spec.u * (s0 + sgn * far)) for p in pts]
+    # one boolean for all probe lines; a line that meets the body leaves at least one edge, found
+    # again by its transverse position
+    hit = body.common(Part.makeCompound(lines))
+
+    def key(pt):
+        d = pt - spec.c0
+        d = d - spec.u * d.dot(spec.u)
+        return (round(d.x, 5), round(d.y, 5), round(d.z, 5))
+
+    met = {key(v.Point) for e in hit.Edges for v in e.Vertexes}
+    for p, ln in zip(pts, lines):
+        if key(p) in met:
+            continue
+        if body.common(ln).Edges:
+            continue
+        raise WeldmentError(
+            "%s at the %s of segment %d: the section is not fully seated on %s; its outline overhangs "
+            "%s (point %.4g, %.4g, %.4g has nothing to meet). Choose a mitre or "
+            "trim to a face of the member that spans the whole section"
+            % (what, which, spec.index, "the other member" if what == "butt" else "the body",
+               "the other member" if what == "butt" else "the body", p.x, p.y, p.z)
+        )
 
 
 def check_on_face(spec, which, face, q, n, what):

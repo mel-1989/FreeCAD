@@ -194,6 +194,132 @@ class TestGrouping(_Base):
         self.assertEqual(CL.to_csv(CL.cut_list(ms)), CL.to_csv(CL.cut_list(list(reversed(ms)))))
 
 
+def _unit(*c):
+    v = V(*c)
+    v.normalize()
+    return v
+
+
+def _cut_piece(doc, name, fam, size, p0, p1, start=None, end=None, mirror=False):
+    """Member p0 -> p1 with optional planar end cuts, each (point, normal)."""
+    h = make_member(doc, fam, size, [_lines(doc, name + "p", [(p0, p1)])], name, mirror=mirror)
+    for which, pl in (("Start", start), ("End", end)):
+        if pl is not None:
+            h = make_trim(doc, h, 0, which, "Face", _plane(doc, name + which + "pl", V(*pl[0]), pl[1]), "Face1",
+                          name=name + which)
+    return h
+
+
+class TestReversedTwins(_Base):
+    nA = _unit(1, 0.4, 0.25)
+    nB = _unit(1, -0.2, 0.5)
+
+    def _pair(self, fam, size, st, en, mirror_q=False):
+        doc = FreeCAD.newDocument("Rev")
+        p = _cut_piece(doc, "P", fam, size, (0, 0, 0), (1000, 0, 0), st, en)
+        # the same solid modelled from the other end: path reversed, planes swapped
+        q = _cut_piece(doc, "Q", fam, size, (1000, 0, 0), (0, 0, 0), en, st, mirror=mirror_q)
+        doc.recompute()
+        for o in (p, q):
+            self.assertNotIn("Invalid", o.State, o.getStatusString())
+        return p, q
+
+    def _rows(self, *objs):
+        return CL.cut_list(list(objs))
+
+    def test_reversed_member_merges_with_its_twin(self):
+        st, en = ((0, 0, 0), self.nA), ((1000, 0, 0), self.nB)
+        for fam, size, a, b in (
+            ("EN IPE", "200", st, en),
+            ("EN IPE", "200", st, None),
+            ("EN IPE", "200", None, en),
+            ("EN RHS", "100x50x5", st, en),
+            ("EN SHS", "100x100x5", st, en),
+            ("EN CHS", "114.3x5", st, en),
+            ("EN CHS", "114.3x5", st, None),
+        ):
+            p, q = self._pair(fam, size, a, b)
+            rows = self._rows(p, q)
+            self.assertEqual([r["quantity"] for r in rows], [2], (fam, size, a is None, b is None))
+
+    def test_reversed_twin_is_input_order_independent(self):
+        p, q = self._pair("EN IPE", "200", ((0, 0, 0), self.nA), ((1000, 0, 0), self.nB))
+        self.assertEqual(CL.to_csv(self._rows(p, q)), CL.to_csv(self._rows(q, p)))
+
+    def test_reversed_pieces_that_really_differ_stay_apart(self):
+        # bevel on the web side at one end versus on the flange side: HEB tilted about z vs about y
+        a = math.radians(30.0)
+        nz = _unit(math.cos(a), math.sin(a), 0)
+        ny = _unit(math.cos(a), 0, math.sin(a))
+        doc = FreeCAD.newDocument("Differ")
+        p = _cut_piece(doc, "P", "EN HEB", "300", (0, 0, 0), (1000, 0, 0), ((0, 0, 0), nz), None)
+        q = _cut_piece(doc, "Q", "EN HEB", "300", (1000, 0, 0), (0, 0, 0), None, ((0, 0, 0), ny))
+        r = _cut_piece(doc, "R", "EN HEB", "300", (1000, 0, 0), (0, 0, 0), None, ((0, 0, 0), nz))
+        doc.recompute()
+        self.assertEqual(sorted(x["quantity"] for x in CL.cut_list([p, q])), [1, 1])
+        self.assertEqual(sorted(x["quantity"] for x in CL.cut_list([p, r])), [2])
+        # a different length or the other end angle never merges either
+        s = _cut_piece(doc, "S", "EN HEB", "300", (900, 0, 0), (0, 0, 0), ((900, 0, 0), nz), None)
+        doc.recompute()
+        self.assertEqual(sorted(x["quantity"] for x in CL.cut_list([p, s])), [1, 1])
+
+    def test_unequal_angle_reversed_is_the_other_hand_unless_mirrored(self):
+        st = ((0, 0, 0), self.nA)
+        p, q = self._pair("AISC L", "L8X6X1", st, None)
+        self.assertEqual(sorted(r["quantity"] for r in self._rows(p, q)), [1, 1])
+        # modelled from the other end with the section mirrored, the solid is the same one
+        p2, q2 = self._pair("AISC L", "L8X6X1", st, None, mirror_q=True)
+        self.assertAlmostEqual(p2.Shape.common(q2.Shape).Volume, p2.Shape.Volume, delta=1e-6 * p2.Shape.Volume)
+        self.assertEqual([r["quantity"] for r in self._rows(p2, q2)], [2])
+
+    def test_saddle_ends_reversed_merge_by_shape(self):
+        doc = FreeCAD.newDocument("Saddle")
+        beam = make_member(doc, "EN CHS", "193.7x8", [_lines(doc, "bp", [((-1500, 0, 0), (1500, 0, 0))])], "Beam")
+        p = make_member(doc, "EN CHS", "114.3x5", [_lines(doc, "pp", [((0, 0, 900), (0, 0, 0))])], "P")
+        p = make_trim(doc, p, 0, "End", "Butt", beam, "", 0, "Start", name="PB")
+        q = make_member(doc, "EN CHS", "114.3x5", [_lines(doc, "qp", [((0, 0, 0), (0, 0, 900))])], "Q")
+        q = make_trim(doc, q, 0, "Start", "Butt", beam, "", 0, "Start", name="QB")
+        doc.recompute()
+        for o in (p, q):
+            self.assertNotIn("Invalid", o.State, o.getStatusString())
+        self.assertEqual([r["quantity"] for r in self._rows(p, q)], [2])
+
+
+class TestBodySeating(_Base):
+    def _col(self, plate_w):
+        doc = FreeCAD.newDocument("Body")
+        b = doc.addObject("Part::Feature", "Plate")
+        b.Shape = Part.makeBox(400, plate_w, 50, V(-200, -plate_w / 2.0, -50))
+        col = make_member(doc, "EN SHS", "100x100x5", [_lines(doc, "cp", [((0, 0, 900), (0, 0, 0))])], "Col")
+        t = make_trim(doc, col, 0, "End", "Body", b, "", -1, "Start", name="T")
+        doc.recompute()
+        return t
+
+    def test_narrow_plate_is_refused(self):
+        for w in (60.0, 20.0):
+            t = self._col(w)
+            self.assertIn("Invalid", t.State)
+            self.assertIn("not fully seated", t.getStatusString())
+
+    def test_plate_as_wide_or_wider_is_accepted(self):
+        for w in (100.0, 200.0):
+            t = self._col(w)
+            self.assertNotIn("Invalid", t.State, t.getStatusString())
+
+
+class TestCurvedOverhang(_Base):
+    def test_sub_tenth_mm_overhang_on_a_tube_is_refused(self):
+        for depth in (0.01, 0.05):
+            doc = FreeCAD.newDocument("Curve")
+            beam = make_member(doc, "EN SHS", "300x300x8", [_lines(doc, "bp", [((-1500, 0, 0), (1500, 0, 0))])], "Beam")
+            e = V(1500 - (96.85 - depth), 0, 0)
+            col = make_member(doc, "EN CHS", "193.7x8", [_lines(doc, "cp", [(tuple(e + V(0, 0, 900)), tuple(e))])], "Col")
+            t = make_trim(doc, col, 0, "End", "Butt", beam, "", 0, "Start", name="T")
+            doc.recompute()
+            self.assertIn("Invalid", t.State, depth)
+            self.assertIn("not fully seated", t.getStatusString())
+
+
 class TestCsvAndMessages(_Base):
     def test_csv_prints_micrometre_precision(self):
         doc = FreeCAD.newDocument("Csv")
@@ -219,6 +345,9 @@ class TestCsvAndMessages(_Base):
         msg = str(cm.exception)
         self.assertLess(len(msg), 400)
         self.assertIn("nearest", msg)
+        with self.assertRaises(KeyError) as cm2:
+            Profiles.get("EN RHS", "zzzzzzzzzzzz")
+        self.assertNotIn("nearest", str(cm2.exception))
         self.assertIn("%d sizes" % len(Profiles.sizes("EN RHS")), msg)
         doc = FreeCAD.newDocument("Bad")
         m = make_member(doc, "EN RHS", "100x50x5", [_lines(doc, "p", [((0, 0, 0), (0, 0, 100))])], "B")
@@ -242,6 +371,16 @@ class TestHssDocumented(unittest.TestCase):
         self.assertIn("nominal-wall", head)
         self.assertIn("ambaker1/aisc-csv", head)
         self.assertIn("tdes", Profiles.__doc__)
+        self.assertIn("4.5 to 8.5 %", head)
+        self.assertIn("4.5 to 8.5 %", Profiles.__doc__)
+
+    def test_unknown_family_lists_families_once(self):
+        doc = FreeCAD.newDocument("Fam")
+        m = make_member(doc, "EN RHS", "100x50x5", [_lines(doc, "p", [((0, 0, 0), (0, 0, 100))])], "B")
+        m.Family = "NOPE"
+        doc.recompute()
+        msg = m.getStatusString()
+        self.assertEqual(msg.count("EN IPE"), 1, msg)
 
 
 if __name__ == "__main__":

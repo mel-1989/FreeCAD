@@ -5,9 +5,12 @@ from WTests.testCutList import TestCutList  # noqa: F401
 from WTests.testLicence import TestWeldmentLicence  # noqa: F401
 from WTests.testMember import TestMember  # noqa: F401
 from WTests.testRepair import (  # noqa: F401
+    TestBodySeating,
     TestCsvAndMessages,
+    TestCurvedOverhang,
     TestGrouping,
     TestHssDocumented,
+    TestReversedTwins,
     TestSaddleLength,
     TestSeating,
 )

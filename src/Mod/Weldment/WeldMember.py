@@ -70,10 +70,10 @@ def get_profile(family, size):
     try:
         return Profiles.get(family, size)
     except KeyError as e:
-        raise WeldmentError(
-            "unknown profile (%s); families: %s" % (e.args[0] if e.args else "%r %r" % (family, size),
-                                  ", ".join(Profiles.families()))
-        )
+        msg = e.args[0] if e.args else "%r %r" % (family, size)
+        if "known families" not in msg:
+            msg += "; families: " + ", ".join(Profiles.families())
+        raise WeldmentError("unknown profile (%s)" % msg)
 
 
 def segment_specs(obj):

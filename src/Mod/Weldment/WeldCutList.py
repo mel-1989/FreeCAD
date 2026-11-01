@@ -8,7 +8,9 @@ the profile's own frame, is part of the match: a bevel facing the web and one fa
 different pieces. Two pieces match when a rotation about the axis that maps the section onto itself
 (180 degrees for an I or a rectangle, 90 for a square, any for a round tube, none for an angle)
 carries one's bevel azimuths onto the other's at both ends at once; reflections are never used
-(the opposite hand is a different piece).
+(the opposite hand is a different piece). A member modelled from the other end (path reversed) is the same piece:
+its start is compared with the other's end, through the reflection that reversing the axis imposes on the section
+plane, and only when that reflection is a symmetry of the section (an unequal angle reversed is the opposite hand).
 
 Definitions
 -----------
@@ -226,7 +228,14 @@ def segment_pieces(obj):
                 "cut_length": length,
                 "start_angle": a0,
                 "end_angle": a1,
-                "rotations": _rotations(profile),
+                "profile": profile,
+                "circle": profile.kind == "CHS",
+                "mirror": bool(root.Mirror),
+                "c0": spec.c0,
+                "xv": spec.xv,
+                "yv": spec.yv,
+                "u": spec.u,
+                "solid": solid,
                 "start_azimuth": z0,
                 "end_azimuth": z1,
                 # curved ends carry no plane to compare, so the solid's volume stands in for their shape
@@ -259,36 +268,56 @@ def _near(a, b, tol):
     return (a is None and b is None) or (a is not None and b is not None and abs(a - b) <= tol)
 
 
+#: relative volume agreement for pieces with a curved (saddle) end: the same saddle cut from the two
+#: ends differs by boolean noise of about 3e-5, a fabrication-irrelevant film
+TOL_VOL = 1e-4
 TOL_AZ = 1e-5   # on a unit vector: the transverse part of a nearly square end carries relative noise
 
-_SYM = {}
+_FACES = {}
+_MAPS = {}
+
+# the eight multiples of 45 degrees cover every symmetry axis of the table sections (I, rectangle,
+# square, equal angle); a circle is handled from the bevel azimuths themselves
+_THETAS = tuple(45.0 * k for k in range(8))
 
 
-def _rotations(profile):
-    """Rotations about the axis (degrees) that map the section onto itself: [0], [0, 180],
-    [0, 90, 180, 270], or None for a circle (every rotation). Mirror symmetry is not used: a
-    reflected piece is the opposite hand, not the same piece."""
-    key = (profile.family, profile.size)
-    if key not in _SYM:
-        if profile.kind == "CHS":
-            _SYM[key] = None
-        else:
-            face = profile.face()
-            found = [0.0]
-            for deg in (90.0, 180.0, 270.0):
-                r = face.copy()
-                r.rotate(V(0, 0, 0), V(0, 0, 1), deg)
-                if abs(face.common(r).Area - face.Area) <= 1e-9 * face.Area:
-                    found.append(deg)
-            _SYM[key] = found
-    return _SYM[key]
+def _eff_face(profile, mirror):
+    """Section face in the profile's centred frame as the member sees it (mirrored if asked)."""
+    key = (profile.family, profile.size, bool(mirror))
+    if key not in _FACES:
+        face = profile.face()
+        if mirror:
+            face = face.mirror(V(0, 0, 0), V(1, 0, 0))
+        _FACES[key] = face
+    return _FACES[key]
 
 
-def _rot(a, deg):
+def _lin(m, a):
     if a is None:
         return None
+    return (m[0] * a[0] + m[1] * a[1], m[2] * a[0] + m[3] * a[1])
+
+
+def _rotm(deg):
     c, s = math.cos(math.radians(deg)), math.sin(math.radians(deg))
-    return (a[0] * c - a[1] * s, a[0] * s + a[1] * c)
+    return (c, -s, s, c)
+
+
+def _mul(m, n):
+    return (m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3],
+            m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3])
+
+
+_FLIP = (-1.0, 0.0, 0.0, 1.0)   # the section-plane map of reversing a member: x -> -x, y -> y
+
+
+def _maps_onto(fp, fq, m, key):
+    """True when the linear map m (rotation or reflection) carries section face fp onto fq."""
+    k = (key, tuple(round(v, 9) for v in m))
+    if k not in _MAPS:
+        g = fp.transformGeometry(FreeCAD.Matrix(m[0], m[1], 0, 0, m[2], m[3], 0, 0, 0, 0, 1, 0, 0, 0, 0, 1))
+        _MAPS[k] = abs(g.common(fq).Area - fq.Area) <= 1e-9 * fq.Area and abs(g.Area - fq.Area) <= 1e-9 * fq.Area
+    return _MAPS[k]
 
 
 def _az_pair_near(pa, qa):
@@ -300,39 +329,120 @@ def _az_pair_near(pa, qa):
     return True
 
 
-def _az_match(p, q, rotations):
-    """True when turning piece p about its axis by a symmetry rotation of its section lines the
-    bevel azimuths of both ends up with q's."""
+def _candidate_maps(p, q, reverse):
+    """Section-plane linear maps N that could carry p's end-face azimuths onto q's ends.
+
+    Forward: N is a rotation R with R(section p) = section q. Reversed (p modelled from the other
+    end): the rigid motion that turns p end for end acts on the section plane as M = R * diag(-1, 1)
+    (a reflection, because the axis flips) and the azimuth, which is read with the normal turned to
+    point along +axis, maps by -M; so N = -M with M(section p) = section q. A circle accepts every
+    rotation or reflection: N is then fixed by one bevel azimuth.
+    """
     pa = (p["start_azimuth"], p["end_azimuth"])
-    qa = (q["start_azimuth"], q["end_azimuth"])
-    if rotations is None:
+    qa = (q["end_azimuth"], q["start_azimuth"]) if reverse else (q["start_azimuth"], q["end_azimuth"])
+    if p["circle"]:
         ref = next((i for i in (0, 1) if pa[i] is not None), None)
-        if ref is None:
-            return _az_pair_near(pa, qa)
-        if qa[ref] is None:
-            return False
-        phi = math.degrees(math.atan2(qa[ref][1], qa[ref][0]) - math.atan2(pa[ref][1], pa[ref][0]))
-        rotations = [phi]
-    return any(_az_pair_near(tuple(_rot(a, deg) for a in pa), qa) for deg in rotations)
+        if ref is None or qa[ref] is None:
+            if reverse:
+                # no bevel azimuth to fix the reflection (curved ends): try the axes at multiples of
+                # 45 degrees and let the solid comparison decide; a saddle whose symmetry plane lies
+                # at another angle stays a separate row (never a wrong merge)
+                return [tuple(-v for v in _mul(_rotm(th), _FLIP)) for th in _THETAS]
+            return [(1.0, 0.0, 0.0, 1.0)]
+        phi_p = math.atan2(pa[ref][1], pa[ref][0])
+        phi_q = math.atan2(qa[ref][1], qa[ref][0])
+        if not reverse:
+            return [_rotm(math.degrees(phi_q - phi_p))]
+        # reflection about the bisector line: angle -> phi_p + phi_q - angle
+        c, s = math.cos(phi_p + phi_q), math.sin(phi_p + phi_q)
+        return [(c, s, s, -c)]
+    fp, fq = _eff_face(p["profile"], p["mirror"]), _eff_face(q["profile"], q["mirror"])
+    key = (p["profile"].family, p["profile"].size, p["mirror"], q["mirror"], reverse)
+    out = []
+    for th in _THETAS:
+        r = _rotm(th)
+        if reverse:
+            m = _mul(r, _FLIP)
+            if _maps_onto(fp, fq, m, key):
+                out.append(tuple(-v for v in m))
+        elif _maps_onto(fp, fq, r, key):
+            out.append(r)
+    return out
 
 
-def _same(p, q):
+def _az_match(p, q, reverse=False):
+    """True when some symmetry of the section lines up the bevel azimuths of both ends of p with q's
+    (p's start with q's end and vice versa when ``reverse``)."""
+    pa = (p["start_azimuth"], p["end_azimuth"])
+    qa = (q["end_azimuth"], q["start_azimuth"]) if reverse else (q["start_azimuth"], q["end_azimuth"])
+    return any(_az_pair_near(tuple(_lin(n, a) for a in pa), qa) for n in _candidate_maps(p, q, reverse))
+
+
+def _shape_matches(p, q, reverse):
+    """Exact check for pieces with curved ends: carry p's solid by the rigid motion implied by the
+    section map and the axis reversal onto q's frame and compare by common volume."""
+    sp, sq = p["solid"], q["solid"]
+    cp, cq = sp.CenterOfMass, sq.CenterOfMass
+    fp = (p["xv"], p["yv"], p["u"])
+    fq = (q["xv"], q["yv"], q["u"])
+    lp = [(cp - p["c0"]).dot(v) for v in fp]
+    lq = [(cq - q["c0"]).dot(v) for v in fq]
+    p_cands = _candidate_maps(p, q, reverse)
+    for n in p_cands:
+        # forward: (a, b, s) -> (N (a, b), s + d); reversed: (a, b, s) -> (-N (a, b), d - s)
+        m = n if not reverse else tuple(-v for v in n)
+        ab = _lin(m, (lp[0], lp[1]))
+        if math.hypot(ab[0] - lq[0], ab[1] - lq[1]) > 1e-4 * max(1.0, sp.BoundBox.DiagonalLength):
+            continue
+        sgn = -1.0 if reverse else 1.0
+        d = lq[2] - sgn * lp[2]
+        # image of p-local basis vectors in the global frame of q
+        def img(a, b, s):
+            x, y = _lin(m, (a, b))
+            return fq[0] * x + fq[1] * y + fq[2] * (sgn * s)
+        e1, e2, e3 = img(1, 0, 0), img(0, 1, 0), img(0, 0, 1)
+        # global linear part L = [e1 e2 e3] * [xp yp up]^T
+        cols = []
+        for g in (V(1, 0, 0), V(0, 1, 0), V(0, 0, 1)):
+            cols.append(e1 * g.dot(fp[0]) + e2 * g.dot(fp[1]) + e3 * g.dot(fp[2]))
+        t = q["c0"] + fq[2] * d
+        mat = FreeCAD.Matrix(cols[0].x, cols[1].x, cols[2].x, 0, cols[0].y, cols[1].y, cols[2].y, 0,
+                             cols[0].z, cols[1].z, cols[2].z, 0, 0, 0, 0, 1)
+        moved = sp.copy()
+        # x_q = t + L (x_p - c0_p)
+        moved.translate(p["c0"] * -1.0)
+        moved.transformShape(mat)   # a proper rotation: exact, surfaces stay analytic
+        moved.translate(t)
+        vol = sq.Volume
+        if abs(moved.common(sq).Volume - vol) <= TOL_VOL * vol and abs(moved.Volume - vol) <= TOL_VOL * vol:
+            return True
+    return False
+
+
+def _same(p, q, reverse=False):
     """Identical pieces: same stock and treatments, and lengths, end angles, bevel azimuths about
-    the axis (in the profile's own frame, not folded for section symmetry) agree to tolerance."""
-    for k in ("family", "size", "material", "start_end", "end_end"):
+    the axis (in the profile's own frame, up to the symmetries of the section) agree to tolerance.
+    ``reverse`` compares p's start with q's end and p's end with q's start (a member modelled from
+    the other end)."""
+    for k in ("family", "size", "material"):
         if p[k] != q[k]:
             return False
+    ks, ke = ("end", "start") if reverse else ("start", "end")
+    if p["start_end"] != q[ks + "_end"] or p["end_end"] != q[ke + "_end"]:
+        return False
     if not _near(p["cut_length"], q["cut_length"], TOL_LEN):
         return False
-    for k in ("start_angle", "end_angle"):
-        if not _near(p[k], q[k], TOL_ANG):
-            return False
-    if not _az_match(p, q, p["rotations"]):
+    if not _near(p["start_angle"], q[ks + "_angle"], TOL_ANG) or not _near(p["end_angle"], q[ke + "_angle"], TOL_ANG):
+        return False
+    if not _az_match(p, q, reverse):
         return False
     pv, qv = p["volume"], q["volume"]
-    return (pv is None and qv is None) or (
-        pv is not None and qv is not None and abs(pv - qv) <= 1e-9 * max(pv, qv)
-    )
+    if not ((pv is None and qv is None) or (
+            pv is not None and qv is not None and abs(pv - qv) <= TOL_VOL * max(pv, qv))):
+        return False
+    if pv is not None and reverse and not _shape_matches(p, q, reverse):
+        return False
+    return True
 
 
 def cut_list(objs):
@@ -348,7 +458,7 @@ def cut_list(objs):
     groups = []
     for p in pieces:
         for g in groups:
-            if _same(g[0], p):
+            if _same(g[0], p) or _same(g[0], p, reverse=True):
                 g.append(p)
                 break
         else:

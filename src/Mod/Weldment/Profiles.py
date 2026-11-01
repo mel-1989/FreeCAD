@@ -19,7 +19,7 @@ Public API (frozen):
     Profile.bbox()  (xmin, xmax, ymin, ymax) of face() in the centred frame
 
 Mass note for AISC HSS (``05_aisc_hss.csv``): the face is built on the design wall ``tdes`` while
-``mass_kg_m`` is the database's nominal-wall mass, so it is 4.5 to 8 % above area x 7850 kg/m^3.
+``mass_kg_m`` is the database's nominal-wall mass, so it is about 4.5 to 8.5 % above area x 7850 kg/m^3.
 
 Section conventions (all lengths in mm):
 
@@ -269,22 +269,24 @@ def families():
     return list(_load().keys())
 
 
+def _unknown_family(family, tab):
+    return "unknown profile family %r; known families: %s" % (family, ", ".join(tab))
+
+
 def sizes(family):
     tab = _load()
     if family not in tab:
-        raise KeyError("unknown profile family %r; known families: %s" %
-                       (family, ", ".join(tab)))
+        raise KeyError(_unknown_family(family, tab))
     return list(tab[family].keys())
 
 
 def get(family, size):
     tab = _load()
     if family not in tab:
-        raise KeyError("unknown profile family %r; known families: %s" %
-                       (family, ", ".join(tab)))
+        raise KeyError(_unknown_family(family, tab))
     if size not in tab[family]:
         names = list(tab[family])
-        near = difflib.get_close_matches(str(size), names, n=5, cutoff=0.0)
-        raise KeyError("unknown size %r in family %r (%d sizes); nearest: %s" %
-                       (size, family, len(names), ", ".join(near)))
+        near = difflib.get_close_matches(str(size), names, n=5, cutoff=0.5)
+        msg = "unknown size %r in family %r (%d sizes)" % (size, family, len(names))
+        raise KeyError(msg + ("; nearest: " + ", ".join(near) if near else ""))
     return tab[family][size]

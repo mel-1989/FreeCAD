@@ -126,6 +126,7 @@ def resolve(trim, spec):
                 raise WeldmentError("%s: OtherSegment %d is out of range" % (trim.Name, trim.OtherSegment))
             shape = shape.Solids[trim.OtherSegment]
         cut = body_cut(spec, which, "body", shape)
+        check_seated(spec, which, shape, "body trim")
     else:
         raise WeldmentError("%s: unknown kind %r" % (trim.Name, kind))
     if hasattr(cut, "s_hit"):

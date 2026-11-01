@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # AISC HSS (SI), Shapes Database v15.0 as above. Wall thickness is the design wall tdes (AISC computes A from it, 0.93 x nominal for ERW).
 # Data route: the values were read from the ambaker1/aisc-csv GitHub mirror (https://github.com/ambaker1/aisc-csv, MIT licence) of the AISC Shapes Database v15.0; the AISC page below is the authoritative publication of the same database.
-# Mass: mass_kg_m is the database's nominal-wall linear mass, but the face is built on the design wall tdes (0.93 x nominal for ERW), so mass_kg_m runs 4.5 to 8 % above area x 7850 kg/m^3 for these rows. Cut-list mass uses mass_kg_m (what the mill lists); the analytic area/volume of the geometry follows tdes.
+# Mass: mass_kg_m is the database's nominal-wall linear mass, but the face is built on the design wall tdes (0.93 x nominal for ERW), so mass_kg_m runs about 4.5 to 8.5 % above area x 7850 kg/m^3 for these rows. Cut-list mass uses mass_kg_m (what the mill lists); the analytic area/volume of the geometry follows tdes.
 # Rectangular: the database lists no corner radii; we use outside ro = 2 tdes and inside ri = tdes, the convention (tried against 1.5t/0.5t, 2t/1t, 1.5t/0) that reproduces the published areas best (all 388 rows within 1 %). Round: ring of OD and tdes.
 family,size,kind,h,b,tw,tf,r,t,ro,ri,d,r1,r2,area_mm2,mass_kg_m,source
 AISC HSS Rect,HSS24X12X3/4,RHS,610,305,,,,17.7,35.4,17.7,,,,30400,255,https://www.aisc.org/publications/steel-construction-manual-resources/15th-ed-steel-construction-manual/shapes-database-v15.0
