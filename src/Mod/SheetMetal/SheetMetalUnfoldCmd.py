@@ -1204,7 +1204,7 @@ if SheetMetalTools.isGuiLoaded():
                     "Pixmap": os.path.join(iconPath, "SheetMetal_UnfoldUnattended.svg"),
                     "MenuText": translate("SheetMetal", "Unattended Unfold"),
                     "StatusTip": translate("SheetMetal", "Flatten the part without opening the task panel"),
-                    "Accel": "U",
+                    # no default shortcut: "U" is SheetMetal_Unfold's (the UI lint's CMD_SHORTCUT_CONFLICT)
                     "ToolTip": translate(
                         "SheetMetal",
                         "Flatten folded sheet metal object with default options\n"

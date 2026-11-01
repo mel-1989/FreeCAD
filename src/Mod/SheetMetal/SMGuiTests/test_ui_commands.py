@@ -33,6 +33,23 @@ class TestCommandGuarantee(unittest.TestCase):
             except Exception:    # noqa: BLE001  (a workbench missing from a build only weakens the collision sweep)
                 pass
         cls.names = sorted(n for n in Gui.listCommands() if n.startswith(PREFIX))
+        # A command gets its action, and so its default shortcut, only once a toolbar holds it; SheetMetal commands
+        # no toolbar places (UnattendedUnfold unless its preference is set) would read an empty shortcut and hide a
+        # collision, so a scratch workbench places them, as harness/gui/lint_gui.py does for every command.
+        orphans = [n for n in cls.names if not Gui.Command.get(n).getAction()]
+        if orphans:
+            class _Sweep(Gui.Workbench):
+                MenuText = "SheetMetal lint sweep"
+
+                def Initialize(self):
+                    self.appendToolbar("SheetMetal lint sweep", orphans)
+
+                def GetClassName(self):
+                    return "Gui::PythonWorkbench"
+
+            Gui.addWorkbench(_Sweep())
+            Gui.activateWorkbench("_Sweep")
+            Gui.activateWorkbench("SMWorkbench")
 
     def test_the_module_registers_commands(self):
         self.assertGreaterEqual(len(self.names), 18, self.names)
