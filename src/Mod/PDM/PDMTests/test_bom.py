@@ -240,5 +240,180 @@ class TestDiff(FixtureCase):
             self.v.diff("bracket", "A.1", "Z.9")
 
 
+def rows(r):
+    return [(x["level"], x["name"], x["kind"], x["quantity"]) for x in r]
+
+
+class TestBOMLinkEdgeCases(unittest.TestCase):
+    """Verifier findings of run 031: links to sub-objects, links to links and arrays, cross-document cycles,
+    hidden and excluded objects, material fallback, unique names. Each expectation is written by hand."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault("CADFORK_CTL", CTL)
+        cls.tmp = os.path.realpath(tempfile.mkdtemp(prefix="pdmbom2"))
+        F.close_all()
+        cls.v = V.Vault.clone(V.Vault.create(os.path.join(cls.tmp, "vault.git")), os.path.join(cls.tmp, "wc"), "alice")
+
+    @classmethod
+    def tearDownClass(cls):
+        F.close_all()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def newdoc(self, name):
+        d = App.newDocument(name)
+        d.saveAsFolder(self.v.doc_path(name))
+        return d
+
+    @staticmethod
+    def box(d, name, material=None):
+        b = d.addObject("Part::Box", name)
+        if material:
+            b.addProperty("App::PropertyString", "Material", "Base")
+            b.Material = material
+        return b
+
+    def commit(self, *names):
+        for n in names:
+            d = App.getDocument(n)
+            d.recompute()
+            d.save()
+        F.close_all()
+        for n in names:
+            self.v.add_document(n)
+
+    def test_link_to_sub_object_lists_that_sub_object(self):
+        d = self.newdoc("sub1")
+        p, inner = d.addObject("App::Part", "P"), d.addObject("App::Part", "Inner")
+        p.addObject(inner)
+        inner.addObject(self.box(d, "X"))
+        inner.addObject(self.box(d, "Z"))
+        d.addObject("App::Link", "LS").setLink(p, "Inner.X.")
+        self.commit("sub1")
+        # P stays a component (a link to a sub-object does not use it up); LS is one more X
+        self.assertEqual(rows(self.v.bom("sub1")), [(0, "sub1", "assembly", 1), (1, "P", "assembly", 1),
+                                                   (2, "Inner", "assembly", 1), (3, "X", "part", 1),
+                                                   (3, "Z", "part", 1), (1, "X", "part", 1)])
+
+    def test_cross_document_sub_object_link_is_the_only_component(self):
+        d = self.newdoc("lib1")
+        p, inner = d.addObject("App::Part", "P"), d.addObject("App::Part", "Inner")
+        p.addObject(inner)
+        inner.addObject(self.box(d, "X", "Cu"))
+        m = self.newdoc("mach1")
+        m.addObject("App::Link", "LS").setLink(p, "Inner.X.")
+        self.commit("lib1", "mach1")
+        # not collapsed to a lone part: the document is an assembly of one linked component
+        r = self.v.bom("mach1")
+        self.assertEqual(rows(r), [(0, "mach1", "assembly", 1), (1, "lib1", "part", 1)])
+        self.assertEqual(r[1]["material"], "Cu")
+
+    def test_quantities_multiply_through_links(self):
+        d = self.newdoc("qty1")
+        b = self.box(d, "Bx")
+        l1 = d.addObject("App::Link", "L1")
+        l1.LinkedObject, l1.ElementCount = b, 3
+        l2 = d.addObject("App::Link", "L2")
+        l2.LinkedObject, l2.ElementCount = l1, 2        # 2 x 3 = 6
+        l3 = d.addObject("App::Link", "L3")
+        l3.LinkedObject = l1                            # ElementCount 0 counts as 1: 3
+        l4 = d.addObject("App::Link", "L4")
+        l4.LinkedObject = l3                            # link to a link to the array: 3
+        d2 = self.newdoc("qty2")
+        c = self.box(d2, "Cx")
+        a1 = d2.addObject("App::Link", "A1")
+        a1.LinkedObject, a1.ElementCount = c, 3
+        d2.addObject("App::Link", "A2").LinkedObject = a1
+        self.commit("qty1", "qty2")
+        # top level of qty1 is L2 and L4 (L1, L3 are used): 6 + 3 identical Bx = 9
+        self.assertEqual(rows(self.v.bom("qty1")), [(0, "qty1", "assembly", 1), (1, "Bx", "part", 9)])
+        self.assertEqual([(x["name"], x["quantity"]) for x in self.v.bom_flat("qty1")], [("Bx", 9)])
+        # a plain link to an array of 3 is 3
+        self.assertEqual(rows(self.v.bom("qty2")), [(0, "qty2", "assembly", 1), (1, "Cx", "part", 3)])
+
+    def test_cross_document_cycle_keeps_both_components_and_terminates(self):
+        p, q = self.newdoc("cyc_p"), self.newdoc("cyc_q")
+        bp, bq = self.box(p, "BP"), self.box(q, "BQ")
+        self.box(p, "P2")
+        self.box(q, "Q2")
+        p.addObject("App::Link", "LtoQ").LinkedObject = bq
+        q.addObject("App::Link", "LtoP").LinkedObject = bp
+        self.commit("cyc_p", "cyc_q")  # added one after the other: cyc_p's first revision predates cyc_q
+        want_p = [(0, "cyc_p", "assembly", 1), (1, "BP", "part", 1), (1, "P2", "part", 1), (1, "cyc_q", "part", 1)]
+        want_q = [(0, "cyc_q", "assembly", 1), (1, "BQ", "part", 1), (1, "Q2", "part", 1), (1, "cyc_p", "part", 1)]
+        self.assertEqual(rows(self.v.bom("cyc_p")), want_p)
+        self.assertEqual(rows(self.v.bom("cyc_q")), want_q)
+        # the first revision of cyc_p predates cyc_q: a clear error naming the missing document
+        with self.assertRaises(V.DocumentError) as cm:
+            self.v.bom("cyc_p", "A.1")
+        self.assertIn("cyc_q", str(cm.exception))
+        self.assertIn("not in the vault", str(cm.exception))
+        # a second revision of cyc_p, taken when cyc_q exists: BOM and diff work, a diff with itself is empty
+        self.v.checkout("cyc_p")
+        d = App.openDocument(self.v.doc_path("cyc_p"))
+        d.getObject("BP").Length = 20
+        d.recompute()
+        d.save()
+        rev = self.v.checkin("cyc_p", "longer")["revision"]
+        F.close_all()
+        self.assertEqual(rows(self.v.bom("cyc_p", rev)), want_p)
+        r = self.v.diff("cyc_p", rev, rev)
+        self.assertTrue(r["empty"])
+        self.assertEqual(r["bom"], {"added": [], "removed": [], "changed": []})
+
+    def test_hidden_listed_excluded_and_suppressed_left_out(self):
+        d = self.newdoc("vis1")
+        self.box(d, "Vis")
+        self.box(d, "Hidden").Visibility = False   # view state: still a component
+        for prop, name in (("ExcludeFromAssembly", "Excl"), ("Suppressed", "Supp")):
+            o = self.box(d, name)
+            o.addProperty("App::PropertyBool", prop, "Base")
+            setattr(o, prop, True)
+        keep = self.box(d, "KeepFlag")
+        keep.addProperty("App::PropertyBool", "Suppressed", "Base")  # present but false: kept
+        d.addObject("App::Link", "ToExcl").LinkedObject = d.getObject("Excl")  # a link to an excluded object is left out
+        arr = d.addObject("App::Link", "Arr")
+        arr.LinkedObject, arr.ElementCount, arr.ShowElement = self.box(d, "Bx"), 4, True
+        arr.ElementList[0].Visibility = False      # a hidden element of a ShowElement array still counts
+        self.commit("vis1")
+        self.assertEqual(rows(self.v.bom("vis1")), [(0, "vis1", "assembly", 1), (1, "Bx", "part", 4),
+                                                   (1, "Hidden", "part", 1), (1, "KeepFlag", "part", 1),
+                                                   (1, "Vis", "part", 1)])
+
+    def test_material_default_is_unassigned(self):
+        import types
+        mk = lambda name: types.SimpleNamespace(TypeId="Part::Box", Material="", ShapeMaterial=types.SimpleNamespace(Name=name))
+        self.assertEqual(B._material(mk("Default")), "")
+        self.assertEqual(B._material(mk("Steel-Generic")), "Steel-Generic")
+        d = self.newdoc("mat1")
+        self.box(d, "Plain")
+        self.commit("mat1")
+        self.assertEqual(self.v.bom("mat1")[0]["material"], "")
+
+    def test_two_parts_of_one_document_get_unique_names(self):
+        lib = self.newdoc("lib2")
+        a, b = self.box(lib, "PartA"), self.box(lib, "PartB")
+        a.Label, b.Label = "Axle", "Bearing"
+        m = self.newdoc("mach2")
+        m.addObject("App::Link", "LA").LinkedObject = a
+        m.addObject("App::Link", "LB").LinkedObject = b
+        lb2 = m.addObject("App::Link", "LB2")
+        lb2.LinkedObject, lb2.ElementCount = b, 2
+        self.commit("lib2", "mach2")
+        r = self.v.bom("mach2")
+        self.assertEqual(rows(r), [(0, "mach2", "assembly", 1), (1, "lib2:Axle", "part", 1), (1, "lib2:Bearing", "part", 3)])
+        flat = self.v.bom_flat("mach2")
+        self.assertEqual([(x["name"], x["quantity"]) for x in flat], [("lib2:Axle", 1), ("lib2:Bearing", 3)])
+
+    def test_flat_grouping_keeps_object_identity(self):
+        rws = [{"level": 0, "name": "r", "kind": "assembly", "revision": "A.1", "quantity": 1, "material": "",
+                "document": "r", "object": None},
+               {"level": 1, "name": "P", "kind": "part", "revision": "A.1", "quantity": 1, "material": "",
+                "document": "r", "object": "Body"},
+               {"level": 1, "name": "P", "kind": "part", "revision": "A.1", "quantity": 2, "material": "",
+                "document": "r", "object": "Body001"}]
+        self.assertEqual([x["quantity"] for x in B.flatten(rws)], [1, 2])
+
+
 if __name__ == "__main__":
     unittest.main()

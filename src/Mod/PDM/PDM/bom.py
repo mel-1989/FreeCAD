@@ -25,7 +25,11 @@ Row schema of ``bom()`` (a list of plain dicts in tree order, children sorted by
 ``extra``     weldment rows: ``family``, ``size``, ``length_mm``, ``mass_kg``; ``{}`` otherwise
 
 Identical siblings are those with the same name, kind, source document and object; the subtree of the first
-is kept. Only ``kind == "EBOM"`` exists; an MBOM is refused.
+is kept. Quantities multiply through links (a link to a link array, a link to a link). A link to a sub-object
+(``setLink(part, "Inner.X.")``) lists that sub-object. Policy for hidden and excluded objects: the EBOM lists
+every component regardless of ``Visibility`` (a view state; hidden elements of a ``ShowElement`` array still
+count), but an object with a true ``Suppressed`` property or ``ExcludeFromAssembly`` flag, and links to it, are
+left out. A document that contributes more than one distinct part to a BOM names them ``document:label``. Only ``kind == "EBOM"`` exists; an MBOM is refused.
 """
 
 import csv
@@ -99,7 +103,7 @@ class Tree:
             if not os.path.isdir(os.path.join(self.base, n + V.DOC_SUFFIX)):
                 if n == name:
                     raise V.DocumentError(f"{name} is not in the vault at {self.commit[:10]}")
-                return
+                raise V.DocumentError(f"{name} links to {n}, which is not in the vault at {self.commit[:10]}")
             for dep in self._links_of(n):
                 visit(dep)
             order.append(n)
@@ -110,6 +114,14 @@ class Tree:
             path = os.path.join(self.base, n + V.DOC_SUFFIX)
             docs[n] = next((d for d in FreeCAD.listDocuments().values()
                             if os.path.realpath(d.FileName.rstrip("/\\")) == path), None) or FreeCAD.openDocument(path)
+        for _ in range(3):  # a document opened as the target of a link in a cycle is only partially loaded
+            partial = [n for n in order if docs[n].Partial]
+            if not partial:
+                break
+            for n in partial:
+                path = docs[n].FileName
+                FreeCAD.closeDocument(docs[n].Name)
+                docs[n] = FreeCAD.openDocument(path)
         return docs[name]
 
     def revision(self, stem):
@@ -150,9 +162,38 @@ def _material(o):
             return m
         sm = getattr(obj, "ShapeMaterial", None)
         name = getattr(sm, "Name", "") if sm is not None else ""
-        if name:
+        if name and name != "Default":  # FreeCAD's "Default" is what a part has when no material was assigned
             return name
     return ""
+
+
+def _excluded(o):
+    """Left out of the EBOM: a true ``Suppressed`` property or an ``ExcludeFromAssembly``-style flag. Visibility is a
+    view state and never excludes (see the README)."""
+    return any(getattr(o, p, False) is True for p in ("Suppressed", "ExcludeFromAssembly"))
+
+
+def _link_target(link):
+    """The object a link points at; a link to a sub-object (``LinkedObject`` is ``(object, subname)``) resolves
+    through ``getSubObject``. None when the link has no target."""
+    t = link.LinkedObject
+    if isinstance(t, tuple):
+        obj, sub = t
+        if obj is not None and sub:
+            return obj.getSubObject(sub, 1)
+        return obj
+    return t
+
+
+def _is_sub_link(o):
+    return _is_link(o) and isinstance(o.LinkedObject, tuple) and bool(o.LinkedObject[1])
+
+
+def _top_objects(doc):
+    """Components of a document that nothing in the same document uses. A link from another document, or a link
+    to a sub-object, does not make its target 'used'."""
+    return [o for o in doc.Objects if _is_component(o) and not _excluded(o)
+            and not any(i.Document is doc and not _is_sub_link(i) for i in o.InList)]
 
 
 def _weldment_module():
@@ -174,16 +215,15 @@ class _Walker:
     def __init__(self, tree):
         self.tree = tree
 
-    def node(self, name, kind, doc, obj, qty=1, material="", children=None, extra=None):
+    def node(self, name, kind, doc, obj, qty=1, material="", children=None, extra=None, label=None):
         stem = _stem(doc) if doc is not None else None
-        return {"name": name, "kind": kind, "document": stem, "object": obj,
+        return {"label": label, "name": name, "kind": kind, "document": stem, "object": obj,
                 "revision": self.tree.revision(stem) if stem else None, "quantity": qty,
                 "material": material, "extra": extra or {}, "children": children or []}
 
     def doc_children(self, doc, stack):
         """Components at the top level of a document: objects nothing else uses."""
-        top = [o for o in doc.Objects if not o.InList and _is_component(o)]
-        return self.merge([self.expand(o, stack) for o in top])
+        return self.merge([self.expand(o, stack) for o in _top_objects(doc)])
 
     def weld_children(self, doc):
         stem = _stem(doc)
@@ -200,8 +240,10 @@ class _Walker:
         doc = self.tree.open(name)
         if _is_weldment_doc(doc):
             return self.node(name, "weldment", doc, None, children=self.weld_children(doc))
+        top = _top_objects(doc)
         kids = self.doc_children(doc, ())
-        if len(kids) == 1 and kids[0]["kind"] == "part" and kids[0]["quantity"] == 1:
+        if (len(top) == 1 and len(kids) == 1 and not (_is_link(top[0]) or _is_linkgroup(top[0]))
+                and kids[0]["kind"] == "part" and kids[0]["quantity"] == 1):
             # a document that is one part is that part, not an assembly of one
             return self.node(name, "part", doc, kids[0]["object"], material=kids[0]["material"])
         return self.node(name, "assembly" if kids else "part", doc, None, children=kids)
@@ -212,17 +254,23 @@ class _Walker:
             raise V.DocumentError(f"link cycle through {key[0]}:{key[1]}")
         stack = stack + (key,)
         if _is_link(o):
-            tgt = o.LinkedObject
+            tgt = _link_target(o)
             if tgt is None:
                 raise V.DocumentError(f"{key[0]}:{o.Name} is a link with no target")
+            if _excluded(tgt):
+                return None
             qty = int(o.ElementCount) if getattr(o, "ElementCount", 0) and o.ElementCount > 0 else 1
             n = self.expand_target(tgt, stack, o.Document)
-            n["quantity"] = qty
+            if n is None:
+                return None
+            n["quantity"] *= qty  # a link to a link array, or a link to a link, multiplies
             n["material"] = _material(o) or n["material"]
             return n
         if _is_linkgroup(o):
-            kids = self.merge([self.expand(e, stack) for e in o.ElementList if _is_link(e)])
+            kids = self.merge([self.expand(e, stack) for e in o.ElementList if _is_link(e) and not _excluded(e)])
             return self.node(o.Label, "assembly", o.Document, o.Name, material=_material(o), children=kids)
+        if _excluded(o):
+            return None
         return self.expand_target(o, stack, o.Document)
 
     def expand_target(self, t, stack, from_doc):
@@ -234,15 +282,17 @@ class _Walker:
             return self.node(name, "weldment", t.Document, t.Name, material=_material(t),
                              children=self.weld_children(t.Document))
         if _is_container(t):
-            kids = self.merge([self.expand(c, stack) for c in t.Group if _is_component(c)])
+            kids = self.merge([self.expand(c, stack) for c in t.Group if _is_component(c) and not _excluded(c)])
             return self.node(name, "assembly", t.Document, t.Name, material=_material(t), children=kids)
-        return self.node(name, "part", t.Document, t.Name, material=_material(t))
+        return self.node(name, "part", t.Document, t.Name, material=_material(t), label=t.Label if cross else None)
 
     @staticmethod
     def merge(nodes):
         """Identical siblings counted once with a summed quantity; deterministic order."""
         by = {}
         for n in nodes:
+            if n is None:
+                continue
             k = (n["name"], n["kind"], n["document"], n["object"] or "")
             if k in by:
                 by[k]["quantity"] += n["quantity"]
@@ -259,6 +309,27 @@ def _rows(node, level, out):
         _rows(c, level + 1, out)
 
 
+def _unique_names(node):
+    """A document that contributes more than one distinct part is named ``document:object label`` for each, so two
+    different linked parts of one document are not both called after the document."""
+    seen = {}
+
+    def collect(n):
+        if n.get("label") is not None:
+            seen.setdefault(n["document"], set()).add(n["object"])
+        for c in n["children"]:
+            collect(c)
+
+    def apply(n):
+        if n.get("label") is not None and len(seen[n["document"]]) > 1:
+            n["name"] = f"{n['document']}:{n['label']}"
+        for c in n["children"]:
+            apply(c)
+
+    collect(node)
+    apply(node)
+
+
 def rows_of_node(node):
     out = []
     _rows(node, 0, out)
@@ -267,7 +338,9 @@ def rows_of_node(node):
 
 def bom_at(tree, name):
     """Indented BOM rows of document ``name`` inside an open ``Tree``."""
-    return rows_of_node(_Walker(tree).root(name))
+    node = _Walker(tree).root(name)
+    _unique_names(node)
+    return rows_of_node(node)
 
 
 def bom(vault, name, revision=None, kind="EBOM"):
@@ -300,7 +373,7 @@ def flatten(rows):
         total = 1
         for q in mult:
             total *= q
-        k = (r["name"], r["kind"], r["document"] or "", r["revision"] or "", r["material"])
+        k = (r["name"], r["kind"], r["document"] or "", r.get("object") or "", r["revision"] or "", r["material"])
         if k in acc:
             acc[k]["quantity"] += total
         else:
