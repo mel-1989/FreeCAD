@@ -176,6 +176,7 @@ SET(Document_CPP_SRCS
     GeoFeaturePyImp.cpp
     DocumentObjectPyImp.cpp
     DocumentObserver.cpp
+    FailureMessages.cpp
     DocumentObserverPython.cpp
     DocumentPyImp.cpp
     DocumentSettings.cpp
@@ -228,6 +229,7 @@ SET(Document_HPP_SRCS
     DocumentObjectFileIncluded.h
     DocumentObjectGroup.h
     DocumentObserver.h
+    FailureMessages.h
     DocumentObserverPython.h
     DocumentSettings.h
     Expression.h
