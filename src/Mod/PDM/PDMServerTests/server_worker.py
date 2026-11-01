@@ -55,6 +55,14 @@ def run(op):
             return {"ok": True, "pushed": v._push_main(tip)}
         except V.PDMError as e:
             return cw.err(e)
+    if kind == "move_unguarded":
+        # Vault.move without the library's own open-ECO check, as a client that skips the library would push it.
+        from PDM import eco
+        eco.guard_move = lambda _v, _n: None
+        try:
+            return {"ok": True, "value": v.move(op["old"], op["new"])}
+        except V.PDMError as e:
+            return cw.err(e)
     if kind == "eco_forge":
         return _eco_forge(v, op)
     if kind == "race_loop":
@@ -172,6 +180,14 @@ def _eco_forge(v, op):
     v._fetch()
     head = v._head()
     try:
+        if op.get("create") is not None:  # a create record with any number and timestamp the test chooses
+            c = op["create"]
+            rec = eco.apply_action(None, "create", v.user, "engineer", "", c.get("at") or eco._now(), False,
+                                   {"number": c["number"], "title": "forged", "reason": "forged",
+                                    "documents": [{"name": n, "revision": "A.1"} for n in c["documents"]]})
+            tip = eco._put(v, head, f"{eco.ECO_DIR}{c['number']}.json", eco._dump(rec), "forged create", "eco",
+                           [("Eco", c["number"]), ("Eco-Action", "create")])
+            return {"ok": True, "pushed": v._push_main(tip)}
         if op.get("roles") is not None:
             data = eco._dump(op["roles"])
             tip = eco._put(v, head, eco.ROLES_PATH, data, "forged roles", "roles",

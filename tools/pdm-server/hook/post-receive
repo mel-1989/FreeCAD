@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+"""Post-receive hook of the vault repository on Forgejo: tells the PDM server which ref updates really landed.
+
+The server approved the push in the pre-receive hook but writes its ECO and role audit records only now, so a push
+that lost a race on the ref (approved, never applied) leaves no audit entry. Installed next to the pre-receive hook
+as ``<repo>.git/hooks/post-receive.d/pdm``. Never fails the push: it has already happened.
+"""
+
+import json
+import os
+import sys
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def main():
+    try:
+        with open(os.path.join(HERE, "..", "..", "pdm-hook.json")) as f:
+            cfg = json.load(f)
+        updates = []
+        for line in sys.stdin.read().splitlines():
+            parts = line.split()
+            if len(parts) == 3:
+                updates.append({"old": parts[0], "new": parts[1], "ref": parts[2]})
+        req = urllib.request.Request(cfg["url"].rstrip("/") + "/internal/post-receive", method="POST",
+                                     data=json.dumps({"updates": updates}).encode(),
+                                     headers={"Content-Type": "application/json", "X-PDM-Hook-Secret": cfg["secret"]})
+        urllib.request.urlopen(req, timeout=30).read()
+    except Exception as e:  # the audit record is then missing, which the server's log shows; the push stands
+        sys.stderr.write(f"PDM: could not confirm the push to the server for the audit log ({e})\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -310,6 +310,23 @@ async def pre_receive(request: Request, x_pdm_hook_secret: str = Header(default=
     if reason:
         st["db"].log(pusher, "push-refused", None, {"reason": reason})
         return {"allow": False, "reason": reason}
-    for action, document, detail in notes:  # ECO steps, role changes and admin overrides of the push just approved
-        st["db"].log(pusher, action, document, detail)
+    if notes:  # ECO steps, role changes and admin overrides: audited once the ref update lands (post-receive)
+        new = [u["new"] for u in body["updates"] if u["ref"] == f"refs/heads/{mirror.V.BRANCH}"]
+        st["db"].hold_notes(new[-1], pusher, notes)
     return {"allow": True}
+
+
+@app.post("/internal/post-receive")
+async def post_receive(request: Request, x_pdm_hook_secret: str = Header(default="")):
+    """Called by the repository's post-receive hook after a ref update succeeded; writes the audit records the
+    pre-receive approval held for exactly that new head (a push that lost a race never gets here)."""
+    st = S()
+    import hmac
+    if not hmac.compare_digest(x_pdm_hook_secret, st["cfg"].hook_secret):
+        raise HTTPException(401, "bad hook secret")
+    body = await request.json()
+    n = 0
+    for u in body.get("updates", []):
+        if u.get("ref") == f"refs/heads/{st['mirror'].V.BRANCH}":
+            n += st["db"].settle_notes(u["new"])
+    return {"logged": n}

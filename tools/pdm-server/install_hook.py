@@ -4,7 +4,7 @@
 
     install_hook.py <repo.git directory> <server url> <secret> [python interpreter]
 
-Writes ``hooks/pre-receive.d/pdm`` (the hook, with the given interpreter, default this one, on its first line) and, in the repository
+Writes ``hooks/post-receive.d/pdm`` (confirms pushes for the audit log) and ``hooks/pre-receive.d/pdm`` (the hook, with the given interpreter, default this one, on its first line) and, in the repository
 directory, ``pdm-hook.json`` (mode 600). The secret is the server's ``PDM_HOOK_SECRET``.
 """
 
@@ -25,6 +25,14 @@ def install(repo_dir, url, secret, python=None):
     with open(hook, "w") as f:
         f.write(f"#!{python or sys.executable}\n{text}")
     os.chmod(hook, 0o755)
+    post_dir = os.path.join(repo_dir, "hooks", "post-receive.d")  # audit records are written after the ref update
+    os.makedirs(post_dir, exist_ok=True)
+    with open(os.path.join(HERE, "hook", "post-receive")) as f:
+        post_text = f.read().split("\n", 1)[1]
+    post = os.path.join(post_dir, "pdm")
+    with open(post, "w") as f:
+        f.write(f"#!{python or sys.executable}\n{post_text}")
+    os.chmod(post, 0o755)
     cfg = os.path.join(repo_dir, "pdm-hook.json")
     with open(cfg, "w") as f:
         json.dump({"url": url, "secret": secret}, f)

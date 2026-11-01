@@ -24,7 +24,10 @@ The named multi-user scenarios (acceptance check 2 asks for at least 12):
 14. roles_change_is_admin_only                     library, forged roles commit, REST /roles and /access
 15. document_in_two_open_ecos_refused
 16. concurrent_creators_get_distinct_numbers
-17. approve_and_reject_racing_exactly_one_wins     bob approves while dora rejects, 3 trials
+17. approve_and_reject_racing_exactly_one_wins     bob approves while dora rejects, 3 trials; /audit holds only the step that landed
+18. forged_create_must_take_the_next_number        ECO-99999999 refused; the next create still works
+19. forged_future_timestamp_refused                 an entry dated 2999 is refused; the ECO keeps moving
+20. move_of_a_document_in_an_open_eco_refused      library and a client that skips the library's check
 """
 
 import os
@@ -357,3 +360,38 @@ class TestEco(ServerCase):
             ok_b, ok_d = "error" not in rb[2 * t + 1], "error" not in rd[2 * t + 1]
             self.assertNotEqual(ok_b, ok_d, f"trial {t}: approve {rb[2 * t + 1]}, reject {rd[2 * t + 1]}")
             self.assertEqual(self.eco(by_doc[d])["state"], "Approved" if ok_b else "Draft", t)
+            # the audit log holds the step that landed and nothing of the one that lost the race
+            _st, rows = self.api("GET", "/audit", "dora")
+            steps = sorted(x["detail"]["action"] for x in rows
+                           if x["document"] == by_doc[d] and x["detail"].get("action") in ("approve", "reject"))
+            self.assertEqual(steps, ["approve" if ok_b else "reject"], (t, steps))
+
+    def test_18_forged_create_must_take_the_next_number(self):
+        d = self.mkdoc()
+        r = self.run_as("alice", [{"op": "eco_forge", "create": {"number": "ECO-99999999", "documents": [d]}}])
+        self.assertEqual(r[0]["error"], "PermissionDenied", r)
+        self.assertIn("next free number", r[0]["message"])
+        r = self.run_as("alice", [call("eco_create", "after the squat", "r", {d: "A.1"})])
+        self.assertTrue(r[0]["ok"], r)
+        self.assertNotEqual(r[0]["value"]["number"], "ECO-99999999")
+
+    def test_19_forged_future_timestamp_refused(self):
+        d = self.mkdoc()
+        n = self.new_eco([d])
+        r = self.run_as("alice", [{"op": "eco_forge", "number": n, "action": "submit", "state": "Submitted",
+                                   "entry": {"at": "2999-01-01T00:00:00+00:00"}}])
+        self.assertEqual(r[0]["error"], "PermissionDenied", r)
+        self.assertIn("ahead of the server clock", r[0]["message"])
+        r = self.run_as("alice", [call("eco_submit", n)])
+        self.assertTrue(r[0]["ok"], r)
+        self.assertEqual(self.run_as("bob", [call("eco_approve", n)])[0]["value"]["state"], "Approved")
+
+    def test_20_move_of_a_document_in_an_open_eco_refused(self):
+        d = self.mkdoc()
+        n = self.new_eco([d])
+        r = self.run_as("alice", [call("move", d, d + "m"), {"op": "move_unguarded", "old": d, "new": d + "m"}])
+        self.assertEqual(r[0]["error"], "LifecycleError", r)
+        self.assertIn(n, r[0]["message"])
+        self.assertEqual(r[1]["error"], "PermissionDenied", r)  # the vault host refuses what the library would not
+        self.assertIn(f"open {n}", r[1]["message"])
+        self.assertEqual(self.states(d), {d: ("A.1", "WIP")})

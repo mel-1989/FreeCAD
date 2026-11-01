@@ -25,6 +25,16 @@ CREATE TABLE IF NOT EXISTS audit (
     document  text,
     detail    jsonb NOT NULL DEFAULT '{}'
 );
+CREATE TABLE IF NOT EXISTS pending_notes (
+    id        bigserial PRIMARY KEY,
+    sha       text NOT NULL,
+    actor     text NOT NULL,
+    action    text NOT NULL,
+    document  text,
+    detail    jsonb NOT NULL DEFAULT '{}',
+    held_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS pending_notes_sha ON pending_notes (sha);
 CREATE TABLE IF NOT EXISTS link_index (
     id        integer PRIMARY KEY CHECK (id = 1),
     head      text NOT NULL
@@ -134,6 +144,25 @@ class Db:
         with self.conn() as c:
             c.execute("INSERT INTO audit (actor, action, document, detail) VALUES (%s, %s, %s, %s)",
                       (actor, action, document, json.dumps(detail or {})))
+
+    def hold_notes(self, sha, actor, notes):
+        """Keep the audit records of a push the pre-receive hook approved until the ref update is confirmed."""
+        with self.conn() as c:
+            for action, document, detail in notes:
+                c.execute("INSERT INTO pending_notes (sha, actor, action, document, detail) VALUES (%s, %s, %s, %s, %s)",
+                          (sha, actor, action, document, json.dumps(detail or {})))
+
+    def settle_notes(self, sha):
+        """The ref now points at ``sha``: move its held records into the audit log (once). Held records of pushes
+        that never landed (a lost race) are dropped after a day. Returns how many were logged."""
+        with self.conn() as c:
+            rows = c.execute("DELETE FROM pending_notes WHERE sha = %s RETURNING actor, action, document, detail",
+                             (sha,)).fetchall()
+            for r in rows:
+                c.execute("INSERT INTO audit (actor, action, document, detail) VALUES (%s, %s, %s, %s)",
+                          (r["actor"], r["action"], r["document"], json.dumps(r["detail"])))
+            c.execute("DELETE FROM pending_notes WHERE held_at < now() - interval '1 day'")
+            return len(rows)
 
     # ---- head pin: the last vault head this service approved -------------------------------
 

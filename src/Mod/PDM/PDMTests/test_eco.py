@@ -285,3 +285,106 @@ class TestPolicyReplay(EcoCase):
                              check=True, stdout=subprocess.PIPE, text=True).stdout
         self.assertEqual(json.loads(out)["state"], "Submitted")
         self.assertEqual(out, json.dumps(json.loads(out), indent=2, sort_keys=True) + "\n")
+
+
+class TestReview031(EcoCase):
+    """Repairs after the independent verifier of run 031 (half E)."""
+
+    def raw_eco_commit(self, v, number, rec, event="eco"):
+        v._fetch()
+        return eco._put(v, v._head(), f"{eco.ECO_DIR}{number}.json", eco._dump(rec), "forged", event,
+                        [("Eco", number), ("Eco-Action", "x")])
+
+    def test_next_number_is_one_above_the_top_and_survives_a_squatted_top(self):
+        self.assertEqual(eco.next_number({}), "ECO-0001")
+        self.assertEqual(eco.next_number({"ECO-0007": 1, "ECO-0002": 1}), "ECO-0008")
+        self.assertEqual(eco.next_number({"ECO-99999999": 1}), "ECO-0001")
+        self.assertEqual(eco.next_number({"ECO-99999999": 1, "ECO-0001": 1}), "ECO-0002")
+
+    def test_verify_change_demands_exactly_the_next_number_for_a_create(self):
+        rec = eco.apply_action(None, "create", "alice", "engineer", "", eco._now(), False,
+                               {"number": "ECO-99999999", "title": "t", "reason": "r",
+                                "documents": [{"name": "p1", "revision": "A.1"}]})
+        why, _a, _e = eco.verify_change(None, rec, "alice", "engineer", {"ECO-0001": {}})
+        self.assertIn("next free number ECO-0002", why)
+        rec["number"] = "ECO-0002"
+        rec["history"] = [dict(rec["history"][0])]
+        self.assertIsNone(eco.verify_change(None, rec, "alice", "engineer", {"ECO-0001": {}})[0])
+
+    def test_verify_change_refuses_a_timestamp_ahead_of_the_clock(self):
+        rec = eco.apply_action(None, "create", "alice", "engineer", "", "2999-01-01T00:00:00+00:00", False,
+                               {"number": "ECO-0001", "title": "t", "reason": "r",
+                                "documents": [{"name": "p1", "revision": "A.1"}]})
+        self.assertIn("ahead of the server clock", eco.verify_change(None, rec, "alice", "engineer", {}, eco.latest_at())[0])
+        self.assertIsNone(eco.verify_change(None, rec, "alice", "engineer", {})[0])  # no clock given: not judged
+
+    def test_a_forged_future_entry_jams_a_local_vault_with_a_clear_error_but_slight_skew_does_not(self):
+        import datetime
+        self.add("p1")
+        a = self.u("alice")
+        n = a.eco_create("t", "r", {"p1": "A.1"})["number"]
+        a._fetch()
+        rec = copy.deepcopy(eco.load(a, a._head(), n))
+        soon = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=120)).isoformat(timespec="seconds")
+        rec["history"][-1]["at"] = soon  # the author's clock ran two minutes fast
+        self.assertTrue(a._push_main(self.raw_eco_commit(a, n, rec)))
+        self.assertEqual(a.eco_submit(n)["history"][-1]["at"], soon)  # never goes backwards: max(now, last)
+        a._fetch()
+        rec = copy.deepcopy(eco.load(a, a._head(), n))
+        rec["history"][-1]["at"] = "2999-01-01T00:00:00+00:00"
+        self.assertTrue(a._push_main(self.raw_eco_commit(a, n, rec)))
+        with self.assertRaises(eco.EcoError) as cm:
+            a.eco_withdraw(n, "no")
+        self.assertIn("ahead of this machine's clock", str(cm.exception))
+
+    def test_moving_a_document_in_an_open_eco_is_refused_and_a_released_one_may_move(self):
+        self.add("p1")
+        self.add("p2")
+        a = self.u("alice")
+        n = a.eco_create("t", "r", {"p1": "A.1"})["number"]
+        before = self.head()
+        with self.assertRaises(V.LifecycleError) as cm:
+            a.move("p1", "p1b")
+        self.assertIn(n, str(cm.exception))
+        self.assertEqual(self.head(), before)
+        self.assertEqual(a.move("p2", "p2b")["new"], "p2b")  # not in an ECO
+
+    def test_an_eco_naming_a_document_that_is_no_longer_in_the_tree_is_refused(self):
+        self.add("p1")
+        a = self.u("alice")
+        self.assertEqual(a.move("p1", "p1b")["new"], "p1b")
+        rec = {"number": "ECO-0001", "documents": [{"name": "p1", "revision": "A.1"}]}
+        docs = {"p1": {"revision": "A.1", "state": "WIP"}}  # the moved-away name still has records
+        eco.check_context("create", rec, docs, {}, {})  # without the tree it passes: the gap the verifier found
+        with self.assertRaises(eco.EcoError):
+            eco.check_context("create", rec, docs, {}, {}, present={"p1b"})
+        with self.assertRaises(eco.EcoError):
+            a.eco_create("t", "r", {"p1": "A.1"})
+
+    def test_set_role_to_the_role_already_held_pushes_nothing(self):
+        a = self.u("alice")
+        a.set_role("alice", "admin")  # bootstrap: the first writer of the file
+        before = self.head()
+        self.assertEqual(a.set_role("alice", "admin"), {"alice": "admin"})
+        self.assertEqual(a.set_role("carol", None), {"alice": "admin"})  # removing an entry that is not there
+        self.assertEqual(self.head(), before)
+
+    def test_a_record_the_hook_would_not_forward_is_refused_before_pushing(self):
+        self.add("p1")
+        a = self.u("alice")
+        a.set_role("alice", "admin")
+        n = a.eco_create("t", "r", {"p1": "A.1"})["number"]
+        before = self.head()
+        old = eco.MAX_PLM_BYTES
+        eco.MAX_PLM_BYTES = 300
+        try:
+            with self.assertRaises(eco.EcoError) as cm:
+                a.eco_submit(n)
+            self.assertIn("300 bytes", str(cm.exception))
+            eco.MAX_PLM_BYTES = 20
+            with self.assertRaises(eco.EcoError):
+                a.set_role("bob", "approver")
+        finally:
+            eco.MAX_PLM_BYTES = old
+        self.assertEqual(self.head(), before)
+        self.assertEqual(a.eco_submit(n)["state"], "Submitted")

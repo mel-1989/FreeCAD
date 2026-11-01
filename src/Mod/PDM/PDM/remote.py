@@ -94,6 +94,8 @@ class Api:
 class RemoteVault(V.Vault):
     """``Vault`` whose git remote is the server's Forgejo repository and whose locks live on the server."""
 
+    remote = True
+
     def __init__(self, workdir, user, vault_path=None, server_url=None, token=None, git_env=None):
         server_url = server_url or os.environ.get("PDM_SERVER_URL") or self._saved_server(workdir)
         token = token if token is not None else os.environ.get("PDM_TOKEN", "")

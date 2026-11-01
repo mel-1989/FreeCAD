@@ -161,6 +161,8 @@ def _fault(point):
 class Vault:
     """A client's handle on a vault: ``Vault.create`` makes the bare repo, ``Vault.clone`` a working copy."""
 
+    remote = False  # True for a vault behind a PDM server (the server's hook enforces what the library alone cannot)
+
     def __init__(self, workdir, user, vault_path=None, git_env=None):
         self.workdir = os.path.abspath(workdir)
         self.user = user
@@ -938,6 +940,8 @@ class Vault:
                 names = self._doc_names_at(head)
                 if old not in names:
                     raise DocumentError(f"no document {old!r} in the vault")
+                from PDM import eco
+                eco.guard_move(self, old)  # an open ECO names the document; renaming it would strand the ECO
                 for n in names:
                     if n.lower() == new.lower():
                         raise DocumentError(f"cannot move to {new!r}: document {n!r} already exists (names are case-insensitive)")

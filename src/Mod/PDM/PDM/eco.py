@@ -46,6 +46,9 @@ ACTIONS = {
     "reject": (("Submitted",), "Rejected", "approver"),  # then back to Draft in the same commit
     "release": (("Approved",), "Released", "engineer"),
 }
+MAX_NUMBER = 99999999
+SKEW_SECONDS = 300  # how far ahead of the clock that judges it (the server's, or the local machine's) a timestamp may be
+MAX_PLM_BYTES = 262144  # the pre-receive hook does not forward plm/ files larger than this, so the library refuses them
 _AT_RE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00")
 
 
@@ -101,6 +104,25 @@ def read_roles(v, commit):
 def _now():
     import datetime
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def latest_at(skew=SKEW_SECONDS):
+    """The latest timestamp (same fixed format as ``at``, so strings compare in time order) a change may carry now."""
+    import datetime
+    t = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=skew)
+    return t.isoformat(timespec="seconds")
+
+
+def next_number(ecos):
+    """The one number a new ECO must take: one above the highest in use; if that is past the format, the lowest free."""
+    top = max([int(n[4:]) for n in ecos] or [0])
+    if top < MAX_NUMBER:
+        return f"ECO-{top + 1:04d}"
+    used = {int(n[4:]) for n in ecos}
+    free = next((i for i in range(1, MAX_NUMBER + 1) if i not in used), None)
+    if free is None:
+        raise EcoError("every ECO number is in use")
+    return f"ECO-{free:04d}"
 
 
 def _docs(documents):
@@ -201,9 +223,11 @@ def apply_action(rec, action, actor, role, comment, at, override=False, fields=N
     return new
 
 
-def verify_change(old, new, actor, role):
+def verify_change(old, new, actor, role, ecos=None, latest=None):
     """Policy side: ``(None, action, entry)`` when the pushed record ``new`` is exactly what ``apply_action`` produces
-    from ``old`` for the history entry ``new`` appends, else ``(reason, None, None)``."""
+    from ``old`` for the history entry ``new`` appends, else ``(reason, None, None)``. With ``ecos`` (number -> record
+    at the old head) a create must take exactly ``next_number``; with ``latest`` (``latest_at()``) the entry may not be
+    dated later than that."""
     if not isinstance(new, dict) or not isinstance(new.get("history"), list):
         return "the ECO record is malformed", None, None
     oh = old["history"] if old else []
@@ -211,6 +235,15 @@ def verify_change(old, new, actor, role):
     if nh[:len(oh)] != oh or len(nh) <= len(oh) or not isinstance(nh[len(oh)], dict):
         return "an ECO's history is append-only and the change must add an entry", None, None
     e = nh[len(oh)]
+    if latest is not None and isinstance(e.get("at"), str) and e["at"] > latest:
+        return f"the timestamp {e['at']} is ahead of the server clock (allowed up to {latest})", None, None
+    if old is None and ecos is not None and e.get("action") == "create":
+        try:
+            want = next_number(ecos)
+        except EcoError as x:
+            return str(x), None, None
+        if new.get("number") != want:
+            return f"a new ECO must take the next free number {want}, not {new.get('number')!r}", None, None
     fields = {k: new.get(k) for k in ("number", "title", "reason", "documents")}
     try:
         expected = apply_action(copy.deepcopy(old), e.get("action"), actor, role, e.get("comment"), e.get("at"),
@@ -232,14 +265,15 @@ def open_docs(ecos, exclude=None):
     return out
 
 
-def check_context(action, rec, docs, locks, other_open):
+def check_context(action, rec, docs, locks, other_open, present=None):
     """The document rules of ``action`` on record ``rec``. ``docs``: name -> latest record (revision, state) or None;
-    ``locks``: name -> lock or None; ``other_open``: ``open_docs`` of the other ECOs."""
+    ``locks``: name -> lock or None; ``other_open``: ``open_docs`` of the other ECOs; ``present``: the document names
+    in the vault tree (a document that was moved away still has records but is no longer there)."""
     if action not in ("create", "edit", "submit", "release"):
         return
     for d in rec["documents"]:
         n, target, cur = d["name"], d["revision"], docs.get(d["name"])
-        if cur is None:
+        if cur is None or (present is not None and n not in present):
             raise EcoError(f"{rec['number']}: no document {n!r} in the vault")
         if action == "release":
             if cur["revision"] != target:
@@ -304,6 +338,13 @@ def list_ecos(v, state=None):
     return out
 
 
+def guard_move(v, name):
+    """Refuse renaming a document an open ECO names (the ECO would point at a name that is gone)."""
+    for n, num in sorted(open_docs(read_all(v, v._head())).items()):
+        if n.lower() == name.lower():
+            raise V.LifecycleError(f"{name} is part of the open {num}; finish or withdraw the ECO before renaming it")
+
+
 def guard_direct_release(v, name):
     """Refuse a plain transition to Released of a document that an open ECO holds (it moves only through the ECO)."""
     for n, num in sorted(open_docs(read_all(v, v._head())).items()):
@@ -336,11 +377,6 @@ def _dump(rec):
     return (json.dumps(rec, indent=2, sort_keys=True) + "\n").encode()
 
 
-def _next_number(ecos):
-    top = max([int(n[4:]) for n in ecos] or [0])
-    return f"ECO-{top + 1:04d}"
-
-
 def _docs_ctx(v, rec, ecos):
     docs, locks = {}, {}
     for d in rec["documents"]:
@@ -362,14 +398,24 @@ def write(v, number, action, comment=None, override=False, fields=None):
         ecos = read_all(v, head)
         fields = dict(fields or {})
         if action == "create":
-            number = _next_number(ecos)
+            number = next_number(ecos)
             fields["number"] = number
         old = ecos.get(number)
         if number is not None and action != "create" and old is None:
             raise EcoError(f"no ECO {number}")
-        new = apply_action(old, action, v.user, role, comment, _now(), override, fields)
+        at = _now()
+        if old is not None and old["history"]:
+            last = old["history"][-1]["at"]
+            if not getattr(v, "remote", False) and last > latest_at():
+                raise EcoError(f"{number}'s last history entry is dated {last}, ahead of this machine's clock; "
+                               "its timestamps would have to go backwards")
+            at = max(at, last)  # a clock slightly behind the last entry's author must not jam the ECO
+        new = apply_action(old, action, v.user, role, comment, at, override, fields)
         if action in ("create", "edit", "submit", "release"):
-            check_context(action, new, *_docs_ctx(v, new, ecos))
+            check_context(action, new, *_docs_ctx(v, new, ecos), present=set(v._doc_names_at(head)))
+        if len(_dump(new)) > MAX_PLM_BYTES:
+            raise EcoError(f"{number} would be over {MAX_PLM_BYTES} bytes (the history or document list is too "
+                           "long), more than the server checks")
         tip = _put(v, head, f"{ECO_DIR}{number}.json", _dump(new), f"{number}: {action}", "eco",
                    [("Eco", number), ("Eco-Action", action)])
         if action == "release":
@@ -421,12 +467,16 @@ def set_role(v, user, role, comment=None):
         me = v._role()
         if me != "admin" and existed:
             raise AccessError(f"{v.user} is {me}; changing roles needs admin")
+        if grants.get(user) == role or (role is None and user not in grants):
+            return grants  # no change: nothing to push
         new = dict(grants)
         if role is None:
             new.pop(user, None)
         else:
             new[user] = role
         parse_roles(new)
+        if len(_dump(new)) > MAX_PLM_BYTES:
+            raise EcoError(f"roles.json would be over {MAX_PLM_BYTES} bytes, more than the server checks")
         tip = _put(v, head, ROLES_PATH, _dump(new), f"roles: {user} -> {role or 'default'}", "roles",
                    [("Roles-User", user), ("Roles-Role", role or "")])
         if v._push_main(tip):

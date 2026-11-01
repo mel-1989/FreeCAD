@@ -148,7 +148,7 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                     return f"commit {short}: the init commit must be empty"
                 continue
             if event in ("eco", "roles"):
-                bad = eco_commit(V, E, db, c, event, meta, short, pusher, eff, all_ecos(), pending, record, notes)
+                bad = eco_commit(V, E, db, c, event, meta, short, pusher, eff, all_ecos(), pending, record, notes, docs)
                 if bad:
                     return bad
                 continue
@@ -207,6 +207,10 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                     V._check_name(src)
                 except Exception:
                     return f"commit {short}: move without a valid PDM-Moved-From trailer"
+                held = E.open_docs(all_ecos()).get(src)
+                if held:
+                    return (f"commit {short} (move {src} -> {doc}): {src} is part of the open {held}; "
+                            "finish or withdraw the ECO before renaming it")
                 allowed, holds = {folder, src + suffix}, [src]
                 sprev = record(src)
                 if src not in docs or sprev is None:
@@ -288,7 +292,7 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
     return None
 
 
-def eco_commit(V, E, db, c, event, meta, short, pusher, eff, ecos, pending, record, notes):
+def eco_commit(V, E, db, c, event, meta, short, pusher, eff, ecos, pending, record, notes, present):
     """Check one ``eco`` or ``roles`` commit against what it really changes; None when it is allowed. Updates ``ecos``
     and ``pending`` (the release chain the following ``transition`` commits must complete)."""
     changes = c["changes"]
@@ -329,7 +333,7 @@ def eco_commit(V, E, db, c, event, meta, short, pusher, eff, ecos, pending, reco
         return f"commit {short} (eco {number}): the record is not valid JSON"
     if (changes[0][0] == "A") != (old is None) or old != ecos.get(number) or new.get("number") != number:
         return f"commit {short} (eco {number}): the record's base is not the vault's current one"
-    bad, act, entry = E.verify_change(old, new, pusher, eff)
+    bad, act, entry = E.verify_change(old, new, pusher, eff, ecos, E.latest_at())
     if bad:
         return f"commit {short} (eco {number}): {bad}"
     if act != action:
@@ -337,7 +341,7 @@ def eco_commit(V, E, db, c, event, meta, short, pusher, eff, ecos, pending, reco
     names = [d["name"] for d in new["documents"]]
     try:
         E.check_context(act, new, {n: record(n) for n in names}, {n: db.lock(n) for n in names},
-                        E.open_docs(ecos, exclude=number))
+                        E.open_docs(ecos, exclude=number), present)
     except V.PDMError as e:
         return f"commit {short} (eco {number}): {e}"
     if act == "release":
