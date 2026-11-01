@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Original geometric icon drawn for the cad-fork SheetMetal edge flange command (G07 slice 6b). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<polygon points="6,40 40,40 40,50 6,50" fill="#6c9bd1" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+<path d="M40,40 L48,40 A10,10 0 0 0 58,30 L58,8 L48,8 L48,30 L40,30 Z" fill="#e8892b" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+</svg>

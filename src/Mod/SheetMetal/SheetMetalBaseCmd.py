@@ -21,6 +21,10 @@
 #
 #
 ########################################################################
+#
+#  Modified for cad-fork on 2026-11-01, run 034 (LGPL-2.1 section 2a): the Make Base Wall command reports a
+#  sketch that sits in an inactive PartDesign Body in the report view, instead of the application-modal warning.
+#
 
 import os
 
@@ -254,6 +258,18 @@ if SheetMetalTools.isGuiLoaded():
 
         def Activated(self):
             selobj = Gui.Selection.getSelectionEx()[0].Object
+            if SheetMetalTools.smIsPartDesign(selobj):
+                view = Gui.ActiveDocument.ActiveView
+                body = view.getActiveObject("pdbody") if hasattr(view, "getActiveObject") else None
+                if not SheetMetalTools.smBelongToBody(selobj, body):
+                    FreeCAD.Console.PrintError(
+                        translate(
+                            "SheetMetal",
+                            "Make Base Wall: %s does not belong to the active Body. "
+                            "Make its Body active by double-clicking it, then try again.\n",
+                        ) % selobj.Label
+                    )
+                    return
             newObj, activeBody = SheetMetalTools.smCreateNewObject(selobj, "BaseBend")
             if newObj is None:
                 return
