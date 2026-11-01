@@ -1,0 +1,1 @@
+three.js r187 (npm three@0.187.0), MIT licence (see LICENSE). Files copied unmodified from the npm package: build/three.module.js, build/three.core.js, examples/jsm/{loaders/GLTFLoader.js,utils/BufferGeometryUtils.js,utils/SkeletonUtils.js,controls/OrbitControls.js}.

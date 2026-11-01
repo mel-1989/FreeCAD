@@ -1,0 +1,100 @@
+{# SPDX-License-Identifier: LGPL-2.1-or-later #}
+{% extends "base.html" %}
+{% from "_viewer.html" import viewer %}
+{% from "_bom.html" import bomtable %}
+{% block title %}{{ rec.number }} - PDM{% endblock %}
+{% block head %}
+{% if state in ("pending", "busy") %}<meta http-equiv="refresh" content="3">{% endif %}
+{% if state == "ready" %}
+<script type="importmap" nonce="{{ nonce }}">{"imports": {"three": "/static/vendor/three/build/three.module.js", "three/addons/": "/static/vendor/three/examples/jsm/"}}</script>
+<script type="module" nonce="{{ nonce }}" src="/static/viewer.js"></script>
+{% endif %}
+{% endblock %}
+{% block bodyattrs %}{% if state != "ready" %} data-rendered="1"{% endif %}{% endblock %}
+{% block main %}
+<p><a href="/web/ecos">&larr; ECOs</a></p>
+<h1>{{ rec.number }}: {{ rec.title }}</h1>
+{% if done %}<p class="flash" id="done">Done: {{ done }}.</p>{% endif %}
+<p id="eco-state">State: <strong>{{ rec.state }}</strong>. Author: {{ rec.author }}.</p>
+<p>{{ rec.reason }}</p>
+{% if can_review %}
+<form method="post" action="/web/ecos/{{ rec.number }}/approve" class="review" id="approve-form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Comment <input type="text" name="comment" maxlength="300"></label>
+  <button type="submit" id="approve">Approve</button>
+</form>
+<form method="post" action="/web/ecos/{{ rec.number }}/reject" class="review" id="reject-form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Reason (required) <input type="text" name="comment" maxlength="300" required></label>
+  <button type="submit" id="reject">Reject</button>
+</form>
+{% endif %}
+<h2>History</h2>
+<table id="eco-history">
+<thead><tr><th>When</th><th>Action</th><th>By</th><th>Role</th><th>Comment</th></tr></thead>
+<tbody>
+{% for h in rec.history %}
+<tr><td>{{ h.at }}</td><td>{{ h.action }}</td><td>{{ h.actor }}</td><td>{{ h.role }}</td><td>{{ h.comment or "" }}{% if h.get("override") %} (admin override){% endif %}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+<h2>Affected documents</h2>
+{% if state == "pending" %}
+<p class="pending" id="pending">Pending: the diff and 3D views are being built by the FreeCAD worker. This page reloads itself.</p>
+{% elif state == "busy" %}
+<p class="pending" id="busy">Busy: the FreeCAD worker has too many jobs queued. This page reloads itself and tries again.</p>
+{% elif state == "failed" %}
+<p class="error" id="failed">The worker failed: {{ why }}</p>
+{% elif state == "disabled" %}
+<p class="pending" id="disabled">The diff and 3D views are not built: {{ why }}.</p>
+{% endif %}
+{% for d in docs %}
+<section class="affected" id="doc-{{ d.name }}">
+<h3><a href="/web/doc/{{ d.name|urlencode }}">{{ d.name }}</a>: {{ d.from or "?" }} &rarr; {{ d.to }}</h3>
+{% if d.error %}<p class="error">{{ d.error }}</p>{% endif %}
+{% if d.diff %}
+{% set df = d.diff.diff %}
+<p class="counts" id="counts-{{ d.name }}">Objects: {{ df.objects.added|length }} added, {{ df.objects.removed|length }} removed, {{ df.objects.modified|length }} modified; {{ df.properties|length }} property changes; BOM: {{ df.bom.added|length }} added, {{ df.bom.removed|length }} removed, {{ df.bom.changed|length }} changed.{% if df.empty %} No differences.{% endif %}</p>
+{% if df.shapes %}
+<table class="shapes" id="shapes-{{ d.name }}">
+<thead><tr><th>Object</th><th>Status</th><th>Volume before</th><th>Volume after</th><th>Volume change</th><th>Max deviation</th></tr></thead>
+<tbody>
+{% for s in df.shapes %}
+<tr><td>{{ s.object }}</td><td>{{ s.status }}</td>
+<td>{{ (s.before.volume if s.before else None)|num }}</td><td>{{ (s.after.volume if s.after else None)|num }}</td>
+<td>{{ (s.delta.volume if s.delta else None)|num }}</td>
+<td>{{ (([s.deviation.max_cand_to_gold, s.deviation.max_gold_to_cand]|max) if s.deviation else None)|num }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+{% if df.properties %}
+<table class="props" id="props-{{ d.name }}">
+<thead><tr><th>Object</th><th>Property</th><th>Change</th><th>Before</th><th>After</th></tr></thead>
+<tbody>
+{% for p in df.properties %}
+<tr><td>{{ p.object }}</td><td>{{ p.property }}</td><td>{{ p.change }}</td><td>{{ p.before }}</td><td>{{ p.after }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+{% if df.bom.added or df.bom.removed or df.bom.changed %}
+<table class="bomdelta" id="bomdelta-{{ d.name }}">
+<thead><tr><th>BOM line</th><th>Change</th></tr></thead>
+<tbody>
+{% for b in df.bom.added %}<tr><td>{{ b.path }}</td><td>added, quantity {{ b.quantity }}</td></tr>{% endfor %}
+{% for b in df.bom.removed %}<tr><td>{{ b.path }}</td><td>removed, quantity {{ b.quantity }}</td></tr>{% endfor %}
+{% for b in df.bom.changed %}<tr><td>{{ b.path }}</td><td>{% for k, c in b.changes.items() %}{{ k }} {{ c[0] }} &rarr; {{ c[1] }}; {% endfor %}</td></tr>{% endfor %}
+</tbody>
+</table>
+{% endif %}
+{% if d.files.old and d.files.new %}
+<div class="viewers" id="views-{{ d.name }}">
+{{ viewer("old-" ~ d.name, base ~ "/" ~ d.name ~ "-old.glb", base ~ "/" ~ d.name ~ "-diff.glb" if d.files.diff else "", "removed", colors, opacity, d.from ~ " (removed material in red)", d.name) }}
+{{ viewer("new-" ~ d.name, base ~ "/" ~ d.name ~ "-new.glb", base ~ "/" ~ d.name ~ "-diff.glb" if d.files.diff else "", "added", colors, opacity, d.to ~ " (added material in green)", d.name) }}
+</div>
+{% endif %}
+{% endif %}
+</section>
+{% endfor %}
+{% endblock %}

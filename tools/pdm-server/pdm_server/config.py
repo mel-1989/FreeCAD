@@ -22,3 +22,7 @@ class Config:
         self.mirror_dir = _req("PDM_MIRROR_DIR")             # where the service keeps its read-only clone
         # The vault library (PDM.vault) the service imports for lifecycle rules and the link scanner.
         self.vault_lib = os.environ.get("PDM_VAULT_LIB", "")
+        # The web UI (optional): a FreeCADCmd for the worker that builds BOMs, glTF models and ECO diffs into the cache.
+        # Without it the pages still render and say that the 3D model, BOM and diff are not built.
+        self.freecad_cmd = os.environ.get("PDM_FREECAD_CMD", "")
+        self.cache_dir = os.environ.get("PDM_CACHE_DIR") or os.path.join(self.mirror_dir, "cache")

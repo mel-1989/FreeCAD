@@ -1,0 +1,38 @@
+{# SPDX-License-Identifier: LGPL-2.1-or-later #}
+{% extends "base.html" %}
+{% from "_viewer.html" import viewer %}
+{% from "_bom.html" import bomtable %}
+{% block title %}{{ name }} {{ rec.revision }} - PDM{% endblock %}
+{% block head %}
+{% if state in ("pending", "busy") %}<meta http-equiv="refresh" content="3">{% endif %}
+{% if state == "ready" and glb %}
+<script type="importmap" nonce="{{ nonce }}">{"imports": {"three": "/static/vendor/three/build/three.module.js", "three/addons/": "/static/vendor/three/examples/jsm/"}}</script>
+<script type="module" nonce="{{ nonce }}" src="/static/viewer.js"></script>
+{% endif %}
+{% endblock %}
+{% block bodyattrs %}{% if state != "ready" or not glb %} data-rendered="1"{% endif %}{% endblock %}
+{% block main %}
+<p><a href="/web/doc/{{ name|urlencode }}">&larr; {{ name }}</a></p>
+<h1>{{ name }} <span class="rev">{{ rec.revision }}</span></h1>
+<p id="revinfo">{{ rec.state }}; {{ rec.event }} by {{ rec.author }}, {{ rec.time }}. {{ rec.message }}</p>
+{% if state == "pending" %}
+<p class="pending" id="pending">Pending: the BOM and 3D model of this revision are being built by the FreeCAD worker. This page reloads itself.</p>
+{% elif state == "busy" %}
+<p class="pending" id="busy">Busy: the FreeCAD worker has too many jobs queued. This page reloads itself and tries again.</p>
+{% elif state == "failed" %}
+<p class="error" id="failed">The worker failed: {{ why }}</p>
+{% elif state == "disabled" %}
+<p class="pending" id="disabled">The BOM and 3D model are not built: {{ why }}.</p>
+{% else %}
+<h2>3D model</h2>
+{% if glb %}
+{{ viewer("model", base ~ "/model.glb") }}
+{% else %}<p>This revision has no solid or face geometry to show.</p>{% endif %}
+<h2>Bill of materials</h2>
+<p><a href="{{ base }}/bom.csv" id="csv-indented">Download CSV (indented)</a> &middot; <a href="{{ base }}/bom-flat.csv" id="csv-flat">Download CSV (flat)</a></p>
+<h3>Indented</h3>
+{{ bomtable(bom.rows, "bom", True) }}
+<h3>Flat (summed quantities)</h3>
+{{ bomtable(bom.flat, "bom-flat", False) }}
+{% endif %}
+{% endblock %}

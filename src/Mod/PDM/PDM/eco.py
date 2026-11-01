@@ -33,6 +33,12 @@ ROLES_PATH = "plm/roles.json"
 NUM_RE = r"ECO-\d{4,8}"
 STATES = ("Draft", "Submitted", "Approved", "Rejected", "Released")
 OPEN = ("Draft", "Submitted", "Approved")
+# States in which an ECO holds its documents (they move only through it). A Draft holds nothing: a new, edited,
+# withdrawn or rejected ECO is a working record, and a withdrawn one must not keep blocking its documents.
+HOLDING = ("Submitted", "Approved")
+# Stable code the service's policy puts in front of the "lost the number" refusal; the client matches the code
+# (remote.EcoNumberTaken), never the wording.
+NUMBER_TAKEN = "eco-number-taken"
 ROLES = ("viewer", "engineer", "approver", "admin")
 RANK = {r: i for i, r in enumerate(ROLES)}
 ALIAS = {"reader": "viewer", "writer": "engineer"}
@@ -243,7 +249,7 @@ def verify_change(old, new, actor, role, ecos=None, latest=None):
         except EcoError as x:
             return str(x), None, None
         if new.get("number") != want:
-            return f"a new ECO must take the next free number {want}, not {new.get('number')!r}", None, None
+            return f"[{NUMBER_TAKEN}] a new ECO must take the next free number {want}, not {new.get('number')!r}", None, None
     fields = {k: new.get(k) for k in ("number", "title", "reason", "documents")}
     try:
         expected = apply_action(copy.deepcopy(old), e.get("action"), actor, role, e.get("comment"), e.get("at"),
@@ -256,10 +262,10 @@ def verify_change(old, new, actor, role, ecos=None, latest=None):
 
 
 def open_docs(ecos, exclude=None):
-    """Document name -> number of the open ECO that holds it (``ecos``: number -> record)."""
+    """Document name -> number of the Submitted or Approved ECO that holds it (``ecos``: number -> record)."""
     out = {}
     for n, r in ecos.items():
-        if n != exclude and r["state"] in OPEN:
+        if n != exclude and r["state"] in HOLDING:
             for d in r["documents"]:
                 out.setdefault(d["name"], n)
     return out
@@ -457,7 +463,8 @@ def write(v, number, action, comment=None, override=False, fields=None):
         except V.PDMError as e:
             # a concurrent create took the number first and the server judged this push against the newer head:
             # retry once on the fresh head (a new number), then say so rather than report a permission failure
-            if action != "create" or type(e).__name__ != "PermissionDenied" or "next free number" not in str(e):
+            from PDM import remote
+            if action != "create" or not isinstance(e, remote.EcoNumberTaken):
                 raise
             lost_race += 1
             if lost_race > 1:

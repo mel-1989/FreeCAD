@@ -41,7 +41,7 @@ def missing():
                        ("forgejo", FORGEJO), ("the service venv", os.path.join(VENV, "bin", "python"))):
         if not os.path.exists(path):
             return f"{what} not found at {path}"
-    p = subprocess.run([os.path.join(VENV, "bin", "python"), "-c", "import fastapi, uvicorn, psycopg"],
+    p = subprocess.run([os.path.join(VENV, "bin", "python"), "-c", "import fastapi, uvicorn, psycopg, jinja2"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if p.returncode != 0:
         return f"the venv {VENV} lacks the packages of tools/pdm-server/requirements.txt"
@@ -83,9 +83,11 @@ def wait_http(url, seconds=60):
 
 
 class Stack:
-    def __init__(self, vault_lib):
-        """``vault_lib``: the directory holding the ``PDM`` package (the FreeCAD tree's src/Mod/PDM, or its build copy)."""
+    def __init__(self, vault_lib, extra_env=None):
+        """``vault_lib``: the directory holding the ``PDM`` package (the FreeCAD tree's src/Mod/PDM, or its build copy).
+        ``extra_env``: more environment for the service (e.g. ``PDM_FREECAD_CMD`` for the web UI's worker)."""
         self.vault_lib = vault_lib
+        self.extra_env = dict(extra_env or {})
         self.root = tempfile.mkdtemp(prefix="pdms", dir="/tmp")
         self.procs = {}
         self.tokens = {}
@@ -117,7 +119,7 @@ class Stack:
         self.verify_hook_enforces()
 
     def stop(self):
-        for name in ("service", "forgejo"):
+        for name in [n for n in self.procs if n not in ("forgejo", "postgres")] + ["forgejo"]:
             self._kill(name)
         with contextlib.suppress(Exception):
             self.stop_pg()
@@ -277,17 +279,25 @@ SHOW_FOOTER_VERSION = false
 
     # ---- service -----------------------------------------------------------------------------
 
-    def start_service(self):
+    def start_service(self, name="service", port=None, src=None, extra_env=None):
+        """Start a service process (``name`` keys ``self.procs``); returns its base URL. ``src`` is the directory that holds
+        the ``pdm_server`` package (default: this one); ``extra_env`` adds to the stack's ``extra_env``."""
+        port = port or self.svc_port
+        src = src or HERE
         env = dict(os.environ, PDM_DATABASE_URL=self.database_url, PDM_FORGEJO_URL=self.fj_url,
                    PDM_FORGEJO_TOKEN=self.tokens[OWNER], PDM_REPO=f"{OWNER}/{REPO}", PDM_HOOK_SECRET=self.hook_secret,
-                   PDM_MIRROR_DIR=os.path.join(self.root, "service"), PDM_VAULT_LIB=self.vault_lib, HOME=self.root,
-                   PYTHONPATH=HERE)
+                   PDM_MIRROR_DIR=os.path.join(self.root, name), PDM_VAULT_LIB=self.vault_lib, HOME=self.root,
+                   PYTHONPATH=src)
+        env.update(self.extra_env)
+        env.update(extra_env or {})
         os.makedirs(env["PDM_MIRROR_DIR"], exist_ok=True)
-        self.procs["service"] = subprocess.Popen(
+        self.procs[name] = subprocess.Popen(
             [os.path.join(VENV, "bin", "python"), "-m", "uvicorn", "pdm_server.app:app", "--host", "127.0.0.1",
-             "--port", str(self.svc_port), "--log-level", "warning"], cwd=HERE, env=env, stdin=subprocess.DEVNULL,
-            stdout=open(os.path.join(self.root, "service.out"), "a"), stderr=subprocess.STDOUT)
-        wait_http(f"{self.url}/health")
+             "--port", str(port), "--log-level", "warning"], cwd=src, env=env, stdin=subprocess.DEVNULL,
+            stdout=open(os.path.join(self.root, name + ".out"), "a"), stderr=subprocess.STDOUT)
+        url = f"http://127.0.0.1:{port}"
+        wait_http(f"{url}/health")
+        return url
 
     def stop_service(self):
         self._kill("service")

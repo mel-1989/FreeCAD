@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: LGPL-2.1-or-later #}
+{% macro bomtable(rows, id, indent=True) %}
+<table id="{{ id }}" class="bom">
+<thead><tr>{% if indent %}<th>Level</th>{% endif %}<th>Name</th><th>Kind</th><th>Revision</th><th>Qty</th><th>Material</th><th>Document</th></tr></thead>
+<tbody>
+{% for r in rows %}
+<tr>{% if indent %}<td>{{ r.level }}</td>{% endif %}<td{% if indent %} class="lvl lvl-{{ [r.level, 12]|min }}"{% endif %}>{{ r.name }}</td>
+<td>{{ r.kind }}</td><td>{{ r.revision or "" }}</td><td>{{ r.quantity }}</td><td>{{ r.material }}</td><td>{{ r.document or "" }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endmacro %}
