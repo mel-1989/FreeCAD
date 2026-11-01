@@ -8,6 +8,7 @@ The BOM is the slice 6a fixture (``bom_fixture``): ``machine`` (a sub-assembly u
 weldment frame), released at A.1 and again at B.1 after a Cover sub-assembly is added.
 """
 
+import http.server
 import itertools
 import os
 import shutil
@@ -98,6 +99,8 @@ class FakeOdoo:
             rec.update(active=True, type="normal", product_qty=1.0, bom_line_ids=[])
         if model == "mrp.bom.line":
             rec.update(product_qty=1.0)
+            if "product_qty" in vals:
+                vals["product_qty"] = round(vals["product_qty"], 2)  # Odoo stores quantities at its unit precision
         lines = vals.pop("bom_line_ids", [])
         rec.update(vals)
         self.store[model][i] = rec
@@ -262,19 +265,19 @@ class TestErpSync(unittest.TestCase):
         mark = len(self.odoo.log)
         r = self.sync("B.1")
         self.assertEqual(r["products"]["created"], 2)  # machine:Cover, machine:CoverPlate; the rest exist
-        self.assertEqual(sorted(r["archived"]), ["machine A.1", "machine:Sub A.1"])
+        self.assertEqual(r["archived"], ["machine A.1"])  # the root's own older revision only, see the module docstring
         boms = self.odoo.boms()
         for code, want in BOMS_B1.items():
             self.assertEqual(boms[code], want, code)
         self.assertEqual(boms["machine A.1"], (False, "machine", BOMS_A1["machine A.1"][2]))  # kept, not deleted
-        self.assertEqual(boms["machine:Sub A.1"][0], False)
+        self.assertEqual(boms["machine:Sub A.1"], BOMS_A1["machine:Sub A.1"])  # a child's BOM is not this sync's to archive
         self.assertEqual(boms["frame A.1"], BOMS_A1["frame A.1"])  # untouched: the frame did not change
-        self.assertEqual([c[2][1] for c in self.odoo.calls("write", since=mark)], [{"active": False}] * 2)  # the two archives only
+        self.assertEqual([c[2][1] for c in self.odoo.calls("write", since=mark)], [{"active": False}])  # the one archive only
         mark = len(self.odoo.log)
         self.assertTrue(self.sync("B.1")["unchanged"])
         self.assertEqual(self.odoo.calls("create", "write", since=mark), [])
         r = self.sync("A.1")  # going back reactivates the old BOM and archives the newer one
-        self.assertEqual((r["boms"]["reactivated"], sorted(r["archived"])), (2, ["machine B.1", "machine:Sub B.1"]))
+        self.assertEqual((r["boms"]["reactivated"], r["archived"]), (1, ["machine B.1"]))
         self.assertEqual(self.odoo.boms()["machine A.1"][0], True)
 
     def test_a_revision_that_is_not_released_is_refused_before_any_call(self):
@@ -326,6 +329,117 @@ class TestErpSync(unittest.TestCase):
                 os.environ.pop(k, None)
                 if v is not None:
                     os.environ[k] = v
+
+
+def _row(name, doc, level, qty=1, rev="A.1"):
+    return dict(name=name, document=doc, level=level, quantity=qty, revision=rev, material=None, extra=None, kind="part")
+
+
+class _FakeVault:
+    """Released documents with a canned BOM, for plans the fixture cannot build."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def history(self, name):
+        return [dict(revision="A.1", state=RELEASED_STATE)]
+
+    def bom(self, name, revision):
+        return self.rows
+
+
+RELEASED_STATE = "Released"
+
+
+class TestErpSyncRules(unittest.TestCase):
+    """Archiving, quantities and transport errors, on canned BOMs (no vault documents needed)."""
+
+    def setUp(self):
+        self.odoo = FakeOdoo()
+        self.addCleanup(self.odoo.close)
+
+    def sync(self, rows, name="m", **kw):
+        return erp.sync_bom(_FakeVault(rows), name, "A.1", self.odoo.url, DB, USER, KEY, **kw)
+
+    def active(self):
+        return {c for c, v in self.odoo.boms().items() if v[0]}
+
+    def test_one_document_at_two_revisions_converges_with_both_boms_active(self):
+        rows = [_row("m", "m", 0), _row("sub", "sub", 1, rev="A.1"), _row("p", "p", 2), _row("sub", "sub", 1, rev="A.2"), _row("q", "q", 2)]
+        r = self.sync(rows)
+        self.assertEqual((r["boms"]["created"], r["archived"]), (3, []))
+        for _ in range(3):
+            mark = len(self.odoo.log)
+            r = self.sync(rows)
+            self.assertTrue(r["unchanged"], r)
+            self.assertEqual(self.odoo.calls("create", "write", since=mark), [])
+        self.assertEqual(self.active(), {"m A.1", "sub A.1", "sub A.2"})
+
+    def test_syncing_another_root_never_archives_a_sub_assembly_bom_another_root_uses(self):
+        self.sync([_row("b", "b", 0), _row("sub", "sub", 1, rev="A.1"), _row("p", "p", 2)], name="b")
+        r = self.sync([_row("c", "c", 0), _row("sub", "sub", 1, rev="A.2"), _row("q", "q", 2)], name="c")
+        self.assertEqual(r["archived"], [])
+        self.assertEqual(self.active(), {"b A.1", "c A.1", "sub A.1", "sub A.2"})
+
+    def test_a_sub_assembly_synced_as_its_own_root_archives_its_older_revisions(self):
+        self.sync([_row("sub", "sub", 0, rev="A.1"), _row("p", "p", 1)], name="sub")
+        r = self.sync([_row("sub", "sub", 0, rev="A.2"), _row("p", "p", 1)], name="sub")
+        self.assertEqual(r["archived"], ["sub A.1"])
+        self.assertEqual(self.active(), {"sub A.2"})
+
+    def test_a_manual_bom_survives_every_sync(self):
+        rows = [_row("m", "m", 0), _row("a", "a", 1)]
+        self.sync(rows)
+        prod = next(p for p in self.odoo.store["product.product"].values() if p["default_code"] == "m")
+        self.odoo._create("mrp.bom", {"code": "MANUAL-ENGINEERING", "product_tmpl_id": prod["product_tmpl_id"], "product_id": prod["id"]})
+        self.odoo._create("mrp.bom", {"code": False, "product_tmpl_id": prod["product_tmpl_id"], "product_id": prod["id"]})
+        for rev in ("A.2", "A.3", "A.2"):
+            r = self.sync([dict(x, revision=rev) for x in rows])
+            self.assertNotIn("MANUAL-ENGINEERING", r["archived"])
+        boms = self.odoo.boms()
+        self.assertTrue(boms["MANUAL-ENGINEERING"][0])
+        self.assertTrue(boms[False][0])
+        self.assertEqual(self.active() - {"MANUAL-ENGINEERING", False}, {"m A.2"})
+
+    def test_a_fractional_quantity_is_not_rewritten_on_every_sync(self):
+        rows = [_row("m", "m", 0), _row("a", "a", 1, qty=0.125)]
+        self.sync(rows)
+        self.assertEqual(self.odoo.boms()["m A.1"][2], [("a", 0.12)])  # the fake rounds like Odoo
+        mark = len(self.odoo.log)
+        self.assertTrue(self.sync(rows)["unchanged"])
+        self.assertEqual(self.odoo.calls("create", "write", since=mark), [])
+        r = self.sync([_row("m", "m", 0), _row("a", "a", 1, qty=2.5)])  # a real change is still written
+        self.assertEqual(r["boms"]["updated"], 1)
+
+    def test_a_non_xml_reply_is_an_erp_error_without_the_key(self):
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "5")
+                self.end_headers()
+                self.wfile.write(b"<<<>>")
+
+            def log_message(self, *a):
+                pass
+
+        hs = http.server.HTTPServer(("127.0.0.1", 0), H)
+        t = threading.Thread(target=hs.serve_forever, daemon=True)
+        t.start()
+        self.addCleanup(lambda: (hs.shutdown(), hs.server_close(), t.join(5)))
+        with self.assertRaises(erp.ErpError) as cm:
+            erp.sync_bom(_FakeVault([_row("m", "m", 0), _row("a", "a", 1)]), "m", "A.1", "http://127.0.0.1:%d" % hs.server_address[1], DB, USER, KEY)
+        self.assertNotIn(KEY, str(cm.exception))
+
+    def test_a_silent_server_times_out_as_an_erp_error(self):
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        self.addCleanup(srv.close)
+        with self.assertRaises(erp.ErpError) as cm:
+            erp.sync_bom(_FakeVault([_row("m", "m", 0), _row("a", "a", 1)]), "m", "A.1", "http://127.0.0.1:%d" % srv.getsockname()[1],
+                         DB, USER, KEY, timeout=0.5)
+        self.assertNotIn(KEY, str(cm.exception))
 
 
 if __name__ == "__main__":

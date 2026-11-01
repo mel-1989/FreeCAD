@@ -26,20 +26,39 @@ Keys (what makes a second sync find the same records)
 Versioning and idempotence
 --------------------------
 Existing records are read first and written only when a field differs, so syncing the same revision twice makes
-no create or write call after the reads. Syncing makes the synced revision's BOM the only active one for each
-product it builds a BOM for: other BOMs of that product (older or newer revisions) are archived with
-``active=False``, never deleted, and a previously archived BOM with the same code is reactivated.
+no create or write call after the reads. Quantities are compared to the 0.01 precision Odoo rounds to (a
+``0.125`` line is stored as ``0.13`` and is not rewritten on every sync). A previously archived BOM with a code in
+the plan is reactivated.
+
+Archiving rule. A sync archives (``active=False``, never deletes) only BOMs that satisfy all of: (1) the BOM is on
+the *root* document's product, i.e. the document being synced, so a sub-assembly that merely appears as a child of
+another root is never touched (machine B's released BOM keeps using ``sub`` A.1 when machine C, which uses ``sub``
+A.2, is synced; each root's own sync decides about its own older revisions); (2) its code is ``<root part key>
+<revision label>`` with a vault revision label (``[A-Z]+\\.\\d+``), i.e. this sync created it; BOMs a person made by
+hand, with any other code, are never archived, and keys like ``machine:Sub A.1`` do not match the root key
+``machine``; (3) its code is not in the current plan, so a BOM of the same plan is never archived (one document
+at two revisions under one root, say ``sub`` A.1 and A.2, keeps both BOMs active and a repeat sync makes no write).
+To retire the older revisions of a sub-assembly, sync that sub-assembly as its own Released document. Consequence:
+several revisions of a sub-assembly BOM can be active at once; Odoo then picks among them by its own sequence
+rule, and the engineer retires the older ones by syncing the sub-assembly itself.
 
 Credentials come from the arguments only (``credentials_from_env`` is a convenience for ``PDM_ODOO_*``) and are
 never put in a message. A live Odoo is optional and never on a public host (gate D11).
 """
 
+import http.client
 import os
+import re
 import xmlrpc.client
+from xml.parsers.expat import ExpatError
 
 from PDM import vault as V
 
 RELEASED = "Released"
+DEFAULT_TIMEOUT = 30.0  # seconds per XML-RPC request
+QTY_TOLERANCE = 0.005 + 1e-9  # Odoo rounds quantities to its unit precision, 2 decimals by default
+REV_LABEL = r"[A-Z]+\.\d+"  # the vault revision label (see PDM.vault.parse_label)
+_NET_ERRORS = (OSError, xmlrpc.client.Error, http.client.HTTPException, ExpatError)
 
 
 class ErpError(V.PDMError):
@@ -104,16 +123,39 @@ def plan(rows):
     return products, out
 
 
+class _TimeoutMixin:
+    timeout = DEFAULT_TIMEOUT
+
+    def make_connection(self, host):
+        conn = super().make_connection(host)
+        conn.timeout = self.timeout
+        return conn
+
+
+class _Transport(_TimeoutMixin, xmlrpc.client.Transport):
+    pass
+
+
+class _SafeTransport(_TimeoutMixin, xmlrpc.client.SafeTransport):
+    pass
+
+
+def _transport(url, timeout):
+    t = (_SafeTransport if url.lower().startswith("https:") else _Transport)()
+    t.timeout = timeout
+    return t
+
+
 class _Odoo:
-    def __init__(self, url, db, user, key):
+    def __init__(self, url, db, user, key, timeout=DEFAULT_TIMEOUT):
         self.db, self.user, self._key = db, user, key
         base = url.rstrip("/")
         self.where = base.split("@")[-1]
         try:
-            self.common = xmlrpc.client.ServerProxy(base + "/xmlrpc/2/common", allow_none=True)
+            self.common = xmlrpc.client.ServerProxy(base + "/xmlrpc/2/common", transport=_transport(base, timeout), allow_none=True)
             self.uid = self.common.authenticate(db, user, key, {})
-            self.models = xmlrpc.client.ServerProxy(base + "/xmlrpc/2/object", allow_none=True)
-        except (OSError, xmlrpc.client.Error) as e:
+            self.models = xmlrpc.client.ServerProxy(base + "/xmlrpc/2/object", transport=_transport(base, timeout), allow_none=True)
+        except _NET_ERRORS as e:
             raise ErpError(f"cannot reach Odoo at {self.where}: {type(e).__name__}") from None
         if not self.uid:
             raise ErpError(f"Odoo at {self.where} refused the login for user {user!r} on database {db!r}")
@@ -123,14 +165,18 @@ class _Odoo:
             return self.models.execute_kw(self.db, self.uid, self._key, model, method, list(args), kw)
         except xmlrpc.client.Fault as e:
             raise ErpError(f"Odoo refused {model}.{method}: {str(e.faultString).strip().splitlines()[-1][:300]}") from None
-        except (OSError, xmlrpc.client.Error) as e:
+        except _NET_ERRORS as e:
             raise ErpError(f"Odoo call {model}.{method} failed: {type(e).__name__}") from None
 
 
 _ALL = {"context": {"active_test": False}}
 
 
-def sync_bom(vault, name, revision, url, db, user, key):
+def _same_lines(got, want):
+    return len(got) == len(want) and all(g[0] == w[0] and abs(g[1] - w[1]) <= QTY_TOLERANCE for g, w in zip(got, want))
+
+
+def sync_bom(vault, name, revision, url, db, user, key, timeout=DEFAULT_TIMEOUT):
     """Push the EBOM of ``name`` at Released ``revision`` to Odoo. Returns what changed::
 
         {"products": {"created": n, "updated": n}, "boms": {"created": n, "updated": n, "reactivated": n},
@@ -150,7 +196,7 @@ def sync_bom(vault, name, revision, url, db, user, key):
         raise ErpError(f"{name} {revision} is {recs[0]['state']}, not Released; only Released revisions are synced to the ERP")
     rows = vault.bom(name, revision)
     products, boms = plan(rows)
-    odoo = _Odoo(url, db, user, key)
+    odoo = _Odoo(url, db, user, key, timeout)
     res = {"products": {"created": 0, "updated": 0}, "boms": {"created": 0, "updated": 0, "reactivated": 0}, "archived": []}
 
     # products
@@ -173,6 +219,7 @@ def sync_bom(vault, name, revision, url, db, user, key):
         pid[k], tmpl[k] = cur["id"], cur["product_tmpl_id"][0] if isinstance(cur["product_tmpl_id"], (list, tuple)) else cur["product_tmpl_id"]
 
     # boms
+    root_key, plan_codes = part_key(rows[0]), {b["code"] for b in boms}
     if boms:
         existing = odoo.call("mrp.bom", "search_read", [["product_tmpl_id", "in", sorted(set(tmpl[b["key"]] for b in boms))]],
                              fields=["code", "active", "product_tmpl_id", "product_qty", "type", "bom_line_ids"], **_ALL)
@@ -190,7 +237,7 @@ def sync_bom(vault, name, revision, url, db, user, key):
                 got = sorted((l["product_id"][0] if isinstance(l["product_id"], (list, tuple)) else l["product_id"],
                               float(l["product_qty"])) for l in lines)
                 vals = {}
-                if got != want_lines:
+                if not _same_lines(got, want_lines):
                     vals["bom_line_ids"] = [[5, 0, 0]] + [[0, 0, {"product_id": p, "product_qty": q}] for p, q in want_lines]
                 if not e["active"]:
                     vals["active"] = True
@@ -206,9 +253,11 @@ def sync_bom(vault, name, revision, url, db, user, key):
                 new = new[0] if isinstance(new, list) else new
                 e = {"id": new, "code": b["code"]}
                 res["boms"]["created"] += 1
-            stale = [o for o in by_tmpl.get(t, []) if o["code"] != b["code"] and o["active"]]
-            if stale:
-                odoo.call("mrp.bom", "write", [o["id"] for o in stale], {"active": False})
-                res["archived"].extend(o["code"] for o in stale)
+            if b is boms[0] and b["key"] == root_key:  # archiving rule: only the root's own older revisions
+                stale = [o for o in by_tmpl.get(t, []) if o["active"] and o["code"] not in plan_codes
+                         and re.fullmatch(re.escape(root_key) + " " + REV_LABEL, o["code"] or "")]
+                if stale:
+                    odoo.call("mrp.bom", "write", [o["id"] for o in stale], {"active": False})
+                    res["archived"].extend(o["code"] for o in stale)
     res["unchanged"] = not (res["products"]["created"] or res["products"]["updated"] or any(res["boms"].values()) or res["archived"])
     return res
