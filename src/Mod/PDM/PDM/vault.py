@@ -780,6 +780,11 @@ class Vault:
     def eco_history(self, number):
         return self.eco_get(number)["history"]
 
+    def eco_diff(self, number):
+        """The diff of every document the ECO changes, from its last Released revision (or first) to the ECO's target."""
+        from PDM import eco
+        return eco.eco_diff(self, number)
+
     def eco_list(self, state=None):
         from PDM import eco
         return eco.list_ecos(self, state)

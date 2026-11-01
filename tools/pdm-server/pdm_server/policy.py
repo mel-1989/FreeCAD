@@ -210,7 +210,7 @@ def check_push(V, db, mirror_vault, pusher, role, updates, pinned=None, emails=(
                 held = E.open_docs(all_ecos()).get(src)
                 if held:
                     return (f"commit {short} (move {src} -> {doc}): {src} is part of the open {held}; "
-                            "finish or withdraw the ECO before renaming it")
+                            "edit the ECO to drop the document, or release it, before renaming it")
                 allowed, holds = {folder, src + suffix}, [src]
                 sprev = record(src)
                 if src not in docs or sprev is None:

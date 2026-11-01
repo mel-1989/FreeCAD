@@ -346,8 +346,31 @@ class TestReview031(EcoCase):
         with self.assertRaises(V.LifecycleError) as cm:
             a.move("p1", "p1b")
         self.assertIn(n, str(cm.exception))
+        self.assertIn("edit the ECO to drop the document, or release it", str(cm.exception))
         self.assertEqual(self.head(), before)
         self.assertEqual(a.move("p2", "p2b")["new"], "p2b")  # not in an ECO
+
+    def test_a_create_that_loses_the_number_race_to_the_server_retries_once_then_says_so(self):
+        from PDM import remote
+        self.add("p1")
+        self.add("p2")
+        a = self.u("alice")
+        real, calls = a._push_main, []
+
+        def lose(sha, times):
+            calls.append(sha)
+            if len(calls) <= times:
+                raise remote.PermissionDenied("the vault refused the push: a new ECO must take the next free number ECO-0002")
+            return real(sha)
+        a._push_main = lambda sha: lose(sha, 1)
+        self.assertEqual(a.eco_create("t", "r", {"p1": "A.1"})["number"], "ECO-0001")
+        self.assertEqual(len(calls), 2)  # one retry succeeded
+        calls.clear()
+        a._push_main = lambda sha: lose(sha, 9)
+        with self.assertRaises(eco.EcoError) as cm:
+            a.eco_create("t2", "r", {"p2": "A.1"})
+        self.assertIn("lost the race", str(cm.exception))
+        self.assertEqual(len(calls), 2)
 
     def test_an_eco_naming_a_document_that_is_no_longer_in_the_tree_is_refused(self):
         self.add("p1")

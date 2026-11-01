@@ -192,7 +192,7 @@ def _is_sub_link(o):
 def _top_objects(doc):
     """Components of a document that nothing in the same document uses. A link from another document, or a link
     to a sub-object, does not make its target 'used'."""
-    return [o for o in doc.Objects if _is_component(o) and not _excluded(o)
+    return [o for o in doc.Objects if _is_component(o) and not _excluded(o) and o.TypeId != "App::LinkElement"
             and not any(i.Document is doc and not _is_sub_link(i) for i in o.InList)]
 
 
@@ -398,9 +398,13 @@ def _paths(rows):
     """Component rows below level 0 -> unique path key ``a/b/c`` of names below the document (a repeated key gets
     ``#2``...), so a document renamed by a move compares equal to itself."""
     stack, out, seen = [], {}, {}
+    root_doc = rows[0]["document"] if rows else None
     for r in rows:
         del stack[r["level"]:]
-        stack.append(r["name"])
+        # a part of another vault document is keyed by document and object, not by its display name, which
+        # depends on how many parts that document contributes (adding a sibling must not rename this one)
+        stack.append(f"{r['document']}:{r['object']}" if r["level"] and r["object"] and r["document"] != root_doc
+                     else r["name"])
         if r["level"] == 0:
             continue
         p = "/".join(stack[1:])

@@ -327,6 +327,27 @@ def get(v, number):
     return rec
 
 
+def base_revision(v, name, target):
+    """The revision an ECO's change to ``name`` starts from: the document's newest Released revision that is behind
+    ``target``, else the first revision it ever had (when it was never released)."""
+    hist = v.history(name)  # newest first, follows a move
+    tgt = V.parse_label(target)
+    released = [r["revision"] for r in hist if r["state"] == "Released" and V.parse_label(r["revision"]) < tgt]
+    if released:
+        return max(released, key=V.parse_label)
+    contents = [r["revision"] for r in hist if r["event"] in V.CONTENT_EVENTS and r["revision"]]
+    return contents[-1] if contents else target
+
+
+def eco_diff(v, number):
+    """The diff of every document an ECO changes: ``[{document, from, to, diff}]`` by document name, where ``diff`` is
+    exactly ``Vault.diff(document, from, to)`` and ``from`` is ``base_revision``, ``to`` the ECO's target revision.
+    Needs FreeCAD (it compares the documents), so it is computed on the client, never by the service."""
+    rec = get(v, number)
+    return [{"document": d["name"], "from": (b := base_revision(v, d["name"], d["revision"])), "to": d["revision"],
+             "diff": v.diff(d["name"], b, d["revision"])} for d in rec["documents"]]
+
+
 def list_ecos(v, state=None):
     """Summaries of every ECO, by number."""
     v._fetch()
@@ -342,7 +363,7 @@ def guard_move(v, name):
     """Refuse renaming a document an open ECO names (the ECO would point at a name that is gone)."""
     for n, num in sorted(open_docs(read_all(v, v._head())).items()):
         if n.lower() == name.lower():
-            raise V.LifecycleError(f"{name} is part of the open {num}; finish or withdraw the ECO before renaming it")
+            raise V.LifecycleError(f"{name} is part of the open {num}; edit the ECO to drop the document, or release it, before renaming it")
 
 
 def guard_direct_release(v, name):
@@ -391,6 +412,7 @@ def write(v, number, action, comment=None, override=False, fields=None):
     V._check_message(comment or "")
     if number is not None:
         _check_number(number)
+    lost_race = 0
     for _ in range(8):
         v._fetch()
         head = v._head()
@@ -430,7 +452,18 @@ def write(v, number, action, comment=None, override=False, fields=None):
                                         extra=[("Eco", number)])
                     state = step
         V._fault("after_commit")
-        if v._push_main(tip):
+        try:
+            pushed = v._push_main(tip)
+        except V.PDMError as e:
+            # a concurrent create took the number first and the server judged this push against the newer head:
+            # retry once on the fresh head (a new number), then say so rather than report a permission failure
+            if action != "create" or type(e).__name__ != "PermissionDenied" or "next free number" not in str(e):
+                raise
+            lost_race += 1
+            if lost_race > 1:
+                raise EcoError("lost the race for the ECO number twice; someone else is creating ECOs, retry") from e
+            continue
+        if pushed:
             return new
     raise V.GitError(f"vault kept moving; ECO {action} gave up after 8 attempts (nothing changed)")
 
