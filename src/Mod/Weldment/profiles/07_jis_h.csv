@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# JIS H sections (JIS G 3192 standard sectional dimensions), transcribed from the public Japanese section-property table
+# https://www.milcon.co.jp/data/pdf/product_3054.pdf (Milcon, "H-shape section property table, reference JIS G 3192"). Columns: H (depth) -> h, B -> b, t1 -> tw, t2 -> tf, r -> r, all mm.
+# area_mm2 is the table's sectional area in cm^2 times 100, mass_kg_m its unit mass. Size label is HxBxt1xt2. Rows marked with an asterisk in the source (non-standard-series sizes) are included.
+# Dropped: H 344x348x10x16, whose printed area (114 cm^2) and mass (113 kg/m) do not agree with its dimensions (geometry gives about 144 cm^2); the source rows for this size are garbled.
+# Cross-checked by eye against Stahlwerk Thueringen's JIS G 3192:2014 sheet https://stahlwerk-thueringen.de/files/14426C5B565 for H100..H300.
+family,size,kind,h,b,tw,tf,r,t,ro,ri,d,r1,r2,area_mm2,mass_kg_m,source
+JIS H,100x50x5x7,I,100,50,5,7,8,,,,,,,1185,9.3,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,100x100x6x8,I,100,100,6,8,8,,,,,,,2159,16.9,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,125x60x6x8,I,125,60,6,8,8,,,,,,,1669,13.1,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,125x125x6.5x9,I,125,125,6.5,9,8,,,,,,,3000,23.6,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,150x75x5x7,I,150,75,5,7,8,,,,,,,1785,14,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,148x100x6x9,I,148,100,6,9,8,,,,,,,2635,20.7,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,150x150x7x10,I,150,150,7,10,8,,,,,,,3965,31.1,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,175x90x5x8,I,175,90,5,8,8,,,,,,,2290,18,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,175x175x7.5x11,I,175,175,7.5,11,13,,,,,,,5142,40.4,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,198x99x4.5x7,I,198,99,4.5,7,8,,,,,,,2269,17.8,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,200x100x5.5x8,I,200,100,5.5,8,8,,,,,,,2667,20.9,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,194x150x6x9,I,194,150,6,9,8,,,,,,,3811,29.9,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,200x200x8x12,I,200,200,8,12,13,,,,,,,6353,49.9,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,200x204x12x12,I,200,204,12,12,13,,,,,,,7153,56.2,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,248x124x5x8,I,248,124,5,8,8,,,,,,,3199,25.1,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,250x125x6x9,I,250,125,6,9,8,,,,,,,3697,29,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,244x175x7x11,I,244,175,7,11,13,,,,,,,5549,43.6,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,250x250x9x14,I,250,250,9,14,13,,,,,,,9143,71.8,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,250x255x14x14,I,250,255,14,14,13,,,,,,,10390,81.6,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,298x149x5.5x8,I,298,149,5.5,8,13,,,,,,,4080,32,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,300x150x6.5x9,I,300,150,6.5,9,13,,,,,,,4678,36.7,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,294x200x8x12,I,294,200,8,12,13,,,,,,,7105,55.8,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,294x302x12x12,I,294,302,12,12,13,,,,,,,10630,83.4,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,300x300x10x15,I,300,300,10,15,13,,,,,,,11840,93,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,300x305x15x15,I,300,305,15,15,13,,,,,,,13340,105,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,346x174x6x9,I,346,174,6,9,13,,,,,,,5245,41.2,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,350x175x7x11,I,350,175,7,11,13,,,,,,,6291,49.4,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,340x250x9x14,I,340,250,9,14,13,,,,,,,9953,78.1,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,350x350x12x19,I,350,350,12,19,13,,,,,,,17190,135,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,396x199x7x11,I,396,199,7,11,13,,,,,,,7141,56.1,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,400x200x8x13,I,400,200,8,13,13,,,,,,,8337,65.4,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,390x300x10x16,I,390,300,10,16,13,,,,,,,13320,105,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,388x402x15x15,I,388,402,15,15,22,,,,,,,17850,140,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,394x398x11x18,I,394,398,11,18,22,,,,,,,18680,147,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,400x400x13x21,I,400,400,13,21,22,,,,,,,21870,172,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,400x408x21x21,I,400,408,21,21,22,,,,,,,25070,197,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,414x405x18x28,I,414,405,18,28,22,,,,,,,29540,232,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,428x407x20x35,I,428,407,20,35,22,,,,,,,36070,283,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,458x417x30x50,I,458,417,30,50,22,,,,,,,52860,415,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,498x432x45x70,I,498,432,45,70,22,,,,,,,77010,605,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,446x199x8x12,I,446,199,8,12,13,,,,,,,8297,65.1,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,450x200x9x14,I,450,200,9,14,13,,,,,,,9543,74.9,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,440x300x11x18,I,440,300,11,18,13,,,,,,,15390,121,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,496x199x9x14,I,496,199,9,14,13,,,,,,,9929,77.9,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,500x200x10x16,I,500,200,10,16,13,,,,,,,11220,88.2,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,506x201x11x19,I,506,201,11,19,13,,,,,,,12930,102,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,482x300x11x15,I,482,300,11,15,13,,,,,,,14120,111,https://www.milcon.co.jp/data/pdf/product_3054.pdf
+JIS H,488x300x11x18,I,488,300,11,18,13,,,,,,,15920,125,https://www.milcon.co.jp/data/pdf/product_3054.pdf
