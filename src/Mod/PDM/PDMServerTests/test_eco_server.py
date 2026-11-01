@@ -281,7 +281,7 @@ class TestEco(ServerCase):
 
     def test_12_direct_release_of_a_document_in_an_open_eco_refused(self):
         d = self.mkdoc()
-        n = self.new_eco([d])
+        n = self.new_eco([d], submit=True)  # a Draft holds nothing
         self.assertTrue(self.run_as("alice", [call("transition", d, "InReview")])[0]["ok"])
         r = self.run_as("alice", [call("transition", d, "Released")])
         self.assertEqual(r[0]["error"], "LifecycleError", r)
@@ -319,8 +319,8 @@ class TestEco(ServerCase):
 
     def test_15_document_in_two_open_ecos_refused(self):
         d = self.mkdoc()
-        n = self.new_eco([d])
-        r = self.run_as("bob", [call("eco_create", "second", "r", {d: "A.1"})])
+        n = self.new_eco([d], submit=True)
+        r = self.run_as("bob", [call("eco_create", "second", "r", {d: "A.1"})])  # held while n is Submitted or Approved
         self.assertEqual(r[0]["error"], "EcoError", r)
         self.assertIn(n, r[0]["message"])
 
@@ -369,7 +369,7 @@ class TestEco(ServerCase):
     def test_18_forged_create_must_take_the_next_number(self):
         d = self.mkdoc()
         r = self.run_as("alice", [{"op": "eco_forge", "create": {"number": "ECO-99999999", "documents": [d]}}])
-        self.assertEqual(r[0]["error"], "PermissionDenied", r)
+        self.assertEqual(r[0]["error"], "EcoNumberTaken", r)
         self.assertIn("next free number", r[0]["message"])
         r = self.run_as("alice", [call("eco_create", "after the squat", "r", {d: "A.1"})])
         self.assertTrue(r[0]["ok"], r)
@@ -388,10 +388,27 @@ class TestEco(ServerCase):
 
     def test_20_move_of_a_document_in_an_open_eco_refused(self):
         d = self.mkdoc()
-        n = self.new_eco([d])
+        n = self.new_eco([d], submit=True)
         r = self.run_as("alice", [call("move", d, d + "m"), {"op": "move_unguarded", "old": d, "new": d + "m"}])
         self.assertEqual(r[0]["error"], "LifecycleError", r)
         self.assertIn(n, r[0]["message"])
         self.assertEqual(r[1]["error"], "PermissionDenied", r)  # the vault host refuses what the library would not
         self.assertIn(f"open {n}", r[1]["message"])
         self.assertEqual(self.states(d), {d: ("A.1", "WIP")})
+
+    def test_21_withdrawn_or_rejected_eco_no_longer_holds_its_documents(self):
+        d1, d2 = self.mkdoc(), self.mkdoc(self.doc + "w")
+        n1 = self.new_eco([d1], submit=True)
+        self.assertTrue(self.run_as("alice", [call("transition", d1, "InReview")])[0]["ok"])
+        r = self.run_as("alice", [call("transition", d1, "Released")])
+        self.assertEqual(r[0]["error"], "LifecycleError", r)  # held while Submitted
+        self.assertEqual(self.run_as("alice", [call("eco_withdraw", n1, "not yet")])[0]["value"]["state"], "Draft")
+        r = self.run_as("alice", [{"op": "bare_release", "name": d1}])  # the policy replays eco.open_docs: no hold left
+        self.assertTrue(r[0]["ok"], r)
+        self.assertEqual(self.states(d1), {d1: ("A.1", "Released")})
+        n2 = self.new_eco([d2], submit=True)
+        r = self.run_as("alice", [call("move", d2, d2 + "m")])
+        self.assertEqual(r[0]["error"], "LifecycleError", r)
+        self.assertEqual(self.run_as("bob", [call("eco_reject", n2, "no")])[0]["value"]["state"], "Draft")
+        r = self.run_as("alice", [call("move", d2, d2 + "m")])
+        self.assertTrue(r[0]["ok"], r)

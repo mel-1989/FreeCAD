@@ -34,6 +34,10 @@ class PermissionDenied(PDMError):
     """The credentials are valid but the user's role does not allow the operation."""
 
 
+class EcoNumberTaken(PermissionDenied):
+    """A new ECO's number was taken by a concurrent creator (the service's policy code ``eco-number-taken``)."""
+
+
 class ServerUnavailable(PDMError):
     """The server (or its database) could not be reached or answered with a 5xx; nothing was changed."""
 
@@ -225,6 +229,9 @@ class RemoteVault(V.Vault):
             if ("non-fast-forward" in err or "fetch first" in err or "incorrect old value" in err
                     or "cannot lock ref" in err):  # lost a race for the branch (the host's own compare-and-swap)
                 return False
+            from PDM import eco
+            if f"[{eco.NUMBER_TAKEN}]" in err:
+                raise EcoNumberTaken(f"the vault refused the push: {err}")
             raise PermissionDenied(f"the vault refused the push: {err}")
         if "401" in err or "Authentication failed" in err:
             raise AuthError(f"the vault host refused the credentials: {err}")
