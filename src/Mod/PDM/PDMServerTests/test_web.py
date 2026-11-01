@@ -20,6 +20,7 @@ playwright). The suite skips when the stack, playwright, scikit-image or the hea
 10. worker_failure_busy_and_sweep            a failing worker: generic line for a reader, detail for an admin; a full queue says busy; tmp-* swept at start
 """
 
+import contextlib
 import json
 import os
 import shutil
@@ -34,6 +35,13 @@ from PDM import vault as V
 from PDMServerTests.test_server import CMD, HERE, SERVER_SRC, SKIP, ServerCase, S, call
 from PDMServerTests.test_server import _collect  # noqa: F401
 
+# Under an ASCII locale (LANG=C) a failure message with non-ASCII text (the pages carry some) would crash the
+# test runner's own printing: write what cannot be encoded as a backslash escape instead.
+for _stream in (sys.stdout, sys.stderr):
+    with contextlib.suppress(Exception):
+        _stream.reconfigure(errors="backslashreplace")
+
+UTF8_ENV = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
 VENV_PY = os.path.join(S.VENV, "bin", "python") if S else None
 BROWSE = os.path.join(SERVER_SRC, "browse.py") if SERVER_SRC else None
 BASELINES = os.path.join(SERVER_SRC, "baselines") if SERVER_SRC else None
@@ -48,7 +56,7 @@ def web_missing():
         return "browse.py not found"
     probe = ("from playwright.sync_api import sync_playwright as s\nimport numpy, skimage, PIL\n"
              "p = s().start(); b = p.chromium.launch(); b.close(); p.stop()\n")
-    r = subprocess.run([VENV_PY, "-c", probe], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    r = subprocess.run(env=UTF8_ENV, args=[VENV_PY, "-c", probe], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         return "playwright, scikit-image or the headless Chromium is missing in the service venv " \
                "(tools/pdm-server/requirements-test.txt): " + r.stdout.strip().splitlines()[-1][:200]
@@ -122,11 +130,11 @@ class TestWeb(ServerCase):
         """Run browser steps (see browse.py); logs in as ``user`` first. Returns the list of step results."""
         steps = ([{"op": "login", "token": self.stack.tokens[user]}] if user else []) + steps
         plan = os.path.join(self.tmp, "plan.json")
-        with open(plan, "w") as f:
+        with open(plan, "w", encoding="utf-8") as f:
             json.dump({"base": self.stack.url, "viewport": list(viewport), "steps": steps}, f)
-        p = subprocess.run([VENV_PY, BROWSE, "run", plan], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=900)
+        p = subprocess.run(env=UTF8_ENV, args=[VENV_PY, BROWSE, "run", plan], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8", errors="replace", timeout=900)
         self.assertEqual(p.returncode, 0, p.stdout[-2000:])
-        with open(plan + ".result.json") as f:
+        with open(plan + ".result.json", encoding="utf-8") as f:
             out = json.load(f)
         self.console = out["console_errors"]
         res = out["steps"]
@@ -239,7 +247,7 @@ class TestWeb(ServerCase):
         hist = self.run_as("carol", [call("eco_history", n)])[0]["value"]
         self.assertEqual([(h["action"], h["actor"]) for h in hist][-1], ("approve", "bob"))
         log = subprocess.run(["git", "--git-dir", self.stack.repo_dir, "log", "-1", "--format=%an|%ae|%cn|%ce|%s", "main"],
-                             stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
+                             stdout=subprocess.PIPE, encoding="utf-8", errors="replace", check=True).stdout.strip()
         self.assertEqual(log, f"bob|bob@pdm.local|bob|bob@pdm.local|{n}: approve")
         st, audit = self.api("GET", "/audit", "dora")
         self.assertIn(("eco", "bob"), [(a["action"], a["actor"]) for a in audit])
@@ -315,13 +323,13 @@ class TestWeb(ServerCase):
             self.assertEqual(S.http("GET", url + "/web/status")[1], {"static": False, "worker": False, "cache": False})
             self.assertEqual(S.http("GET", url + "/static/web.css")[0], 404)
             plan = os.path.join(self.tmp, "bare.json")
-            with open(plan, "w") as f:
+            with open(plan, "w", encoding="utf-8") as f:
                 json.dump({"base": url, "steps": [
                     {"op": "login", "token": self.stack.tokens["carol"]},
                     {"op": "goto", "path": "/web/", "extract": {"rows": {"table": "#docs"}}},
                     {"op": "goto", "path": "/web/doc/bracket/rev/A.2"},
                     {"op": "goto", "path": f"/web/ecos/{TestWeb.fx['eco_a']}"}]}, f)
-            p = subprocess.run([VENV_PY, BROWSE, "run", plan], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=300)
+            p = subprocess.run(env=UTF8_ENV, args=[VENV_PY, BROWSE, "run", plan], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8", errors="replace", timeout=300)
             self.assertEqual(p.returncode, 0, p.stdout[-1500:])
             steps = json.load(open(plan + ".result.json"))["steps"]
             self.assertEqual([s["status"] for s in steps[1:]], [200, 200, 200], ascii(steps))
@@ -357,8 +365,8 @@ class TestWeb(ServerCase):
             base = os.path.join(BASELINES, name + ".png")
             if not os.path.isfile(base) or os.environ.get("PDM_UPDATE_BASELINES"):
                 shutil.copy(a, base)
-            two = float(subprocess.run([VENV_PY, BROWSE, "ssim", a, b], stdout=subprocess.PIPE, text=True, check=True).stdout)
-            stored = float(subprocess.run([VENV_PY, BROWSE, "ssim", base, b], stdout=subprocess.PIPE, text=True, check=True).stdout)
+            two = float(subprocess.run(env=UTF8_ENV, args=[VENV_PY, BROWSE, "ssim", a, b], stdout=subprocess.PIPE, encoding="utf-8", errors="replace", check=True).stdout)
+            stored = float(subprocess.run(env=UTF8_ENV, args=[VENV_PY, BROWSE, "ssim", base, b], stdout=subprocess.PIPE, encoding="utf-8", errors="replace", check=True).stdout)
             report[name] = {"run1_vs_run2": two, "stored_vs_run2": stored}
         sys.stderr.write("\nweb screenshot SSIM: " + json.dumps(report) + "\n")
         for name, v in report.items():

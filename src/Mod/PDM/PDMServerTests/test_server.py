@@ -99,7 +99,7 @@ def _spawn(ops, tmp, env):
     with os.fdopen(fd, "w") as f:
         json.dump(ops, f)
     return subprocess.Popen([CMD, "-c", f"exec(open({WORKER!r}).read())"], env=dict(ENV, PDM_OPS_FILE=path, **env),
-                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace")
 
 
 def _collect(proc, timeout=300):
@@ -122,6 +122,7 @@ class ServerCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         lib = os.path.dirname(os.path.dirname(V.__file__))
+        S.sweep(log=lambda m: print(m, file=sys.stderr))  # leftovers of an earlier SIGKILLed run (never a live one)
         cls.stack = S.Stack(lib)
         try:
             cls.stack.start()
@@ -436,6 +437,20 @@ class TestAccess(ServerCase):
         p = subprocess.run(["git", "ls-remote", self.stack.git_url], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            env=dict(os.environ, GIT_TERMINAL_PROMPT="0", HOME=self.tmp))
         self.assertNotEqual(p.returncode, 0)  # the vault host itself refuses anonymous reads
+
+    def test_57_rest_api_sends_nosniff(self):
+        self.seed()
+        import urllib.error
+        import urllib.request
+        for path, token in (("/whoami", self.stack.tokens["carol"]), ("/locks", self.stack.tokens["carol"]),
+                            ("/whoami", None), ("/no-such-route", None)):
+            req = urllib.request.Request(self.stack.url + path, headers={"Authorization": f"token {token}"} if token else {})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    headers = r.headers
+            except urllib.error.HTTPError as e:  # 401 and 404 answers carry it too
+                headers = e.headers
+            self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff", path)
 
     def test_16_token_of_another_user_refused(self):
         self.seed()
