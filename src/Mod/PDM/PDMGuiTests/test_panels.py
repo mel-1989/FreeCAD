@@ -110,6 +110,13 @@ class TestCommands(PanelCase):
         self.assertIn("PDMWorkbench", Gui.listWorkbenches())
         self.assertEqual(commands.TOOLBAR, ALL)
 
+    def test_activating_the_workbench_builds_its_toolbar_and_menu(self):
+        # InitGui.py is exec()d with separate globals and locals: a method must not rely on its module-level imports
+        Gui.activateWorkbench("PDMWorkbench")
+        self.assertEqual(Gui.activeWorkbench().name(), "PDMWorkbench")
+        wb = Gui.getWorkbench("PDMWorkbench")
+        self.assertEqual(list(wb.getToolbarItems()["PDM"]), commands.TOOLBAR)
+
     def test_settings_roundtrip(self):
         s = state.settings()
         try:

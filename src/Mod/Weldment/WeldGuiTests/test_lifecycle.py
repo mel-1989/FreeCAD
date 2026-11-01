@@ -367,3 +367,51 @@ class TestCommandsOpenPanels(Base):
         self.assertIsInstance(P.current(), P.CutListPanel)
         Gui.Control.closeDialog()
         Gui.Selection.clearSelection()
+
+
+def pump():
+    from PySide import QtCore, QtWidgets
+
+    for _ in range(4):
+        QtWidgets.QApplication.processEvents()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+
+
+class TestPanelGuards(Base):
+    """The two guards ported from the SheetMetal panels (run 034): closeDialog leaves edit mode, deleted objects refuse."""
+
+    def test_closing_the_dialog_directly_leaves_edit_mode(self):
+        a, _b = F.joint(self.doc)
+        self.doc.recompute()
+        self.open_edit(a)
+        gd = Gui.getDocument(self.doc.Name)
+        self.assertIsNotNone(gd.getInEdit())
+        Gui.Control.closeDialog()
+        pump()
+        self.assertIsNone(gd.getInEdit())
+
+    def test_accepting_after_the_edited_feature_was_deleted_is_a_readable_refusal(self):
+        a, _b = F.joint(self.doc)
+        self.doc.recompute()
+        panel = P.show(P.MemberPanel(self.doc, obj=a))    # open, but not through edit mode
+        self.doc.removeObject(a.Name)
+        with F.capture_output() as cap:
+            ok = panel.accept()
+        self.assertFalse(ok)
+        self.assertIn("no longer exists", panel.error_text())
+        self.assertNotIn("Traceback", cap.text)
+        self.assertNotIn("ReferenceError", panel.error_text())
+        Gui.Control.closeDialog()
+
+    def test_accepting_after_a_picked_member_was_deleted_is_a_readable_refusal(self):
+        a, b = F.joint(self.doc)
+        self.doc.recompute()
+        panel = P.show(P.GussetPanel(self.doc, a=a, b=b))
+        self.doc.removeObject(b.Name)
+        with F.capture_output() as cap:
+            ok = panel.accept()
+        self.assertFalse(ok)
+        self.assertIn("was deleted", panel.error_text())
+        self.assertNotIn("Traceback", cap.text)
+        self.assertNotIn("ReferenceError", panel.error_text())
+        Gui.Control.closeDialog()

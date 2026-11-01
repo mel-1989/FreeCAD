@@ -4719,12 +4719,12 @@ bool Sketch::updateGeometry()
             ++i;
         }
         catch (Base::Exception& e) {
-            Base::Console().error("Updating geometry: Error build geometry({}): {}\n", i, e.what());
+            Base::Console().log("Updating geometry: Error build geometry({}): {}\n", i, e.what());
             return false;
         }
         catch (const Standard_Failure& e) {
             Base::Console()
-                .error("Updating geometry: Error build geometry({}): {}\n", i, e.GetMessageString());
+                .log("Updating geometry: Error build geometry({}): {}\n", i, e.GetMessageString());
             return false;
         }
     }
@@ -5031,7 +5031,7 @@ GCS::SolveStatus Sketch::internalSolve(std::string& solvername, int level)
         if (!valid_solution) {
             GCSsys.undoSolution();
             updateGeometry();
-            Base::Console().warning("Invalid solution from {} solver.\n", solvername);
+            Base::Console().log("Invalid solution from {} solver.\n", solvername);
         }
         else {
             updateNonDrivingConstraints();
@@ -5090,7 +5090,7 @@ GCS::SolveStatus Sketch::internalSolve(std::string& solvername, int level)
                 if (!valid_solution) {
                     GCSsys.undoSolution();
                     updateGeometry();
-                    Base::Console().warning("Invalid solution from {} solver.\n", solvername);
+                    Base::Console().log("Invalid solution from {} solver.\n", solvername);
                     status = GCS::SolveStatus::SuccessfulSolutionInvalid;
                 }
                 else {

@@ -160,3 +160,44 @@ class TestCatalogueEdgeCases(unittest.TestCase):
         doc.recompute()
         self.assertEqual(fillet.getStatusString(), "BRep_API: command not done")
         self.assertIn("Invalid", fillet.State)
+
+
+class TestSketcherSolverNoise(unittest.TestCase):
+    """Run 035: the solver's own per-attempt messages go to the log, so a degenerate sketch leaves one report line."""
+
+    SCRIPT = """
+import FreeCAD, Part, Sketcher
+doc = FreeCAD.newDocument("Noise")
+sk = doc.addObject("Sketcher::SketchObject", "Sketch")
+sk.addGeometry(Part.LineSegment(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(10, 0, 0)), False)
+sk.addConstraint(Sketcher.Constraint("Horizontal", 0))
+sk.addConstraint(Sketcher.Constraint("Vertical", 0))
+sk.Label = "Noise sketch"
+FreeCAD.Console.PrintLog("@@BEGIN noise\\n")
+doc.recompute()
+FreeCAD.Console.PrintLog("@@END noise\\n")
+"""
+
+    def test_degenerate_sketch_prints_one_line_and_keeps_the_solver_text_in_the_log(self):
+        exe = os.path.join(FreeCAD.getHomePath(), "bin", "FreeCADCmd")
+        with tempfile.TemporaryDirectory() as tmp:
+            script, log = os.path.join(tmp, "noise.py"), os.path.join(tmp, "fc.log")
+            with open(script, "w", encoding="utf-8") as fh:
+                fh.write(self.SCRIPT)
+            env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+            subprocess.run([exe, "--log-file", log, script], env=env, capture_output=True, timeout=300, check=False)
+            with open(log, encoding="utf-8-sig") as fh:
+                lines = fh.read().splitlines()
+        inside, report, logged = False, [], []
+        for line in lines:
+            m = PREFIX.match(line)
+            if m and m.group(1) == "Log" and m.group(2).startswith("@@BEGIN"):
+                inside = True
+            elif m and m.group(1) == "Log" and m.group(2).startswith("@@END"):
+                inside = False
+            elif inside and m:
+                (report if m.group(1) in REPORT_LEVELS else logged).append(m.group(2))
+        self.assertTrue(any("could not be solved" in x for x in report), report)
+        self.assertEqual(len(report), 1, report)
+        self.assertTrue(any(x.startswith("Invalid solution from") for x in logged), logged)
+        self.assertTrue(any(x.startswith("Updating geometry") for x in logged), logged)

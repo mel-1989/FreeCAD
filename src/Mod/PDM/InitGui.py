@@ -11,6 +11,8 @@ FreeCAD.__unit_test__ += ["TestPDMGui"]
 from PDMGui import commands as _pdm_commands  # noqa: E402
 
 _pdm_commands.register()
+# InitGui.py is exec()d with separate globals and locals, so a method cannot see module-level imports: Initialize
+# imports what it needs itself.
 
 
 class PDMWorkbench(FreeCADGui.Workbench):
@@ -18,6 +20,8 @@ class PDMWorkbench(FreeCADGui.Workbench):
     ToolTip = "Vault check-in, revisions, where-used and lifecycle"
 
     def Initialize(self):
+        from PDMGui import commands as _pdm_commands
+
         self.appendToolbar("PDM", _pdm_commands.TOOLBAR)
         self.appendMenu("PDM", _pdm_commands.TOOLBAR)
 
