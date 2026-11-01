@@ -44,8 +44,9 @@ USERS = {"alice": "write", "bob": "write", "carol": "read", "dora": "admin"}  # 
 PREFIX = "pdms"
 MARKER = "stack.json"
 _LIVE = set()
-_LIVE_LOCK = threading.Lock()
+_LIVE_LOCK = threading.RLock()  # re-entrant: a signal handler may run while this thread holds it
 _HANDLERS_DONE = []
+_PENDING = []  # a signal that arrived while the main thread was inside stop()
 
 
 def _lstart(pid):
@@ -74,6 +75,11 @@ def _kill_group(pgid, grace=10):
             time.sleep(0.05)
 
 
+def _live():
+    with _LIVE_LOCK:
+        return list(_LIVE)
+
+
 def _stop_all():
     with _LIVE_LOCK:
         stacks = list(_LIVE)
@@ -83,6 +89,13 @@ def _stop_all():
 
 
 def _on_signal(signum, frame):
+    if any(st._busy_here() for st in _live()):
+        _PENDING.append((signum, frame))  # this thread is inside stop(): let it finish, it re-raises on the way out
+        return
+    _die(signum, frame)
+
+
+def _die(signum, frame):
     _stop_all()
     prev = _HANDLERS_DONE and dict(_HANDLERS_DONE).get(signum)
     signal.signal(signum, prev if callable(prev) else signal.SIG_DFL)
@@ -166,6 +179,8 @@ class Stack:
         self.stopped = False
         self._marks = {}  # name -> {"pid", "pgid", "lstart"}
         self._stop_lock = threading.RLock()
+        self._depth = 0
+        self._tid = None
         with _LIVE_LOCK:
             _LIVE.add(self)
         _install_handlers()
@@ -202,21 +217,43 @@ class Stack:
             self.stop()  # what was already started does not outlive a failed start
             raise
 
+    def _busy_here(self):
+        return self._depth > 0 and self._tid == threading.get_ident()
+
     def stop(self):
-        """Stop everything this stack started and remove its directory. Safe to call again, at exit or from a signal."""
+        """Stop everything this stack started and remove its directory. Safe to call again, at exit or from a signal.
+        A SIGTERM/SIGHUP that arrives on this thread mid-stop is held back and acted on once the stop is complete."""
+        try:
+            self._stop()
+        finally:
+            if (_PENDING and threading.current_thread() is threading.main_thread()
+                    and not any(st._busy_here() for st in _live())):
+                signum, frame = _PENDING.pop(0)
+                del _PENDING[:]
+                _die(signum, frame)
+
+    def _stop(self):
         with self._stop_lock:
             if self.stopped:
                 return
             self.stopped = True
-            for name in [n for n in list(self._marks) if n not in ("forgejo", "postgres")] + ["forgejo"]:
-                self._kill(name)
-            with contextlib.suppress(Exception):
-                self.stop_pg()
-            self._kill_pg_group()
-            self._kill("postgres")
-            shutil.rmtree(self.root, ignore_errors=True)
-            with _LIVE_LOCK:
-                _LIVE.discard(self)
+            self._depth += 1
+            self._tid = threading.get_ident()
+            try:
+                self._stop_locked()
+            finally:
+                self._depth -= 1
+
+    def _stop_locked(self):
+        for name in [n for n in list(self._marks) if n not in ("forgejo", "postgres")] + ["forgejo"]:
+            self._kill(name)
+        with contextlib.suppress(Exception):
+            self.stop_pg()
+        self._kill_pg_group()
+        self._kill("postgres")
+        shutil.rmtree(self.root, ignore_errors=True)
+        with _LIVE_LOCK:
+            _LIVE.discard(self)
 
     def _kill(self, name):
         p = self.procs.pop(name, None)
@@ -444,34 +481,87 @@ SHOW_FOOTER_VERSION = false
         return {"PDM_SERVER_URL": self.url, "PDM_TOKEN": self.tokens[user]}
 
 
+def _is_pid(v):
+    return isinstance(v, int) and not isinstance(v, bool) and v > 1
+
+
+def _owner_alive(m):
+    """Is the stack's owner still running? An unknown recorded start time with a live owner pid counts as alive."""
+    ls = _lstart(m["owner"])
+    if ls is None:
+        return False
+    rec = m.get("owner_lstart")
+    return rec is None or rec == ls
+
+
+def _kill_pid(pid, grace=3):
+    """SIGTERM one process, then SIGKILL it if it is still there after ``grace`` seconds."""
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 5)):
+        try:
+            os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        end = time.time() + wait
+        while time.time() < end:
+            try:
+                os.kill(pid, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+            time.sleep(0.05)
+
+
+def _sweep_one(d, log):
+    """Sweep one directory; True when it was removed. Raises on anything unexpected (the caller reports and skips)."""
+    try:
+        with open(os.path.join(d, MARKER)) as f:
+            m = json.load(f)
+    except (OSError, ValueError):
+        return False  # no marker, or one that cannot be read: not provably ours, never deleted
+    if not isinstance(m, dict) or m.get("root") != d or not _is_pid(m.get("owner")):
+        return False
+    procs = m.get("procs")
+    if not isinstance(procs, dict) or not all(
+            isinstance(v, dict) and _is_pid(v.get("pid")) and _is_pid(v.get("pgid")) for v in procs.values()):
+        log(f"sweep: skipped {d}: malformed marker")
+        return False
+    if _owner_alive(m):
+        return False
+    for name in [n for n in procs if n != "postgres"] + (["postgres"] if "postgres" in procs else []):
+        mark = procs[name]
+        if not mark.get("lstart") or _lstart(mark["pid"]) != mark["lstart"]:
+            continue  # gone, unverifiable, or the pid belongs to something else now
+        if name == "postgres":
+            subprocess.run([os.path.join(PG_BIN, "pg_ctl"), "-D", os.path.join(d, "pgdata"), "-m", "immediate", "-w", "stop"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        if _lstart(mark["pid"]) == mark["lstart"]:
+            try:
+                same_group = os.getpgid(mark["pid"]) == mark["pgid"]
+            except OSError:
+                same_group = False
+            if same_group:
+                _kill_group(mark["pgid"], grace=3)
+            else:
+                _kill_pid(mark["pid"])  # the recorded group is not this process's: signal the verified pid only
+        log(f"sweep: stopped {name} (pid {mark['pid']}) of {d}")
+    shutil.rmtree(d, ignore_errors=True)
+    return True
+
+
 def sweep(tmp="/tmp", log=print):
     """Remove stacks left behind by a run that was SIGKILLed (or lost its machine's power): every ``<tmp>/pdms*``
     directory holding a ``stack.json`` whose owner process no longer exists. Its recorded processes are stopped only
-    when pid and start time both still match, so nothing that is not ours is ever signalled; PostgreSQL gets a
-    ``pg_ctl stop -m immediate`` first. Directories without a marker, and stacks whose owner is alive, are left alone.
-    Returns the list of removed directories."""
+    when pid and start time both still match (and the recorded process group is the pid's own), so nothing that is
+    not ours is ever signalled; PostgreSQL gets a ``pg_ctl stop -m immediate`` first. Directories without a readable,
+    well-formed marker, and stacks whose owner is alive, are left alone. Each directory is handled on its own: a
+    failure in one is reported and never stops the rest or raises. Returns the list of removed directories."""
     removed = []
     for d in sorted(glob.glob(os.path.join(tmp, PREFIX + "*"))):
         try:
-            with open(os.path.join(d, MARKER)) as f:
-                m = json.load(f)
-        except (OSError, ValueError):
-            continue
-        if m.get("root") != d or (m.get("owner_lstart") and _lstart(m["owner"]) == m["owner_lstart"]):
-            continue  # not a stack of ours, or its owner is still running
-        procs = m.get("procs", {})
-        for name in [n for n in procs if n != "postgres"] + (["postgres"] if "postgres" in procs else []):
-            mark = procs[name]
-            if _lstart(mark["pid"]) != mark["lstart"]:
-                continue  # gone, or the pid belongs to something else now
-            if name == "postgres":
-                subprocess.run([os.path.join(PG_BIN, "pg_ctl"), "-D", os.path.join(d, "pgdata"), "-m", "immediate", "-w", "stop"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            if _lstart(mark["pid"]) == mark["lstart"]:
-                _kill_group(mark["pgid"], grace=3)
-            log(f"sweep: stopped {name} (pid {mark['pid']}) of {d}")
-        shutil.rmtree(d, ignore_errors=True)
-        removed.append(d)
+            if _sweep_one(d, log):
+                removed.append(d)
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                log(f"sweep: skipped {d}: {type(e).__name__}: {e}")
     return removed
 
 

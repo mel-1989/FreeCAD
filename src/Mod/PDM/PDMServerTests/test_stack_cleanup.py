@@ -10,6 +10,10 @@ outlive their owner, and ``stack.sweep`` clears what a SIGKILL leaves while touc
  6. sweep_leaves_foreign_and_live_alone    a foreign process, a stack of a live owner and an unmarked directory survive
  7. rest_api_sends_nosniff                 see test_server.TestAccess (REST responses carry X-Content-Type-Options)
  8. ascii_locale_prints_failures           test_web imports and prints non-ASCII under LC_ALL=C
+ 9. sweep_survives_malformed_markers       valid JSON of the wrong shape: reported, skipped, never deleted, never raises, the rest still swept
+10. sweep_ignores_forged_pgid              a recorded pgid that is not the pid's own group: only the verified pid is signalled
+11. sweep_owner_without_lstart_is_alive    an owner_lstart of None with a live owner pid: skipped
+12. sigterm_during_stop_finishes_the_stop  SIGTERM on the main thread mid-stop(): the stop completes, then the process dies of the signal
 """
 
 import contextlib
@@ -36,9 +40,22 @@ mode = sys.argv[1]
 st.start_pg(initialise=True)
 if mode == "forgejo":
     st.start_forgejo()
+if mode == "stopsig":
+    import signal, time
+    orig = st.stop_pg
+    def slow_stop_pg(*a, **k):
+        os.kill(os.getpid(), signal.SIGTERM)  # arrives on the main thread, inside stop()
+        time.sleep(0.5)
+        return orig(*a, **k)
+    st.stop_pg = slow_stop_pg
 print("READY", st.root, flush=True)
 if mode == "exit":
     sys.exit(0)
+if mode == "stopsig":
+    sys.stdin.readline()
+    st.stop()
+    print("SURVIVED", flush=True)
+    sys.exit(3)
 sys.stdin.read()  # wait to be killed
 """
 
@@ -165,3 +182,72 @@ class TestStackCleanup(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr[-1500:])
         self.assertIn(b"caf", p.stderr)
         self.assertNotIn(b"UnicodeEncodeError", p.stderr + p.stdout)
+
+    def _dead_marker(self, parent, name, **over):
+        d = os.path.join(parent, S.PREFIX + name)
+        os.makedirs(d)
+        m = {"owner": 2 ** 22 + 12345, "owner_lstart": "Mon Jan  1 00:00:00 2001", "root": d, "procs": {}}
+        m.update(over)
+        with open(os.path.join(d, S.MARKER), "w") as f:
+            json.dump(m, f)
+        return d
+
+    def test_09_sweep_survives_malformed_markers(self):
+        parent = tempfile.mkdtemp()
+        self.cleanup.append(lambda: shutil.rmtree(parent, ignore_errors=True))
+        bad = []
+        for name, raw in (("list", "[]"), ("null", "null"), ("empty", ""), ("trunc", '{"owner": 12'), ("num", "7")):
+            d = os.path.join(parent, S.PREFIX + name)
+            os.makedirs(d)
+            with open(os.path.join(d, S.MARKER), "w") as f:
+                f.write(raw)
+            bad.append(d)
+        for name, over in (("procsnull", {"procs": None}), ("procslist", {"procs": []}), ("nopid", {"procs": {"x": {"lstart": "a"}}}),
+                           ("entrynull", {"procs": {"x": None}}), ("ownerstr", {"owner": "abc"}), ("ownernull", {"owner": None})):
+            bad.append(self._dead_marker(parent, name, **over))
+        good = self._dead_marker(parent, "zgood")
+        msgs = []
+        removed = S.sweep(tmp=parent, log=msgs.append)  # must not raise
+        self.assertEqual(removed, [good])
+        for d in bad:
+            self.assertTrue(os.path.isdir(d), f"{d} was deleted")
+        self.assertTrue(any("malformed" in m for m in msgs), msgs)
+        # setUpClass of ServerCase must not fail because of a bad marker: an exception inside one directory is contained too
+        orig = S._sweep_one
+        S._sweep_one = lambda d, log: (_ for _ in ()).throw(KeyError("pid"))
+        try:
+            self.assertEqual(S.sweep(tmp=parent, log=msgs.append), [])
+        finally:
+            S._sweep_one = orig
+        self.assertTrue(any("KeyError" in m for m in msgs))
+
+    def test_10_sweep_ignores_forged_pgid(self):
+        victim = subprocess.Popen(["sleep", "300"], start_new_session=True)
+        bystander = subprocess.Popen(["sleep", "300"], start_new_session=True)  # in a group of its own
+        self.cleanup.append(lambda: (victim.kill(), victim.wait(), bystander.kill(), bystander.wait()))
+        parent = tempfile.mkdtemp()
+        self.cleanup.append(lambda: shutil.rmtree(parent, ignore_errors=True))
+        d = self._dead_marker(parent, "forge", procs={"p": {"pid": victim.pid, "pgid": bystander.pid, "lstart": S._lstart(victim.pid)}})
+        self.assertEqual(S.sweep(tmp=parent, log=lambda m: None), [d])
+        victim.wait(30)  # the verified pid is stopped
+        self.assertIsNone(bystander.poll(), "the forged pgid's group was signalled")
+
+    def test_11_sweep_owner_without_lstart_is_alive(self):
+        parent = tempfile.mkdtemp()
+        self.cleanup.append(lambda: shutil.rmtree(parent, ignore_errors=True))
+        alive_d = self._dead_marker(parent, "a", owner=os.getpid(), owner_lstart=None)
+        dead_d = self._dead_marker(parent, "b", owner_lstart=None)  # owner pid does not exist
+        removed = S.sweep(tmp=parent, log=lambda m: None)
+        self.assertEqual(removed, [dead_d])
+        self.assertTrue(os.path.isdir(alive_d))
+
+    def test_12_sigterm_during_stop_finishes_the_stop(self):
+        p, root, pids = self.driver("stopsig")
+        p.stdin.write("go\n")
+        p.stdin.flush()
+        out = p.stdout.read()
+        p.wait(60)
+        self.assertNotIn("SURVIVED", out)
+        self.assertEqual(p.returncode, -signal.SIGTERM)  # it still dies of the signal, once the stop is done
+        self.assertTrue(wait_dead(pids), f"survivors among {pids}")
+        self.assertFalse(os.path.exists(root), "the stop was cut short")
