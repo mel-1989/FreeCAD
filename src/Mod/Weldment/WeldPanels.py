@@ -265,6 +265,38 @@ def _set_combo(w, data):
 
 # ---------------------------------------------------------------- base panel
 
+#: panel attribute -> what to call it in the "deleted" message
+_PICK_NOUNS = {"a": "member", "b": "member", "base": "member", "body1": "body", "body2": "body", "_edges": "edge",
+               "face": "face", "path": "path"}
+
+
+def _live(o):
+    try:
+        doc = o.Document
+        return doc is not None and doc.getObject(o.Name) is not None
+    except Exception:    # noqa: BLE001  (a deleted object raises ReferenceError)
+        return False
+
+
+def _picked_objects(value, depth=0):
+    if isinstance(value, FreeCAD.DocumentObject):
+        yield value
+    elif isinstance(value, (list, tuple)) and depth < 3:
+        for item in value:
+            yield from _picked_objects(item, depth + 1)
+
+
+def deleted_target_message(panel):
+    """A readable sentence when an object the panel holds as a pick was deleted since, else None."""
+    for name, value in vars(panel).items():
+        if name in ("obj", "doc", "form") or (name.startswith("_") and name != "_edges"):
+            continue
+        for o in _picked_objects(value):
+            if not _live(o):
+                return "The selected %s was deleted; pick it again." % _PICK_NOUNS.get(name, "object")
+    return None
+
+
 class FeaturePanel:
     """A task dialog that creates one feature (``obj`` None) or edits one."""
 
@@ -293,6 +325,9 @@ class FeaturePanel:
         self.build()
         if obj is not None:
             self.load(obj)
+        # Gui.Control.closeDialog() calls neither accept nor reject: leave edit mode when the form is destroyed
+        # without either having run
+        self.form.destroyed.connect(self._form_destroyed)
 
     # subclass hooks
     def build(self):
@@ -312,18 +347,53 @@ class FeaturePanel:
 
     # messages
     def show_error(self, text):
-        self.error.setText(text)
-        self.error.setVisible(bool(text))
+        try:
+            self.error.setText(text)
+            self.error.setVisible(bool(text))
+        except RuntimeError:    # the dialog is already closed: nothing to show it in
+            pass
 
     def error_text(self):
-        return self.error.text()
+        try:
+            return self.error.text()
+        except RuntimeError:
+            return ""
 
     # dialog buttons
+    def alive(self):
+        """False (with a message in the panel) when the edited feature or the document is gone."""
+        try:
+            self.doc.Name
+            if self.obj is not None:
+                self.obj.Name
+                if self.obj.Document is None:
+                    raise ReferenceError
+        except (ReferenceError, RuntimeError, AttributeError):
+            self.show_error("The feature or its document no longer exists: close this panel.")
+            return False
+        return True
+
+    def doc_closed(self):
+        try:
+            self.doc.Name
+        except (ReferenceError, RuntimeError, AttributeError):
+            return True
+        return False
+
     def accept(self):
+        if self.doc_closed():    # the document was closed under the open dialog: nothing to apply, close quietly
+            self.done = True
+            return True
         self.show_error("")
+        if not self.alive():
+            return False
+        gone = deleted_target_message(self)
+        if gone:
+            self.show_error(gone)
+            return False
         try:
             v = self.values()
-        except (WeldmentError, ValueError) as e:
+        except (WeldmentError, ValueError, ReferenceError, RuntimeError) as e:
             self.show_error(str(e))
             return False
         if self.obj is None:
@@ -345,6 +415,11 @@ class FeaturePanel:
     def cancelled(self):
         """The dialog was closed from outside (edit mode left): nothing was applied, nothing to undo."""
         self.done = True
+
+    def _form_destroyed(self, *_args):
+        if not self.done:
+            self.done = True
+            self._leave_edit()
 
     def _leave_edit(self):
         if self.obj is None:
