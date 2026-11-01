@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# Weldment: structural members, corner treatment and trim, cut list (cad-fork G07 slice 5a).
+# Weldment: structural members, corner treatment and trim, gussets, end caps, cut list (cad-fork G07 slices 5a, 5b).
 # Python and data only. Every .py, .csv and .md file under this directory is copied, which covers
 # Profiles.py, WTests/testProfiles.py and profiles/*.csv without listing them.
 

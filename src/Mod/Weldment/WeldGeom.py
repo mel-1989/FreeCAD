@@ -42,6 +42,24 @@ class WeldmentError(ValueError):
     pass
 
 
+def refuse_invalid(objs, what):
+    """Raise a WeldmentError naming every object of ``objs`` whose State holds Invalid or Error: a
+    list built from a failed feature would carry its stale shape or miss the part, both wrong."""
+    bad = []
+    for o in objs:
+        state = list(getattr(o, "State", []) or [])
+        if "Invalid" in state or "Error" in state:
+            try:
+                why = o.getStatusString()
+            except Exception:
+                why = ""
+            bad.append("%s (%s)" % (o.Name, why) if why and why != "Valid" else o.Name)
+    if bad:
+        raise WeldmentError(
+            "%s refused: %d feature(s) are invalid and must be repaired first: %s" % (what, len(bad), "; ".join(bad))
+        )
+
+
 def anchor_point(bbox, anchor):
     """Local (x, y) of the named anchor on bbox = (xmin, xmax, ymin, ymax)."""
     if anchor not in ANCHORS:
