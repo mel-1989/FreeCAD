@@ -273,6 +273,44 @@ class TestCommandPalette(unittest.TestCase):
         pump()
         self.assertEqual([e["name"] for e in dlg.shown[:3]], ["Std_ViewTop", "Std_ViewIsometric", "Std_ViewFitAll"])
 
+    def test_expressions_command_is_safe(self):
+        """Std_Expressions.isActive() used to dereference actions that exist only after createAction() (segfault)."""
+        cmd = Gui.Command.get("Std_Expressions")
+        cmd.isActive()                      # no document
+        App.newDocument("PaletteExpr")
+        pump()
+        cmd.isActive()                      # with a document
+        for doc in list(App.listDocuments()):
+            App.closeDocument(doc)
+        dlg = pw.open_palette("expressions")
+        pump()
+        self.assertTrue(any(e["name"] == "Std_Expressions" for e in dlg.shown))
+        dlg.list.setCurrentRow(next(i for i, e in enumerate(dlg.shown) if e["name"] == "Std_Expressions"))
+        with Recorder() as rec:
+            key(dlg, QtCore.Qt.Key_Return)  # greyed with no document: runs nothing, does not crash
+        self.assertEqual(rec.calls, [])
+
+    def test_open_task_panel_blocks_workbench_switch(self):
+        doc = App.newDocument("PaletteDlg")
+        Gui.activateWorkbench("NoneWorkbench")
+        pump()
+
+        class Panel:
+            def getStandardButtons(self):
+                return 0
+
+        Gui.Control.showDialog(Panel())
+        try:
+            m = pw.Model()
+            e = m.entries[m.by_name["Assembly_CreateAssembly"]]
+            with Recorder() as rec:
+                self.assertFalse(pw.run_entry(e, m))
+            self.assertEqual(rec.calls, [])
+            self.assertEqual(pw.current_workbench(), "NoneWorkbench")
+            self.assertIn("task panel", Gui.getMainWindow().statusBar().currentMessage())
+        finally:
+            Gui.Control.closeDialog()
+
     def test_latency_smoke(self):
         r = measure_latency(["fillet", "new sketch", "bend sheet metal"], opens=5)
         self.assertLess(r["open_p95_ms"], 300)

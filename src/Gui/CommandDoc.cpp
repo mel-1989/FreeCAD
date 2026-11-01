@@ -2448,6 +2448,10 @@ protected:
 
     bool isActive() override
     {
+        if (!pcActionCopyAll || !pcActionCopySel || !pcActionCopyActive || !pcActionPaste) {
+            // createAction() has not run yet (the command lives only in the tree context menu): nothing to enable
+            return App::GetApplication().getActiveDocument() != nullptr;
+        }
         if (!App::GetApplication().getActiveDocument()) {
             pcActionCopyAll->setEnabled(false);
             pcActionCopySel->setEnabled(false);

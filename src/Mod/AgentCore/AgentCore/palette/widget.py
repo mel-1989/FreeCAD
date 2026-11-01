@@ -19,10 +19,6 @@ MAX_ROWS = 12
 RECENT_MAX = 20
 PARAM = "User parameter:BaseApp/Preferences/CommandPalette"
 
-# Commands whose isActive() crashes the process when no document is open (found by probing every registered command with none open;
-# Std_Expressions dereferences a missing tree view). They are shown as runnable; the command itself decides when it is invoked.
-UNSAFE_IS_ACTIVE = frozenset({"Std_Expressions"})
-
 _dialog = None
 last_open = {}       # timings of the latest open (perf_counter seconds): "start", "first_paint"; read by the tests and the eval
 
@@ -80,7 +76,7 @@ def current_workbench():
 def inactive_reason(entry):
     """None when the command can run now, else the sentence for the status bar. A command of a workbench that is not loaded
     yet is not registered and counts as runnable: activating the workbench registers it."""
-    if entry["name"] not in Gui.listCommands() or entry["name"] in UNSAFE_IS_ACTIVE:
+    if entry["name"] not in Gui.listCommands():
         return None
     cmd = Gui.Command.get(entry["name"])
     if cmd is None or cmd.isActive():
@@ -98,7 +94,13 @@ def run_entry(entry, model=None):
             bar.showMessage(why, 8000)
         return False
     wb = entry["wb"]
-    if wb and wb != current_workbench() and wb in Gui.listWorkbenches():
+    previous = current_workbench()
+    switch = bool(wb) and wb != previous and wb in Gui.listWorkbenches()
+    if switch and Gui.Control.activeDialog():
+        if bar:
+            bar.showMessage("Close the open task panel first.", 8000)
+        return False
+    if switch:
         Gui.activateWorkbench(wb)
     if entry["name"] not in Gui.listCommands():
         if bar:
@@ -106,6 +108,8 @@ def run_entry(entry, model=None):
         return False
     why = inactive_reason(entry)    # the workbench switch can change the context
     if why:
+        if switch:
+            Gui.activateWorkbench(previous)
         if bar:
             bar.showMessage(why, 8000)
         return False
