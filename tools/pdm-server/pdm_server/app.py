@@ -152,16 +152,20 @@ def _eco_mod(st):
     return importlib.import_module(st["mirror"].V.__name__.rsplit(".", 1)[0] + ".eco")
 
 
-@app.get("/access")
-def access(user: User = Depends(auth)):
-    """The caller's effective role (viewer, engineer, approver, admin): the host's permission on the repository,
-    narrowed or widened by the vault's own ``plm/roles.json`` (see PDM/eco.py). ``/whoami`` keeps the host's role."""
-    st = S()
+def effective_role(st, user):
+    """The caller's effective role: the host's permission narrowed or widened by ``plm/roles.json`` (see PDM/eco.py)."""
     E = _eco_mod(st)
     with st["mirror"].lock:
         v, head = st["mirror"].sync()
         grants = E.read_roles(v, head)
     return {"user": user.login, "base": user.role, "role": E.effective_role(user.role, grants, user.login)}
+
+
+@app.get("/access")
+def access(user: User = Depends(auth)):
+    """The caller's effective role (viewer, engineer, approver, admin): the host's permission on the repository,
+    narrowed or widened by the vault's own ``plm/roles.json`` (see PDM/eco.py). ``/whoami`` keeps the host's role."""
+    return effective_role(S(), user)
 
 
 @app.get("/roles")
@@ -330,3 +334,12 @@ async def post_receive(request: Request, x_pdm_hook_secret: str = Header(default
         if u.get("ref") == f"refs/heads/{st['mirror'].V.BRANCH}":
             n += st["db"].settle_notes(u["new"])
     return {"logged": n}
+
+
+# The web UI (HTML pages under /web) is optional: without jinja2 the service still starts and the REST API is unchanged.
+try:
+    from . import web
+except ImportError:  # pragma: no cover
+    web = None
+if web is not None:
+    web.install(app, S, effective_role, User)

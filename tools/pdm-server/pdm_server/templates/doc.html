@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} - PDM{% endblock %}
+{% block main %}
+<h1>{{ name }}</h1>
+<p>{% if lock %}Checked out by <strong>{{ lock.holder }}</strong>{% if lock.get("new_revision") %} (for a new revision){% endif %}.{% else %}Not checked out.{% endif %}</p>
+<h2>Revisions and history</h2>
+<table id="history">
+<thead><tr><th>Revision</th><th>State</th><th>Event</th><th>Author</th><th>Time</th><th>Message</th></tr></thead>
+<tbody>
+{% for r in recs %}
+<tr><td>{% if r.event in content and r.revision %}<a href="/web/doc/{{ name|urlencode }}/rev/{{ r.revision|urlencode }}">{{ r.revision }}</a>{% else %}{{ r.revision }}{% endif %}</td>
+<td>{{ r.state }}</td><td>{{ r.event }}</td><td>{{ r.author }}</td><td>{{ r.time }}</td><td>{{ r.message }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

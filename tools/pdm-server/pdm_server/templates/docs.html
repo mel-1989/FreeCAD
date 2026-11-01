@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Documents - PDM{% endblock %}
+{% block main %}
+<h1>Documents</h1>
+<table id="docs">
+<thead><tr><th>Document</th><th>Revision</th><th>State</th><th>Checked out by</th><th>Last change</th></tr></thead>
+<tbody>
+{% for r in rows %}
+<tr><td><a href="/web/doc/{{ r.name|urlencode }}">{{ r.name }}</a></td><td>{{ r.revision }}</td><td>{{ r.state }}</td><td>{{ r.lock or "" }}</td><td>{{ r.author }}, {{ r.time }}</td></tr>
+{% else %}
+<tr><td colspan="5">The vault has no documents yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

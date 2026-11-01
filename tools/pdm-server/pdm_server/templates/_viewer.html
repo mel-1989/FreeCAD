@@ -1,0 +1,8 @@
+{#- A cached view of a 3D model. Arguments: id, glb, overlay (url or ""), kind (added/removed), colors, opacity -#}
+{% macro viewer(id, glb, overlay="", kind="", colors=None, opacity=0.45, caption="", group="") %}
+<figure class="viewer-box">
+  <div class="viewer" id="{{ id }}" data-glb="{{ glb }}" data-overlay="{{ overlay }}" data-kind="{{ kind }}" data-group="{{ group }}"
+       {% if colors %}data-color="{{ colors[kind] if kind else '' }}" data-opacity="{{ opacity }}"{% endif %}></div>
+  {% if caption %}<figcaption>{{ caption }}</figcaption>{% endif %}
+</figure>
+{% endmacro %}

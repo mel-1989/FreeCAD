@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}ECOs - PDM{% endblock %}
+{% block main %}
+<h1>Engineering change orders</h1>
+<table id="ecos">
+<thead><tr><th>ECO</th><th>Title</th><th>State</th><th>Author</th><th>Documents</th></tr></thead>
+<tbody>
+{% for r in rows %}
+<tr><td><a href="/web/ecos/{{ r.number }}">{{ r.number }}</a></td><td>{{ r.title }}</td><td>{{ r.state }}</td><td>{{ r.author }}</td><td>{{ r.documents }}</td></tr>
+{% else %}
+<tr><td colspan="5">No ECOs yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

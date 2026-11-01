@@ -1,0 +1,31 @@
+{#- SPDX-License-Identifier: LGPL-2.1-or-later -#}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}PDM{% endblock %}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/web.css">
+{% block head %}{% endblock %}
+</head>
+<body{% block bodyattrs %}{% endblock %}>
+<header>
+  <strong>PDM vault</strong>
+  {% if me %}
+  <nav>
+    <a href="/web/"{% if nav|default('') == 'docs' %} class="on"{% endif %}>Documents</a>
+    <a href="/web/ecos"{% if nav|default('') == 'ecos' %} class="on"{% endif %}>ECOs</a>
+  </nav>
+  <form method="post" action="/web/logout" class="who">
+    <span id="whoami">{{ me.login }} ({{ me.role }})</span>
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit">Log out</button>
+  </form>
+  {% endif %}
+</header>
+<main>
+{% if flash %}<p class="flash">{{ flash }}</p>{% endif %}
+{% block main %}{% endblock %}
+</main>
+</body>
+</html>
