@@ -133,6 +133,14 @@ def build_cap(spec, solid, which, mode, thickness, recess, chamfer):
     if n.dot(spec.u) * sgn < 0:
         n = n * -1.0      # outward: away from the member
     cosa = abs(n.dot(spec.u))
+    if mode == "Inset":
+        depth = max((q - v.Point).dot(n) for v in solid.Vertexes)
+        if recess + thickness > depth + 1e-9:
+            raise WeldmentError(
+                "end cap: recess %.6g + thickness %.6g = %.6g mm reaches past the other end of the member "
+                "(%.6g mm deep from this end); reduce the recess or the thickness"
+                % (recess, thickness, recess + thickness, depth)
+            )
     s_q = (q - spec.c0).dot(n) / n.dot(spec.u)
     margin = (thickness + recess + 2.0 * spec.radius) / cosa + 1.0
     face = outline_face(spec, mode, chamfer)

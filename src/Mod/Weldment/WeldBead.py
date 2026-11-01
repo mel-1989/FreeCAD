@@ -42,7 +42,7 @@ import math
 import FreeCAD
 import Part
 
-from WeldGeom import WeldmentError
+from WeldGeom import WeldmentError, refuse_invalid
 
 V = FreeCAD.Vector
 
@@ -106,7 +106,12 @@ def _planar_faces_with(shape, pts):
 
 
 def bead_prism(name, edge, body1, body2, z):
-    """(prism solid, edge length) for one edge, or WeldmentError."""
+    """(prism solid, edge length, volume) for one edge, or WeldmentError.
+
+    The bead is the triangular prism of leg z along the edge; the volume is z^2 / 2 L exactly. Where
+    a leg leaves a face at an end of the edge (the acute tip of a gusset, say) the prism is clipped
+    to the face outlines and the returned volume is the clipped solid's. A leg that leaves a face
+    at the middle of the edge is refused."""
     p0 = edge.valueAt(edge.FirstParameter)
     p1 = edge.valueAt(edge.LastParameter)
     length = (p1 - p0).Length
@@ -149,13 +154,15 @@ def bead_prism(name, edge, body1, body2, z):
                     if not f2.isInside(mid + d2 * eps, 1e-6, True) or _inside(body1, mid + d2 * eps):
                         continue
                     ends = [(f1, d1), (f2, d2)]
-                    for q in (p0, mid, p1):
-                        for f, d in ends:
-                            if not f.isInside(q + d * z, 1e-6, True):
-                                raise WeldmentError(
-                                    "weld edge %s: a leg of %g mm runs past the end of the face it lies on; "
-                                    "use a smaller size" % (name, z)
-                                )
+                    for f, d in ends:
+                        if not f.isInside(mid + d * z, 1e-6, True):
+                            raise WeldmentError(
+                                "weld edge %s: a leg of %g mm runs past the end of the face it lies on; "
+                                "use a smaller size" % (name, z)
+                            )
+                    # at the ends of the edge a leg may leave the face (an acute tip of a plate, a
+                    # corner): the bead is then clipped to the outlines of both faces
+                    clip = not all(f.isInside(q + d * z, 1e-6, True) for q in (p0, p1) for f, d in ends)
                     tri = Part.makePolygon([p0, p0 + d1 * z, p0 + d2 * z, p0])
                     solid = Part.Face(tri).extrude(p1 - p0)
                     solid = Part.Solid(solid.Shells[0]) if solid.ShapeType != "Solid" else solid
@@ -164,7 +171,22 @@ def bead_prism(name, edge, body1, body2, z):
                     centre = solid.CenterOfMass
                     if _inside(body1, centre) or _inside(body2, centre):
                         continue
-                    return solid, length
+                    volume = z * z / 2.0 * length
+                    if clip:
+                        # keep what lies over both faces: f1 carried along d2 and f2 along d1 (the
+                        # faces are square to each other, so d2 is f1's normal and d1 is f2's)
+                        keep1 = f1.extrude(d2 * (2.0 * z))
+                        keep2 = f2.extrude(d1 * (2.0 * z))
+                        clipped = solid.common(keep1).common(keep2)
+                        pieces = [p for p in clipped.Solids if p.Volume > 1e-9 * volume]
+                        if not pieces:
+                            raise WeldmentError(
+                                "weld edge %s: a leg of %g mm leaves nothing of the bead over the faces; "
+                                "use a smaller size" % (name, z)
+                            )
+                        solid = pieces[0] if len(pieces) == 1 else Part.Compound(pieces)
+                        volume = sum(p.Volume for p in pieces)
+                    return solid, length, volume
     if angles and not perpendicular:
         raise WeldmentError(
             "weld edge %s: the faces meet at %.6g degrees; only 90 degree fillet corners are supported"
@@ -191,6 +213,8 @@ class WeldBead:
         obj.addProperty("App::PropertyLength", "Throat", "Result", "Throat thickness a = z / sqrt 2 (mm)")
         obj.addProperty("App::PropertyLength", "Length", "Result", "Total weld length (mm)")
         obj.addProperty("App::PropertyFloatList", "EdgeLengths", "Result", "Length of each weld edge (mm)")
+        obj.addProperty("App::PropertyFloatList", "EdgeVolumes", "Result", "Weld metal volume of each edge (mm^3)")
+        obj.setEditorMode("EdgeVolumes", 1)
         for p in ("LegZ", "Throat", "Length", "EdgeLengths"):
             obj.setEditorMode(p, 1)
 
@@ -204,14 +228,16 @@ class WeldBead:
         edges = _edges_of(obj.Edges)
         if not edges:
             raise WeldmentError("%s has no edges; link the edges to weld" % obj.Name)
-        solids, lengths = [], []
+        solids, lengths, volumes = [], [], []
         for name, e in edges:
-            s, l = bead_prism(name, e, obj.Body1.Shape, obj.Body2.Shape, z)
+            s, l, v = bead_prism(name, e, obj.Body1.Shape, obj.Body2.Shape, z)
             solids.append(s)
             lengths.append(l)
+            volumes.append(v)
         obj.LegZ = z
         obj.Throat = throat_from_leg(z)
         obj.EdgeLengths = lengths
+        obj.EdgeVolumes = volumes
         obj.Length = sum(lengths)
         obj.Shape = Part.Compound(solids)
 
@@ -252,7 +278,9 @@ def weld_summary(doc_or_objects, density_kg_m3=STEEL_DENSITY):
     (weld metal at ``density_kg_m3``). Sizes within 1e-6 mm are one size. Deterministic.
     """
     groups = []
-    for b in sorted(beads_in(doc_or_objects), key=lambda o: (o.LegZ.Value, o.Name)):
+    beads = beads_in(doc_or_objects)
+    refuse_invalid(beads, "weld summary")
+    for b in sorted(beads, key=lambda o: (o.LegZ.Value, o.Name)):
         z = b.LegZ.Value
         for g in groups:
             if abs(g["leg_z_mm"] - z) <= 1e-6:
@@ -264,7 +292,7 @@ def weld_summary(doc_or_objects, density_kg_m3=STEEL_DENSITY):
         g["total_length_mm"] += sum(b.EdgeLengths)
         g["bead_count"] += 1
         g["edge_count"] += len(b.EdgeLengths)
-        g["volume_mm3"] += z * z / 2.0 * sum(b.EdgeLengths)
+        g["volume_mm3"] += sum(b.EdgeVolumes) if len(b.EdgeVolumes) == len(b.EdgeLengths) else z * z / 2.0 * sum(b.EdgeLengths)
     for g in groups:
         g["mass_kg"] = g["volume_mm3"] * 1e-9 * density_kg_m3
     return sorted(groups, key=lambda g: g["leg_z_mm"])

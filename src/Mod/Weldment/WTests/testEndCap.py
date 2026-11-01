@@ -235,6 +235,26 @@ class TestEndCapRefusals(unittest.TestCase):
             spec = WeldEndCap.segment_specs(fr.members["A"])[0]
             WeldEndCap.build_cap(spec, fr.members["A"].Shape.Solids[0], "End", "Inset", 5.0, -1.0, 0.0)
 
+    def test_recess_past_the_member(self):
+        """An inset cap whose recess + thickness reaches beyond the other end of the member is refused."""
+        for rec, t, ok in ((500.0, 10.0, True), (1180.0, 10.0, True), (1195.0, 10.0, False), (1250.0, 10.0, False),
+                           (100.0, 1300.0, False)):
+            prof = oracle.kind_profile("RHS", 0.5)
+            doc = FreeCAD.newDocument("Rc")
+            fr = frames.Frame(doc)
+            fr.add("M", prof.family, prof.size, [((0, 0, 0), (0, 0, 1200))])
+            doc.recompute()
+            cap = WeldEndCap.make_end_cap(doc, fr.members["M"], 0, "End", t, "Inset", rec, 0.0)
+            doc.recompute()
+            if ok:
+                self.assertNotIn("Invalid", cap.State, cap.getStatusString())
+                bb = cap.Shape.BoundBox
+                self.assertGreaterEqual(bb.ZMin, -1e-9)
+                self.assertLessEqual(bb.ZMax, 1200.0 + 1e-9)
+            else:
+                self._bad(cap, "reaches past the other end")
+            FreeCAD.closeDocument(doc.Name)
+
     def test_saddle_end(self):
         pa, pb = oracle.kind_profile("CHS", 0.2), oracle.kind_profile("CHS", 0.8)
         doc = FreeCAD.newDocument("S")

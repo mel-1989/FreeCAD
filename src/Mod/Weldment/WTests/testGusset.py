@@ -252,3 +252,83 @@ class TestGussetRefusals(unittest.TestCase):
         doc3.recompute()
         g3 = WeldGusset.make_gusset(doc3, fr3.members["A"], 0, "Start", fr3.members["B"], 0, "Start", 100, 100, 8)
         self._bad(g3, "circular hollow section")
+
+
+def _edges_on(plate, solid, tol=1e-7, min_len=100.0):
+    """('EdgeN', length) of the straight plate edges longer than min_len that lie on the solid."""
+    out = []
+    for i, e in enumerate(plate.Shape.Edges):
+        if e.Length < min_len:
+            continue
+        pts = [e.valueAt(e.FirstParameter + (e.LastParameter - e.FirstParameter) * k / 4.0) for k in range(5)]
+        if all(Part.Vertex(p).distToShape(solid)[0] < tol for p in pts):
+            out.append(("Edge%d" % (i + 1), e.Length))
+    return out
+
+
+class TestGussetWeld(unittest.TestCase):
+    """A fillet bead along a gusset leg welds: at an acute corner of the plate the bead is clipped to
+    the plate outline, and its volume is z^2 L / 2 minus z^3 / (6 tan a) at each end where the plate's
+    interior angle a between the edge and the next side is below 90 degrees (derived by hand: the strip
+    of the bead that would stand beyond the slanted side is a pyramid-like wedge)."""
+
+    def tearDown(self):
+        for n in list(FreeCAD.listDocuments()):
+            FreeCAD.closeDocument(n)
+
+    @staticmethod
+    def _loss(z, phi):
+        return z ** 3 / (6.0 * math.tan(phi)) if phi < math.pi / 2 - 1e-12 else 0.0
+
+    def test_leg_welds_with_clipped_volume(self):
+        import WeldBead
+
+        worst = 0.0
+        n = 0
+        for theta, d1, d2 in ((90, 200.0, 200.0), (60, 200.0, 150.0), (120, 220.0, 260.0), (45, 300.0, 300.0)):
+            th = math.radians(theta)
+            for z in (2.0, 5.0, 8.0):
+                doc = FreeCAD.newDocument("W")
+                fr, prof, _ = _build(doc, "RHS", theta, 0, 0)
+                g = WeldGusset.make_gusset(doc, fr.members["A"], 0, "Start", fr.members["B"], 0, "Start", d1, d2, 10.0)
+                doc.recompute()
+                self.assertEqual(g.State.count("Invalid"), 0, g.getStatusString())
+                # plate corner angles at the two ends of each leg
+                phi_k = th
+                phi_t1 = math.atan2(d2 * math.sin(th), d1 - d2 * math.cos(th))   # at the end of leg 1
+                phi_t2 = math.atan2(d1 * math.sin(th), d2 - d1 * math.cos(th))   # at the end of leg 2
+                for mname, length, phi_t in (("A", d1, phi_t1), ("B", d2, phi_t2)):
+                    sol = fr.members[mname].Shape.Solids[0]
+                    legs = _edges_on(g, sol)
+                    self.assertEqual(len(legs), 2, (theta, mname))
+                    for ename, elen in legs:
+                        self.assertLess(abs(elen - length), 1e-9)
+                        b = WeldBead.make_bead(doc, fr.members[mname], g, [(g, ename)], z)
+                        doc.recompute()
+                        self.assertEqual(b.State.count("Invalid"), 0, "%s z=%g %s: %s" % (theta, z, mname, b.getStatusString()))
+                        want = z * z / 2.0 * length - self._loss(z, phi_k) - self._loss(z, phi_t)
+                        rel = abs(b.Shape.Volume - want) / want
+                        worst = max(worst, rel)
+                        self.assertLess(rel, 1e-9, (theta, z, mname, b.Shape.Volume, want))
+                        self.assertLess(abs(b.Length.Value - length), 1e-9)
+                        # the summary reports the clipped metal
+                        row = WeldBead.weld_summary([b])[0]
+                        self.assertLess(abs(row["volume_mm3"] - want) / want, 1e-9)
+                        self.assertLess(b.Shape.common(sol).Volume, 1e-9 * b.Shape.Volume)
+                        self.assertLess(b.Shape.common(g.Shape).Volume, 1e-9 * b.Shape.Volume)
+                        n += 1
+                FreeCAD.closeDocument(doc.Name)
+        FreeCAD.Console.PrintMessage("gusset weld worst clipped-volume error %.3g over %d beads\n" % (worst, n))
+
+    def test_leg_past_face_mid_edge_still_refused(self):
+        import WeldBead
+
+        doc = FreeCAD.newDocument("W")
+        fr, prof, _ = _build(doc, "RHS", 90, 0, 0)
+        g = WeldGusset.make_gusset(doc, fr.members["A"], 0, "Start", fr.members["B"], 0, "Start", 200.0, 200.0, 10.0)
+        doc.recompute()
+        name = _edges_on(g, fr.members["A"].Shape.Solids[0])[0][0]
+        b = WeldBead.make_bead(doc, fr.members["A"], g, [(g, name)], 150.0)   # the plate is only 200 wide at the K end
+        doc.recompute()
+        self.assertIn("Invalid", b.State)
+        self.assertIn("runs past", b.getStatusString())

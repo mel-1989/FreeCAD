@@ -29,6 +29,14 @@ Row schema (every row has exactly these keys, in this order)
                ``Label`` of an unsaved one
 ============== ===========================================================================
 
+Failed features: ``bom_rows`` (like ``WeldCutList.cut_list`` and ``WeldBead.weld_summary``) raises
+``WeldmentError`` naming every invalid member, trim, gusset, end cap or bead (State holds Invalid or
+Error) instead of returning rows that omit the part or carry its stale shape.
+
+Reopened documents: a document reopened from a vault gives the same rows as the original in text,
+counts and keys exactly and in every number within 1e-6 (mm, degrees, kg), because shapes reload
+from BREP with last-digit noise.
+
 Order: members (the cut list's own order), then plates (cut list order), then welds by ascending
 leg size. Numbers are not rounded; two calls on the same document, and calls on a document and its
 reopened copy, return equal lists.
@@ -52,6 +60,7 @@ import os
 
 import WeldBead
 import WeldCutList
+from WeldGeom import refuse_invalid
 from WeldTrim import is_trim
 
 KEYS = [
@@ -131,7 +140,13 @@ def document_name(doc):
 
 
 def bom_rows(doc):
-    """BOM lines (list of dicts with exactly the keys in ``KEYS``) for a weldment document."""
+    """BOM lines (list of dicts with exactly the keys in ``KEYS``) for a weldment document.
+
+    Raises ``WeldmentError`` naming the features if any member, trim, gusset, end cap or weld bead
+    of the document is invalid (State holds Invalid or Error): a BOM built around a failed feature
+    would show stale data or lack the part."""
+    refuse_invalid([o for o in doc.Objects if _is_member(o) or is_trim(o) or _is_plate(o) or WeldBead.is_bead(o)],
+                   "BOM")
     heads = chain_heads(doc)
     cut = WeldCutList.cut_list(heads) if heads else []
     parts = []

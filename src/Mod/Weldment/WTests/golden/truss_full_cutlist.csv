@@ -8,8 +8,9 @@ item,quantity,family,size,material,cut_length_mm,start_angle_deg,end_angle_deg,s
 
 item,quantity,type,thickness_mm,length_mm,width_mm,area_mm2,material,density_kg_m3,mass_each_kg,mass_total_kg
 6,1,End cap,6.000000,75.000000,75.000000,5497.0000,Structural steel,7850.0,0.2589,0.2589
-7,2,Gusset,8.000000,250.000000,92.847669,11605.9586,Structural steel,7850.0,0.7289,1.4577
+7,2,Gusset,8.000000,245.489097,94.553761,11605.9586,Structural steel,7850.0,0.7289,1.4577
 
 leg_z_mm,throat_a_mm,bead_count,total_length_mm,mass_kg
 2.000000,1.414214,1,174.000000,0.0027
 2.500000,1.767767,1,174.000000,0.0043
+3.000000,2.121320,2,2000.000000,0.0699

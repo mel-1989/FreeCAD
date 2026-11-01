@@ -14,6 +14,7 @@ import random
 import unittest
 
 import FreeCAD
+import Part
 
 import WeldBead
 import WeldCutList as CL
@@ -62,6 +63,7 @@ def portal_full(doc):
     for name, x, z in (("TieL", xmin, 5.0), ("TieR", xmax, 6.0)):
         names = plane_edges(tie, 0, x)
         welds.append((make_bead(doc, cols, tie, names, z, name), names, z))
+    welds += leg_welds(doc, eaves, [cols, rafters], 4.0, "L")
     doc.recompute()
     return fr, objs + eaves + caps + [w[0] for w in welds], eaves, caps, welds
 
@@ -92,8 +94,29 @@ def truss_full(doc):
         near = next(v.Point for v in solid.Vertexes if abs(v.Point.z - plane) < 1e-6)
         names = plane_edges(web, 2, plane, near, 150.0)
         welds.append((make_bead(doc, chords, web, names, z, name), names, z))
+    welds += leg_welds(doc, gus, [chords], 3.0, "L")
     doc.recompute()
     return fr, objs + gus + caps + [w[0] for w in welds], gus, caps, welds
+
+
+def leg_welds(doc, gussets, bodies, z, tag):
+    """Welds along the leg edges of each gusset where it rests on the given members: one bead per
+    gusset and member, on the (two) plate edges that lie on that member."""
+    out = []
+    for g in gussets:
+        for body in bodies:
+            names = []
+            for i, e in enumerate(g.Shape.Edges):
+                pts = [e.valueAt(e.FirstParameter + (e.LastParameter - e.FirstParameter) * k / 4.0) for k in range(5)]
+                if e.Length > 100.0 and all(Part.Vertex(p).distToShape(body.Shape)[0] < 1e-7 for p in pts):
+                    names.append("Edge%d" % (i + 1))
+            if names:
+                out.append((make_bead(doc, body, g, names, z, "%s%s%s" % (tag, g.Name, body.Name)), names, z))
+    return out
+
+
+def WeldCutList_is_plate(obj):
+    return CL.is_plate(obj)
 
 
 def edge_total(obj, names):
@@ -137,7 +160,7 @@ class TestFullCutList(unittest.TestCase):
         _golden_check(self, "portal_full_cutlist.csv", text)
         self._order(objs, text)
         sec = self._sections(text)
-        self.assertEqual([len(s) - 1 for s in sec], [3, 3, 2])   # member items, plate items, weld sizes
+        self.assertEqual([len(s) - 1 for s in sec], [3, 3, 3])   # member items, plate items, weld sizes
         self.assertEqual(sec[2][0], ",".join(CL.WELD_COLUMNS))
         self._hand_numbers(objs, caps, welds)
 
@@ -163,7 +186,13 @@ class TestFullCutList(unittest.TestCase):
             self.assertLess(abs(r["total_length_mm"] - total), 1e-6)
             self.assertEqual(r["bead_count"], len(chosen))
             self.assertAlmostEqual(r["throat_a_mm"], z / math.sqrt(2.0), places=9)
-            self.assertLess(abs(r["mass_kg"] - z * z / 2.0 * total * 7850e-9), 1e-9)
+            # metal: the beads' own solids (a bead along a gusset leg is clipped at the plate's acute
+            # corners, so z^2/2 L only holds for the straight welds)
+            metal = sum(w[0].Shape.Volume for w in chosen)
+            self.assertLess(abs(r["mass_kg"] - metal * 7850e-9), 1e-9)
+            for w in chosen:
+                if not WeldCutList_is_plate(w[0].Body2):
+                    self.assertLess(abs(w[0].Shape.Volume - z * z / 2.0 * edge_total(w[0].Body2, w[1])) / metal, 1e-9)
         # caps: mass = analytic outline area x thickness x density
         for c in caps:
             row = next(r for r in prows if c.Name in r["marks"])

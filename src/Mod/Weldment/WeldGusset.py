@@ -18,7 +18,9 @@ in the angle between the two members' *inner* side faces:
   -N face of the web or wall).
 
 Because the plate lies on the faces and not in the members, it has no common volume with either
-member. Anything that would give a wrong solid is a readable ``WeldmentError``: members that do not
+member. The reported outline size is the minimum-area bounding rectangle of the plate and the cut list
+groups plates by congruence of the polygon (angles and sides, up to rotation and reflection).
+Anything that would give a wrong solid is a readable ``WeldmentError``: members that do not
 meet, members that do not share a plane, a section turned out of the plane, a round tube (no flat
 face), a leg that runs past the member's face (checked on the real member solid, so a trimmed or
 mitred end counts), a chamfer that eats a leg.
@@ -195,6 +197,62 @@ def outline_size(shape, n, e1):
     return max(a, b), min(a, b)
 
 
+def min_area_rect(points, n, e1):
+    """(long, short) side of the minimum-area bounding rectangle of the polygon ``points`` (3D, in a
+    plane square to n); one side of that rectangle lies along a polygon side, so each side direction
+    is tried. Equal areas (any triangle) are broken by the smaller long side. Independent of the
+    plate's orientation and of the order of the corners, so congruent plates report the same size."""
+    f1 = e1 - n * e1.dot(n)
+    f1.normalize()
+    f2 = n.cross(f1)
+    xy = [(p.dot(f1), p.dot(f2)) for p in points]
+    best = None
+    for i in range(len(xy)):
+        ax, ay = xy[(i + 1) % len(xy)][0] - xy[i][0], xy[(i + 1) % len(xy)][1] - xy[i][1]
+        h = math.hypot(ax, ay)
+        ax, ay = ax / h, ay / h
+        us = [x * ax + y * ay for x, y in xy]
+        vs = [-x * ay + y * ax for x, y in xy]
+        w, d = max(us) - min(us), max(vs) - min(vs)
+        # minimum area; sides of a triangle give equal areas, so a tie goes to the smaller long side
+        # (what makes the answer independent of the order the corners are listed in)
+        area, lng = w * d, max(w, d)
+        if best is None or area < best[0] * (1.0 - 1e-9) or (area <= best[0] * (1.0 + 1e-9) and lng < best[1] - 1e-9):
+            best = (area, lng, min(w, d))
+    return best[1], best[2]
+
+
+def polygon_signature(points):
+    """Flat list [interior angle (rad), side length to the next vertex, ...] of a convex polygon, in
+    the order of ``points``: the data that decides whether two plates are congruent."""
+    n = len(points)
+    out = []
+    for i in range(n):
+        a, b, c = points[i - 1], points[i], points[(i + 1) % n]
+        u, v = a - b, c - b
+        out.append(math.atan2(u.cross(v).Length, u.dot(v)))
+        out.append((c - b).Length)
+    return out
+
+
+def congruent(sa, sb, tol_len=1e-6, tol_ang=1e-7):
+    """True when two polygon signatures describe congruent polygons: the cyclic sequences of
+    (angle, side) agree up to rotation of the start and reversal of the direction (a reflection)."""
+    if len(sa) != len(sb):
+        return False
+    n = len(sa) // 2
+    a = [(sa[2 * i], sa[2 * i + 1]) for i in range(n)]
+    b = [(sb[2 * i], sb[2 * i + 1]) for i in range(n)]
+    # reversed reading: the angle at vertex i followed by the side that precedes it
+    rb = [(b[i][0], b[i - 1][1]) for i in range(n)][::-1]
+    for seq in (b, rb):
+        for r in range(n):
+            if all(abs(a[i][0] - seq[(i + r) % n][0]) <= tol_ang and abs(a[i][1] - seq[(i + r) % n][1]) <= tol_len
+                   for i in range(n)):
+                return True
+    return False
+
+
 class Gusset:
     plate_kind = "Gusset"
 
@@ -224,7 +282,8 @@ class Gusset:
         obj.addProperty("App::PropertyFloat", "AreaMm2", "Result", "Plate outline area (mm^2)")
         obj.addProperty("App::PropertyFloat", "OutlineLengthMm", "Result", "Long side of the bounding rectangle (mm)")
         obj.addProperty("App::PropertyFloat", "OutlineWidthMm", "Result", "Short side of the bounding rectangle (mm)")
-        for name in ("AreaMm2", "OutlineLengthMm", "OutlineWidthMm"):
+        obj.addProperty("App::PropertyFloatList", "Signature", "Result", "Angle and side of each plate corner (cut-list congruence)")
+        for name in ("AreaMm2", "OutlineLengthMm", "OutlineWidthMm", "Signature"):
             obj.setEditorMode(name, 1)
 
     def _end(self, obj, which):
@@ -271,9 +330,8 @@ class Gusset:
             if common > 1e-9 * member_solid.Volume:
                 raise WeldmentError("%s: the plate overlaps %s (common volume %.6g mm^3)" % (obj.Name, label, common))
         obj.AreaMm2 = data["area"]
-        flat = Part.Face(Part.makePolygon(pts + [pts[0]]))
-        lng, wid = outline_size(flat, n, data["ua"])
-        obj.OutlineLengthMm, obj.OutlineWidthMm = lng, wid
+        obj.OutlineLengthMm, obj.OutlineWidthMm = min_area_rect(pts, n, data["ua"])
+        obj.Signature = polygon_signature(pts)
         obj.Shape = solid
 
     def __getstate__(self):

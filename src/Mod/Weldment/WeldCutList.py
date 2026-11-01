@@ -36,7 +36,8 @@ import FreeCAD
 import Part
 
 import WeldBead
-from WeldGeom import WeldmentError
+import WeldGusset
+from WeldGeom import WeldmentError, refuse_invalid
 from WeldMember import get_profile, segment_specs
 from WeldTrim import is_trim, root_member, treatments
 
@@ -486,14 +487,22 @@ def plate_piece(obj):
         "material": obj.Material,
         "density": obj.Density,
         "volume": vol,
+        "signature": list(getattr(obj, "Signature", []) or []),
     }
 
 
 def _plate_sort_key(p):
-    return (p["type"], p["material"], p["density"], p["thickness"], -p["length"], -p["width"], -p["area"], p["mark"])
+    return (p["type"], p["material"], p["density"], p["thickness"], -p["length"], -p["width"], -p["area"],
+            tuple(sorted(round(x, 6) for x in p["signature"])), p["mark"])
 
 
 def _plate_same(p, q):
+    if p["signature"] or q["signature"]:
+        # plates with a corner list (gussets): congruent polygons, whatever the order of the corners
+        if not (p["signature"] and q["signature"] and WeldGusset.congruent(p["signature"], q["signature"])):
+            return False
+        return (p["type"] == q["type"] and p["material"] == q["material"] and p["density"] == q["density"]
+                and _near(p["thickness"], q["thickness"], TOL_PLATE))
     if p["type"] != q["type"] or p["material"] != q["material"] or p["density"] != q["density"]:
         return False
     return (
@@ -509,6 +518,8 @@ def plate_list(objs, first_item=1):
 
     Mass: plate volume x density (kg/m^3) / 1e9 (mm^3 to m^3); a Density property of 7850 is structural steel.
     """
+    objs = list(objs)
+    refuse_invalid([o for o in objs if is_plate(o)], "plate list")
     pieces = sorted((plate_piece(o) for o in objs if is_plate(o)), key=_plate_sort_key)
     groups = []
     for p in pieces:
@@ -561,6 +572,7 @@ def cut_list(objs):
     tolerance (a clustering, not a rounding: values straddling a rounding boundary still merge).
     """
     objs = list(objs)
+    refuse_invalid(objs, "cut list")
     plates = [o for o in objs if is_plate(o)]
     beads = [o for o in objs if WeldBead.is_bead(o)]
     pieces = []
