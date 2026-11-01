@@ -859,6 +859,7 @@ def make_lofted_bend(doc, profile_a, profile_b, name="LoftedBend", **props):
     for key, value in props.items():
         setattr(obj, key, value)
     doc.recompute()
+    SheetMetalTools.attach_view_provider(obj)
     return obj
 
 

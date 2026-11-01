@@ -311,6 +311,18 @@ def flat_volume_offset(cuts, radii, angles, thickness, k):
 
 def build_corner_relief(base_shape, edge_name, relief_type="Round", size=3.0, size_mode="Absolute",
                         k_factor=0.4, ratio=2.0, rotation=0.0, info=None):
+    """Pure geometry: see ``_build_corner_relief``. A failure inside the geometry kernel (a relief far larger than
+    the part leaves it nothing to cut) is re-raised as a ReliefError that says so."""
+    try:
+        return _build_corner_relief(base_shape, edge_name, relief_type, size, size_mode, k_factor, ratio, rotation, info)
+    except ReliefError:
+        raise
+    except (FreeCAD.Base.FreeCADError, RuntimeError, ValueError) as exc:
+        raise ReliefError("the relief of size %g could not be cut: it is probably larger than the part or its "
+                          "bend (%s)" % (size, exc)) from exc
+
+
+def _build_corner_relief(base_shape, edge_name, relief_type, size, size_mode, k_factor, ratio, rotation, info):
     """Pure geometry: cut the relief at the corner edge `edge_name` of `base_shape`. Returns one
     valid solid; raises ReliefError with a readable message on bad input. When `info` is a dict
     it receives "flat_volume_offset" (see `flat_volume_offset`) and "radii" (the two bends'
@@ -520,4 +532,5 @@ def make_corner_relief(doc, base_obj, edge_name, name="CornerRelief", **props):
     for key, value in props.items():
         setattr(obj, key, value)
     doc.recompute()
+    SheetMetalTools.attach_view_provider(obj)
     return obj

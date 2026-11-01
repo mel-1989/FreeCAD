@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Original geometric icon drawn for the cad-fork SheetMetal hem command (G07 slice 6b). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<polygon points="6,38 40,38 40,48 6,48" fill="#6c9bd1" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+<path d="M40,38 A10,10 0 0 1 40,18 L10,18 L10,28 L40,28 Z" fill="#e8892b" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+</svg>

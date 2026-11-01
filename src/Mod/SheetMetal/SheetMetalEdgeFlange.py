@@ -237,4 +237,5 @@ def make_edge_flange(doc, base_obj, edge_names, name="EdgeFlange", **props):
     for key, value in props.items():
         setattr(obj, key, value)
     doc.recompute()
+    SheetMetalTools.attach_view_provider(obj)
     return obj

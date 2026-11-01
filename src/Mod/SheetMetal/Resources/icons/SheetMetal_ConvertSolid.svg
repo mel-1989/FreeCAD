@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Original geometric icon drawn for the cad-fork SheetMetal convert-from-solid command (G07 slice 6b). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<polygon points="8,24 28,14 56,24 56,48 36,58 8,48" fill="#c9d6e6" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="8,24 36,34 56,24" fill="none" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+<line x1="36" y1="34" x2="36" y2="58" stroke="#2b4a6f" stroke-width="2"/>
+<polygon points="8,24 36,34 36,58 8,48" fill="#e8892b" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+</svg>

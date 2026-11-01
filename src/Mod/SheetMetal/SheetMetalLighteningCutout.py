@@ -44,6 +44,10 @@ OVERREACH_AREA = 1e-10  # mm2: area of a profile outside the face above which it
 smElementMapVersion = "sm1."
 
 
+#: most copies one pattern may have (the pairwise overlap check is quadratic)
+MAX_COPIES = 400
+
+
 class CutoutError(Exception):
     """The cutout cannot be made; the message says why."""
 
@@ -123,6 +127,9 @@ def pattern_offsets(pattern, count_x, count_y, pitch_x, pitch_y, normal, directi
     ny = count_y if pattern == "Grid" else 1
     if count_x < 1 or ny < 1:
         raise CutoutError("pattern counts must be at least 1")
+    if count_x * ny > MAX_COPIES:
+        raise CutoutError("the pattern has %d copies; at most %d are supported (the overlap check grows with the "
+                          "square of the count)" % (count_x * ny, MAX_COPIES))
     if (count_x > 1 and pitch_x <= EPS) or (ny > 1 and pitch_y <= EPS):
         raise CutoutError("pattern pitch must be greater than zero when the count is above 1")
     return [u * (i * pitch_x) + w * (j * pitch_y) for j in range(ny) for i in range(count_x)]
@@ -252,4 +259,5 @@ def make_lightening_cutout(doc, base_obj, face_name, sketch, name="LighteningCut
     for key, value in props.items():
         setattr(obj, key, value)
     doc.recompute()
+    SheetMetalTools.attach_view_provider(obj)
     return obj
