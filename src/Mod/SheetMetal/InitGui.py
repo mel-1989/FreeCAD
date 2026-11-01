@@ -23,20 +23,15 @@
 ########################################################################
 #
 #  Adapted for cad-fork core (2026-10-31) from shaise/FreeCAD_SheetMetal cbf6595.
+#  Modified for cad-fork on 2026-11-01 (LGPL-2.1 section 2a): names are imported inside the class body and methods, because FreeCAD exec()s InitGui.py with separate globals and locals; registers TestSheetMetalGui.
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # SheetMetal workbench. Only the commands of the vendored LGPL files are registered; the edge flange,
 # hem, convert-from-solid, corner relief, junction, sketch and cutout commands arrive in later slices.
 
-import os
-
 import FreeCAD
+import FreeCADGui as Gui
 
-import SheetMetalTools
-from engineering_mode import engineering_mode_enabled
-
-Gui = FreeCAD.Gui
-SMWBPath = SheetMetalTools.mod_path
-SMIconPath = SheetMetalTools.icons_path
+FreeCAD.__unit_test__ += ["TestSheetMetalGui"]
 
 
 class SMWorkbench(Workbench):
@@ -45,11 +40,15 @@ class SMWorkbench(Workbench):
         "SheetMetal",
         "Sheet Metal workbench allows for designing and unfolding sheet metal parts",
     )
-    Icon = os.path.join(SMIconPath, "SMLogo.svg")
+    # InitGui.py is exec()d with separate globals and locals, so module-level names are invisible in a class
+    # body and its methods: import what each one needs inside it.
+    Icon = __import__("os").path.join(__import__("SheetMetalTools").icons_path, "SMLogo.svg")
 
     def Initialize(self):
         """Execute when FreeCAD starts."""
         import SheetMetalBaseCmd
+        import SheetMetalTools
+        from engineering_mode import engineering_mode_enabled
         import SheetMetalBend
         import SheetMetalExtendCmd
         import SheetMetalFoldCmd
@@ -74,7 +73,7 @@ class SMWorkbench(Workbench):
 
         self.appendToolbar(FreeCAD.Qt.translate("SheetMetal", "Sheet Metal"), self.list)
         self.appendMenu(FreeCAD.Qt.translate("SheetMetal", "&Sheet Metal"), self.list)
-        Gui.addIconPath(SMIconPath)
+        Gui.addIconPath(SheetMetalTools.icons_path)
 
     def Activated(self):
         return

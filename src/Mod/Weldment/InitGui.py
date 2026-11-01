@@ -4,16 +4,20 @@
 import FreeCAD
 import FreeCADGui as Gui
 
+FreeCAD.__unit_test__ += ["TestWeldmentGui"]
+
 
 class WeldmentWorkbench(Gui.Workbench):
     MenuText = "Weldment"
     ToolTip = "Structural members from profile tables, corner trims and cut lists"
+    # InitGui.py is exec()d, so a class body cannot see names imported at module level: import inside the expression
+    Icon = __import__("WeldViewProviders").icon_path("Weldment_Workbench")
 
     def Initialize(self):
         import WeldCommands  # noqa: F401  (registers the commands)
 
-        self.appendToolbar("Weldment", ["Weldment_Member", "Weldment_Mitre", "Weldment_Gusset", "Weldment_EndCap", "Weldment_WeldBead", "Weldment_CutList"])
-        self.appendMenu("Weldment", ["Weldment_Member", "Weldment_Mitre", "Weldment_Gusset", "Weldment_EndCap", "Weldment_WeldBead", "Weldment_CutList"])
+        self.appendToolbar("Weldment", WeldCommands.TOOLBAR)
+        self.appendMenu("Weldment", WeldCommands.MENU)
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"

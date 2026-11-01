@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Original geometric icon drawn for the cad-fork Weldment workbench (cad-fork G07 slice 6a). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<rect x="8" y="14" width="48" height="10" fill="#6c9bd1" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+<rect x="8" y="24" width="10" height="34" fill="#6c9bd1" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+<rect x="46" y="24" width="10" height="34" fill="#6c9bd1" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="18,24 18,36 30,24" fill="#e8892b" stroke="#2b4a6f" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="46,24 46,36 34,24" fill="#e8892b" stroke="#2b4a6f" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>
