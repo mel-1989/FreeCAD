@@ -18,6 +18,9 @@
     <layout class="QGridLayout" name="gridLayout">
      <item row="0" column="0">
       <widget class="QLabel" name="labelStart">
+       <property name="buddy">
+         <cstring>startMode</cstring>
+       </property>
        <property name="text">
         <string>Start</string>
        </property>
@@ -100,6 +103,9 @@
      </item>
      <item row="4" column="0">
       <widget class="QLabel" name="sidesLabel">
+       <property name="buddy">
+         <cstring>sidesMode</cstring>
+       </property>
        <property name="text">
         <string>Direction</string>
        </property>
@@ -146,6 +152,9 @@
      </item>
      <item row="6" column="0">
       <widget class="QLabel" name="textLabel1">
+       <property name="buddy">
+         <cstring>changeMode</cstring>
+       </property>
        <property name="text">
         <string>Type</string>
        </property>
@@ -162,6 +171,9 @@
      </item>
      <item row="7" column="0">
       <widget class="QLabel" name="labelLength">
+       <property name="buddy">
+         <cstring>lengthEdit</cstring>
+       </property>
        <property name="text">
         <string>Length</string>
        </property>
@@ -196,6 +208,9 @@
      </item>
      <item row="9" column="0">
       <widget class="QLabel" name="labelTaperAngle">
+       <property name="buddy">
+         <cstring>taperEdit</cstring>
+       </property>
        <property name="toolTip">
         <string>Angle to taper the extrusion</string>
        </property>
@@ -612,6 +627,9 @@ measured along the specified direction</string>
        <layout class="QGridLayout" name="gridLayout_3">
         <item row="0" column="0">
          <widget class="QLabel" name="labelEdge">
+          <property name="buddy">
+            <cstring>directionCB</cstring>
+          </property>
           <property name="text">
            <string>Direction/edge</string>
           </property>

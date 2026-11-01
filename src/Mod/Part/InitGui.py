@@ -76,3 +76,4 @@ Gui.addWorkbench(PartWorkbench())
 
 App.__unit_test__ += ["TestPartGui"]
 App.__unit_test__ += ["TestPartPreview"]
+App.__unit_test__ += ["TestUpstreamCommandsGui"]

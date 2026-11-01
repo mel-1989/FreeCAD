@@ -42,6 +42,9 @@
     <layout class="QHBoxLayout" name="horizontalLayout_2">
      <item>
       <widget class="QLabel" name="label">
+       <property name="buddy">
+         <cstring>filletRadius</cstring>
+       </property>
        <property name="text">
         <string>Radius</string>
        </property>

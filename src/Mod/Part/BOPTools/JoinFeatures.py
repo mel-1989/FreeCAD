@@ -225,6 +225,9 @@ class CommandConnect:
             "ToolTip": QtCore.QT_TRANSLATE_NOOP(
                 "Part_JoinConnect", "Fuses shapes, taking care to preserve voids"
             ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
+                "Part_JoinConnect", "Fuses shapes, taking care to preserve voids"
+            ),
         }
 
     def Activated(self):
@@ -338,6 +341,9 @@ class CommandEmbed:
             "MenuText": QtCore.QT_TRANSLATE_NOOP("Part_JoinEmbed", "Embed Shapes"),
             "Accel": "",
             "ToolTip": QtCore.QT_TRANSLATE_NOOP(
+                "Part_JoinEmbed", "Fuses one shape into another, taking care to preserve voids"
+            ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
                 "Part_JoinEmbed", "Fuses one shape into another, taking care to preserve voids"
             ),
         }
@@ -454,6 +460,9 @@ class CommandCutout:
             "MenuText": QtCore.QT_TRANSLATE_NOOP("Part_JoinCutout", "Cutout Shape"),
             "Accel": "",
             "ToolTip": QtCore.QT_TRANSLATE_NOOP(
+                "Part_JoinCutout", "Creates a cutout in the selected shape to fit another shape"
+            ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
                 "Part_JoinCutout", "Creates a cutout in the selected shape to fit another shape"
             ),
         }

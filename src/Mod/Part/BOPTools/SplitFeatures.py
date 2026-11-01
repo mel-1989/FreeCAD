@@ -225,6 +225,10 @@ class CommandBooleanFragments:
                 "Part_BooleanFragments",
                 "Creates a boolean union which is sliced at the intersections of the selected shapes",
             ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
+                "Part_BooleanFragments",
+                "Creates a boolean union which is sliced at the intersections of the selected shapes",
+            ),
         }
 
     def Activated(self):
@@ -446,6 +450,10 @@ class CommandSlice:
                 "Part_Slice",
                 "Slices the selected object by using other objects as cutting tools and storing the results in one compound",
             ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
+                "Part_Slice",
+                "Slices the selected object by using other objects as cutting tools and storing the results in one compound",
+            ),
         }
 
     def Activated(self):
@@ -482,6 +490,10 @@ class CommandSliceApart:
             "MenuText": QtCore.QT_TRANSLATE_NOOP("Part_SliceApart", "Slice Apart"),
             "Accel": "",
             "ToolTip": QtCore.QT_TRANSLATE_NOOP(
+                "Part_SliceApart",
+                "Slices the selected object by other objects, and splits it apart, creating a compound filter for each slide",
+            ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
                 "Part_SliceApart",
                 "Slices the selected object by other objects, and splits it apart, creating a compound filter for each slide",
             ),
@@ -668,6 +680,12 @@ class CommandXOR:
             "MenuText": QtCore.QT_TRANSLATE_NOOP("Part_XOR", "Boolean XOR"),
             "Accel": "",
             "ToolTip": QtCore.QT_TRANSLATE_NOOP(
+                "Part_XOR",
+                "Performs an 'exclusive OR' boolean operation with two or more selected objects,\n"
+                "or with the shapes inside a compound.\n"
+                "Overlapping volumes of the shapes will be removed.",
+            ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
                 "Part_XOR",
                 "Performs an 'exclusive OR' boolean operation with two or more selected objects,\n"
                 "or with the shapes inside a compound.\n"

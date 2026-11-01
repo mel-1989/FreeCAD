@@ -61,6 +61,10 @@ class _CommandExplodeCompound:
                 "Part_ExplodeCompound",
                 "Splits up a compound of shapes into separate objects, creating a compound filter for each shape",
             ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
+                "Part_ExplodeCompound",
+                "Splits up a compound of shapes into separate objects, creating a compound filter for each shape",
+            ),
         }
 
     def Activated(self):

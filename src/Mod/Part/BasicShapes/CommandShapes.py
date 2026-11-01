@@ -49,6 +49,7 @@ class CommandTube:
             "CmdType": "AlterDoc:Alter3DView:AlterSelection",
             "Pixmap": "Part_Tube_Parametric",
             "ToolTip": Qt.QT_TRANSLATE_NOOP("Part_Tube", "Creates a tube"),
+            "StatusTip": Qt.QT_TRANSLATE_NOOP("Part_Tube", "Creates a tube"),
         }
 
     def Activated(self):
