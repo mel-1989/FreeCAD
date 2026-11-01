@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# Weldment workbench (cad-fork G07 slice 5a): structural member, corner trim, cut list.
+# Weldment workbench (cad-fork G07 slice 5a/5b): structural member, corner trim, gusset, end cap, cut list.
 
 import FreeCAD
 import FreeCADGui as Gui
@@ -12,8 +12,8 @@ class WeldmentWorkbench(Gui.Workbench):
     def Initialize(self):
         import WeldCommands  # noqa: F401  (registers the commands)
 
-        self.appendToolbar("Weldment", ["Weldment_Member", "Weldment_Mitre", "Weldment_CutList"])
-        self.appendMenu("Weldment", ["Weldment_Member", "Weldment_Mitre", "Weldment_CutList"])
+        self.appendToolbar("Weldment", ["Weldment_Member", "Weldment_Mitre", "Weldment_Gusset", "Weldment_EndCap", "Weldment_CutList"])
+        self.appendMenu("Weldment", ["Weldment_Member", "Weldment_Mitre", "Weldment_Gusset", "Weldment_EndCap", "Weldment_CutList"])
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"

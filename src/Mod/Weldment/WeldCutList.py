@@ -445,15 +445,114 @@ def _same(p, q, reverse=False):
     return True
 
 
+#: Plate items (gussets and end caps): columns of the second CSV section, written only when plates exist.
+PLATE_COLUMNS = [
+    "item",
+    "quantity",
+    "type",
+    "thickness_mm",
+    "length_mm",
+    "width_mm",
+    "area_mm2",
+    "material",
+    "density_kg_m3",
+    "mass_each_kg",
+    "mass_total_kg",
+]
+#: tolerance for two plates being identical: thickness and outline sizes (mm) and area (relative)
+TOL_PLATE = 1e-6
+
+
+def is_plate(obj):
+    return getattr(getattr(obj, "Proxy", None), "plate_kind", None) is not None
+
+
+def plate_piece(obj):
+    """One plate item from a Gusset or EndCap object (recomputed shape required)."""
+    t = obj.Thickness.Value
+    vol = obj.Shape.Volume
+    if vol <= 0 or t <= 0:
+        raise WeldmentError("%s: no plate solid; recompute first" % obj.Name)
+    return {
+        "mark": obj.Name,
+        "type": obj.Proxy.plate_kind,
+        "thickness": t,
+        "length": obj.OutlineLengthMm,
+        "width": obj.OutlineWidthMm,
+        "area": obj.AreaMm2,
+        "material": obj.Material,
+        "density": obj.Density,
+        "volume": vol,
+    }
+
+
+def _plate_sort_key(p):
+    return (p["type"], p["material"], p["density"], p["thickness"], -p["length"], -p["width"], -p["area"], p["mark"])
+
+
+def _plate_same(p, q):
+    if p["type"] != q["type"] or p["material"] != q["material"] or p["density"] != q["density"]:
+        return False
+    return (
+        _near(p["thickness"], q["thickness"], TOL_PLATE)
+        and _near(p["length"], q["length"], TOL_PLATE)
+        and _near(p["width"], q["width"], TOL_PLATE)
+        and abs(p["area"] - q["area"]) <= TOL_PLATE * max(p["area"], q["area"])
+    )
+
+
+def plate_list(objs, first_item=1):
+    """Grouped plate items (list of dicts, deterministic order) for Gusset and EndCap objects.
+
+    Mass: plate volume x density (kg/m^3) / 1e9 (mm^3 to m^3); a Density property of 7850 is structural steel.
+    """
+    pieces = sorted((plate_piece(o) for o in objs if is_plate(o)), key=_plate_sort_key)
+    groups = []
+    for p in pieces:
+        for g in groups:
+            if _plate_same(g[0], p):
+                g.append(p)
+                break
+        else:
+            groups.append([p])
+    rows = []
+    for n, ps in enumerate(sorted(groups, key=lambda g: _plate_sort_key(g[0])), first_item):
+        p = ps[0]
+        each = p["volume"] * p["density"] / 1e9
+        rows.append(
+            {
+                "item": n,
+                "quantity": len(ps),
+                "type": p["type"],
+                "thickness_mm": p["thickness"],
+                "length_mm": p["length"],
+                "width_mm": p["width"],
+                "area_mm2": p["area"],
+                "material": p["material"],
+                "density_kg_m3": p["density"],
+                "mass_each_kg": each,
+                "mass_total_kg": each * len(ps),
+                "marks": sorted(q["mark"] for q in ps),
+            }
+        )
+    return rows
+
+
 def cut_list(objs):
     """Grouped cut list (list of dicts, deterministic order) for Members and EndTrim chain heads.
+
+    Gusset and EndCap objects among ``objs`` follow the member rows as plate items (rows with a
+    ``type`` key; see ``plate_list``); a list without plates is exactly the member rows.
 
     Pieces are sorted by value, then each joins the first group whose first member matches it to
     tolerance (a clustering, not a rounding: values straddling a rounding boundary still merge).
     """
+    objs = list(objs)
+    plates = [o for o in objs if is_plate(o)]
     pieces = []
     for o in objs:
-        pieces.extend(segment_pieces(o))
+        if not is_plate(o):
+            pieces.extend(segment_pieces(o))
     pieces.sort(key=_sort_key)
     groups = []
     for p in pieces:
@@ -492,7 +591,7 @@ def cut_list(objs):
                 "marks": sorted(q["mark"] for q in ps),
             }
         )
-    return rows
+    return rows + plate_list(plates, len(rows) + 1)
 
 
 def _fmt(col, v):
@@ -502,16 +601,32 @@ def _fmt(col, v):
         return "%.6f" % (v + 0.0)
     if col.startswith("mass"):
         return "%.4f" % v
+    if col in ("thickness_mm", "length_mm", "width_mm"):
+        return "%.6f" % v
+    if col == "area_mm2":
+        return "%.4f" % v
+    if col == "density_kg_m3":
+        return "%.1f" % v
     return str(v)
 
 
 def to_csv(rows):
-    """CSV text (LF line ends, fixed decimals) of cut_list rows."""
+    """CSV text (LF line ends, fixed decimals) of cut_list rows. Plate rows, when present, follow the
+    member rows as a second section: a blank line, then their own header."""
     lines = [",".join(COLUMNS)]
-    for r in rows:
-        cells = [_fmt(c, r[c]) for c in COLUMNS]
-        cells = ['"%s"' % c if "," in c else c for c in cells]
-        lines.append(",".join(cells))
+
+    def emit(cols, rs):
+        for r in rs:
+            cells = [_fmt(c, r[c]) for c in cols]
+            cells = ['"%s"' % c if "," in c else c for c in cells]
+            lines.append(",".join(cells))
+
+    emit(COLUMNS, [r for r in rows if "type" not in r])
+    plates = [r for r in rows if "type" in r]
+    if plates:
+        lines.append("")
+        lines.append(",".join(PLATE_COLUMNS))
+        emit(PLATE_COLUMNS, plates)
     return "\n".join(lines) + "\n"
 
 
