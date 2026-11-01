@@ -15,13 +15,19 @@ playwright). The suite skips when the stack, playwright, scikit-image or the hea
  5. pages_show_the_numbers_of_the_python_api BOM (indented and flat), CSV, diff.json and the diff tables equal Vault.bom / bom_csv / eco_diff
  6. service_starts_with_no_web_assets        no static directory, no worker, no cache: the REST API works, the pages say what is missing
  7. screenshot_baselines                     three fixture pages, two runs each, SSIM; and against the stored baselines
+ 8. corrupt_cache_entry_is_rebuilt           a built entry missing bom.json: pending, then a rebuilt page, never a 500
+ 9. security_headers_and_logout_csrf         nosniff and CSP on pages and static files; logout with a bad CSRF is 403 and keeps the session
+10. worker_failure_busy_and_sweep            a failing worker: generic line for a reader, detail for an admin; a full queue says busy; tmp-* swept at start
 """
 
 import json
 import os
 import shutil
+import glob
+import stat
 import subprocess
 import sys
+import time
 import unittest
 
 from PDM import vault as V
@@ -358,3 +364,83 @@ class TestWeb(ServerCase):
         for name, v in report.items():
             self.assertEqual(v["run1_vs_run2"], 1.0, f"{name}: two runs differ: {report}")
             self.assertGreaterEqual(v["stored_vs_run2"], 0.99, f"{name}: differs from the stored baseline: {report}")
+
+    # ---- repairs after the run-032 verification --------------------------------------------------------
+
+    def cache(self):
+        return os.path.join(self.stack.root, "service", "cache")
+
+    def test_08_corrupt_cache_entry_is_rebuilt(self):
+        self.fixture()
+        path = "/web/doc/bracket/rev/A.2"
+        r = self.browse([{"op": "goto", "path": path, "wait": "ready"}], user="carol")
+        self.assertEqual(r[0]["status"], 200, r)
+        boms = glob.glob(os.path.join(self.cache(), "*", "bracket", "bom.json"))
+        self.assertTrue(boms, "the first visit built the entry")
+        os.remove(boms[0])
+        r = self.browse([{"op": "goto", "path": path}, {"op": "goto", "path": path, "wait": "ready", "extract": {"bom": {"table": "#bom"}}}],
+                        user="carol")                                       # browse() fails the test on any 5xx
+        self.assertEqual([r[0]["status"], r[1]["status"]], [200, 200], r)
+        self.assertIn("Pending", r[0]["body"])
+        self.assertIsNone(r[1].get("wait_error"), r)
+        self.assertEqual([row[1] for row in r[1]["bom"]], ["bracket"])
+        self.assertTrue(os.path.isfile(boms[0]), "the entry was rebuilt")
+
+    def test_09_security_headers_and_logout_csrf(self):
+        self.fixture()
+        r = self.browse([
+            {"op": "goto", "path": "/web/doc/bracket/rev/A.2", "wait": "ready"},
+            {"op": "download", "path": "/static/web.css"},
+            {"op": "post", "path": "/web/logout", "csrf": "bad"},
+            {"op": "goto", "path": "/web/", "extract": {"who": {"text": "#whoami"}}},
+        ], user="carol")
+        page, css, bad, after = r
+        csp = page["headers"]["content-security-policy"]
+        self.assertIn("default-src 'self'", csp)
+        self.assertNotIn("unsafe-inline", csp)
+        self.assertEqual(page["headers"]["x-content-type-options"], "nosniff")
+        self.assertEqual(css["headers"]["x-content-type-options"], "nosniff")
+        self.assertEqual(self.console, [])
+        self.assertEqual(bad["status"], 403, bad)
+        self.assertNotIn("set-cookie", bad["headers"])                      # the cookie is left alone
+        self.assertEqual(after["status"], 200, after)                       # and the session survives
+        self.assertIn("carol", after["who"])
+        sha = os.path.basename(os.path.dirname(glob.glob(os.path.join(self.cache(), "*", "bracket"))[0]))
+        r = self.browse([{"op": "download", "path": f"/web/artifact/{sha}/bracket/bom.csv"}], user="carol")
+        self.assertEqual(r[0]["headers"]["x-content-type-options"], "nosniff")
+
+    def test_10_worker_failure_busy_and_sweep(self):
+        self.fixture()
+        script = os.path.join(self.tmp, "fakecmd")
+        with open(script, "w") as f:
+            f.write("#!/bin/sh\nsleep 3\necho 'Traceback: File /Users/secret/path.py line 1: boom'\nexit 1\n")
+        os.chmod(script, os.stat(script).st_mode | stat.S_IXUSR)
+        cache = os.path.join(self.tmp, "failcache")
+        os.makedirs(os.path.join(cache, "tmp-deadbeef"))
+        open(os.path.join(cache, "job-old.json"), "w").close()
+        url = self.stack.start_service("fail", S.free_port(), None, {"PDM_FREECAD_CMD": script, "PDM_CACHE_DIR": cache, "PDM_WEB_MAX_JOBS": "1"})
+        try:
+            self.assertEqual(sorted(os.listdir(cache)), [])                 # swept at start-up
+            saved = self.stack.url
+            self.stack.url = url
+            try:
+                r = self.browse([{"op": "goto", "path": "/web/doc/bracket/rev/A.2"},
+                                 {"op": "goto", "path": "/web/doc/machine/rev/A.1"}], user="carol")
+                self.assertIn("Pending", r[0]["body"])
+                self.assertIn("Busy", r[1]["body"])                          # queue of one is full: no second job
+                self.assertEqual(r[1]["status"], 200)
+                body = ""
+                for _ in range(30):
+                    time.sleep(1)
+                    body = self.browse([{"op": "goto", "path": "/web/doc/bracket/rev/A.2"}], user="carol")[0]["body"]
+                    if "could not build" in body:
+                        break
+                self.assertIn("could not build", body)
+                self.assertNotIn("Traceback", body)
+                self.assertNotIn("/Users/secret", body)
+                admin = self.browse([{"op": "goto", "path": "/web/doc/bracket/rev/A.2"}], user="dora")[0]["body"]
+                self.assertIn("Traceback", admin)                            # an admin sees the detail
+            finally:
+                self.stack.url = saved
+        finally:
+            self.stack._kill("fail")

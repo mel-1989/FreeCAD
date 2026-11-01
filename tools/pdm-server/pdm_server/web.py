@@ -21,7 +21,9 @@ import html
 import json
 import os
 import re
+import logging
 import secrets
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -39,6 +41,11 @@ COOKIE = "pdm_session"
 LOGIN_COOKIE = "pdm_login"
 SESSION_TTL = 8 * 3600
 JOB_TIMEOUT = 900
+MAX_JOBS = int(os.environ.get("PDM_WEB_MAX_JOBS") or 16)  # running + queued worker jobs; beyond it a page says "busy"
+LOG = logging.getLogger("pdm_server.web")
+GENERIC_FAILURE = "The worker could not build this view. An administrator can see the details."
+CSP = ("default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self'; img-src 'self' data: blob:; "
+       "connect-src 'self' blob:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 KEY_RE = re.compile(r"eco-ECO-\d{4,8}-[0-9a-f]{10}")
 REV_RE = re.compile(r"[A-Z]+\.\d+")
@@ -65,15 +72,63 @@ class Jobs:
         self.running = {}   # final directory -> start time
         self.failed = {}    # final directory -> (time, message)
         self.slot = threading.Semaphore(1)
+        self.warned = False
+        self.sweep(cfg.cache_dir)
+
+    @staticmethod
+    def sweep(cache_dir):
+        """Remove what a killed worker or service left in the cache root: ``tmp-*`` build directories, ``job-*`` files."""
+        try:
+            names = os.listdir(cache_dir)
+        except OSError:
+            return
+        for n in names:
+            if n.startswith("tmp-") or n.startswith("job-"):
+                p = os.path.join(cache_dir, n)
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+
+    @staticmethod
+    def entry_ok(final):
+        """True when ``final`` is a complete cache entry: ``meta.json`` parses and every file it (and the kind) lists exists."""
+        try:
+            with open(os.path.join(final, "meta.json")) as f:
+                meta = json.load(f)
+            if meta.get("kind") == "revision":
+                need = ["bom.json", "bom.csv", "bom-flat.csv"] + (["model.glb"] if meta.get("glb") else [])
+                with open(os.path.join(final, "bom.json")) as f:
+                    json.load(f)
+            elif meta.get("kind") == "eco":
+                need = ["diff.json"]
+                for doc, flags in meta["files"].items():
+                    need += [f"{doc}-{k}.glb" for k in ("old", "new", "diff") if flags.get(k)]
+                with open(os.path.join(final, "diff.json")) as f:
+                    json.load(f)
+            else:
+                return False
+            return all(os.path.isfile(os.path.join(final, n)) for n in need)
+        except (OSError, ValueError, KeyError, AttributeError, TypeError):
+            return False
 
     @property
     def enabled(self):
         return bool(self.cfg.freecad_cmd) and os.path.isfile(self.cfg.freecad_cmd)
 
     def state(self, final, job):
-        """'ready', 'pending', 'failed' or 'disabled' for the cache entry ``final``; starts the worker when it is missing."""
+        """'ready', 'pending', 'busy', 'failed' or 'disabled' for the cache entry ``final``; starts the worker when it is missing."""
         if os.path.isdir(final):
-            return "ready", None
+            if self.entry_ok(final):
+                return "ready", None
+            with self.lock:
+                if final not in self.running:  # corrupt or partial: drop it and rebuild below
+                    shutil.rmtree(final, ignore_errors=True)
+            if os.path.isdir(final):
+                return "pending", None
         if not self.enabled:
             return "disabled", "no FreeCAD worker is configured (set PDM_FREECAD_CMD)"
         with self.lock:
@@ -82,10 +137,24 @@ class Jobs:
             bad = self.failed.get(final)
             if bad and time.time() - bad[0] < 30:  # do not hammer a failing job; retry on a later load
                 return "failed", bad[1]
+            if len(self.running) >= MAX_JOBS:
+                return "busy", "the worker queue is full"
             self.failed.pop(final, None)
             self.running[final] = time.time()
         threading.Thread(target=self._run, args=(final, job), daemon=True).start()
         return "pending", None
+
+    def worker_token(self):
+        """The credential the worker clones with: ``PDM_WORKER_TOKEN`` (a read-only collaborator's token) when set, else the
+        service's owner token, with a warning, because the worker opens untrusted ``.FCStd`` files."""
+        tok = os.environ.get("PDM_WORKER_TOKEN")
+        if tok:
+            return tok
+        if not self.warned:
+            LOG.warning("PDM_WORKER_TOKEN is not set: the FreeCAD worker uses the service's owner token; "
+                        "give it a read-only collaborator's token instead")
+            self.warned = True
+        return self.cfg.forgejo_token
 
     def _run(self, final, job):
         err = None
@@ -100,7 +169,7 @@ class Jobs:
                 with os.fdopen(fd, "w") as f:
                     json.dump(job, f)
                 worker = os.path.join(HERE, "fcworker.py")
-                env_ = dict(os.environ, PDM_JOB=path, PDM_WORKER_TOKEN=self.cfg.forgejo_token, QT_QPA_PLATFORM="offscreen")
+                env_ = dict(os.environ, PDM_JOB=path, PDM_WORKER_TOKEN=self.worker_token(), QT_QPA_PLATFORM="offscreen")
                 try:
                     p = subprocess.run([self.cfg.freecad_cmd, "-c", f"exec(open({worker!r}).read())"], env=env_,
                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -138,6 +207,22 @@ def install(app, S, effective_role, User):
     else:  # the service must start with no web assets
         pass
 
+    @app.on_event("startup")
+    def sweep_cache():
+        try:
+            from .config import Config
+            Jobs.sweep(Config().cache_dir)
+        except Exception:  # the service starts without a complete environment too (S() then answers 503)
+            pass
+
+    @app.middleware("http")
+    async def nosniff(request, call_next):
+        resp = await call_next(request)
+        path = request.url.path
+        if path == "/" or path.startswith(("/web", "/static")):
+            resp.headers["X-Content-Type-Options"] = "nosniff"
+        return resp
+
     def jobs(st):
         if "j" not in jobs_holder:
             jobs_holder["j"] = Jobs(st["cfg"])
@@ -147,8 +232,10 @@ def install(app, S, effective_role, User):
 
     def page(request, _tpl, status=200, **ctx):
         sess = ctx.pop("sess", None)
-        ctx.update(csrf=sess["csrf"] if sess else "", me=ctx.get("me"), flash=ctx.get("flash"))
+        nonce = secrets.token_urlsafe(16)
+        ctx.update(csrf=sess["csrf"] if sess else "", me=ctx.get("me"), flash=ctx.get("flash"), nonce=nonce)
         resp = HTMLResponse(env.get_template(_tpl).render(**ctx), status_code=status)
+        resp.headers["Content-Security-Policy"] = CSP.format(nonce=nonce)
         resp.headers["Cache-Control"] = "no-store"
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "same-origin"
@@ -194,6 +281,14 @@ def install(app, S, effective_role, User):
         body = (await request.body()).decode("utf-8", "replace")
         return {k: v[0] for k, v in urllib.parse.parse_qs(body, keep_blank_values=True).items()}
 
+    def is_https(request):
+        """The cookie's Secure flag: the request's own scheme; X-Forwarded-Proto only when PDM_TRUST_PROXY=1 says a proxy sets it."""
+        if os.environ.get("PDM_TRUST_PROXY") == "1":
+            fwd = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+            if fwd:
+                return fwd == "https"
+        return request.url.scheme == "https"
+
     def to_login():
         return RedirectResponse("/web/login", status_code=303)
 
@@ -233,7 +328,7 @@ def install(app, S, effective_role, User):
             sessions[sid] = {"token": token, "login": who[0], "csrf": secrets.token_urlsafe(24), "created": time.time()}
         resp = RedirectResponse("/web/", status_code=303)
         resp.set_cookie(COOKIE, sid, httponly=True, samesite="lax", path="/", max_age=SESSION_TTL,
-                        secure=request.url.scheme == "https")
+                        secure=is_https(request))
         resp.delete_cookie(LOGIN_COOKIE, path="/web")
         return resp
 
@@ -241,7 +336,10 @@ def install(app, S, effective_role, User):
     async def logout(request: Request):
         sess = get_session(request)
         f = await form(request)
-        if sess and same_origin(request) and hmac.compare_digest(sess["csrf"], f.get("csrf", "")):
+        if sess:
+            if not same_origin(request) or not hmac.compare_digest(sess["csrf"], f.get("csrf", "")):
+                return page(request, "error.html", 403, sess=sess, me=whom(S(), sess),
+                            message="The form's security token did not match; reload the page and try again.")
             with slock:
                 sessions.pop(request.cookies.get(COOKIE), None)
         resp = RedirectResponse("/web/login", status_code=303)
@@ -271,6 +369,10 @@ def install(app, S, effective_role, User):
         rows = [{"name": n, "revision": r["revision"], "state": r["state"], "author": r["author"], "time": r["time"],
                  "lock": locks.get(n, {}).get("holder")} for n, r in sorted(docs.items())]
         return page(request, "docs.html", sess=sess, me=me, rows=rows, nav="docs")
+
+    def redact(state, why, me):
+        """A worker failure's detail (traceback, local paths) is for admins; everyone else gets one generic line."""
+        return GENERIC_FAILURE if state == "failed" and me["role"] != "admin" else why
 
     def revision_view(st, name, v):
         st["mirror"].V._check_name(name)
@@ -308,6 +410,7 @@ def install(app, S, effective_role, User):
             return page(request, "error.html", 404, sess=sess, me=me, message=str(e), nav="docs")
         final = os.path.join(st["cfg"].cache_dir, rec["sha"], name)
         state, why = jobs(st).state(final, {"kind": "revision", "name": name, "revision": revision, "sha": rec["sha"]})
+        why = redact(state, why, me)
         bom = glb = None
         if state == "ready":
             with open(os.path.join(final, "bom.json")) as f:
@@ -408,6 +511,7 @@ def install(app, S, effective_role, User):
             return page(request, "error.html", 404, sess=sess, me=me, message=str(e), nav="ecos")
         final = os.path.join(st["cfg"].cache_dir, last, key)
         state, why = jobs(st).state(final, {"kind": "eco", "number": number, "eco_commit": last, "key": key})
+        why = redact(state, why, me)
         diffs = {}
         files = {}
         if state == "ready":

@@ -67,6 +67,13 @@ Server-rendered pages under `/web` (the root `/` redirects there), served by the
 | `PDM_FREECAD_CMD` | path of the `FreeCADCmd` the worker uses (optional) |
 | `PDM_CACHE_DIR` | artifact cache (default `<PDM_MIRROR_DIR>/cache`) |
 | `PDM_GOLDEN_DIR` or `CADFORK_CTL` | passed through to the worker so `Vault.diff` has I3's shape metrics |
+| `PDM_WORKER_TOKEN` | the credential the worker clones the vault with; give it a token of a read-only collaborator, because the worker opens untrusted `.FCStd` files. When unset the worker falls back to the service's owner token and the service logs a warning once |
+| `PDM_WEB_MAX_JOBS` | running plus queued worker jobs (default 16); beyond it a page says "busy" and starts nothing |
+| `PDM_TRUST_PROXY` | `1` makes the session cookie's `Secure` flag follow `X-Forwarded-Proto`; otherwise that header is ignored (run uvicorn with `--no-proxy-headers` unless a trusted proxy sets it) |
+
+**Hardening notes.** Every `/web` and `/static` response carries `X-Content-Type-Options: nosniff`, and every page a `Content-Security-Policy` (`default-src 'self'`; scripts only from this origin plus a per-response nonce for the three.js import map; no inline styles; `blob:` allowed for images, fetches and workers because the glTF loader uses it). A cache entry counts as built only when its `meta.json` parses and every file it lists exists; otherwise it is removed and rebuilt. `tmp-*` build directories and `job-*` files left by a killed worker are removed when the service starts. A failed worker job shows non-admins one generic line; the traceback is shown to admins only. `POST /web/logout` with a wrong CSRF token is refused with 403 and keeps the session.
+
+**Known gaps.** The CSV downloads are the library's `PDM.bom.to_csv` bytes unchanged, so a material or name starting with `=`, `+`, `-` or `@` is not neutralised against spreadsheet formula injection; the library is the source of truth for those bytes and changing it is a separate decision. Without `PDM_WORKER_TOKEN` the worker holds the owner token (see above).
 
 Tests: `src/Mod/PDM/PDMServerTests/test_web.py` (part of `TestPDMServer`; run alone with `FreeCADCmd -t PDMServerTests.test_web.TestWeb`). It drives Chromium through `browse.py` in the service venv (`pip install -r requirements-test.txt`, then `python -m playwright install chromium-headless-shell`) and skips when playwright, scikit-image or the browser is missing. The three screenshot baselines are in `baselines/`; set `PDM_UPDATE_BASELINES=1` to regenerate them after an intended change to the viewer or the fixture.
 

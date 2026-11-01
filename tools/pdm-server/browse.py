@@ -60,10 +60,12 @@ def wait_page(page, wait, timeout):
         page.reload(wait_until="load")
     if wait == "rendered" and page.locator(".viewer").count():
         remain = max(1000, int((end - time.time()) * 1000))
-        try:
-            page.wait_for_function("document.body.dataset.rendered", timeout=remain)
-        except Exception:
-            return "timeout: nothing rendered"
+        # polled with evaluate (CDP): wait_for_function evaluates a string in the page and the page's CSP forbids eval
+        deadline = time.time() + remain / 1000
+        while not page.evaluate("document.body.dataset.rendered || ''"):
+            if time.time() > deadline:
+                return "timeout: nothing rendered"
+            page.wait_for_timeout(100)
         if page.evaluate("document.body.dataset.rendered") != "1":
             return "render error: " + str(page.evaluate("document.body.dataset.renderError"))
         page.wait_for_timeout(300)
@@ -101,6 +103,7 @@ def run(plan_path):
                 elif op == "goto":
                     resp = page.goto(base + step["path"], wait_until="load")
                     r["status"] = resp.status if resp else None
+                    r["headers"] = dict(resp.headers) if resp else {}
                     if step.get("wait"):
                         r["wait_error"] = wait_page(page, step["wait"], step.get("timeout", 240))
                     r["url"] = page.url
@@ -121,11 +124,11 @@ def run(plan_path):
                     if token is not None:
                         form["csrf"] = token
                     resp = ctx.request.post(base + step["path"], form=form, max_redirects=0)
-                    r.update(status=resp.status, body=resp.text()[:1500], location=resp.headers.get("location"))
+                    r.update(status=resp.status, body=resp.text()[:1500], location=resp.headers.get("location"), headers=dict(resp.headers))
                 elif op == "download":
                     resp = ctx.request.get(base + step["path"])
-                    r.update(status=resp.status, bytes=len(resp.body()))
-                    if resp.status == 200:
+                    r.update(status=resp.status, bytes=len(resp.body()), headers=dict(resp.headers))
+                    if resp.status == 200 and step.get("save"):
                         with open(step["save"], "wb") as f:
                             f.write(resp.body())
                 else:

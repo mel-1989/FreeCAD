@@ -17,3 +17,16 @@ th { background: #eef1f4; }
 .viewer { width: 480px; height: 360px; background: #e9edf1; border: 1px solid #c3ccd4; }
 .viewer canvas { display: block; }
 figcaption { color: #4a5864; margin-top: .2em; }
+.lvl-0 { padding-left: 0.5em; }
+.lvl-1 { padding-left: 1.9em; }
+.lvl-2 { padding-left: 3.3em; }
+.lvl-3 { padding-left: 4.7em; }
+.lvl-4 { padding-left: 6.1em; }
+.lvl-5 { padding-left: 7.5em; }
+.lvl-6 { padding-left: 8.9em; }
+.lvl-7 { padding-left: 10.3em; }
+.lvl-8 { padding-left: 11.7em; }
+.lvl-9 { padding-left: 13.1em; }
+.lvl-10 { padding-left: 14.5em; }
+.lvl-11 { padding-left: 15.9em; }
+.lvl-12 { padding-left: 17.3em; }
