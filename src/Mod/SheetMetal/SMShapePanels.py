@@ -402,6 +402,7 @@ class CornerReliefPanel(FeaturePanel):
         self.fields.addRow("", self.from_part)
         self.fields.addRow("K-factor (ANSI)", self.kfactor)
         self.kind.currentIndexChanged.connect(lambda _i: self.refresh())
+        self.size_mode.currentIndexChanged.connect(lambda _i: self.refresh())
         self.from_part.toggled.connect(lambda _b: self.refresh())
         self.use_sel.clicked.connect(self.take_selection)
         self.refresh()
@@ -409,6 +410,7 @@ class CornerReliefPanel(FeaturePanel):
     def refresh(self):
         self.ratio.setEnabled(self.kind.currentData() == "Obround")
         self.kfactor.setEnabled(not self.from_part.isChecked())
+        self.size.setSuffix(" mm" if self.size_mode.currentData() == "Absolute" else " x T")   # the stored value is unchanged
         if self.base is None:
             self.target.setText("(nothing selected: pick the sheet-metal solid and a corner edge, then press Use selection)")
         else:
@@ -724,6 +726,7 @@ class ExportDxfPanel:
         self.text_height = _spin(0.0, 1000.0, 2.5, 3, " mm")
         self.path = QtWidgets.QLineEdit(path if path is not None else self.default_path())
         self.path.setObjectName("path")
+        self.path.setAccessibleName("File")
         self.browse = QtWidgets.QPushButton("Browse...")
         self.browse.setObjectName("browse")
         row = QtWidgets.QHBoxLayout()

@@ -28,6 +28,17 @@ COMMANDS = {
     "Weldment_CutList": ("Cut list", "List the selected members, plates and welds grouped, and export the list as CSV", "Weldment_CutList"),
 }
 TOOLBAR = list(COMMANDS)
+STATUS = {
+    "Weldment_Member": "Sweep a profile along the selected edges or sketch",
+    "Weldment_Mitre": "Mitre two members that meet at a point",
+    "Weldment_ButtA": "Trim member A to the outer surface of member B",
+    "Weldment_ButtB": "Trim member B to the outer surface of member A",
+    "Weldment_TrimToFace": "Extend or trim a member end to the selected face",
+    "Weldment_Gusset": "Add a corner plate between two members",
+    "Weldment_EndCap": "Add a cap plate on or in a member end",
+    "Weldment_WeldBead": "Add a fillet weld bead along the selected edges",
+    "Weldment_CutList": "List and export the selected members, plates and welds",
+}
 CORNER_COMMANDS = ["Weldment_Mitre", "Weldment_ButtA", "Weldment_ButtB", "Weldment_TrimToFace"]
 MENU = ["Weldment_Member", "Separator"] + CORNER_COMMANDS + ["Separator", "Weldment_Gusset", "Weldment_EndCap",
                                                               "Weldment_WeldBead", "Separator", "Weldment_CutList"]
@@ -57,7 +68,8 @@ class _Command:
 
     def GetResources(self):
         text, tip, icon = COMMANDS[self.name]
-        return {"Pixmap": os.path.join(ICON_DIR, icon + ".svg"), "MenuText": text, "ToolTip": tip}
+        return {"Pixmap": os.path.join(ICON_DIR, icon + ".svg"), "MenuText": text, "ToolTip": tip,
+                "StatusTip": STATUS[self.name]}
 
     def IsActive(self):
         return FreeCAD.ActiveDocument is not None

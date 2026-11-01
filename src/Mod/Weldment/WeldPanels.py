@@ -930,6 +930,26 @@ def default_cut_objects(doc):
     return out
 
 
+class _ReturnCloses(QtCore.QObject):
+    """Return pressed in a read-only view closes a Close-only panel, as the Close button would.
+
+    A Close button is a reject-role button, so Qt never makes it the default and the task view's Return
+    handling (it clicks the visible default button, see QDialogButtonBox in the Qt docs) has nothing to click.
+    Only the panel's own item views are filtered; buttons and editors keep their Return."""
+
+    def __init__(self, panel, views):
+        super().__init__(panel.form)
+        self.panel = panel
+        for v in views:
+            v.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.KeyPress and event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+            QtCore.QTimer.singleShot(0, self.panel.close_from_key)
+            return True
+        return False
+
+
 class CutListPanel:
     """The cut list as three tables (members, plates, welds) with a CSV export; read-only, no document change."""
 
@@ -971,6 +991,7 @@ class CutListPanel:
         self.export_button.setObjectName("export")
         self.export_button.clicked.connect(self.export_clicked)
         lay.addWidget(self.export_button)
+        self._return_closes = _ReturnCloses(self, [t for _h, t in self.sections.values()])
         self.refresh()
 
     def refresh(self):
@@ -1040,6 +1061,10 @@ class CutListPanel:
     def getStandardButtons(self):
         close = QtWidgets.QDialogButtonBox.StandardButton.Close
         return int(getattr(close, "value", close))
+
+    def close_from_key(self):
+        if Gui.Control.activeDialog() and self.reject():
+            Gui.Control.closeDialog()
 
     def accept(self):
         self.done = True

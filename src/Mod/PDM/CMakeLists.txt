@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# PDM: the cad-fork local vault (headless, Python only). Every .py and .json file
+# PDM: the cad-fork local vault (headless, Python only). Every .py, .json and .svg file
 # under this directory is copied, so sub-packages can add files without
 # editing this list.
 
 file(GLOB_RECURSE PDM_SRCS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.svg"
 )
 SOURCE_GROUP("" FILES ${PDM_SRCS})
 

@@ -215,7 +215,7 @@ if SheetMetalTools.isGuiLoaded():
                     # The name of a svg file available in the resources.
                     "Pixmap": os.path.join(icons_path, "SheetMetal_AddRelief.svg"),
                     "MenuText": FreeCAD.Qt.translate("SheetMetal", "Make Relief"),
-                    "Accel": "S, R",
+                    "StatusTip": FreeCAD.Qt.translate("SheetMetal", "Cut a relief at the selected bend or corner"),
                     "ToolTip": FreeCAD.Qt.translate(
                         "SheetMetal",
                         "Modify an Individual solid corner to create Relief.\n"

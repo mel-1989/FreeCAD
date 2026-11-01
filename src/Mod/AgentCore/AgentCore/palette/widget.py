@@ -130,6 +130,7 @@ class PaletteDialog(QtWidgets.QDialog):
         lay.setContentsMargins(8, 8, 8, 8)
         self.edit = QtWidgets.QLineEdit(self)
         self.edit.setPlaceholderText("Search commands in every workbench...")
+        self.edit.setAccessibleName("Search commands")
         self.edit.setClearButtonEnabled(False)
         self.list = QtWidgets.QListWidget(self)
         self.list.setObjectName("CommandPaletteList")

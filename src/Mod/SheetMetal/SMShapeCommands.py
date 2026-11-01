@@ -37,6 +37,12 @@ COMMANDS = {
         "SheetMetal_ExportFlatDXF"),
 }
 TOOLBAR = list(COMMANDS)
+STATUS = {
+    "SheetMetal_CornerRelief": "Cut a relief where two bends meet",
+    "SheetMetal_LighteningCutout": "Cut a profile through the sheet, alone or as a pattern",
+    "SheetMetal_LoftedBend": "Join two open profiles with a faceted sheet-metal transition",
+    "SheetMetal_ExportFlatDXF": "Write the flat pattern of the selected unfold to a DXF file",
+}
 
 
 def _doc():
@@ -63,7 +69,8 @@ class _Command:
 
     def GetResources(self):
         text, tip, icon = COMMANDS[self.name]
-        return {"Pixmap": os.path.join(ICON_DIR, icon + ".svg"), "MenuText": text, "ToolTip": tip}
+        return {"Pixmap": os.path.join(ICON_DIR, icon + ".svg"), "MenuText": text, "ToolTip": tip,
+                "StatusTip": STATUS[self.name]}
 
     def IsActive(self):
         return FreeCAD.ActiveDocument is not None and len(Gui.Selection.getSelectionEx()) > 0

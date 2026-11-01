@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<!-- Original geometric icon drawn for the cad-fork PDM workbench (cad-fork G08a slice 3). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<ellipse cx="32" cy="14" rx="18" ry="6" fill="#6c9bd1" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M14 14 V38 A18 6 0 0 0 50 38 V14" fill="#6c9bd1" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M14 26 A18 6 0 0 0 50 26" fill="none" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M24 54 H40 M32 44 V54" fill="none" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="32" cy="44" r="4" fill="#e8892b" stroke="#2b4a6f" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

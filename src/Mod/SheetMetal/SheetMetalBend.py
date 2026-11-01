@@ -212,7 +212,7 @@ if SheetMetalTools.isGuiLoaded():
                     # The name of a svg file available in the resources.
                     "Pixmap": os.path.join(icons_path, "SheetMetal_AddBend.svg"),
                     "MenuText": FreeCAD.Qt.translate("SheetMetal", "Make Bend"),
-                    "Accel": "S, B",
+                    "StatusTip": FreeCAD.Qt.translate("SheetMetal", "Create a bend where two walls meet"),
                     "ToolTip": FreeCAD.Qt.translate(
                         "SheetMetal",
                         "Create Bend where two walls come together on solids\n"
