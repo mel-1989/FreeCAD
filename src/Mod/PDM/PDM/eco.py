@@ -33,6 +33,9 @@ ROLES_PATH = "plm/roles.json"
 NUM_RE = r"ECO-\d{4,8}"
 STATES = ("Draft", "Submitted", "Approved", "Rejected", "Released")
 OPEN = ("Draft", "Submitted", "Approved")
+# States in which an ECO holds its documents (they move only through it). A Draft holds nothing: a new, edited,
+# withdrawn or rejected ECO is a working record, and a withdrawn one must not keep blocking its documents.
+HOLDING = ("Submitted", "Approved")
 ROLES = ("viewer", "engineer", "approver", "admin")
 RANK = {r: i for i, r in enumerate(ROLES)}
 ALIAS = {"reader": "viewer", "writer": "engineer"}
@@ -256,10 +259,10 @@ def verify_change(old, new, actor, role, ecos=None, latest=None):
 
 
 def open_docs(ecos, exclude=None):
-    """Document name -> number of the open ECO that holds it (``ecos``: number -> record)."""
+    """Document name -> number of the Submitted or Approved ECO that holds it (``ecos``: number -> record)."""
     out = {}
     for n, r in ecos.items():
-        if n != exclude and r["state"] in OPEN:
+        if n != exclude and r["state"] in HOLDING:
             for d in r["documents"]:
                 out.setdefault(d["name"], n)
     return out

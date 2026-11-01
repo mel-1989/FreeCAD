@@ -147,6 +147,7 @@ class TestWorkflow(EcoCase):
         a = self.u("alice")
         n = a.eco_create("t", "r", {"p1": "A.1"})["number"]
         a.transition("p1", "InReview")
+        a.eco_submit(n)  # a Draft holds nothing; a Submitted or Approved ECO does
         with self.assertRaises(V.LifecycleError) as cm:
             a.transition("p1", "Released")
         self.assertIn(n, str(cm.exception))
@@ -157,8 +158,10 @@ class TestWorkflow(EcoCase):
         self.add("p1")
         a = self.u("alice")
         a.eco_create("one", "r", {"p1": "A.1"})
+        two = a.eco_create("two", "r", {"p1": "A.1"})["number"]  # two Drafts may name it; only one can be submitted
+        a.eco_submit("ECO-0001")
         with self.assertRaises(eco.EcoError) as cm:
-            a.eco_create("two", "r", {"p1": "A.1"})
+            a.eco_submit(two)
         self.assertIn("ECO-0001", str(cm.exception))
         with self.assertRaises(eco.EcoError):
             a.eco_create("three", "r", {"nope": "A.1"})
@@ -342,6 +345,7 @@ class TestReview031(EcoCase):
         self.add("p2")
         a = self.u("alice")
         n = a.eco_create("t", "r", {"p1": "A.1"})["number"]
+        a.eco_submit(n)
         before = self.head()
         with self.assertRaises(V.LifecycleError) as cm:
             a.move("p1", "p1b")
@@ -349,6 +353,27 @@ class TestReview031(EcoCase):
         self.assertIn("edit the ECO to drop the document, or release it", str(cm.exception))
         self.assertEqual(self.head(), before)
         self.assertEqual(a.move("p2", "p2b")["new"], "p2b")  # not in an ECO
+
+    def test_a_withdrawn_or_rejected_eco_no_longer_holds_its_documents(self):
+        self.add("p1")
+        self.add("p2")
+        a = self.u("alice")
+        a.set_role("bob", "approver")
+        n = a.eco_create("t", "r", {"p1": "A.1"})["number"]
+        a.eco_submit(n)
+        a.transition("p1", "InReview")
+        with self.assertRaises(V.LifecycleError):
+            a.transition("p1", "Released")
+        a.eco_withdraw(n, "second thoughts")
+        self.assertEqual(a.eco_get(n)["state"], "Draft")
+        self.assertEqual(a.transition("p1", "Released")["state"], "Released")  # free again, no edit needed
+        m = a.eco_create("m", "r", {"p2": "A.1"})["number"]
+        a.eco_submit(m)
+        with self.assertRaises(V.LifecycleError):
+            a.move("p2", "p2b")
+        self.u("bob").eco_reject(m, "no")
+        self.assertEqual(a.eco_get(m)["state"], "Draft")
+        self.assertEqual(a.move("p2", "p2b")["new"], "p2b")
 
     def test_a_create_that_loses_the_number_race_to_the_server_retries_once_then_says_so(self):
         from PDM import remote
