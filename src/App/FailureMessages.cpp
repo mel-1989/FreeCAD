@@ -167,7 +167,12 @@ std::string firstLine(const std::string& raw)
     }
     constexpr std::size_t maxLength = 160;
     if (line.size() > maxLength) {
-        line.resize(maxLength);
+        // cut on a UTF-8 character boundary: never keep a lone lead or continuation byte
+        std::size_t cut = maxLength;
+        while (cut > 0 && (static_cast<unsigned char>(line[cut]) & 0xC0) == 0x80) {
+            --cut;
+        }
+        line.resize(cut);
         line += "...";
     }
     return line;

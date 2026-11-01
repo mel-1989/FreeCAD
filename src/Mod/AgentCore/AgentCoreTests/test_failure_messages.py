@@ -40,8 +40,8 @@ def run_corpus():
         log, res = os.path.join(tmp, "fc.log"), os.path.join(tmp, "res.json")
         env = dict(os.environ, G08A_OUT=res, G08A_DIR=CORPUS, QT_QPA_PLATFORM="offscreen")
         subprocess.run([exe, "--log-file", log, os.path.join(CORPUS, "driver.py")], env=env,
-                       capture_output=True, text=True, timeout=600, check=False)
-        with open(res) as fh:
+                       capture_output=True, encoding="utf-8", errors="replace", timeout=600, check=False)
+        with open(res, encoding="utf-8") as fh:
             results = json.load(fh)
         with open(log, encoding="utf-8-sig") as fh:
             text = fh.read()
@@ -73,7 +73,7 @@ def run_corpus():
 class TestFailureMessages(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(CORPUS, "manifest.json")) as fh:
+        with open(os.path.join(CORPUS, "manifest.json"), encoding="utf-8") as fh:
             cls.manifest = json.load(fh)["cases"]
         cls.rows = run_corpus()
 
@@ -133,8 +133,10 @@ class TestFailureMessages(unittest.TestCase):
             with self.subTest(case=cid):
                 line = [l for l in self.rows[cid]["report"] if "'%s'" % self.manifest[cid]["label"] in l][0]
                 own = self.manifest[cid]["stored_status"].strip().splitlines()[0].rstrip(".")
-                self.assertIn(own, line)
+                # the detail is cut at 160 bytes on a UTF-8 boundary, so compare the start of a long message
+                self.assertIn(own[:40], line)
                 self.assertIn("failed to recompute", line)
+                self.assertNotIn("\ufffd", line)
 
 
 class TestCatalogueEdgeCases(unittest.TestCase):

@@ -62,7 +62,7 @@ GUI_CASES = [
 class TestGuiFailureTooltip(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(CORPUS, "manifest.json")) as fh:
+        with open(os.path.join(CORPUS, "manifest.json"), encoding="utf-8") as fh:
             cls.manifest = json.load(fh)["cases"]
         cls.cases = load_cases()
 
