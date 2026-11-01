@@ -442,4 +442,5 @@ def make_convert_solid(doc, src_obj, fixed_face, bend_edges, open_faces=(), name
     for key, value in props.items():
         setattr(obj, key, value)
     doc.recompute()
+    SheetMetalTools.attach_view_provider(obj)
     return obj

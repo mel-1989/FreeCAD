@@ -143,7 +143,8 @@ class Lifecycle:
         self.assertNotIn("ReferenceError", panel.error_text())
 
     def test_an_old_document_without_view_provider_proxies_opens_unchanged(self):
-        obj = self.K.api(self.doc, "A")    # made headlessly: no panel proxy
+        obj = self.K.api(self.doc, "A")
+        obj.ViewObject.Proxy = 0    # as saved before slice 6b: the make_* functions now attach a provider with the GUI up
         volume, oname = obj.Shape.Volume, obj.Name
         path = os.path.join(tempfile.mkdtemp(prefix="smgui-"), "old.FCStd")
         self.doc.saveAs(path)

@@ -3,7 +3,7 @@
 #  SheetMetalTools.py
 #
 #  Copyright 2024 Shai Seger <shaise at gmail dot com>
-#  Modified for cad-fork on 2026-10-31 (LGPL-2.1 section 2a): lazy importDXF/importSVG/Draft imports; bend-table entries; V1 unfolder as default (UseOldUnfolder defaults True).
+#  Modified for cad-fork on 2026-10-31 (LGPL-2.1 section 2a): lazy importDXF/importSVG/Draft imports; bend-table entries; V1 unfolder as default (UseOldUnfolder defaults True); attach_view_provider helper added 2026-11-01.
 #
 #
 #  This program is free software; you can redistribute it and/or
@@ -1371,3 +1371,22 @@ class UnfoldException(Exception):
 
 class SMException(Exception):
     """Sheet Metal Custom Exception."""
+
+
+def attach_view_provider(obj):
+    """Give a feature made by a ``make_*`` function its task-panel view provider when the GUI is up.
+
+    Headless nothing is imported, so Qt is never pulled in; without a view object (or when the provider modules
+    cannot load) the feature simply keeps the default view provider."""
+    if not FreeCAD.GuiUp or getattr(obj, "ViewObject", None) is None:
+        return
+    name = type(getattr(obj, "Proxy", None)).__name__
+    try:
+        import SMEdgeViewProviders
+        import SMShapeViewProviders
+    except ImportError:    # no PySide, e.g. a build without the GUI modules
+        return
+    for module in (SMEdgeViewProviders, SMShapeViewProviders):
+        if name in module.BY_TYPE:
+            module.attach(obj)
+            return

@@ -149,4 +149,5 @@ def make_hem(doc, base_obj, edge_names, name="Hem", **props):
     for key, value in props.items():
         setattr(obj, key, value)
     doc.recompute()
+    SheetMetalTools.attach_view_provider(obj)
     return obj

@@ -28,6 +28,7 @@ from PySide import QtWidgets
 import SheetMetalBendCornerRelief as CR
 import SheetMetalLighteningCutout as LC
 import SheetMetalLoftedBend as LB
+import SMPanelGuard
 
 #: panel the user has open (set by ``show``)
 _CURRENT = []
@@ -81,6 +82,8 @@ def _status(o):
 
 
 def message_of(e):
+    if isinstance(e, ReferenceError):    # an object picked earlier was deleted since
+        return "A selected object was deleted; pick it again."
     return str(e.args[0] if e.args else e) or type(e).__name__
 
 
@@ -102,7 +105,8 @@ def transact(doc, label, fn):
             doc.commitTransaction()
             return True, objs
         message = "\n".join(problems)
-    except _REFUSALS + (PanelError, ValueError, TypeError, KeyError, RuntimeError, FreeCAD.Base.FreeCADError) as e:
+    except _REFUSALS + (PanelError, ValueError, TypeError, KeyError, RuntimeError, ReferenceError,
+                        FreeCAD.Base.FreeCADError) as e:
         message = message_of(e)
     except Exception as e:    # noqa: BLE001  (a panel never raises into the Qt event loop)
         message = "%s: %s" % (type(e).__name__, e)
@@ -283,14 +287,29 @@ class FeaturePanel:
             return False
         return True
 
+    def doc_closed(self):
+        try:
+            self.doc.Name
+        except (ReferenceError, RuntimeError, AttributeError):
+            return True
+        return False
+
     def accept(self):
+        if self.doc_closed():    # the document was closed under the open dialog: nothing to apply, close quietly
+            self.done = True
+            return True
         self.show_error("")
         if not self.alive():
+            return False
+        gone = SMPanelGuard.deleted_target_message(self)
+        if gone:
+            self.show_error(gone)
             return False
         try:
             v = self.values()
             self.preflight(v)
-        except _REFUSALS + (PanelError, ValueError, TypeError, KeyError, RuntimeError, FreeCAD.Base.FreeCADError) as e:
+        except _REFUSALS + (PanelError, ValueError, TypeError, KeyError, RuntimeError, ReferenceError,
+                            FreeCAD.Base.FreeCADError) as e:
             self.show_error(message_of(e))
             return False
         except Exception as e:    # noqa: BLE001
@@ -474,8 +493,8 @@ class LighteningCutoutPanel(FeaturePanel):
         self.use_sel = QtWidgets.QPushButton("Use selection")
         self.use_sel.setObjectName("use_selection")
         self.pattern = _combo(["None", "Linear", "Grid"], "None")
-        self.count_x = _ispin(1, 1000, 1)
-        self.count_y = _ispin(1, 1000, 1)
+        self.count_x = _ispin(1, LC.MAX_COPIES, 1)
+        self.count_y = _ispin(1, LC.MAX_COPIES, 1)
         self.pitch_x = _spin(0.0, 100000.0, 10.0, 4, " mm")
         self.pitch_y = _spin(0.0, 100000.0, 10.0, 4, " mm")
         self.dir_x = _spin(-1000.0, 1000.0, 1.0)
@@ -752,6 +771,8 @@ class ExportDxfPanel:
         self.show_error("")
         try:
             obj = self.obj
+            if obj is not None and not SMPanelGuard.is_alive(obj):
+                raise PanelError("The Unfold feature was deleted; close this panel and pick it again.")
             if obj is None or not is_unfold(obj):
                 raise PanelError("%s is not an Unfold feature: select the Unfold feature to export"
                                  % (obj.Label if obj is not None else "nothing"))

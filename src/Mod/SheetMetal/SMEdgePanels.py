@@ -30,6 +30,7 @@ import SheetMetalEdgeFlange as EF
 import SheetMetalHemFeature as HM
 import SheetMetalJog as JG
 import SheetMetalTools
+import SMPanelGuard
 
 
 class PanelError(Exception):
@@ -275,18 +276,37 @@ class FeaturePanel:
 
     # messages
     def show_error(self, text):
-        self.error.setText(text)
-        self.error.setVisible(bool(text))
+        try:
+            self.error.setText(text)
+            self.error.setVisible(bool(text))
+        except RuntimeError:    # the dialog is already closed: nothing to show it in
+            pass
 
     def error_text(self):
-        return self.error.text()
+        try:
+            return self.error.text()
+        except RuntimeError:
+            return ""
 
     def _check_alive(self):
         if self.obj is not None and not alive(self.obj):
             raise PanelError("the feature this panel edits has been deleted; close the panel")
+        gone = SMPanelGuard.deleted_target_message(self)
+        if gone:
+            raise PanelError(gone)
+
+    def doc_closed(self):
+        try:
+            self.doc.Name
+        except (ReferenceError, RuntimeError, AttributeError):
+            return True
+        return False
 
     # dialog buttons
     def accept(self):
+        if self.doc_closed():    # the document was closed under the open dialog: nothing to apply, close quietly
+            self.done = True
+            return True
         self.show_error("")
         try:
             self._check_alive()

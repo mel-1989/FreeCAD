@@ -91,5 +91,5 @@ BY_TYPE = {"SMBendCornerRelief": CornerReliefVP, "SMLighteningCutout": Lightenin
 def attach(obj):
     """Set the matching view provider proxy on a new feature (only with the GUI up)."""
     cls = BY_TYPE.get(type(obj.Proxy).__name__)
-    if cls is not None and obj.ViewObject is not None:
+    if cls is not None and obj.ViewObject is not None and not isinstance(obj.ViewObject.Proxy, cls):
         obj.ViewObject.Proxy = cls()

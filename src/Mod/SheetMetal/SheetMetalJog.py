@@ -330,4 +330,5 @@ def make_jog(doc, base_obj, face_name, sketch, name="Jog", **props):
     for key, value in props.items():
         setattr(obj, key, value)
     doc.recompute()
+    SheetMetalTools.attach_view_provider(obj)
     return obj
