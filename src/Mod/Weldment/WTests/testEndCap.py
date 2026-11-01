@@ -255,6 +255,31 @@ class TestEndCapRefusals(unittest.TestCase):
                 self._bad(cap, "reaches past the other end")
             FreeCAD.closeDocument(doc.Name)
 
+    def test_recess_against_a_mitred_far_end(self):
+        """Far end mitred: the long side is 1250 deep, the short side 1150 at the outer wall and 1155
+        along the bore (100 x 100 x 5 tube, 45 degree joint, section half width 45 at the bore): the cap
+        must fit along the bore's short side, not only the farthest vertex."""
+        prof = oracle.kind_profile("RHS", 0.5)
+        half_bore = prof.dims["b"] / 2.0 - prof.dims["t"]
+        short = 1200.0 - half_bore            # the bore line nearest the mitre's short side, 45 degree mitre
+        for rec, ok in ((short - 20.0, True), (short - 10.0 - 1e-6, True), (short - 10.0 + 1.0, False), (1210.0, False)):
+            doc = FreeCAD.newDocument("Mt")
+            fr = frames.Frame(doc)
+            fr.add("A", prof.family, prof.size, [((0, 0, 0), (0, 0, 1200))])
+            fr.add("B", prof.family, prof.size, [((0, 0, 1200), (1200, 0, 1200))])
+            fr.mitre("A", 0, "End", "B", 0, "Start")
+            doc.recompute()
+            cap = WeldEndCap.make_end_cap(doc, fr.heads["A"], 0, "Start", 10.0, "Inset", rec, 0.0)
+            doc.recompute()
+            if ok:
+                self.assertNotIn("Invalid", cap.State, cap.getStatusString())
+                self.assertLess(cap.Shape.common(fr.heads["A"].Shape).Volume, 1e-9 * cap.Shape.Volume)
+                # every cap vertex is within the member's axial extent over the bore
+                self.assertTrue(all(fr.heads["A"].Shape.BoundBox.ZMin - 1e-9 <= v.Point.z for v in cap.Shape.Vertexes))
+            else:
+                self._bad(cap, "reaches past the other end")
+            FreeCAD.closeDocument(doc.Name)
+
     def test_saddle_end(self):
         pa, pb = oracle.kind_profile("CHS", 0.2), oracle.kind_profile("CHS", 0.8)
         doc = FreeCAD.newDocument("S")

@@ -42,18 +42,39 @@ class WeldmentError(ValueError):
     pass
 
 
+#: link properties through which a feature depends on other features
+_DEPENDS = ("Body1", "Body2", "MemberA", "MemberB", "Base", "Other")
+
+
+def _is_bad(o):
+    state = list(getattr(o, "State", []) or [])
+    return "Invalid" in state or "Error" in state
+
+
 def refuse_invalid(objs, what):
-    """Raise a WeldmentError naming every object of ``objs`` whose State holds Invalid or Error: a
-    list built from a failed feature would carry its stale shape or miss the part, both wrong."""
-    bad = []
-    for o in objs:
-        state = list(getattr(o, "State", []) or [])
-        if "Invalid" in state or "Error" in state:
+    """Raise a WeldmentError naming every object of ``objs``, or any feature it is built on (a bead's
+    bodies, a plate's members, a trim's base and target, followed all the way down), whose State
+    holds Invalid or Error: a list built from a failed feature would carry its stale shape or miss the
+    part, both wrong. Features that are only Touched are not refused (see the WeldBOM contract)."""
+    bad, seen = [], set()
+
+    def visit(o, via=None):
+        if o is None or o.Name in seen:
+            return
+        seen.add(o.Name)
+        if _is_bad(o):
             try:
                 why = o.getStatusString()
             except Exception:
                 why = ""
-            bad.append("%s (%s)" % (o.Name, why) if why and why != "Valid" else o.Name)
+            label = "%s (%s)" % (o.Name, why) if why and why != "Valid" else o.Name
+            bad.append(label + (" under %s" % via if via else ""))
+        for prop in _DEPENDS:
+            if prop in getattr(o, "PropertiesList", []):
+                visit(getattr(o, prop), via or o.Name)
+
+    for o in objs:
+        visit(o)
     if bad:
         raise WeldmentError(
             "%s refused: %d feature(s) are invalid and must be repaired first: %s" % (what, len(bad), "; ".join(bad))
