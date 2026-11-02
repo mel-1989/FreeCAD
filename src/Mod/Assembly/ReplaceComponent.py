@@ -847,28 +847,54 @@ def _near_twins(mo, shape):
                      if any(_is_near(mo.els[on], mn.els[nn], mo.diag) for nn in mn.order["Face"]))
 
 
-def _near_conflict(mo, new_shape, comp):
-    """Alternatives in ``comp`` that explain old faces by near twins that identity does not.
+def _readings_agree(probe, readings, tol=None):
+    """Do all readings, [(shape, placement)], send every reference to the same new element?
 
-    Returns [(candidate, faces)]: the part fits as placed and as turned, and the turned reading
-    recognises faces (for instance the hole the joint is on) that the unturned reading sees changed
-    or gone, and recognises at least as many faces in all (a turned reading that recognises other
-    faces than identity, as many or more, is as good an explanation as identity: nothing says which
-    one is meant). An alternative that explains only faces identity explains too, or fewer faces
-    than identity does, is no conflict: identity stays. Parts that are symmetric under a turn never
-    get here (``_symmetry_verdict`` decides them): this is the rule for parts that are not."""
+    With no ``probe`` (no reference to ask about) nothing is known and the answer is False, so the
+    caller keeps its ambiguous verdict. The first reading is the one the others are compared with."""
+    if probe is None:
+        return False
+    first = probe(*readings[0])
+    return all(not _readings_differ(first, probe(*r), tol=tol) for r in readings[1:])
+
+
+def _near_conflict(mo, new_shape, comp, probe=None):
+    """Alternatives in ``comp`` that may be the reading the designer meant, as [(candidate, faces)].
+
+    Without ``probe``: the part fits as placed and as turned, and the turned reading recognises faces
+    (for instance the hole the joint is on) that the unturned reading sees changed or gone, and
+    recognises at least as many faces in all (a turned reading that recognises other faces than
+    identity, as many or more, is as good an explanation as identity: nothing says which one is meant).
+    An alternative that explains only faces identity explains too, or fewer faces than identity does,
+    is no conflict: identity stays.
+
+    With ``probe`` the references decide: an alternative that recognises at least as many old faces as
+    identity is a candidate when it sends some reference to another new element than identity does
+    (``_readings_differ``), whether or not the faces it recognises are the same ones (a new part that
+    is symmetric under the turn recognises the same old faces turned and as placed, and still puts the
+    top rim of a hole on the bottom one), and is no candidate when every reference lands on the same
+    element. Parts that are symmetric under a turn never get here (``_symmetry_verdict`` decides them):
+    this is the rule for parts that are not."""
     near_id = _near_twins(mo, new_shape)
+    ref_id = probe(new_shape, App.Placement()) if probe is not None else None
     out, seen = [], []
     for c in comp:
         near_c = _near_twins(mo, c[2])
         extra = near_c - near_id
-        if extra and len(near_c) >= len(near_id) and extra not in seen:
+        if len(near_c) < len(near_id):
+            continue
+        if probe is not None:
+            # a reading that recognises faces identity does not is a candidate when any reference differs;
+            # one that recognises the same faces only when a reference both readings match goes to two places
+            if _readings_differ(ref_id, probe(c[2], c[1]), both=not extra, tol=None if not extra else NEAR_POS * mo.diag):
+                out.append((c, extra))
+        elif extra and extra not in seen:
             seen.append(extra)
             out.append((c, extra))
     return out
 
 
-def _alignment_conflict(old_shape, new_shape, iou_id, proper):
+def _alignment_conflict(old_shape, new_shape, iou_id, proper, probe=None):
     """Is identity, which the overlap alone would keep, contradicted by an alternative alignment?
 
     The alternatives that count overlap the old part at least as well as identity does (within
@@ -882,18 +908,35 @@ def _alignment_conflict(old_shape, new_shape, iou_id, proper):
     identity (or better) and recognises, by near twins, an old face that identity does not is also
     ambiguous; this is the part turned that also gained or lost a small hole or boss, whose exact twins
     are gone. Otherwise None. A part symmetric under a proper turn is decided before this, by
-    ``_symmetry_verdict``."""
+    ``_symmetry_verdict``.
+
+    With ``probe`` every reference to the part is planned under each reading and compared by
+    ``_readings_differ``, the comparison ``_symmetry_verdict`` uses. A reading that explains the same
+    faces as one kept (the same twins; a new part that is symmetric under the turn) is dropped only when
+    no reference that both match lands on different new elements; an alternative that no reference
+    tells from identity is no conflict.
+    If no reference goes to a different element under any reading, the alignment does not matter for any
+    joint: identity stands (None), or for several turned alignments that tie, the first. A single
+    reference that lands on different elements keeps the verdict ambiguous. A reading is never preferred
+    on a tie."""
     comp = [c for c in proper if c[0] >= iou_id - IOU_SAME]
     mo = _Model(old_shape)
     twins_id = _face_twins(mo, new_shape)
-    amb, adopt = [], []
+    amb, adopt, rest = [], [], []
     seen = []
     for c in comp:
         tw = _face_twins(mo, c[2])
-        if tw == twins_id or not tw or tw in seen:
+        if not tw:
+            continue
+        if tw == twins_id or tw in seen:
+            rest.append((c, tw))
             continue
         seen.append(tw)
         (adopt if not twins_id else amb).append((c, tw))
+    if twins_id and probe is not None:
+        ref_id = probe(new_shape, App.Placement())
+        amb = [(c, tw) for c, tw in amb if _readings_differ(ref_id, probe(c[2], c[1]), tol=NEAR_POS * mo.diag)] + [
+            (c, tw) for c, tw in rest if _readings_differ(ref_id, probe(c[2], c[1]), both=True)]
     if amb:
         alts = [_plc_json(c[1]) for c, _tw in amb]
         return "ambiguous", ("the new part overlaps the old one about as well as placed (%.4f) as turned (%.4f), "
@@ -901,21 +944,25 @@ def _alignment_conflict(old_shape, new_shape, iou_id, proper):
                              "%d when turned): pass the alignment" % (iou_id, max(c[0] for c, _t in amb),
                                                                       len(twins_id), len(amb[0][1])), alts)
     if adopt:
-        adopt.sort(key=lambda x: -x[0][0])
-        if len(adopt) > 1 and adopt[0][0][0] - adopt[1][0][0] <= IOU_SAME:
-            alts = [_plc_json(c[1]) for c, _tw in adopt]
+        pool = sorted(adopt + (rest if probe is not None else []), key=lambda x: -x[0][0])
+        tied = [x for x in pool if pool[0][0][0] - x[0][0] <= IOU_SAME]
+        if len(tied) > 1 and not _readings_agree(probe, [(c[2], c[1]) for c, _tw in tied],
+                                                           NEAR_POS * mo.diag):
+            alts = [_plc_json(c[1]) for c, _tw in tied]
             return "ambiguous", ("several turned alignments explain faces exactly and overlap equally well: "
                                  "pass the alignment", alts)
-        c = adopt[0][0]
+        c = pool[0][0]
         return "adopt", (c[0], c[1], c[2])
-    near = _near_conflict(mo, new_shape, [c for c in proper if c[0] >= iou_id - NEAR_IOU])
+    near = _near_conflict(mo, new_shape, [c for c in proper if c[0] >= iou_id - NEAR_IOU], probe)
     if near:
         alts = [_plc_json(c[1]) for c, _f in near]
+        faces = max(len(f) for _c, f in near)
+        why = ("turned it recognises %d old faces (within %d%% of the part's diagonal, same type, direction and "
+               "size) that it does not as placed, so it may have been turned and changed" % (faces, int(NEAR_POS * 100))
+               if faces else "turned it recognises the same old faces but sends a referenced element to another "
+               "place of the new part, so it may have been turned and changed")
         return "ambiguous", ("the new part overlaps the old one about as well as placed (%.4f) as turned (%.4f), "
-                             "and turned it recognises %d old faces (within %d%% of the part's diagonal, same type, "
-                             "direction and size) that it does not as placed, so it may have been turned and "
-                             "changed: pass the alignment" % (iou_id, max(c[0] for c, _f in near),
-                                                              max(len(f) for _c, f in near), int(NEAR_POS * 100)), alts)
+                             "and %s: pass the alignment" % (iou_id, max(c[0] for c, _f in near), why), alts)
     return None
 
 
@@ -1025,6 +1072,29 @@ def _resize_stands(so, sn):
     return _same_topology(so, sn)
 
 
+def _readings_differ(first, second, both=False, tol=None):
+    """The references that two readings of the alignment send to different places.
+
+    ``first`` and ``second`` are probe results ({(reference key, position): (status, new element,
+    its centre in the old part's frame)}), one per reading. A reference differs when either reading
+    matches it and the statuses or the new elements are not the same, or, with ``tol`` (mm), the two
+    elements' centres are further apart than that. Returns [(key, element under first, element under second)]. Empty means
+    the alignment does not matter for any joint: whichever reading was meant, every reference lands
+    on the same new element (or neither reading matches it). With ``both`` only a reference that
+    both readings match, to different elements, counts: a reading that finds no match for a reference
+    that the other matches explains the part worse, which is no reason to doubt the other."""
+    moved = []
+    for k in sorted(first):
+        (s0, n0, p0), (s1, n1, p1) = first[k], second[k]
+        # the same element name is not the same place: an adapted match (a hole moved) can put one new
+        # face at two places of the old part's frame
+        far = tol is not None and p0 is not None and p1 is not None and (p0 - p1).Length > tol
+        if (s0 == "matched" and s1 == "matched" and (n0 != n1 or far)) if both else (
+                (s0 == "matched" or s1 == "matched") and (s0 != s1 or n0 != n1 or far)):
+            moved.append((k, n0, n1))
+    return moved
+
+
 def _symmetry_verdict(so, sn, new_shape, iou_id, probe):
     """The symmetry rule: None when it does not apply, ("stand",) or ("ambiguous", note, alternatives).
 
@@ -1052,11 +1122,7 @@ def _symmetry_verdict(so, sn, new_shape, iou_id, probe):
     diff = []
     for plc, shp in turns:
         other = probe(shp, plc)
-        moved = []
-        for k in sorted(as_placed):
-            (s0, n0), (s1, n1) = as_placed[k], other[k]
-            if (s0 == "matched" or s1 == "matched") and (s0 != s1 or n0 != n1):
-                moved.append((k, n0, n1))
+        moved = _readings_differ(as_placed, other, tol=NEAR_POS * so.BoundBox.DiagonalLength)
         if moved:
             diff.append((plc, moved))
     if not diff:
@@ -1130,7 +1196,7 @@ def _choose_alignment(old_shape, new_shape, forced=None, probe=None):
                 return App.Placement(), info, new_shape.copy()
             info.update(method="ambiguous", overlap=iou_id, note=sv[1][0], alternatives=sv[1][1])
             return None, info, None
-        verdict = _alignment_conflict(old_shape, new_shape, iou_id, proper)
+        verdict = _alignment_conflict(old_shape, new_shape, iou_id, proper, probe)
         if verdict is None:
             return App.Placement(), info, new_shape.copy()
         kind, payload = verdict
@@ -1358,7 +1424,8 @@ def _plan(assembly, old, new, choices=None, alignment=None):
         mn_, cache_, out = _Model(shape), {}, {}
         for rf_ in refs:
             for k, e in enumerate(_plan_ref(rf_, mo, mn_, cache_, None, None)):
-                out[(rf_.key, k)] = (e["status"], e["new_global"])
+                g = e["new_global"]
+                out[(rf_.key, k)] = (e["status"], g, mn_.els[g].center if g in mn_.els else None)
         return out
 
     plc, ainfo, aligned = _choose_alignment(old_shape, new_shape, alignment, probe if refs else None)

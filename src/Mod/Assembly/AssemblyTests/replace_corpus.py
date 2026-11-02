@@ -1393,6 +1393,38 @@ def n16_control_symmetric_plate_made_thicker(doc):
     return scene(doc, _PLATE, new, [jspec("revolute", _PLATE_JOINT, (cy((20, 10, 0), (0, 0, 1), 3), ci((20, 10, 14), (0, 0, 1), 3)))])
 
 
+# --- the near twin path asks the references too (r042): a part that is not symmetric (a second, off-centre hole) is replaced by
+# the plain plate turned 180 degrees. The new plate is symmetric, so as placed and as turned it is the same body and explains the
+# same old faces; the joint's rim edge still goes to the top rim as placed and to the bottom rim turned (10 mm apart).
+
+@case("alignment")
+def n17_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_y(doc):
+    return scene(doc, _PLATE_HOLE, _turn_y(_PLATE), [jspec("revolute", _PLATE_JOINT, (AMB, AMB))])
+
+
+@case("alignment")
+def n18_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_x(doc):
+    return scene(doc, _PLATE_HOLE, _turn_x(_PLATE), [jspec("revolute", _PLATE_JOINT, (AMB, AMB))])
+
+
+@case("alignment")
+def n19_control_plate_with_two_holes_replaced_by_the_plain_plate_reference_is_the_centre_hole(doc):
+    # the same parts, but the joint holds only the centre hole's cylinder, which every turn maps onto itself: matched
+    d = (cy((20, 10, 0), (0, 0, 1), 3),) * 2
+    return scene(doc, _PLATE_HOLE, _turn_y(_PLATE), [jspec("cylindrical", d, d)], still=True)
+
+
+@case("alignment")
+def n20_square_plate_turned_a_quarter_and_gained_an_offcentre_hole(doc):
+    # a 20 x 20 plate has no principal axes to align by (equal moments in the plane): only the symmetry rule sees that the
+    # new plate may be the old one turned a quarter about Z, which sends the corner (20, 20, 10) to the corner (0, 20, 10)
+    old = bracket(20, 20, 10, holes=((10, 10, 3),))
+    new = moved(bracket(20, 20, 10, holes=((10, 10, 3), (4, 4, 1.5))),
+                App.Placement(V(0, 0, 0), App.Rotation(V(0, 0, 1), 90), V(10, 10, 5)))
+    corner = vx((20, 20, 10))
+    return scene(doc, old, new, [jspec("ball", (corner, corner), (AMB, AMB))])
+
+
 # --- delete_old must not destroy what is still used --------------------------------------------
 
 def _other_user(doc, target, mode_name="Assembly2"):

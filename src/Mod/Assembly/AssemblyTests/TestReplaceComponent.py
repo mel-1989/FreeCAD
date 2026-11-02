@@ -603,6 +603,18 @@ def _mut_symmetry_rule_off():
     R._symmetry_verdict = lambda *a, **k: None
 
 
+def _mut_agreement_check_blind():
+    # the comparison of two readings finds no difference: every ambiguous alignment "agrees" and the part stands as placed
+    R._readings_differ = lambda first, second, both=False, tol=None: []
+
+
+def _mut_near_twin_shortcut():
+    # the old shortcut: a turned reading that recognises no old face identity does not is dropped without asking where
+    # the references land (a new part symmetric under the turn recognises the same faces turned and as placed)
+    orig = R._near_conflict
+    R._near_conflict = lambda mo, new_shape, comp, probe=None: orig(mo, new_shape, comp, None)
+
+
 def _mut_resize_exemption_off():
     R._same_topology = lambda *a, **k: False
 
@@ -683,8 +695,10 @@ MUTANTS = {
     "moved_and_resized_allowed": (_mut_move_and_resize_allowed, "c2_hole_gone_wider_hole_nearby"),
     "alignment_conflict_check_off": (_mut_alignment_check_off, "e3_bar_turned_about_z_boss_top_and_end"),
     "near_twin_alignment_check_off": (_mut_near_check_off, "n1_bracket_turned_and_gained_a_small_hole"),
-    "symmetry_rule_off": (_mut_symmetry_rule_off, "n5_symmetric_plate_turned_and_gained_an_offcentre_hole"),
+    "symmetry_rule_off": (_mut_symmetry_rule_off, "n20_square_plate_turned_a_quarter_and_gained_an_offcentre_hole"),
     "resize_exemption_off": (_mut_resize_exemption_off, "core_resize_cube_to_flat_plate"),
+    "agreement_check_treats_differing_as_agreeing": (_mut_agreement_check_blind, "n5_symmetric_plate_turned_and_gained_an_offcentre_hole"),
+    "near_twin_shortcut_drops_a_reading_unasked": (_mut_near_twin_shortcut, "n17_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_y"),
     "user_suppression_forgotten_by_repair": (_mut_suppression_forgotten, "@suppression_and_offset"),
     "delete_old_ignores_other_users": (_mut_delete_ignores_users, "t6_delete_old_direct_part_used_by_another_assembly"),
     "body_features_orphaned": (_mut_body_features_orphaned, "t10_delete_old_body_nobody_else_uses"),
@@ -702,7 +716,7 @@ def mutated(name):
     saved = {k: getattr(R, k) for k in ("_match_element", "_choose_alignment", "_decide", "_new_link_placement",
                                         "_write_ref", "_break_joint", "_collect_refs", "_solve", "_new_ref_value", "apply",
                                         "ADJ_MIN", "RADIUS_ADAPT", "SIZE_RATIO_MAX", "_claims", "MOVE_TOL",
-                                        "_alignment_conflict", "_near_conflict", "_symmetry_verdict", "_same_topology", "_outside_users", "_deletion_set", "repair",
+                                        "_alignment_conflict", "_near_conflict", "_readings_differ", "_symmetry_verdict", "_same_topology", "_outside_users", "_deletion_set", "repair",
                                         "_check_element")}
     saved_u = U.findPlacement
     saved_j = JointObject.Joint.onChanged
@@ -1013,6 +1027,8 @@ class TestReplaceComponent(unittest.TestCase):
                                    ("n7_symmetric_plate_turned_about_x_edge_only_reference", "turned 180\u00b0 about X"),
                                    ("n8_symmetric_plate_turned_vertex_only_reference", "turned 180\u00b0 about Y"),
                                    ("n11_bracket_turned_and_lost_a_chamfered_end", "turned 178\u00b0 about Y"),   # an inertia alignment, not exact
+                                   ("n17_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_y", "turned 180\u00b0 about Y"),
+                                   ("n18_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_x", "turned 180\u00b0 about X"),
                                    ("e3_bar_turned_about_z_boss_top_and_end", "turned 180\u00b0 about Z")):
             with self.subTest(case=name):
                 doc = App.newDocument("Rc_cand")
@@ -1046,13 +1062,33 @@ class TestReplaceComponent(unittest.TestCase):
                 finally:
                     App.closeDocument(doc.Name)
 
+    def test_readings_differ_rules(self):
+        V = App.Vector
+        a = {"r": ("matched", "Face7", V(30, 6, 5))}
+        self.assertEqual(R._readings_differ(a, {"r": ("matched", "Face7", V(30, 6, 5))}), [])
+        # the same name at another place differs only when a tolerance is asked for
+        far = {"r": ("matched", "Face7", V(10, 6, 5))}
+        self.assertEqual(R._readings_differ(a, far), [])
+        self.assertEqual(len(R._readings_differ(a, far, tol=1.0)), 1)
+        self.assertEqual(R._readings_differ(a, {"r": ("matched", "Face7", V(30.5, 6, 5))}, tol=1.0), [])
+        # another element differs
+        self.assertEqual(len(R._readings_differ(a, {"r": ("matched", "Face8", V(30, 6, 5))})), 1)
+        # matched against not matched differs, unless only references both readings match count
+        gone = {"r": ("unmatched", None, None)}
+        self.assertEqual(len(R._readings_differ(a, gone)), 1)
+        self.assertEqual(R._readings_differ(a, gone, both=True), [])
+        self.assertEqual(len(R._readings_differ(a, {"r": ("matched", "Face8", V(30, 6, 5))}, both=True)), 1)
+        # neither matched: nothing to tell apart
+        self.assertEqual(R._readings_differ(gone, {"r": ("ambiguous", None, None)}), [])
+
     def test_unambiguous_alignment_has_no_candidates(self):
         for name, method in (("n3_control_plain_revision_gained_a_small_hole", "identity"),
                              ("n4_control_plain_revision_gained_a_boss", "identity"),
                              ("n13_control_symmetric_plate_gained_a_hole_reference_is_the_centre_hole", "identity"),
                              ("n14_control_asymmetric_bracket_gained_a_tiny_hole_far_away", "identity"),
                              ("n15_control_symmetric_plate_resized_keeping_the_symmetry", "identity"),   # a resize: as placed (was inertia before the resize exemption)
-                             ("n16_control_symmetric_plate_made_thicker", "identity")):
+                             ("n16_control_symmetric_plate_made_thicker", "identity"),
+                             ("n19_control_plate_with_two_holes_replaced_by_the_plain_plate_reference_is_the_centre_hole", "identity")):
             with self.subTest(case=name):
                 doc = App.newDocument("Rc_ctl")
                 try:
