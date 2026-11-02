@@ -30,6 +30,7 @@ from AssemblyTests.TestSimulationExport import TestSimulationExport
 from AssemblyTests.TestInterference import TestInterference
 from AssemblyTests.TestReplaceComponent import TestReplaceComponent
 from AssemblyTests.TestAssemblyFeature import TestAssemblyFeature
+from AssemblyTests.TestConfigurations import TestConfigurations
 
 # Use the modules so that code checkers don't complain (flake8)
 True if TestCore else False
@@ -39,3 +40,4 @@ True if TestSimulationExport else False
 True if TestInterference else False
 True if TestReplaceComponent else False
 True if TestAssemblyFeature else False
+True if TestConfigurations else False
