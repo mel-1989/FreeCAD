@@ -88,12 +88,35 @@ def solid_tool():
 
 # ----------------------------------------------------------- feature object
 
+_FEATURE_PROPS = ("Kind", "Spec", "ToolObject", "Scope", "Suppressed", "Dependencies")
+
+
 def _is_feature(obj):
-    return isinstance(getattr(obj, "Proxy", None), AssemblyFeature)
+    """By proxy, or by properties alone (the proxy is lost when stable FreeCAD re-saves a file)."""
+    if isinstance(getattr(obj, "Proxy", None), AssemblyFeature):
+        return True
+    return obj.TypeId == "App::FeaturePython" and all(p in obj.PropertiesList for p in _FEATURE_PROPS)
+
+
+def is_feature(obj):
+    """True for an assembly feature object, including one whose proxy was lost."""
+    return _is_feature(obj)
 
 
 class AssemblyFeature:
     """Proxy of the feature object. ``results`` is the in-memory cut data and never persisted."""
+
+    @classmethod
+    def attach(cls, obj):
+        """Re-attach the proxy to a feature object whose proxy was lost (a file re-saved by a FreeCAD
+        without this module keeps the properties but drops the proxy)."""
+        proxy = cls.__new__(cls)
+        proxy.results = None
+        obj.Proxy = proxy
+        try:
+            obj.touch()  # recompute once so the feature re-cuts and refreshes its dependencies
+        except Exception:
+            pass
 
     def __init__(self, obj):
         obj.addProperty("App::PropertyString", "Kind", PROP_GROUP, "cut or hole")
@@ -234,6 +257,9 @@ def set_scope(feature, selectors):
 def features(assembly, active_only=False):
     """The assembly's feature objects in assembly order (the order cuts are applied in)."""
     out = [o for o in assembly.Group if _is_feature(o)]
+    for o in out:
+        if not isinstance(getattr(o, "Proxy", None), AssemblyFeature):
+            AssemblyFeature.attach(o)
     return [o for o in out if not o.Suppressed] if active_only else out
 
 

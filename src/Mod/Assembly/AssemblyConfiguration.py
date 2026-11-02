@@ -428,7 +428,8 @@ def _components(assembly):
         for o in c.Group:
             if o.TypeId in _SKIP_TYPES or _is_config(o) or not hasattr(o, "Placement"):
                 continue
-            if o.TypeId == "Assembly::AssemblyObject" or getattr(o, "Proxy", None).__class__.__name__ == "AssemblyFeature":
+            import AssemblyFeature
+            if o.TypeId == "Assembly::AssemblyObject" or AssemblyFeature.is_feature(o):
                 continue
             out.append(o)
             out.extend(getattr(o, "ElementList", []) or [])
