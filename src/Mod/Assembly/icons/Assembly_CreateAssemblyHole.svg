@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Assembly_CreateAssemblyHole</title>
+  <path d="M6 30 L26 18 L58 18 L58 24 L38 38 L6 38 Z" fill="#b9d6f2" stroke="#1d5a96" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M6 38 L38 38 L58 24 M38 38 L38 50 L6 50 L6 38" fill="#9cc2e8" stroke="#1d5a96" stroke-width="3" stroke-linejoin="round"/>
+  <ellipse cx="32" cy="27" rx="9" ry="4.5" fill="#263238" stroke="#0d1b21" stroke-width="2"/>
+  <path d="M32 4 L32 22 M26 16 L32 23 L38 16" stroke="#d32f2f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
