@@ -19,41 +19,53 @@ ICON_REPAIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", 
 
 
 def _assembly_of(obj):
-    """The assembly that holds ``obj`` (itself when it is one), else None."""
+    """The outermost assembly that holds ``obj`` (itself when it is one), else None."""
     seen = set()
+    found = None
     while obj is not None and obj.Name not in seen:
         seen.add(obj.Name)
         if obj.isDerivedFrom("Assembly::AssemblyObject"):
-            return obj
+            found = obj
         parent = obj.getParentGeoFeatureGroup()
         if parent is None:
             parent = next((p for p in obj.InList if p.isDerivedFrom("Assembly::AssemblyObject")), None)
         obj = parent
-    return None
+    return found
 
 
 def target():
     """(assembly, component) for the panel: the active assembly, else the assembly that holds the selection; the
-    component is the selected one (the top level child of the assembly that contains the selection) or None."""
+    component is the nearest entry of the panel's component list that holds the selection (a part inside a
+    sub-assembly, an array element) or None."""
+    import ReplaceComponent
+    from ReplacePanel import component_for
+
     assembly = UtilsAssembly.activeAssembly()
     comp = None
     for sel in Gui.Selection.getSelectionEx("*", 0):
         found = _assembly_of(sel.Object)
+        if found is not None and assembly is not None and found != assembly and ReplaceComponent._in_tree(assembly, sel.Object):
+            found = assembly   # a sub-assembly that is the active one: its own parts are the components
         if found is None or (assembly is not None and found != assembly):
             continue
         assembly = found
         if sel.Object == assembly:
-            subs = [s for s in sel.SubElementNames if s]
-            comp = assembly.Document.getObject(subs[0].split(".")[0]) if subs else None
+            comp = None
+            for sub in [x for x in sel.SubElementNames if x]:
+                # the deepest object of the sub-name path that the panel offers (Sub.ML. gives ML, not Sub)
+                for name in reversed([n for n in sub.split(".") if n]):
+                    comp = component_for(assembly, assembly.Document.getObject(name))
+                    if comp is not None:
+                        break
+                if comp is not None:
+                    break
         else:
-            comp = sel.Object
-            while comp is not None and comp not in assembly.Group:
-                comp = comp.getParentGeoFeatureGroup()
+            comp = component_for(assembly, sel.Object)
         if comp is not None:
             break
     if assembly is None:
         return None, None
-    return assembly, comp if comp is not None and comp in assembly.Group else None
+    return assembly, comp
 
 
 class CommandReplaceComponent:

@@ -92,18 +92,77 @@ def part_candidates(doc, exclude=()):
     return out
 
 
-def components_of(assembly):
-    """Children of the assembly that ``ReplaceComponent`` accepts as the old part."""
+_NOT_COMPONENTS = ("Assembly::JointGroup", "Assembly::ViewGroup", "Assembly::BomGroup")
+_CONTAINERS = ("Assembly::AssemblyObject", "App::Part")
+
+
+def _replaceable(assembly, obj):
+    if RC._is_joint(obj) or obj.TypeId in _NOT_COMPONENTS:
+        return False
+    try:
+        RC._find_hosts(assembly, obj)
+    except Exception:  # noqa: BLE001  (not something that can be replaced)
+        return False
+    return True
+
+
+def component_entries(assembly):
+    """``[(object, label)]`` of everything the old-component combo offers, in order: the children of the assembly, the
+    parts inside sub-assemblies (labelled with their path, ``Sub / Part``), the elements of link arrays (``Array[i]``),
+    then each linked source object that two or more links of the assembly point to (``Source (source of N links)``)."""
     out = []
-    for o in assembly.Group:
-        if RC._is_joint(o) or o.TypeId in ("Assembly::JointGroup", "Assembly::ViewGroup", "Assembly::BomGroup"):
-            continue
-        try:
-            RC._find_hosts(assembly, o)
-        except Exception:  # noqa: BLE001  (not something that can be replaced)
-            continue
-        out.append(o)
+    seen = set()
+
+    def add(obj, label):
+        if obj.Name not in seen:
+            seen.add(obj.Name)
+            out.append((obj, label))
+
+    def walk(group, prefix):
+        for o in group.Group:
+            if RC._is_joint(o) or o.TypeId in _NOT_COMPONENTS:
+                continue
+            label = prefix + o.Label
+            if _replaceable(assembly, o):
+                add(o, label)
+                if o.TypeId == "App::Link":
+                    for i, el in enumerate(getattr(o, "ElementList", [])):
+                        if _replaceable(assembly, el):
+                            add(el, "%s[%d]" % (label, i))
+            if o.TypeId in _CONTAINERS:
+                walk(o, label + " / ")
+
+    walk(assembly, "")
+    users = {}
+    for o in assembly.Document.Objects:
+        if o.TypeId == "App::Link" and RC._in_tree(assembly, o):
+            lo = o.LinkedObject
+            while lo is not None and RC._is_link(lo) and getattr(lo, "LinkedObject", None) is not None:
+                lo = lo.LinkedObject
+            if lo is not None:
+                users.setdefault(lo.Name, [lo, 0])[1] += 1
+    for lo, n in users.values():
+        if n >= 2 and _replaceable(assembly, lo):
+            add(lo, translate("Assembly", "%s (source of %d links)") % (lo.Label, n))
     return out
+
+
+def components_of(assembly):
+    """Components the panel can offer as the old part, each accepted by ``ReplaceComponent`` (see ``component_entries``)."""
+    return [o for o, _label in component_entries(assembly)]
+
+
+def component_for(assembly, obj):
+    """The entry of ``components_of`` that ``obj`` is or lies in (nearest first), else None."""
+    comps = {o.Name for o in components_of(assembly)}
+    seen = 0
+    while obj is not None and seen < 64:
+        if obj.Name in comps:
+            return obj
+        arr = RC._array_of(obj)
+        obj = arr if arr is not None else obj.getParentGeoFeatureGroup()
+        seen += 1
+    return None
 
 
 class _Keys(QtCore.QObject):
@@ -338,11 +397,12 @@ class TaskReplaceComponent:
     # ------------------------------------------------------------------ the old component
 
     def _fill_old(self, old):
-        self.components = components_of(self.assembly)
+        entries = component_entries(self.assembly)
+        self.components = [o for o, _label in entries]
         self.old_combo.blockSignals(True)
         self.old_combo.clear()
-        for o in self.components:
-            self.old_combo.addItem(o.Label)
+        for _o, label in entries:
+            self.old_combo.addItem(label)
         self.old_combo.setCurrentIndex(self.components.index(old) if old in self.components else (0 if len(self.components) == 1 and old is None else -1))
         self.old_combo.blockSignals(False)
 
@@ -434,6 +494,16 @@ class TaskReplaceComponent:
             self._watch()
         return doc
 
+    @staticmethod
+    def _open_document_of(path):
+        """The open document whose file is ``path`` (same real path), else None."""
+        real = os.path.realpath(path)
+        for d in App.listDocuments().values():
+            fn = getattr(d, "FileName", "")
+            if fn and os.path.realpath(fn) == real:
+                return d
+        return None
+
     def _restore_active(self):
         if self.document_name in App.listDocuments():
             if App.ActiveDocument is None or App.ActiveDocument.Name != self.document_name:
@@ -473,15 +543,24 @@ class TaskReplaceComponent:
             self.replan()
             return False
         if not os.path.isfile(path):
-            self.show_error(translate("Assembly", "No such file: %s") % path)
             self.replan()
+            self.show_error(translate("Assembly", "No such file: %s") % path)
             return False
+        already = self._open_document_of(path)
+        if already is not None:
+            if already.Name == self.document_name:
+                self.replan()
+                self.show_error(translate("Assembly", "%s is the file of this assembly itself: choose the part from the object list instead.") % path)
+                return False
+            # Opening a path that is open already hands back that document and clears its Modified flag, which would
+            # silence the "save changes?" prompt for the user's unsaved edits: use it as it is, never open or close it.
+            return self._offer(already, self.file_object, self.file_objects, object_name, translate("Assembly", "The file holds no solid part."))
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
             doc = self._open_hidden(path)
         except Exception as exc:  # noqa: BLE001  (a panel never raises into the Qt event loop)
-            self.show_error(translate("Assembly", "Could not open %s: %s") % (path, exc))
             self.replan()
+            self.show_error(translate("Assembly", "Could not open %s: %s") % (path, exc))
             return False
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
@@ -495,8 +574,8 @@ class TaskReplaceComponent:
             combo.addItem(o.Label)
         combo.blockSignals(False)
         if not store:
-            self.show_error(empty_text)
             self.replan()
+            self.show_error(empty_text)
             return False
         pick = next((i for i, o in enumerate(store) if o.Name == object_name or o.Label == object_name), 0)
         combo.setCurrentIndex(pick)
@@ -1022,19 +1101,35 @@ class TaskRepairJoint:
             combo = QtWidgets.QComboBox()
             combo.setObjectName("new_element_%d" % i)
             combo.setAccessibleName(translate("Assembly", "New element for %s") % old)
-            combo.addItem("")
-            self._fill(combo, comp, subs, i)
             self.picks.addRow(translate("Assembly", "New element for %s") % old, combo)
             self.element_combos.append(combo)
+            self._fill(combo, comp, subs, i)
+        if len(subs) == 2 and self.element_combos[0] is not None:
+            first = self.element_combos[0]
+            first.currentIndexChanged.connect(lambda *_a, c=comp, s=list(subs): self._face_picked(c, s))
+
+    def _face_of_edge(self, subs):
+        """The face a face + edge reference's edge is numbered in: the one chosen in the first combo (the old number may
+        not exist on the new part), or the kept first sub-name. None when there is none yet or the reference has no face."""
+        first = RC._split_sub(subs[0].replace("?", ""))
+        if RC._kind_of(first[1]) != "Face":
+            return None
+        combo = self.element_combos[0] if self.element_combos else None
+        if combo is None:
+            return first[0] + first[1] if "?" not in subs[0] else None
+        return first[0] + combo.currentText() if combo.currentText() else None
 
     def _fill(self, combo, comp, subs, i):
         import Part
 
         path, old = RC._split_sub(subs[i].replace("?", ""))
         kind = old.rstrip("0123456789")
+        combo.clear()
+        combo.addItem("")
         try:
             if i == 1 and kind == "Edge" and RC._kind_of(RC._split_sub(subs[0].replace("?", ""))[1]) == "Face":
-                n = len(Part.getShape(comp, path + RC._split_sub(subs[0].replace("?", ""))[1], needSubElement=True).Edges)
+                face = self._face_of_edge(subs)
+                n = 0 if face is None else len(Part.getShape(comp, face, needSubElement=True).Edges)
             else:
                 shape = Part.getShape(comp, path, needSubElement=False)
                 n = len(getattr(shape, kind + "s"))
@@ -1042,6 +1137,12 @@ class TaskRepairJoint:
             n = 0
         for k in range(1, n + 1):
             combo.addItem("%s%d" % (kind, k))
+
+    def _face_picked(self, comp, subs):
+        """The face of a face + edge reference changed: list the edges of that face (the pick of the old one is dropped,
+        its number means another edge there)."""
+        if len(self.element_combos) > 1 and self.element_combos[1] is not None:
+            self._fill(self.element_combos[1], comp, subs, 1)
 
     def set_element(self, index, name):
         """Pick ``name`` in the combo of sub-name ``index`` (what a click does)."""

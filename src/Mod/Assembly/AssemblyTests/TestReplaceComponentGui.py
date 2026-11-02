@@ -695,3 +695,137 @@ class TestReplaceComponentGui(unittest.TestCase):
         Gui.Selection.addSelection(self.doc.Name, "Slide")
         pump(0.7)
         self.assertTrue(act.isEnabled(), "disabled for a broken joint")
+
+    # ------------------------------------------------------------------ a file that is open already (r041 fix 1)
+
+    def unsaved_edit(self, doc, label="Unsaved edit"):
+        """A user's unsaved edit in ``doc``: a new label on its first Part::Feature and the Gui Modified flag set."""
+        obj = [o for o in doc.Objects if o.TypeId == "Part::Feature"][0]
+        obj.Label = label
+        Gui.getDocument(doc.Name).Modified = True
+        pump(0.1)
+        return obj
+
+    def test_a_file_source_that_is_the_assemblys_own_file_is_refused_and_changes_nothing(self):
+        path = os.path.join(self.tmp, "own.FCStd")
+        self.doc.saveAs(path)
+        pump(0.1)
+        self.unsaved_edit(self.doc)
+        before = full_state(self.doc)
+        self.assertTrue(before["modified"])
+        p = self.open_panel()
+        self.assertFalse(p.set_source_file(path))
+        pump(0.2)
+        self.assertIn("itself", p.error.text())
+        self.assertNotIn("TypeError", p.error.text())
+        self.assertIsNone(p.new_obj)
+        self.assertEqual(p.temp, [])
+        Gui.Control.closeDialog()
+        pump(0.5)
+        after = full_state(self.doc)
+        self.assertTrue(after["modified"], "the unsaved edit must still prompt on close")
+        self.assertEqual(state_diff(before, after), [])
+
+    def test_a_file_source_that_is_another_open_document_is_used_as_it_is(self):
+        other = App.newDocument("RcOther")
+        o = other.addObject("Part::Feature", "OtherPart")
+        o.Shape = C.bracket(holes=((10, 6, 3), (30, 6, 3)))
+        other.recompute()
+        path = os.path.join(self.tmp, "other.FCStd")
+        other.saveAs(path)
+        pump(0.1)
+        self.unsaved_edit(other)
+        App.setActiveDocument(self.doc.Name)
+        Gui.ActiveDocument = Gui.getDocument(self.doc.Name)
+        pump(0.1)
+        self.doc.recompute()
+        self.doc.purgeTouched()
+        Gui.getDocument(self.doc.Name).Modified = False
+        mine, theirs = full_state(self.doc), full_state(other)
+        self.assertTrue(theirs["modified"])
+        p = self.open_panel()
+        self.assertTrue(p.set_source_file(path), p.error.text())
+        pump(0.2)
+        self.assertIs(p.new_obj.Document, other)
+        self.assertEqual(p.temp, [], "a document the panel did not open is not its to close")
+        self.assertIsNotNone(p.report)
+        # Cancel: both documents exactly as before, the other one still open and still modified
+        p.reject()
+        Gui.Control.closeDialog()
+        pump(0.5)
+        self.assertIn(other.Name, App.listDocuments())
+        self.assertEqual(state_diff(mine, full_state(self.doc)), [])
+        self.assertEqual(state_diff(theirs, full_state(other)), [])
+        self.assertTrue(Gui.getDocument(other.Name).Modified)
+        # OK: only the assembly's document changes
+        p = self.open_panel()
+        self.assertTrue(p.set_source_file(path), p.error.text())
+        p.choose_alignment(0) if p.align_cands else None
+        self.assertTrue(p.accept(), p.error.text())
+        Gui.Control.closeDialog()
+        pump(0.5)
+        self.assertNotEqual(R.signature(self.doc), mine["sig"])
+        self.assertEqual(state_diff(theirs, full_state(other)), [])
+        self.assertIn(other.Name, App.listDocuments())
+        self.assertTrue(Gui.getDocument(other.Name).Modified)
+
+    # ------------------------------------------------------------------ repairing a face + edge reference by hand (r041 fix 2)
+
+    def test_repair_panel_repairs_face_and_edge_when_the_old_face_number_is_gone(self):
+        from ReplacePanel import TaskRepairJoint
+        import Part
+
+        for case in ("removed_hole_revolute", "mixed_matched_and_broken", "sym_two_holes_revolute"):
+            with self.subTest(case=case):
+                def broken(name):
+                    self.build(case, name)
+                    R.apply(self.b.asm, self.b.old, self.b.new, **self.b.kwargs)
+                    return [j for j, _ in self.b.joints if R.is_broken(j)][0]
+                j = broken("RcRepA")
+                shape = Part.getShape(self.b.new)
+                cyl = [i for i, f in enumerate(shape.Faces, 1) if f.Surface.TypeId == "Part::GeomCylinder"]
+                face = "Face%d" % (cyl[0] if cyl else 1)
+                n_edges = len(shape.getElement(face).Edges)
+                p = TaskRepairJoint(self.b.asm, j)
+                self.assertEqual(p.reference, "Reference2")
+                edge_combo = p.element_combos[1]
+                p.set_element(0, face)
+                self.assertEqual(edge_combo.count() - 1, n_edges, "the edges listed are those of the face picked in the first combo")
+                self.assertGreater(n_edges, 0)
+                p.set_element(1, "Edge1")
+                self.assertTrue(p.accept(), p.error.text())
+                via_panel = norm(R.signature(self.doc))
+                j = broken("RcRepB")
+                R.repair(j, "Reference2", [face, "Edge1"])
+                self.assertEqual(norm(R.signature(self.doc)), via_panel, "the panel did what repair() does")
+                self.assertFalse(R.is_broken(j))
+
+    # ------------------------------------------------------------------ components the API handles (r041 fix 3)
+
+    def test_panel_selects_what_the_api_accepts_as_old(self):
+        for case, label in (("sub_revolute_renumbered", "Sub / ML"), ("sub_hole_removed", "Sub / ML"),
+                            ("array_element_given_as_old", "Arr[1]"), ("link_two_links_one_source", "(source of 2 links)")):
+            with self.subTest(case=case):
+                self.build(case)
+                b = self.b
+                p = F.scene_panel(b)
+                self.assertIn(b.old, p.components, "the old component the API accepts is not offered")
+                labels = [p.old_combo.itemText(i) for i in range(p.old_combo.count())]
+                self.assertTrue(any(label in t for t in labels), (label, labels))
+                p.set_old(b.old)
+                self.assertEqual(p.old, b.old)
+                self.assertIsNotNone(p.report, p.error.text())
+                expect = R.plan(b.asm, b.old, b.new, alignment=b.kwargs.get("alignment"))
+                self.assertEqual(p.report, expect, "the preview is the plan for the same old")
+
+    def test_command_preselects_a_part_inside_a_sub_assembly(self):
+        self.build("sub_revolute_renumbered")
+        made = self.captured()
+        Gui.activateWorkbench("AssemblyWorkbench")
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(self.doc.Name, "ML")
+        Gui.runCommand("Assembly_ReplaceComponent")
+        Gui.updateGui()
+        self.assertEqual(len(made), 1)
+        self.assertEqual(made[0].old, self.doc.getObject("ML"))
+        Gui.Control.closeDialog()
