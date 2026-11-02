@@ -1146,6 +1146,31 @@ class TestReplaceComponent(unittest.TestCase):
             App.closeDocument(doc.Name)
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_importing_a_part_from_another_document_leaves_that_document_as_it_was(self):
+        # Document.copyObject marks the objects it copies from with a hidden _ObjectUUID that the next save of their document
+        # would write; a part taken from a document the user has open is used as it is
+        doc = App.newDocument("Rc_imp")
+        other = App.newDocument("Rc_imp_src")
+        try:
+            b = C.build_case(doc, "renumber_revolute")
+            src = other.addObject("Part::Feature", "SrcPart")
+            src.Shape = b.new.Shape
+            other.recompute()
+            before = (R.signature(other), other.isTouched(), other.UndoCount)
+            rep = R.apply(b.asm, b.old, src, import_foreign=True)
+            self.assertTrue(rep["imported"], rep)
+            self.assertNotIn("_ObjectUUID", src.PropertiesList)
+            self.assertEqual((R.signature(other), other.isTouched(), other.UndoCount), before)
+            # a source object that carried the mark already keeps it
+            src2 = other.addObject("Part::Feature", "SrcPart2")
+            src2.Shape = b.new.Shape
+            src2.addProperty("App::PropertyUUID", "_ObjectUUID", "Base", "", 0, False, True)
+            R._forget_copy_marks(other, {"SrcPart2"})
+            self.assertIn("_ObjectUUID", src2.PropertiesList)
+        finally:
+            App.closeDocument(other.Name)
+            App.closeDocument(doc.Name)
+
     def test_two_runs_identical(self):
         a = run_case("resize_slider", checks=("plan",))["plan"]
         b = run_case("resize_slider", checks=("plan",))["plan"]

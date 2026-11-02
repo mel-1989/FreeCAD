@@ -1640,6 +1640,21 @@ def _apply_ref(rf, new_comp, new_tokens):
     return ok
 
 
+def _forget_copy_marks(src_doc, had_uuid):
+    """Take back the hidden ``_ObjectUUID`` that ``Document.copyObject`` writes onto the objects it copies from.
+
+    FreeCAD marks the source objects of any copy with a UUID so that the copy can say where it came from; the
+    property is saved with the source document, so copying out of a document the user has open would change what
+    their next save writes. A part taken from another document is to be used as it is: remove the mark from the
+    objects that did not carry one before (removing it touches nothing and leaves no undo step)."""
+    for o in src_doc.Objects:
+        if o.Name not in had_uuid and "_ObjectUUID" in o.PropertiesList:
+            try:
+                o.removeProperty("_ObjectUUID")
+            except Exception:
+                pass
+
+
 def apply(assembly, old, new, choices=None, delete_old=False, alignment=None, import_foreign=False):
     """Replace ``old`` by ``new`` in one undo transaction and return the report.
 
@@ -1664,7 +1679,12 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None, im
             # a part of another document (a file, a vault revision) is copied into this one inside the same
             # transaction, so one undo takes the copy and the replacement away together; the copy is then
             # planned again and must read exactly as the original did
-            copied = doc.copyObject(ctx["new_top"], True, True)
+            src_doc = new.Document
+            had_uuid = {o.Name for o in src_doc.Objects if "_ObjectUUID" in o.PropertiesList}
+            try:
+                copied = doc.copyObject(ctx["new_top"], True, True)
+            finally:
+                _forget_copy_marks(src_doc, had_uuid)
             imported = list(copied) if isinstance(copied, (list, tuple)) else [copied]
             roots = [o for o in imported if not any(u in imported for u in o.InList)]   # nothing copied depends on the copy of the part itself
             if len(roots) != 1:
