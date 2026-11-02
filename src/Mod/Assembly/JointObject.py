@@ -46,6 +46,9 @@ from SoSwitchMarker import SoSwitchMarker
 
 translate = App.Qt.translate
 
+# names of the joints someone tried to unsuppress while a replace had left them broken (see Joint.onChanged)
+BrokenUnsuppressLog = []
+
 TranslatedJointTypes = [
     translate("Assembly", "Fixed"),
     translate("Assembly", "Revolute"),
@@ -783,6 +786,20 @@ class Joint:
                     joint.Label = joint.Label.replace(tr_old_type, tr_new_type)
                     break
 
+        if (
+            prop == "Suppressed"
+            and not joint.Suppressed
+            and getattr(joint, "ReplaceBroken", "")
+            and not joint.Document.Transacting
+        ):
+            # a replace left this joint with a reference it could not remap: the solver would skip it
+            # without a word, so refuse here (ReplaceComponent.repair clears the marker first)
+            msg = "cannot unsuppress a joint whose reference is broken; repair it first: "
+            BrokenUnsuppressLog.append(joint.Name)
+            App.Console.PrintError(joint.Label + ": " + msg + joint.ReplaceBroken + "\n")
+            joint.Suppressed = True
+            return
+
         if prop == "Reference1" or prop == "Reference2":
             joint.recompute()
 
@@ -816,6 +833,9 @@ class Joint:
 
     def execute(self, joint):
         errStr = joint.Label + ": " + QT_TRANSLATE_NOOP("Assembly", "Broken link in: ")
+        for prop in ("Reference1", "Reference2"):
+            if UtilsAssembly.hasBrokenMarker(getattr(joint, prop, None)):
+                raise Exception(errStr + prop)
         if (
             hasattr(joint, "Reference1")
             and joint.Reference1 is not None

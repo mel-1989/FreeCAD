@@ -1030,7 +1030,19 @@ So here we want to find a placement that corresponds to a local coordinate syste
 """
 
 
+class BrokenReferenceError(ValueError):
+    """A joint reference holds FreeCAD's broken-link marker, a "?" in a sub-name: its element is unknown."""
+
+
+def hasBrokenMarker(ref):
+    """True if any sub-name of the reference carries the broken-link marker ("?")."""
+    return ref is not None and len(ref) == 2 and any("?" in s for s in ref[1])
+
+
 def findPlacement(ref, ignoreVertex=False):
+    if hasBrokenMarker(ref):
+        # a placement at the identity would look like a real answer; there is none
+        raise BrokenReferenceError("Broken reference: " + ", ".join(ref[1]))
     if not isRefValid(ref, 2):
         return App.Placement()
     obj = getObject(ref)
