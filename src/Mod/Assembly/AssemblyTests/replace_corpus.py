@@ -1236,6 +1236,20 @@ def n4_control_plain_revision_gained_a_boss(doc):
     return scene(doc, BASE, _SMALL_BOSS, [jspec("cylindrical", BR["cylindrical"], BR["cylindrical"])], still=True)
 
 
+# --- the same question asked of the referenced elements (r041): a symmetric plate turned 180 degrees about Y that gained an
+# off-centre hole. Faces are explained alike as placed and as turned, but the hole's rim edge goes to opposite rims.
+
+_PLATE = bracket(holes=((20, 10, 3),))
+_PLATE_HOLE = bracket(holes=((20, 10, 3), (8, 4, 1.5)))
+_PLATE_JOINT = (cy((20, 10, 0), (0, 0, 1), 3), ci((20, 10, 10), (0, 0, 1), 3))
+
+
+@case("alignment")
+def n5_symmetric_plate_turned_and_gained_an_offcentre_hole(doc):
+    # as placed the joint's rim edge goes to one rim, turned back to the opposite one (10 mm apart): ambiguous
+    return scene(doc, _PLATE, _turn_y(_PLATE_HOLE), [jspec("revolute", _PLATE_JOINT, (AMB, AMB))])
+
+
 # --- delete_old must not destroy what is still used --------------------------------------------
 
 def _other_user(doc, target, mode_name="Assembly2"):

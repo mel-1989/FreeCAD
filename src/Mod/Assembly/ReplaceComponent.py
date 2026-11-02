@@ -135,6 +135,10 @@ NEAR_IOU = 0.02         # an alternative alignment this much below identity's ov
 NEAR_ANG = 0.02         # rad, largest direction difference of a near twin face (about 1 degree)
 NEAR_SIZE = 0.25        # relative, largest area difference of a near twin face
 NEAR_RADIUS = 0.10      # relative, largest radius difference of a near twin face
+ALT_FIT = 0.9           # the reference check applies to parts that overlap at least this much as placed
+ALT_MOVE = 0.01         # fraction of the diagonal: a referenced element this far from where the other reading puts it (in the new part) has moved
+ALT_ASYM = 0.01         # a new part whose overlap with itself turned is within this of 1 is symmetric under the turn
+ALT_TURN = 0.01         # rad, smallest rotation that makes an alternative alignment a turned reading (below it: a shift)
 NEAR_POS = 0.03         # largest distance between the centres of near twin faces, as a fraction of the part's diagonal
 
 _ELEMENT_RE = re.compile(r"^(Face|Edge|Vertex)(\d+)$")
@@ -844,7 +848,7 @@ def _near_conflict(mo, new_shape, comp):
     return out
 
 
-def _alignment_conflict(old_shape, new_shape, iou_id, proper):
+def _alignment_conflict(old_shape, new_shape, iou_id, proper, probe=None):
     """Is identity, which the overlap alone would keep, contradicted by an alternative alignment?
 
     The alternatives that count overlap the old part at least as well as identity does (within
@@ -857,7 +861,16 @@ def _alignment_conflict(old_shape, new_shape, iou_id, proper):
     a conflict. Last, near twins (``_near_conflict``): an alternative that overlaps within NEAR_IOU of
     identity (or better) and recognises, by near twins, an old face that identity does not is also
     ambiguous; this is the part turned that also gained or lost a small hole or boss, whose exact twins
-    are gone. Otherwise None."""
+    are gone. Last, the references (``probe``, when given): an alternative that is turned (not just shifted), overlaps
+    within NEAR_IOU of identity (or better) and sends a referenced element to a different new element than identity
+    does, both readings matching it confidently, is ambiguous too: the part fits as placed and as turned and the joint
+    lands on another element under each (a symmetric plate turned 180 degrees that gained an off-centre hole, whose
+    hole rim edge goes to the opposite rim). The rule is narrow on purpose: the parts overlap by at least ALT_FIT
+    as placed, the new part is not itself symmetric under the turn (its overlap with itself turned is below
+    1 - ALT_ASYM: otherwise both readings give the same body), the reference is a face with an edge or vertex on it,
+    the face is the same part of the new part under both readings (a part that trades faces under the turn is left to
+    identity, as the exact-twin rule does) and the edge or vertex is at another place of the new part, by more than
+    ALT_MOVE of the diagonal. Otherwise None."""
     comp = [c for c in proper if c[0] >= iou_id - IOU_SAME]
     mo = _Model(old_shape)
     twins_id = _face_twins(mo, new_shape)
@@ -891,10 +904,38 @@ def _alignment_conflict(old_shape, new_shape, iou_id, proper):
                              "direction and size) that it does not as placed, so it may have been turned and "
                              "changed: pass the alignment" % (iou_id, max(c[0] for c, _f in near),
                                                               max(len(f) for _c, f in near), int(NEAR_POS * 100)), alts)
+    if probe is not None and iou_id >= ALT_FIT:
+        turned = [c for c in proper if c[0] >= iou_id - NEAR_IOU and c[1].Rotation.Angle > ALT_TURN
+                  and _iou(new_shape, c[2]) < 1.0 - ALT_ASYM]
+        if turned:
+            as_placed = probe(new_shape, App.Placement())
+            tol = ALT_MOVE * mo.diag
+            diff = []
+            for c in turned:
+                other = probe(c[2], c[1])
+                moved = []
+                for (key, pos), (st, name, where) in sorted(as_placed.items()):
+                    if pos != 1 or st != "matched" or other.get((key, pos), ("",))[0] != "matched":
+                        continue
+                    f0, f1 = as_placed.get((key, 0)), other.get((key, 0))
+                    if not f0 or not f1 or f0[0] != "matched" or f1[0] != "matched" or (f0[2] - f1[2]).Length > tol:
+                        continue        # the face goes elsewhere too: a part that trades faces under the turn, identity stands
+                    if (where - other[(key, pos)][2]).Length > tol:
+                        moved.append((key, name, other[(key, pos)][1]))
+                if moved:
+                    diff.append((c, moved))
+            if diff:
+                alts = [_plc_json(c[1]) for c, _m in diff]
+                key, a, b = diff[0][1][0]
+                return "ambiguous", ("the new part overlaps the old one about as well as placed (%.4f) as turned (%.4f), "
+                                     "and the face of %s is the same part of the new part under both readings but the "
+                                     "edge or vertex on it is %s as placed and %s when turned, another place on the part "
+                                     "(%d referenced elements): pass the alignment" % (
+                                         iou_id, max(c[0] for c, _m in diff), key[0], a, b, max(len(m) for _c, m in diff)), alts)
     return None
 
 
-def _choose_alignment(old_shape, new_shape, forced=None):
+def _choose_alignment(old_shape, new_shape, forced=None, probe=None):
     """(Placement taking new-local to old-local, info dict, aligned new shape).
 
     The placement is None when no alignment can be chosen (info["method"] is "ambiguous" or
@@ -942,7 +983,7 @@ def _choose_alignment(old_shape, new_shape, forced=None):
                 info.update(method="mirrored", overlap=1.0)
                 return None, info, None
     if iou_id >= best[0] - IOU_MARGIN:
-        verdict = _alignment_conflict(old_shape, new_shape, iou_id, proper)
+        verdict = _alignment_conflict(old_shape, new_shape, iou_id, proper, probe)
         if verdict is None:
             return App.Placement(), info, new_shape.copy()
         kind, payload = verdict
@@ -1161,7 +1202,21 @@ def _plan(assembly, old, new, choices=None, alignment=None):
     old_shape, new_shape = _local_shape(old_leaf), _local_shape(new_leaf)
     if old_shape.isNull() or new_shape.isNull():
         raise ReplaceError("the old or the new part has no shape (recompute the document first)")
-    plc, ainfo, aligned = _choose_alignment(old_shape, new_shape, alignment)
+    refs = _collect_refs(assembly, hosts)
+    mo = _Model(old_shape)
+
+    def probe(shape, plc_):
+        """{(reference key, position): (status, new element, its centre in the new part's own frame)} of every referenced
+        element if ``shape`` (the new part placed by ``plc_``) were the aligned new part."""
+        mn_, cache_, out = _Model(shape), {}, {}
+        inv = plc_.inverse()
+        for rf_ in refs:
+            for k, e in enumerate(_plan_ref(rf_, mo, mn_, cache_, None, None)):
+                g = e["new_global"]
+                out[(rf_.key, k)] = (e["status"], g, inv.multVec(mn_.els[g].center) if g else None)
+        return out
+
+    plc, ainfo, aligned = _choose_alignment(old_shape, new_shape, alignment, probe if refs else None)
     shape_status = None
     if plc is None:
         if ainfo["method"] == "mirrored":
@@ -1172,8 +1227,6 @@ def _plan(assembly, old, new, choices=None, alignment=None):
                             "pass an explicit alignment" % ainfo.get("note", ""))
     if plc is not None and any(h.array_elements for h in hosts) and not plc.isSame(App.Placement(), 1e-9):
         raise ReplaceError("a link array can only be repointed to a part with the old part's origin and orientation")
-    refs = _collect_refs(assembly, hosts)
-    mo = _Model(old_shape)
     mn = _Model(aligned) if aligned is not None else None
     cache = {}
     joints = {}

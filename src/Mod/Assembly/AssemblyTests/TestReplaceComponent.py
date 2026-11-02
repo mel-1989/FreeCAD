@@ -583,6 +583,12 @@ def _mut_alignment_check_off():
 
 def _mut_near_check_off():
     R._near_conflict = lambda *a, **k: []
+    _mut_reference_probe_off()   # on n1 the reference check reads the same turn, so it goes off with the near-twin one
+
+
+def _mut_reference_probe_off():
+    orig = R._choose_alignment
+    R._choose_alignment = lambda old, new, forced=None, probe=None: orig(old, new, forced, None)
 
 
 def _mut_suppression_forgotten():
@@ -661,6 +667,7 @@ MUTANTS = {
     "moved_and_resized_allowed": (_mut_move_and_resize_allowed, "c2_hole_gone_wider_hole_nearby"),
     "alignment_conflict_check_off": (_mut_alignment_check_off, "e3_bar_turned_about_z_boss_top_and_end"),
     "near_twin_alignment_check_off": (_mut_near_check_off, "n1_bracket_turned_and_gained_a_small_hole"),
+    "referenced_element_alignment_check_off": (_mut_reference_probe_off, "n5_symmetric_plate_turned_and_gained_an_offcentre_hole"),
     "user_suppression_forgotten_by_repair": (_mut_suppression_forgotten, "@suppression_and_offset"),
     "delete_old_ignores_other_users": (_mut_delete_ignores_users, "t6_delete_old_direct_part_used_by_another_assembly"),
     "body_features_orphaned": (_mut_body_features_orphaned, "t10_delete_old_body_nobody_else_uses"),
@@ -975,6 +982,7 @@ class TestReplaceComponent(unittest.TestCase):
 
         for name, turned_label in (("n1_bracket_turned_and_gained_a_small_hole", "turned 180\u00b0 about Y"),
                                    ("n2_bracket_turned_and_gained_a_boss", "turned 180\u00b0 about Y"),
+                                   ("n5_symmetric_plate_turned_and_gained_an_offcentre_hole", "turned 180\u00b0 about Y"),
                                    ("e3_bar_turned_about_z_boss_top_and_end", "turned 180\u00b0 about Z")):
             with self.subTest(case=name):
                 doc = App.newDocument("Rc_cand")
