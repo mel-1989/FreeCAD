@@ -155,6 +155,20 @@ def _is_hidden(inst):
     return inst.hidden
 
 
+def _empty_by_design(lo):
+    """An empty sketch, or a PartDesign Body with no features yet: shapeless without anything being wrong."""
+    return lo.TypeId.startswith("Sketcher::") or (lo.TypeId == "PartDesign::Body" and getattr(lo, "Tip", None) is None)
+
+
+def _null_reason(lo):
+    state = list(getattr(lo, "State", []))
+    if "Invalid" in state or "Error" in state:
+        return "null shape (%s failed to recompute)" % lo.Label
+    if "Touched" in state:
+        return "null shape (%s has not been recomputed)" % lo.Label
+    return "null shape (%s)" % lo.Label
+
+
 def _leaf_kind(inst):
     """("geometry" | "none" | "error", reason) for a leaf, from the objects alone (no placement)."""
     obj = inst.objs[-1]
@@ -171,9 +185,9 @@ def _leaf_kind(inst):
         return "none", ""
     shp = lo.Shape
     if shp.isNull():
-        if lo.TypeId.startswith("Sketcher::"):
-            return "geometry", ""  # an empty sketch: listed as a non-solid, not an error
-        return "error", "null shape (%s recomputed with errors: %s)" % (lo.Label, ",".join(lo.State))
+        if _empty_by_design(lo):
+            return "geometry", ""  # listed as a non-solid, not an error
+        return "error", _null_reason(lo)
     return "geometry", ""
 
 
@@ -190,7 +204,7 @@ def _instance_shape(root, inst):
     except Exception as exc:
         raise _Unresolved("shape lookup failed: %s" % exc)
     if shp is None or shp.isNull():
-        if inst.objs[-1].getLinkedObject(True).TypeId.startswith("Sketcher::"):
+        if _empty_by_design(inst.objs[-1].getLinkedObject(True)):
             return Part.Shape()
         raise _Unresolved("shape is null")
     if not shp.isValid():

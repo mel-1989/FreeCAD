@@ -326,6 +326,25 @@ class TestInterference(unittest.TestCase):
         self.assertEqual(self.run_case("hidden_box")["stats"]["hidden_skipped"], 1)
         json.dumps(rep)
 
+    def test_empty_body_is_not_an_error(self):
+        # a Body with no features yet is shapeless by design: listed as a non-solid, never an unresolved error
+        doc = App.newDocument("Itf_empty_body")
+        try:
+            asm = doc.addObject("Assembly::AssemblyObject", "Assembly")
+            asm.addObject(doc.addObject("PartDesign::Body", "Body"))
+            box = doc.addObject("Part::Box", "Box")
+            asm.addObject(box)
+            doc.recompute()
+            rep = Interference.check(asm)
+            self.assertEqual(rep["errors"], [])
+            self.assertEqual([(e["label"], e["shape_type"]) for e in rep["skipped_non_solid"]], [("Body", "Empty")])
+            asm.addObject(doc.addObject("Part::Box", "Fresh"))   # added, not recomputed: reported with a plain reason
+            err = Interference.check(asm)["errors"]
+            self.assertEqual([e["label"] for e in err], ["Fresh"])
+            self.assertIn("not been recomputed", err[0]["reason"])
+        finally:
+            App.closeDocument(doc.Name)
+
     def test_verify_fails_on_unresolved_parts(self):
         from AgentCore import verify
         for name in ("link_deleted_target", "null_shape_part"):
