@@ -256,6 +256,10 @@ class TestCommandPalette(unittest.TestCase):
         color = dlg.list.item(row).foreground().color()
         self.assertNotEqual(color, dlg.palette().color(QtGui.QPalette.Text))      # dimmed, still readable
         self.assertGreater(color.alpha(), 0)
+        dlg.list.clear()      # the background is sampled with no row under the pixel, as refill does
+        bg = dlg.list.viewport().grab(QtCore.QRect(0, 0, 4, 4)).toImage().pixelColor(0, 0)
+        self.assertGreaterEqual(pw._contrast(color, bg), 4.5)      # greyed rows stay readable on the rendered background
+        dlg.refill()
         dlg.list.setCurrentRow(row)
         Gui.getMainWindow().statusBar().clearMessage()
         with Recorder() as rec:

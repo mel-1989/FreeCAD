@@ -97,10 +97,19 @@ class _DocWatch:
             _PENDING[:] = [b for b in _PENDING if b not in gone]
 
 
+def _swatch_css(color):
+    """Style sheet for a label on a fixed background colour, so its text does not depend on the theme (a fixed dark green or red
+    text colour is unreadable on the dark theme). White text where it reaches 4.5:1 (WCAG AA) on the colour, else black."""
+    r, g, b = (int(c * 255) for c in color)
+    lin = [(c / 255.0 / 12.92) if c <= 10 else ((c / 255.0 + 0.055) / 1.055) ** 2.4 for c in (r, g, b)]
+    lum = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+    text = "white" if 1.05 / (lum + 0.05) >= 4.5 else "black"
+    return f"background-color: rgb({r},{g},{b}); color: {text}; padding: 2px 6px;"
+
+
 def _legend(text, color):
     lab = QtWidgets.QLabel(text)
-    r, g, b = (int(c * 255) for c in color)
-    lab.setStyleSheet(f"background-color: rgb({r},{g},{b}); color: white; padding: 2px 6px;")
+    lab.setStyleSheet(_swatch_css(color))
     return lab
 
 
@@ -211,7 +220,7 @@ class ChangeSetPanel:
     # ------------------------------------------------------------ decisions
     def _say(self, text, ok=True):
         self.message = text
-        self.status.setStyleSheet("color: " + ("rgb(20,110,30)" if ok else "rgb(170,20,20)"))
+        self.status.setStyleSheet(_swatch_css(overlay.COLORS["added"] if ok else overlay.COLORS["removed"]))
         self.status.setText(text)
 
     def _on_accept(self):

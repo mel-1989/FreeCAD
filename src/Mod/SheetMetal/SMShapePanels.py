@@ -229,7 +229,7 @@ class FeaturePanel:
         outer.addLayout(self.fields)
         self.error = _label()
         self.error.setObjectName("error")
-        self.error.setStyleSheet("color: #b00020;")
+        self.error.setStyleSheet("background-color: #b00020; color: white; padding: 2px 6px;")   # on its own background: 7:1 on any theme
         self.error.hide()
         outer.addWidget(self.error)
         outer.addStretch(1)
@@ -721,7 +721,8 @@ class ExportDxfPanel:
         outer.addLayout(fields)
         self.target = _label(obj.Label if obj is not None else "(select an Unfold feature)")
         self.target.setObjectName("target")
-        self.notes = QtWidgets.QCheckBox("Write a note with the direction, angle, radius and allowance beside each bend line")
+        self.notes = QtWidgets.QCheckBox("Write a note beside each bend line")
+        self.notes.setToolTip("The note gives the bend direction, angle, radius and allowance")
         self.notes.setChecked(True)
         self.text_height = _spin(0.0, 1000.0, 2.5, 3, " mm")
         self.path = QtWidgets.QLineEdit(path if path is not None else self.default_path())
@@ -738,7 +739,7 @@ class ExportDxfPanel:
         fields.addRow("File", row)
         self.error = _label()
         self.error.setObjectName("error")
-        self.error.setStyleSheet("color: #b00020;")
+        self.error.setStyleSheet("background-color: #b00020; color: white; padding: 2px 6px;")   # on its own background: 7:1 on any theme
         self.error.hide()
         outer.addWidget(self.error)
         outer.addStretch(1)
