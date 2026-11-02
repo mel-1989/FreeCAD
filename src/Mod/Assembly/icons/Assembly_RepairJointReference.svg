@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Assembly_RepairJointReference</title>
+  <rect x="5" y="22" width="22" height="20" rx="3" fill="#fbd9a8" stroke="#a35a00" stroke-width="3"/>
+  <rect x="37" y="22" width="22" height="20" rx="3" fill="#b9d6f2" stroke="#1d5a96" stroke-width="3"/>
+  <path d="M27 32 H31" stroke="#d32f2f" stroke-width="4" stroke-linecap="round"/>
+  <path d="M33 32 H37" stroke="#d32f2f" stroke-width="4" stroke-linecap="round"/>
+  <path d="M32 12 V20 M32 44 V52" stroke="#2e7d32" stroke-width="4" stroke-linecap="round"/>
+  <path d="M26 16 L32 10 L38 16" fill="none" stroke="#2e7d32" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

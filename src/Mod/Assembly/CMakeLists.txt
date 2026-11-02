@@ -42,6 +42,9 @@ set(Assembly_Scripts
     ReplaceComponent.py
     TestAssemblyInterferenceGui.py
     CommandCheckInterference.py
+    CommandReplaceComponent.py
+    ReplacePanel.py
+    TestAssemblyReplaceComponentGui.py
 )
 
 if(BUILD_GUI)
@@ -62,6 +65,8 @@ SET(AssemblyScripts_SRCS
 # Command icons shipped as files (the compiled icon resource would need a rebuild of the GUI library); referenced by path.
 SET(Assembly_Icons
     icons/Assembly_CheckInterference.svg
+    icons/Assembly_ReplaceComponent.svg
+    icons/Assembly_RepairJointReference.svg
 )
 
 
@@ -77,6 +82,8 @@ SET(AssemblyTests_SRCS
     AssemblyTests/replace_corpus.py
     AssemblyTests/interference_gui_fixture.py
     AssemblyTests/TestInterferenceGui.py
+    AssemblyTests/replace_gui_fixture.py
+    AssemblyTests/TestReplaceComponentGui.py
     AssemblyTests/mocks/__init__.py
     AssemblyTests/mocks/MockGui.py
 )

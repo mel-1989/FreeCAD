@@ -1375,19 +1375,46 @@ def _apply_ref(rf, new_comp, new_tokens):
     return ok
 
 
-def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
+def apply(assembly, old, new, choices=None, delete_old=False, alignment=None, import_foreign=False):
     """Replace ``old`` by ``new`` in one undo transaction and return the report.
 
     Joints whose references could not all be matched are kept, suppressed and left with a
     ``?``-marked reference (FreeCAD's broken-link marker, a leading "?" on the sub-name); they are
     never solved against a guessed element. The old part's document object is kept unless ``delete_old``.
+
+    ``new`` may belong to another document (a vault revision, a file). By default the links then point into that
+    document (a cross-document link, the slice 2a behaviour). With ``import_foreign=True`` the part is instead copied
+    with what it depends on into the assembly's document inside the same transaction (hidden, listed in the report's
+    ``imported``), planned again, and the copy must give the same remap as the original or ``ReplaceError`` is raised
+    and nothing changes; the panel uses this so that a temporary document can be closed afterwards.
     """
     doc = assembly.Document
     report, ctx = _plan(assembly, old, new, choices=choices, alignment=alignment)
-    refs, hosts, plc = ctx["refs"], ctx["hosts"], ctx["plc"]
+    foreign = import_foreign and new.Document is not doc
     doc.openTransaction("Replace component")
     deleted, kept = [], []
     try:
+        imported = []
+        if foreign:
+            # a part of another document (a file, a vault revision) is copied into this one inside the same
+            # transaction, so one undo takes the copy and the replacement away together; the copy is then
+            # planned again and must read exactly as the original did
+            copied = doc.copyObject(ctx["new_top"], True, True)
+            imported = list(copied) if isinstance(copied, (list, tuple)) else [copied]
+            roots = [o for o in imported if not any(u in imported for u in o.InList)]   # nothing copied depends on the copy of the part itself
+            if len(roots) != 1:
+                raise ReplaceError("could not tell which copied object is the new part")
+            top_copy = roots[0]
+            for o in imported:
+                o.Visibility = False
+            doc.recompute()
+            again, ctx2 = _plan(assembly, old, top_copy, choices=choices, alignment=alignment)
+            if _readout(again) != _readout(report):
+                raise ReplaceError("the copy of the new part in this document does not read as the original did; "
+                                   "nothing was changed")
+            report, ctx = again, ctx2
+            report["imported"] = [o.Name for o in imported]
+        refs, hosts, plc = ctx["refs"], ctx["hosts"], ctx["plc"]
         new_comp = {}
         for h in hosts:
             if h.mode == "repoint":
@@ -1430,6 +1457,13 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
     report["kept_old"] = kept
     report["new_components"] = {k: v.Name for k, v in new_comp.items()}
     return _json_safe(report)
+
+
+def _readout(report):
+    """What a remap decided, without the names of the new part: for comparing two plans of the same part."""
+    return (report["alignment"]["method"], report["references"],
+            [(j["joint"], r["reference"], [(e["old_element"], e["status"], e["new_element"]) for e in r["elements"]])
+             for j in report["joints"] for r in j["references"]])
 
 
 def _deletion_set(obj):

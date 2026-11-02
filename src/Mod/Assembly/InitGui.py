@@ -22,6 +22,7 @@
 # **************************************************************************/
 
 FreeCAD.__unit_test__ += ["TestAssemblyInterferenceGui"]
+FreeCAD.__unit_test__ += ["TestAssemblyReplaceComponentGui"]
 
 
 class AssemblyCommandGroup:
@@ -75,6 +76,7 @@ class AssemblyWorkbench(Workbench):
         import CommandCreateSnapshot
         import CommandCreateBom
         import CommandCheckInterference
+        import CommandReplaceComponent
         import Preferences
 
         FreeCADGui.addLanguagePath(":/translations")
@@ -95,9 +97,11 @@ class AssemblyWorkbench(Workbench):
             "Assembly_CreateSimulation",
             "Assembly_CreateBom",
             "Assembly_CheckInterference",
+            "Assembly_ReplaceComponent",
         ]
 
         cmdListMenuOnly = [
+            "Assembly_RepairJointReference",
             "Assembly_LinkSelectLinked",
             "Assembly_ExportASMT",
             "Assembly_SelectJointsOfComponent",
@@ -147,6 +151,11 @@ class AssemblyWorkbench(Workbench):
         assembly = UtilsAssembly.activeAssembly()
         if assembly is None:
             return
+
+        import CommandReplaceComponent
+
+        if CommandReplaceComponent._broken_joint_selected()[1] is not None:
+            self.appendContextMenu("", ["Assembly_RepairJointReference"])
 
         selection = Gui.Selection.getSelectionEx("*", 0)
         if not selection:

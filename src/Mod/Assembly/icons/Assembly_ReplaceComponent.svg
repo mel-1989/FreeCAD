@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Assembly_ReplaceComponent</title>
+  <rect x="5" y="7" width="26" height="26" rx="3" fill="#e4e4e4" stroke="#7a7a7a" stroke-width="3" stroke-dasharray="5 3"/>
+  <rect x="31" y="31" width="26" height="26" rx="3" fill="#b9d6f2" stroke="#1d5a96" stroke-width="3"/>
+  <circle cx="44" cy="44" r="5" fill="#ffffff" stroke="#1d5a96" stroke-width="2"/>
+  <path d="M36 14 H50 V26" fill="none" stroke="#2e7d32" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M43 20 L50 27 L57 20" fill="none" stroke="#2e7d32" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
