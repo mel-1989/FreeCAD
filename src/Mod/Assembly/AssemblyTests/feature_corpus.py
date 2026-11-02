@@ -514,12 +514,12 @@ def scope_empty_list_means_all(ctx):
 # ------------------------------------------------------------------------ hidden
 
 @case("hidden")
-def hidden_component_is_cut(ctx):
+def hidden_component_not_cut(ctx):
     a = box(ctx.asm, "A")
     a.Visibility = False
     box(ctx.asm, "B", pos=(12, 0, 0))
-    cut_box(ctx, (5, 0, 0), (12, 5, 10))  # x [5,17]
-    return T({"A": 250.0, "B": 250.0})
+    cut_box(ctx, (5, 0, 0), (12, 5, 10))  # x [5,17] reaches both; the hidden one stays whole
+    return T({"B": 250.0})
 
 
 # ---------------------------------------------------------------------- sequence

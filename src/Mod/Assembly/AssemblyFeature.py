@@ -17,7 +17,8 @@ A suppressed or deleted feature leaves every component's shape exactly the origi
 Components are the solid leaves ``Interference`` walks (a leaf reached through ``App::Link``,
 a link array element, a sub-assembly or an ``App::Part``), each cut where it sits: two links to
 one source are cut independently, and a link array element is cut by where it sits. Hidden
-components are cut like visible ones (visibility is display state, not geometry). A tool that
+components (an object on the path with ``Visibility`` off) are not cut, as the interference check
+leaves them out by default: ``effective_shape`` returns their original shape. A tool that
 touches a component on a face only removes no volume and leaves it unchanged; the report never
 lists a component whose removed volume is not above the volume tolerance as cut.
 
@@ -299,7 +300,8 @@ def _active_features(assembly):
 
 
 def _hidden_ok(inst):
-    return True
+    """Hidden components are outside what a feature acts on."""
+    return not inst.hidden
 
 
 # --------------------------------------------------------------- signature

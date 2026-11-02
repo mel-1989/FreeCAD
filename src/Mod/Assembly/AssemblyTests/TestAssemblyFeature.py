@@ -338,8 +338,8 @@ def _is_array_element(inst):
     return len(inst.objs) >= 1 and re.search(r"\.\d+$", inst.key) is not None and inst.key.startswith("Arr")
 
 
-def _mut_hidden_not_cut(AFm, I):
-    AFm._hidden_ok = lambda inst: not inst.hidden
+def _mut_hidden_cut(AFm, I):
+    AFm._hidden_ok = lambda inst: True
 
 
 def _mut_suppression_ignored(AFm, I):
@@ -416,7 +416,7 @@ MUTANTS = {
     "cut_written_to_source_part": (_mut_cut_written_to_source, "box_two_components"),
     "link_array_elements_cut_alike": (_alike(_is_array_element), "array_elements_cut_independently"),
     "links_of_one_source_cut_alike": (_alike(lambda inst: True), "link_two_instances_cut_both"),
-    "hidden_parts_not_cut": (_mut_hidden_not_cut, "hidden_component_is_cut"),
+    "hidden_parts_cut": (_mut_hidden_cut, "hidden_component_not_cut"),
     "suppression_not_restoring": (_mut_suppression_ignored, "second_feature_suppressed"),
     "recompute_does_not_recut": (_mut_recompute_does_not_recut, "follow_placement_edit"),
     "through_all_too_short": (_mut_through_all_short, "hole_through_stack"),
