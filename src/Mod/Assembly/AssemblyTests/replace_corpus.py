@@ -1204,6 +1204,38 @@ def e7_boss_moved_to_the_other_end(doc):
     return scene(doc, _BAR_BOSS, _bar(2), js)
 
 
+# --- a part turned and also changed (carried MEDIUM of run 040): no exact twins, near twins say "turned" ---
+
+_SMALL_HOLE = bracket(holes=((10, 6, 3), (25, 14, 2)))
+_SMALL_BOSS = bracket(bosses=((30, 5, 4, 6, 2),))
+
+
+def _turn_y(shape):
+    return moved(shape, App.Placement(V(0, 0, 0), App.Rotation(V(0, 1, 0), 180), V(20, 10, 5)))
+
+
+@case("alignment")
+def n1_bracket_turned_and_gained_a_small_hole(doc):
+    # the hole at x = 10 of the old part is at x = 30 once the new part is turned back and as placed: ambiguous
+    return scene(doc, BASE, _turn_y(_SMALL_HOLE), [jspec("revolute", BR["revolute"], (AMB, AMB))])
+
+
+@case("alignment")
+def n2_bracket_turned_and_gained_a_boss(doc):
+    return scene(doc, BASE, _turn_y(_SMALL_BOSS), [jspec("cylindrical", BR["cylindrical"], (AMB, AMB))])
+
+
+@case("alignment")
+def n3_control_plain_revision_gained_a_small_hole(doc):
+    # not turned: the same revolute joint must stay unambiguous
+    return scene(doc, BASE, _SMALL_HOLE, [jspec("revolute", BR["revolute"], BR["revolute"])], still=True)
+
+
+@case("alignment")
+def n4_control_plain_revision_gained_a_boss(doc):
+    return scene(doc, BASE, _SMALL_BOSS, [jspec("cylindrical", BR["cylindrical"], BR["cylindrical"])], still=True)
+
+
 # --- delete_old must not destroy what is still used --------------------------------------------
 
 def _other_user(doc, target, mode_name="Assembly2"):

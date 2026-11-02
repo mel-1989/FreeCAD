@@ -404,7 +404,48 @@ def broken_machinery():
     return problems
 
 
-DEDICATED = {"broken_machinery": broken_machinery}
+def suppression_and_offset_machinery():
+    """A joint the user had suppressed stays suppressed through break and repair; editing the offset of a
+    broken joint is a console message, not a traceback (updateJCSPlacements, which raises, is not called)."""
+    problems = []
+    for was in (True, False):
+        doc = App.newDocument("Rc_supp")
+        try:
+            b = C.build_case(doc, "sym_two_holes_cylindrical")
+            plan = R.plan(b.asm, b.old, b.new)
+            cands = [c["element"] for c in plan["joints"][0]["references"][0]["elements"][0]["candidates"]]
+            j = doc.getObject("Cylindrical")
+            j.Suppressed = was
+            R.apply(b.asm, b.old, b.new)
+            if not (R.is_broken(j) and j.Suppressed):
+                problems.append("joint (suppressed=%s) not broken and suppressed after the replace" % was)
+            calls = []
+            orig = JointObject.Joint.updateJCSPlacements
+            JointObject.Joint.updateJCSPlacements = lambda self, joint: calls.append(1) or orig(self, joint)
+            try:
+                want = App.Placement(App.Vector(1, 2, 3), App.Rotation())
+                j.Offset1 = want
+            finally:
+                JointObject.Joint.updateJCSPlacements = orig
+            if calls:
+                problems.append("an Offset edit on a broken joint went on to the placement update (a traceback)")
+            if not j.Offset1.isSame(want, 1e-9):
+                problems.append("the offset edit on a broken joint was not kept")
+            R.repair(j, "Reference2", cands[1])
+            if R.is_broken(j) or j.Suppressed != was:
+                problems.append("repair left suppressed=%s for a joint that was suppressed=%s" % (j.Suppressed, was))
+            doc.undo()
+            if not (R.is_broken(j) and j.Suppressed):
+                problems.append("undo of the repair did not bring the broken state back (was=%s)" % was)
+        except Exception:
+            import traceback
+            problems.append("exception: " + traceback.format_exc()[-500:])
+        finally:
+            App.closeDocument(doc.Name)
+    return problems
+
+
+DEDICATED = {"broken_machinery": broken_machinery, "suppression_and_offset": suppression_and_offset_machinery}
 
 
 # ----------------------------------------------------------------- mutants
@@ -540,6 +581,19 @@ def _mut_alignment_check_off():
     R._alignment_conflict = lambda *a, **k: None
 
 
+def _mut_near_check_off():
+    R._near_conflict = lambda *a, **k: []
+
+
+def _mut_suppression_forgotten():
+    orig = R._break_joint
+
+    def f(doc, joint, reason=""):
+        orig(doc, joint, reason)
+        setattr(joint, R.WAS_SUPPRESSED_PROP, False)
+    R._break_joint = f
+
+
 def _mut_delete_ignores_users():
     R._outside_users = lambda members: []
 
@@ -606,6 +660,8 @@ MUTANTS = {
     "one_to_one_assignment_off": (_mut_one_to_one_off, "d1_both_holes_referenced_first_gone_second_shifted"),
     "moved_and_resized_allowed": (_mut_move_and_resize_allowed, "c2_hole_gone_wider_hole_nearby"),
     "alignment_conflict_check_off": (_mut_alignment_check_off, "e3_bar_turned_about_z_boss_top_and_end"),
+    "near_twin_alignment_check_off": (_mut_near_check_off, "n1_bracket_turned_and_gained_a_small_hole"),
+    "user_suppression_forgotten_by_repair": (_mut_suppression_forgotten, "@suppression_and_offset"),
     "delete_old_ignores_other_users": (_mut_delete_ignores_users, "t6_delete_old_direct_part_used_by_another_assembly"),
     "body_features_orphaned": (_mut_body_features_orphaned, "t10_delete_old_body_nobody_else_uses"),
     "marker_not_set_on_broken_joint": (_mut_marker_not_set, "removed_hole_revolute"),
@@ -622,7 +678,7 @@ def mutated(name):
     saved = {k: getattr(R, k) for k in ("_match_element", "_choose_alignment", "_decide", "_new_link_placement",
                                         "_write_ref", "_break_joint", "_collect_refs", "_solve", "_new_ref_value", "apply",
                                         "ADJ_MIN", "RADIUS_ADAPT", "SIZE_RATIO_MAX", "_claims", "MOVE_TOL",
-                                        "_alignment_conflict", "_outside_users", "_deletion_set", "repair",
+                                        "_alignment_conflict", "_near_conflict", "_outside_users", "_deletion_set", "repair",
                                         "_check_element")}
     saved_u = U.findPlacement
     saved_j = JointObject.Joint.onChanged
@@ -882,6 +938,9 @@ class TestReplaceComponent(unittest.TestCase):
     def test_broken_joint_marker_findplacement_unsuppress_and_repair(self):
         self.assertEqual(broken_machinery(), [])
 
+    def test_user_suppression_survives_break_and_repair_and_offset_edit_is_quiet(self):
+        self.assertEqual(suppression_and_offset_machinery(), [])
+
     def test_ambiguous_alignment_is_resolved_by_giving_one(self):
         doc = App.newDocument("Rc_align")
         try:
@@ -904,6 +963,86 @@ class TestReplaceComponent(unittest.TestCase):
                               for rr in j["references"] for e in rr["elements"]][0]
             self.assertNotEqual(ends(ident), ends(turned), "the two readings put the +x end on different faces")
             self.assertEqual(ends(ident), C.one(C.local(b.new), C.pl((1, 0, 0), 100)))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_alignment_candidates_contract(self):
+        def counts_of(r):
+            return r["references"]
+
+        def plc_of(d):
+            return App.Placement(App.Vector(*d["base"]), App.Rotation(*d["rotation"]))
+
+        for name, turned_label in (("n1_bracket_turned_and_gained_a_small_hole", "turned 180\u00b0 about Y"),
+                                   ("n2_bracket_turned_and_gained_a_boss", "turned 180\u00b0 about Y"),
+                                   ("e3_bar_turned_about_z_boss_top_and_end", "turned 180\u00b0 about Z")):
+            with self.subTest(case=name):
+                doc = App.newDocument("Rc_cand")
+                try:
+                    b = C.build_case(doc, name)
+                    rep = R.plan(b.asm, b.old, b.new)
+                    json.dumps(rep)
+                    al = rep["alignment"]
+                    self.assertEqual(al["method"], "ambiguous")
+                    cands = al["candidates"]
+                    self.assertEqual(cands[0]["label"], "as placed")
+                    self.assertEqual(cands[0]["placement"], R._plc_json(App.Placement()))
+                    self.assertIn(turned_label, [c["label"] for c in cands])
+                    self.assertGreaterEqual(len(cands), 2)
+                    for c in cands:
+                        self.assertEqual(set(c), {"label", "placement", "counts", "error"})
+                        self.assertEqual(set(c["counts"]), {"matched", "ambiguous", "unmatched"})
+                        again = R.plan(b.asm, b.old, b.new, alignment=plc_of(c["placement"]))
+                        self.assertEqual(again["alignment"]["method"], "given")
+                        self.assertEqual(again["alignment"]["candidates"], [])
+                        self.assertEqual(counts_of(again), c["counts"], c["label"])
+                    # the readings differ: the turned one resolves what as placed does not (or resolves it differently)
+                    news = lambda r: [e["new_element"] for j in r["joints"] for rr in j["references"] for e in rr["elements"]]
+                    self.assertNotEqual(news(R.plan(b.asm, b.old, b.new, alignment=plc_of(cands[0]["placement"]))),
+                                        news(R.plan(b.asm, b.old, b.new, alignment=plc_of(cands[1]["placement"]))))
+                    # apply with the turned candidate reproduces its counts too
+                    done = R.apply(b.asm, b.old, b.new, alignment=plc_of(cands[1]["placement"]))
+                    self.assertEqual(counts_of(done), cands[1]["counts"])
+                    # a given alignment is never reported as ambiguous
+                    self.assertEqual(done["alignment"]["method"], "given")
+                finally:
+                    App.closeDocument(doc.Name)
+
+    def test_unambiguous_alignment_has_no_candidates(self):
+        for name in ("n3_control_plain_revision_gained_a_small_hole", "n4_control_plain_revision_gained_a_boss"):
+            with self.subTest(case=name):
+                doc = App.newDocument("Rc_ctl")
+                try:
+                    b = C.build_case(doc, name)
+                    rep = R.plan(b.asm, b.old, b.new)
+                    self.assertEqual(rep["alignment"]["method"], "identity")
+                    self.assertEqual(rep["alignment"]["candidates"], [])
+                    self.assertEqual(rep["references"]["matched"], 1)
+                finally:
+                    App.closeDocument(doc.Name)
+
+    def test_choices_dict_shape_and_candidate_basis(self):
+        doc = App.newDocument("Rc_choices")
+        try:
+            b = C.build_case(doc, "sym_two_holes_revolute")
+            plan = R.plan(b.asm, b.old, b.new)
+            ref = plan["joints"][0]["references"][0]
+            amb = [e for e in ref["elements"] if e["status"] == "ambiguous"]
+            self.assertTrue(amb)
+            cands = amb[0]["candidates"]
+            self.assertGreaterEqual(len(cands), 2)
+            self.assertEqual(set(cands[0]), {"element", "entity", "cost", "basis"})
+            key = "%s.%s" % (plan["joints"][0]["joint"], ref["reference"])
+            pick = {amb[0]["old_element"]: cands[1]["element"]}
+            rep = R.plan(b.asm, b.old, b.new, choices={key: pick})
+            e = [x for x in element_reports(rep, key)["elements"] if x["old_element"] == amb[0]["old_element"]][0]
+            self.assertEqual((e["status"], e["new_element"], e["basis"]), ("matched", cands[1]["element"], "user"))
+            # a choice for a reference that is not ambiguous is ignored
+            self.assertEqual(R.plan(b.asm, b.old, b.new, choices={"Nope.Reference1": "Face1"})["references"],
+                             plan["references"])
+            rep = R.apply(b.asm, b.old, b.new, choices={key: pick})
+            j = doc.getObject(plan["joints"][0]["joint"])
+            self.assertIn(cands[1]["element"], getattr(j, ref["reference"])[1][0])
         finally:
             App.closeDocument(doc.Name)
 

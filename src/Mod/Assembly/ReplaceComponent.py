@@ -25,7 +25,17 @@ alternative whose overlap is at least identity's and less than 0.1 above it, whi
 let identity stand, and which explains a different set of the old faces by exact twins while
 identity explains some too) are reported (ambiguous
 alignment, or mirrored) and not matched: every reference of that part is then ambiguous or
-unmatched, and the caller resolves it by passing the alignment. Within the aligned frame:
+unmatched, and the caller resolves it by passing the alignment. A part turned and also changed
+(a bracket turned 180 degrees that gains a small hole or boss) has no exact twins left, so the same
+question is asked with near twins: a face is a near twin of an old face when it has the same kind,
+surface type and concavity, a direction within 0.02 rad, a radius within 10 percent, an area within
+25 percent and a centre within 3 percent of the old part's diagonal. An alternative that overlaps the
+old part within 0.02 of identity (or better) and recognises by near twins an old face that identity
+does not (for instance the hole the joint is on) makes the alignment ambiguous; one that recognises
+only faces identity recognises too does not, so a plain revision with a small added feature stays
+unambiguous. The alternatives are the four proper inertia sign combinations; their translation comes
+from the centre of mass, so it is approximate when the part changed, and the elements are then
+matched by the adapted rules. Within the aligned frame:
 
 1. exact: same kind, same surface or curve type, same normal or axis (sign-free for axes), same
    radius, same size and a centre within 1e-6 mm; exactly one such element is a match (basis
@@ -48,12 +58,36 @@ unmatched, and the caller resolves it by passing the alignment. Within the align
    makes it ``unmatched`` with the reason, naming the old element that owns the candidates that
    dropped out.
 
+Report contract for a panel (JSON, ``plan()`` and ``apply()`` return it). ``alignment`` always has
+``method`` ("identity", "inertia", "given", "ambiguous" or "mirrored"), ``overlap``, ``placement``
+(the chosen placement, or null), ``note`` and ``alternatives`` (placements). When ``method`` is
+"ambiguous", ``alignment.candidates`` lists the readings the user can pick, "as placed" first:
+``{"label": "as placed" | "turned 180\u00b0 about Y" | ..., "placement": {"base": [x, y, z], "rotation":
+[qx, qy, qz, qw]}, "counts": {"matched": n, "ambiguous": n, "unmatched": n}, "error": ""}``. ``counts``
+counts references (not elements) and come from re-planning with that placement as ``alignment=``, so
+``plan(..., alignment=App.Placement(App.Vector(*p["base"]), App.Rotation(*p["rotation"])))`` (and
+``apply`` with the same) reproduces them exactly; ``counts`` is null and ``error`` set when the
+alignment cannot be used (a link array needs identity). Mirrored parts and symmetric parts have
+only the "as placed" candidate (or none for mirrored). While the alignment is ambiguous every
+reference is ambiguous with no element candidates: pick an alignment first, re-plan, then resolve
+the remaining ambiguous references. Each element of an ambiguous reference carries ``candidates``:
+``[{"element": "Face7", "entity": ..., "cost": 0.12, "basis": "adapted"}]``, element names being
+the new part's own numbering (``Face``, ``Edge`` or ``Vertex`` of the whole shape, also for the
+edge of a face and edge reference). To pick one, pass ``choices={"<Joint>.<Reference1|Reference2>":
+choice}`` to ``plan`` or ``apply``, where ``choice`` is either one element name, applied to every
+ambiguous element of that reference, or a dict ``{"<old element>": "<new element>"}`` (the old
+element as reported in ``old_element``) for a reference with several. A choice must be an element of
+the same kind on the new part (any, not only the listed candidates; otherwise ``ValueError``); the
+element then reports status "matched" with basis "user". A choice for a reference that is not
+ambiguous is ignored.
+
 Broken joints. A joint with a reference that was not matched is never deleted and never solved
 against a guess: it is suppressed, its unmatched sub-names get FreeCAD's broken-link marker (a leading
 "?", which Joint.execute turns into a recompute error and UtilsAssembly.findPlacement into a
 BrokenReferenceError instead of an identity placement), and it carries a persistent string property
 ``ReplaceBroken`` that says what the matcher found (empty when the joint is sound; ``is_broken(joint)``
-reads it). Unsuppressing such a joint is refused with a console error (JointObject.Joint.onChanged) because
+reads it). The suppression the user had set is remembered in ``ReplaceWasSuppressed`` and given back by ``repair``.
+Unsuppressing such a joint is refused with a console error (JointObject.Joint.onChanged) because
 the solver would skip it without a word. ``repair(joint, reference, elements)`` sets the chosen elements
 (checked against the part), clears the marker, unsuppresses and solves.
 
@@ -97,6 +131,11 @@ IOU_MARGIN = 0.1        # another alignment must overlap this much better than i
 MOVE_TOL = 0.02         # axis shift (fraction of the part's diagonal) above which a feature counts as moved
 RESIZE_TOL = 0.05       # relative radius change above which a feature counts as resized
 CLEAR_REL = 1.0         # a rival must beat a candidate by this fraction (plus AMBIG_ABS) to own it
+NEAR_IOU = 0.02         # an alternative alignment this much below identity's overlap (or better) is compared by near twins
+NEAR_ANG = 0.02         # rad, largest direction difference of a near twin face (about 1 degree)
+NEAR_SIZE = 0.25        # relative, largest area difference of a near twin face
+NEAR_RADIUS = 0.10      # relative, largest radius difference of a near twin face
+NEAR_POS = 0.03         # largest distance between the centres of near twin faces, as a fraction of the part's diagonal
 
 _ELEMENT_RE = re.compile(r"^(Face|Edge|Vertex)(\d+)$")
 _SKIP_GROUPS = ("App::Origin", "App::Line", "App::Plane", "App::Point", "Assembly::JointGroup",
@@ -761,6 +800,50 @@ def _face_twins(mo, shape):
     return out
 
 
+def _is_near(o, n, diag):
+    """Are two faces the same face of a part that gained or lost a small feature elsewhere?
+
+    Same kind and surface type, direction within NEAR_ANG, same concavity, radius within NEAR_RADIUS,
+    area within NEAR_SIZE and centres within NEAR_POS of the old part's diagonal. The tolerances are
+    loose on purpose: an alternative alignment comes from the inertia frame, which a small added hole
+    or boss shifts by a fraction of a millimetre."""
+    if o.kind != n.kind or o.cls != n.cls or o.concave != n.concave:
+        return False
+    if _angle(o.dir, n.dir, not o.signed) > NEAR_ANG:
+        return False
+    if o.radius is not None and n.radius is not None and _rel(o.radius, n.radius) > NEAR_RADIUS:
+        return False
+    if _rel(o.size, n.size) > NEAR_SIZE:
+        return False
+    return (o.center - n.center).Length <= NEAR_POS * diag
+
+
+def _near_twins(mo, shape):
+    """The old faces that have a near twin (``_is_near``) among the faces of ``shape``."""
+    mn = _Model(shape)
+    return frozenset(on for on in mo.order["Face"]
+                     if any(_is_near(mo.els[on], mn.els[nn], mo.diag) for nn in mn.order["Face"]))
+
+
+def _near_conflict(mo, new_shape, comp):
+    """Alternatives in ``comp`` that explain more old faces by near twins than identity does.
+
+    Returns [(candidate, faces)]: the part fits as placed and as turned, and the turned reading
+    recognises faces (for instance the hole the joint is on) that the unturned reading sees changed
+    or gone, and recognises more faces in all. An alternative that explains only faces identity
+    explains too, or that trades faces with identity one for one (a symmetric part whose two
+    holes were both resized), is no conflict: identity stays."""
+    near_id = _near_twins(mo, new_shape)
+    out, seen = [], []
+    for c in comp:
+        near_c = _near_twins(mo, c[2])
+        extra = near_c - near_id
+        if extra and len(near_c) > len(near_id) and extra not in seen:
+            seen.append(extra)
+            out.append((c, extra))
+    return out
+
+
 def _alignment_conflict(old_shape, new_shape, iou_id, proper):
     """Is identity, which the overlap alone would keep, contradicted by an alternative alignment?
 
@@ -770,11 +853,12 @@ def _alignment_conflict(old_shape, new_shape, iou_id, proper):
     faces exactly but by different new faces, the part fits as placed and as turned and nothing in
     the geometry says which one the designer meant: ("ambiguous", (note, alternatives)). If identity
     explains no old face and an alternative explains some, the alternative is adopted:
-    ("adopt", (overlap, placement, shape)). Otherwise None. A part that is the same under both
-    (the same twins) is not a conflict."""
+    ("adopt", (overlap, placement, shape)). A part that is the same under both (the same twins) is not
+    a conflict. Last, near twins (``_near_conflict``): an alternative that overlaps within NEAR_IOU of
+    identity (or better) and recognises, by near twins, an old face that identity does not is also
+    ambiguous; this is the part turned that also gained or lost a small hole or boss, whose exact twins
+    are gone. Otherwise None."""
     comp = [c for c in proper if c[0] >= iou_id - IOU_SAME]
-    if not comp:
-        return None
     mo = _Model(old_shape)
     twins_id = _face_twins(mo, new_shape)
     amb, adopt = [], []
@@ -799,6 +883,14 @@ def _alignment_conflict(old_shape, new_shape, iou_id, proper):
                                  "pass the alignment", alts)
         c = adopt[0][0]
         return "adopt", (c[0], c[1], c[2])
+    near = _near_conflict(mo, new_shape, [c for c in proper if c[0] >= iou_id - NEAR_IOU])
+    if near:
+        alts = [_plc_json(c[1]) for c, _f in near]
+        return "ambiguous", ("the new part overlaps the old one about as well as placed (%.4f) as turned (%.4f), "
+                             "and turned it recognises %d old faces (within %d%% of the part's diagonal, same type, "
+                             "direction and size) that it does not as placed, so it may have been turned and "
+                             "changed: pass the alignment" % (iou_id, max(c[0] for c, _f in near),
+                                                              max(len(f) for _c, f in near), int(NEAR_POS * 100)), alts)
     return None
 
 
@@ -862,7 +954,7 @@ def _choose_alignment(old_shape, new_shape, forced=None):
         return None, info, None
     close = [c for c in proper if c[0] >= best[0] - IOU_SAME]
     if len(close) > 1:
-        info.update(method="ambiguous", overlap=best[0],
+        info.update(method="ambiguous", overlap=best[0], alternatives=[_plc_json(c[1]) for c in close],
                     note="%d inertia alignments overlap equally well" % len(close))
         return None, info, None
     info.update(method="inertia", overlap=best[0])
@@ -1019,6 +1111,49 @@ def plan(assembly, old, new, choices=None, alignment=None):
     return _plan(assembly, old, new, choices, alignment)[0]
 
 
+def _plc_from_json(d):
+    return App.Placement(App.Vector(*d["base"]), App.Rotation(*d["rotation"]))
+
+
+def _turn_label(d):
+    """A short human label for a placement taking the new part's frame to the old part's.
+
+    The rotation of an inertia alignment is not exact when the part changed, so an axis within 3
+    degrees of X, Y or Z is named by it and the angle is rounded to whole degrees."""
+    plc = _plc_from_json(d)
+    if plc.isSame(App.Placement(), 1e-9):
+        return "as placed"
+    axis, ang = plc.Rotation.Axis, math.degrees(plc.Rotation.Angle)
+    if ang < 1e-6:
+        return "shifted by %.3g mm" % plc.Base.Length
+    for name, v in (("X", App.Vector(1, 0, 0)), ("Y", App.Vector(0, 1, 0)), ("Z", App.Vector(0, 0, 1))):
+        if abs(axis.dot(v)) > math.cos(math.radians(3.0)):
+            sign = 1 if axis.dot(v) > 0 or abs(ang - 180.0) < 3.0 else -1
+            return "turned %.0f\u00b0 about %s%s" % (ang, "" if sign > 0 else "-", name)
+    return "turned %.0f\u00b0 about (%.2f, %.2f, %.2f)" % (ang, axis.x, axis.y, axis.z)
+
+
+def _alignment_candidates(assembly, old, new, ainfo, choices):
+    """The candidate alignments of a part whose alignment is ambiguous, each with the counts it gives.
+
+    "As placed" (identity) comes first, then the alternatives the check found. The counts come from
+    re-planning with the candidate placement as ``alignment=`` (after a round trip through its JSON
+    form), so passing that placement back to plan or apply gives exactly these counts."""
+    entries = [("as placed", _plc_json(App.Placement()))]
+    for d in ainfo.get("alternatives", []):
+        if not any(d == e[1] for e in entries):
+            entries.append((_turn_label(d), d))
+    out = []
+    for label, d in entries:
+        try:
+            rep = _plan(assembly, old, new, choices, _plc_from_json(d))[0]
+            counts, err = rep["references"], ""
+        except ReplaceError as e:
+            counts, err = None, str(e)
+        out.append({"label": label, "placement": d, "counts": counts, "error": err})
+    return out
+
+
 def _plan(assembly, old, new, choices=None, alignment=None):
     hosts = _find_hosts(assembly, old)
     new_leaf, new_tokens, new_top = _resolve_new(new)
@@ -1060,7 +1195,7 @@ def _plan(assembly, old, new, choices=None, alignment=None):
                  "new_entity": _entity(new_leaf, s["new_global"]) if s["new_global"] else "",
                  "status": s["status"], "basis": s["basis"], "reason": s["reason"],
                  "candidates": [{"element": c["element"], "entity": _entity(new_leaf, c["element"]),
-                                 "cost": c["cost"]} for c in s["candidates"]]}
+                                 "cost": c["cost"], "basis": s["basis"]} for c in s["candidates"]]}
                 for s in rf.result],
         })
     for j in joints.values():
@@ -1078,7 +1213,9 @@ def _plan(assembly, old, new, choices=None, alignment=None):
         "alignment": {"method": ainfo["method"], "overlap": ainfo.get("overlap"),
                       "placement": _plc_json(plc) if plc is not None else None,
                       "note": ainfo.get("note", ""),
-                      "alternatives": ainfo.get("alternatives", [])},
+                      "alternatives": ainfo.get("alternatives", []),
+                      "candidates": _alignment_candidates(assembly, old, new, ainfo, choices)
+                      if ainfo["method"] == "ambiguous" else []},
         "tolerances": {"position_mm": POS_TOL, "size_rel": SIZE_TOL, "angle_exact_rad": ANG_EXACT,
                        "angle_adapted_rad": ANG_ADAPT, "radius_change_max": RADIUS_ADAPT,
                        "size_ratio_max": SIZE_RATIO_MAX, "neighbours_min": ADJ_MIN,
@@ -1173,6 +1310,7 @@ def _write_ref(joint, prop, comp, subs):
 
 
 BROKEN_PROP = "ReplaceBroken"
+WAS_SUPPRESSED_PROP = "ReplaceWasSuppressed"
 
 
 def is_broken(joint):
@@ -1188,6 +1326,12 @@ def _break_joint(doc, joint, reason=""):
         joint.addProperty("App::PropertyString", BROKEN_PROP, "Replace",
                           "Set by Replace component when a reference could not be remapped; "
                           "empty when the joint is sound. Repair it with ReplaceComponent.repair.")
+    if not hasattr(joint, WAS_SUPPRESSED_PROP):
+        joint.addProperty("App::PropertyBool", WAS_SUPPRESSED_PROP, "Replace",
+                          "Whether the joint was suppressed by the user before Replace component broke it; "
+                          "ReplaceComponent.repair restores that state.")
+    if not is_broken(joint):
+        setattr(joint, WAS_SUPPRESSED_PROP, bool(getattr(joint, "Suppressed", False)))
     setattr(joint, BROKEN_PROP, reason or "a reference could not be remapped")
     if hasattr(joint, "Suppressed"):
         joint.Suppressed = True
@@ -1391,7 +1535,8 @@ def repair(joint, reference, elements):
     sub-name of the reference (a string), or a list with one name per sub-name (a face and an edge:
     the edge is numbered within the face, as FreeCAD holds it). The names are checked against the part
     the reference reaches. When no reference of the joint is broken any more the ``ReplaceBroken`` text is
-    cleared, the joint is unsuppressed and the assembly solved; otherwise the text is rewritten to
+    cleared, the joint gets back the suppression state it had before the replace broke it (a joint the user had
+    suppressed on purpose stays suppressed) and the assembly is solved; otherwise the text is rewritten to
     name what is left. One undo transaction. Returns ``{"joint", "reference", "subs", "still_broken", "solve"}``."""
     if reference not in _JOINT_PROPS:
         raise ValueError("reference must be Reference1 or Reference2, not %r" % (reference,))
@@ -1422,7 +1567,7 @@ def repair(joint, reference, elements):
             setattr(joint, BROKEN_PROP, "%s still broken (repaired %s)" % (", ".join(left), reference))
         else:
             setattr(joint, BROKEN_PROP, "")
-            joint.Suppressed = False
+            joint.Suppressed = bool(getattr(joint, WAS_SUPPRESSED_PROP, False))   # the user's own choice, not always False
             doc.recompute()
             asm = joint.Proxy.getAssembly(joint) if hasattr(joint.Proxy, "getAssembly") else None
             if asm is not None:
