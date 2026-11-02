@@ -22,6 +22,7 @@
 # **************************************************************************/
 
 FreeCAD.__unit_test__ += ["TestAssemblyInterferenceGui"]
+FreeCAD.__unit_test__ += ["TestAssemblyFeatureGui"]
 
 
 class AssemblyCommandGroup:
@@ -75,6 +76,7 @@ class AssemblyWorkbench(Workbench):
         import CommandCreateSnapshot
         import CommandCreateBom
         import CommandCheckInterference
+        import CommandCreateAssemblyFeature
         import Preferences
 
         FreeCADGui.addLanguagePath(":/translations")
@@ -95,12 +97,15 @@ class AssemblyWorkbench(Workbench):
             "Assembly_CreateSimulation",
             "Assembly_CreateBom",
             "Assembly_CheckInterference",
+            "Assembly_CreateAssemblyCut",
+            "Assembly_CreateAssemblyHole",
         ]
 
         cmdListMenuOnly = [
             "Assembly_LinkSelectLinked",
             "Assembly_ExportASMT",
             "Assembly_SelectJointsOfComponent",
+            "Assembly_EditAssemblyFeature",
         ]
 
         cmdListJoints = [
