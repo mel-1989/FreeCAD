@@ -153,8 +153,11 @@ class TaskAssemblyFeature:
         self._cur = None            # (spec, tool object, scope) of the last valid input
         self._scope_dirty = False   # the user touched the scope controls
         self._orig = None
+        self._written = None        # what this panel last wrote to Spec, ToolObject and Scope
+        self._was_touched = "Touched" in assembly.State
         if feature is not None:
             self._orig = {"Spec": feature.Spec, "ToolObject": feature.ToolObject, "Scope": list(feature.Scope)}
+            self._written = dict(self._orig)
 
         self.form = QtWidgets.QWidget()
         self.form.setObjectName("Assembly_TaskAssemblyFeature")
@@ -179,15 +182,28 @@ class TaskAssemblyFeature:
     def _doc_alive(self):
         return self.document_name in App.listDocuments()
 
-    def _restore_edited(self):
-        """Put an edited feature's Spec, ToolObject and Scope back (no transaction is open: nothing is recorded)."""
+    def _feature_alive(self):
+        """True while the working feature is still an object of the document (the user may delete it from the tree)."""
         feat = self.feature
-        o = self._orig
-        if feat.Spec != o["Spec"]:
+        if feat is None:
+            return False
+        try:
+            return feat.isValid() and feat.Document is not None and self.doc.getObject(feat.Name) is feat
+        except Exception:  # noqa: BLE001  (a deleted object raises on any access)
+            return False
+
+    def _restore_edited(self):
+        """Put an edited feature's Spec, ToolObject and Scope back (no transaction is open: nothing is recorded).
+
+        A property is restored only while it still holds the value this panel last wrote; if something else
+        changed it meanwhile (the user's Undo of an earlier edit), that change stays."""
+        feat = self.feature
+        o, w = self._orig, self._written
+        if feat.Spec == w["Spec"] and feat.Spec != o["Spec"]:
             feat.Spec = o["Spec"]
-        if feat.ToolObject is not o["ToolObject"]:
+        if feat.ToolObject is w["ToolObject"] and feat.ToolObject is not o["ToolObject"]:
             feat.ToolObject = o["ToolObject"]
-        if list(feat.Scope) != o["Scope"]:
+        if list(feat.Scope) == list(w["Scope"]) and list(feat.Scope) != o["Scope"]:
             feat.Scope = list(o["Scope"])
         feat.Proxy.results = None
 
@@ -197,14 +213,18 @@ class TaskAssemblyFeature:
             self.discarded = True
             return
         self.discarded = True
-        feat = self.feature
-        if feat is None:
+        if self.feature is None:
+            return
+        if not self._feature_alive():   # the user deleted it from the tree: nothing of ours is left to undo
+            self.feature = None
             return
         if self.editing:
             self._restore_edited()
         else:
-            self.doc.removeObject(feat.Name)
+            self.doc.removeObject(self.feature.Name)
             self.feature = None
+            if not self._was_touched:   # creating and removing the working object touched the assembly
+                self.assembly.purgeTouched()
 
     discarded = False
 
@@ -649,6 +669,8 @@ class TaskAssemblyFeature:
     def _write(self, spec, tool_obj, scope):
         """Create the feature on first valid input, else update the properties that differ."""
         feat = self.feature
+        if feat is None and self._deleted:
+            raise RuntimeError("the feature was deleted")
         if feat is None:
             if self.kind == "cut":
                 feat = AF.make_cut(self.assembly, spec["tool"], scope=scope, tool_object=tool_obj)
@@ -667,11 +689,27 @@ class TaskAssemblyFeature:
         if list(feat.Scope) != list(scope):
             feat.Scope = list(scope)
         feat.Proxy.results = None
+        if self._written is not None:
+            self._written = {"Spec": feat.Spec, "ToolObject": feat.ToolObject, "Scope": list(feat.Scope)}
         return feat
+
+    _deleted = False
+
+    def _note_deleted(self):
+        """The working feature is gone from the document: say so in the panel and stop writing."""
+        self._deleted = True
+        self.feature = None
+        self.preview.clear()
+        self.rows, self.errors, self._cur = [], [], None
+        self.problem = translate("Assembly", "The feature was deleted from the document. Press Cancel or OK to close this panel.")
+        self._fill()
 
     def refresh(self):
         """Read the widgets, update the feature, recompute what it cuts and redraw the preview."""
         self._message("")
+        if self._deleted or (self.feature is not None and not self._feature_alive()):
+            self._note_deleted()
+            return
         spec, tool_obj, problem = self.read_spec()
         scope = self._scope_value()
         if problem is None and scope is None:
@@ -755,6 +793,10 @@ class TaskAssemblyFeature:
         return int(getattr(ok, "value", ok)) | int(getattr(cancel, "value", cancel))
 
     def accept(self):
+        if self._deleted or (self.feature is not None and not self._feature_alive()):
+            self._note_deleted()
+            self.done = True
+            return True      # closes the panel; nothing is created
         if self.problem or self.feature is None or self._cur is None:
             self._message(self.problem or translate("Assembly", "Nothing to create yet."))
             return False

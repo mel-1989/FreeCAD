@@ -631,3 +631,95 @@ class TestFeatureGui(unittest.TestCase):
         self.assertAlmostEqual(removed.Volume, panel.rows[0][1], delta=0.05 * panel.rows[0][1],
                                msg="the red removed-material shape was taken from the plate's old position")
         panel.reject()
+
+    # ---- repair 2: the feature deleted or undone from under the panel, the touch state
+
+    def delete_working_feature(self, panel):
+        self.doc.openTransaction("Delete")
+        self.doc.removeObject(panel.feature.Name)
+        self.doc.commitTransaction()
+        self.doc.recompute()
+
+    def test_deleting_the_working_feature_then_changing_a_parameter_shows_no_internal_error(self):
+        self.load("hole_through_stack")
+        panel = self.open_panel()
+        self.delete_working_feature(panel)
+        panel.diameter.setValue(panel.diameter.value() + 1)
+        text = panel.summary.text()
+        self.assertNotIn("Error", text)
+        self.assertNotIn("getSubObjects", text)
+        self.assertIn("deleted", text)
+        self.assertEqual(AF.features(self.asm), [], "a parameter change must not recreate the feature")
+        panel.reject()
+        Gui.Control.closeDialog()
+
+    def test_deleting_the_working_feature_then_cancel_just_closes(self):
+        self.load("hole_through_stack")
+        panel = self.open_panel()
+        self.delete_working_feature(panel)
+        self.assertTrue(panel.reject())
+        Gui.Control.closeDialog()
+        self.assertFalse(Gui.Control.activeDialog())
+        self.assertEqual(AF.features(self.asm), [])
+        self.assertFalse(self.doc.HasPendingTransaction)
+
+    def test_deleting_the_working_feature_then_ok_says_so_and_creates_nothing(self):
+        self.load("hole_through_stack")
+        panel = self.open_panel()
+        self.delete_working_feature(panel)
+        undo_before = self.doc.UndoCount
+        self.assertTrue(panel.accept(), "OK closes the panel")
+        self.assertIn("deleted", panel.summary.text())
+        Gui.Control.closeDialog()
+        self.assertEqual(AF.features(self.asm), [])
+        self.assertEqual(self.doc.UndoCount, undo_before)
+        self.assertFalse(self.doc.HasPendingTransaction)
+
+    def test_deleting_an_edited_feature_then_cancel_or_ok_does_not_raise(self):
+        for button in ("reject", "accept"):
+            feat = self.made_feature("hole_through_stack")
+            panel = self.open_panel(feature=feat)
+            panel.diameter.setValue(2.0)
+            self.delete_working_feature(panel)
+            getattr(panel, button)()
+            Gui.Control.closeDialog()
+            self.assertEqual(AF.features(self.asm), [], button)
+            for n in list(App.listDocuments()):
+                App.closeDocument(n)
+
+    def test_undo_of_an_earlier_edit_while_editing_survives_cancel(self):
+        feat = self.made_feature("hole_through_stack")
+        spec_first = feat.Spec
+        panel = self.open_panel(feature=feat)
+        panel.diameter.setValue(panel.diameter.value() + 1)
+        panel.accept()
+        Gui.Control.closeDialog()
+        spec_second = feat.Spec
+        self.assertNotEqual(spec_first, spec_second)
+        panel = self.open_panel(feature=feat)
+        panel.diameter.setValue(panel.diameter.value() + 1)
+        self.doc.undo()                       # the user undoes the earlier Edit while the panel is open
+        self.doc.recompute()
+        self.assertEqual(feat.Spec, spec_first)
+        panel.reject()
+        Gui.Control.closeDialog()
+        self.assertEqual(feat.Spec, spec_first, "Cancel put the values captured at open back over the undo")
+
+    def test_cancel_of_a_new_feature_leaves_the_assembly_untouched(self):
+        self.load("hole_through_stack")
+        self.doc.recompute()
+        self.assertNotIn("Touched", self.asm.State)
+        panel = self.open_panel()
+        panel.reject()
+        Gui.Control.closeDialog()
+        self.assertNotIn("Touched", self.asm.State)
+        self.assertEqual([o.Name for o in self.doc.Objects if "Touched" in o.State], [])
+
+    def test_cancel_of_a_new_feature_keeps_a_touch_that_was_there_before(self):
+        self.load("hole_through_stack")
+        self.doc.recompute()
+        self.asm.touch()
+        panel = self.open_panel()
+        panel.reject()
+        Gui.Control.closeDialog()
+        self.assertIn("Touched", self.asm.State)
