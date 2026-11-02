@@ -152,8 +152,7 @@ class PaletteDialog(QtWidgets.QDialog):
         self.shown = self.model.results(text)
         self.list.setUpdatesEnabled(False)
         self.list.clear()
-        text, base = self.palette().color(QtGui.QPalette.Text), self.palette().color(QtGui.QPalette.Base)
-        grey = QtGui.QColor((text.red() + base.red()) // 2, (text.green() + base.green()) // 2, (text.blue() + base.blue()) // 2)
+        grey = inactive_colour(self.list)
         for e in self.shown:
             item = QtWidgets.QListWidgetItem("%s    -    %s" % (e["menu"], self.model.wb_label(e)))
             item.setToolTip("%s\n%s" % (e["name"], e["tip"]))
@@ -220,6 +219,34 @@ class PaletteDialog(QtWidgets.QDialog):
         self.activateWindow()
         self.edit.setFocus()
         self.edit.selectAll()
+
+
+def _lum(c):
+    lin = [(v / 255.0 / 12.92) if v <= 10 else ((v / 255.0 + 0.055) / 1.055) ** 2.4 for v in (c.red(), c.green(), c.blue())]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def _contrast(a, b):
+    la, lb = _lum(a), _lum(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def inactive_colour(view):
+    """Text colour of a greyed row: the list's own background, rendered (a style sheet sets it and the widget palette does not say),
+    pulled toward black or white just far enough to keep 4.5:1 (WCAG AA) against it, so a greyed row is dimmer than an active one but
+    still readable on a light and on a dark theme. A midpoint of the palette's Text and Base was 3.8:1 on the dark theme."""
+    bg = view.viewport().grab(QtCore.QRect(0, 0, 4, 4)).toImage().pixelColor(0, 0)
+    if not bg.isValid() or bg.alpha() == 0:
+        bg = view.palette().color(QtGui.QPalette.Base)
+    far = QtGui.QColor(255, 255, 255) if _lum(bg) < 0.179 else QtGui.QColor(0, 0, 0)
+    best = far
+    for step in range(10, 101, 5):
+        w = step / 100.0
+        c = QtGui.QColor(*(int(round(b + (f - b) * w)) for b, f in ((bg.red(), far.red()), (bg.green(), far.green()), (bg.blue(), far.blue()))))
+        best = c
+        if _contrast(c, bg) >= 4.6:
+            break
+    return best
 
 
 def open_palette(query=""):

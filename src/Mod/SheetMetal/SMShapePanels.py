@@ -229,7 +229,7 @@ class FeaturePanel:
         outer.addLayout(self.fields)
         self.error = _label()
         self.error.setObjectName("error")
-        self.error.setStyleSheet("color: #b00020;")
+        self.error.setStyleSheet("background-color: #b00020; color: white; padding: 2px 6px;")   # on its own background: 7:1 on any theme
         self.error.hide()
         outer.addWidget(self.error)
         outer.addStretch(1)
@@ -739,7 +739,7 @@ class ExportDxfPanel:
         fields.addRow("File", row)
         self.error = _label()
         self.error.setObjectName("error")
-        self.error.setStyleSheet("color: #b00020;")
+        self.error.setStyleSheet("background-color: #b00020; color: white; padding: 2px 6px;")   # on its own background: 7:1 on any theme
         self.error.hide()
         outer.addWidget(self.error)
         outer.addStretch(1)

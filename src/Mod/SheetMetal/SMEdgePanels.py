@@ -243,7 +243,7 @@ class FeaturePanel:
         outer.addLayout(self.fields)
         self.error = _label()
         self.error.setObjectName("error")
-        self.error.setStyleSheet("color: #b00020;")
+        self.error.setStyleSheet("background-color: #b00020; color: white; padding: 2px 6px;")   # on its own background: 7:1 on any theme
         self.error.hide()
         outer.addWidget(self.error)
         outer.addStretch(1)
@@ -636,7 +636,7 @@ class ConvertSolidPanel(FeaturePanel):
         lst = QtWidgets.QListWidget()
         lst.setObjectName(name)
         lst.setMaximumHeight(70)
-        lst.setMinimumHeight(40)   # three lists share the panel: let a short panel squeeze them instead of clipping the rows below
+        lst.setMinimumHeight(3 * lst.fontMetrics().lineSpacing() + 2 * lst.frameWidth() + 6)   # about three rows; three lists share the panel, so a short panel may squeeze them down to this
         lst.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         add = QtWidgets.QPushButton("Set from selection" if single else "Add selected")
         add.setObjectName(name + "_add")
