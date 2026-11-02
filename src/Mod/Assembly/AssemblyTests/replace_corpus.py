@@ -59,6 +59,9 @@ class Built:
         self.solid_ok = True       # False when the joints cannot all be satisfied (broken ones)
         self.moving = []           # component objects whose placement is checked for "did not move"
         self.expect_broken = []    # joint names expected broken after apply
+        self.apply_kwargs = {}     # extra arguments for apply only (delete_old)
+        self.expect_kept = []      # object names that must survive an apply with delete_old, with the reason in kept_old
+        self.expect_deleted = []   # object names that must be gone after an apply with delete_old
         self.alignment = "identity"
         self.old_names = {}
         self.mode = ""
@@ -299,7 +302,7 @@ def _truth_pair(descs, new_shape):
 
 
 def scene(doc, old_shape, new_shape, joints, mode="link", mplace=None, plate_n=1, new_placement=None,
-          kwargs=None, array=False, still=False, ground_old=False, new_is_link=False):
+          kwargs=None, array=False, still=False, ground_old=False, new_is_link=False, old_obj=None):
     """Build the standard scene. ``joints`` is a list of ``jspec`` dicts (one per M-side reference)."""
     b = Built()
     b.mode = mode
@@ -307,7 +310,7 @@ def scene(doc, old_shape, new_shape, joints, mode="link", mplace=None, plate_n=1
     jg = asm.newObject("Assembly::JointGroup", "Joints")
     b.asm = asm
     G = _mk(doc, "G", plate(plate_n))
-    old = _mk(doc, "Old", old_shape)
+    old = old_obj if old_obj is not None else _mk(doc, "Old", old_shape)
     new = _mk(doc, "New", new_shape)
     if new_placement is not None:
         new.Placement = new_placement
@@ -458,13 +461,21 @@ for _t, _js in CASES_RESIZE.items():
 
 # a revision with the hole moved to (30, 10)
 _HOLE30 = bracket(holes=((30, 6, 3),))
+# The bracket with the hole at x = 30 is also the bracket with the hole at x = 10 turned 180 degrees about y:
+# nothing in the geometry says which one the designer meant. By default the replace reports that
+# (ambiguous alignment); the caller who knows the revision kept the part's frame passes the identity.
+AMB = ("amb", [])
 for _t in ("revolute", "cylindrical"):
     def _mk_case(t=_t):
         @case("hole_moved", name="hole_moved_%s" % t)
         def _c(doc):
             new_c = (cy((30, 6, 0), (0, 0, 1), 3), ci((30, 6, 10), (0, 0, 1), 3)) if t == "revolute" else \
                 (cy((30, 6, 0), (0, 0, 1), 3), cy((30, 6, 0), (0, 0, 1), 3))
-            return scene(doc, BASE, _HOLE30, [jspec(t, BR[t], new_c)])
+            return scene(doc, BASE, _HOLE30, [jspec(t, BR[t], new_c)], kwargs={"alignment": App.Placement()})
+
+        @case("hole_moved", name="hole_moved_%s_alignment_open" % t)
+        def _c2(doc):
+            return scene(doc, BASE, _HOLE30, [jspec(t, BR[t], (AMB, AMB))])
     _mk_case()
 
 
@@ -674,7 +685,7 @@ def array_elements_revolute(doc):
 def array_elements_hole_moved(doc):
     nd = (cy((30, 6, 0), (0, 0, 1), 3), ci((30, 6, 10), (0, 0, 1), 3))
     js = [jspec("revolute", BR["revolute"], nd, name="Rev%d" % i) for i in range(3)]
-    return scene(doc, BASE, _HOLE30, js, mode="array", plate_n=3)
+    return scene(doc, BASE, _HOLE30, js, mode="array", plate_n=3, kwargs={"alignment": App.Placement()})
 
 
 @case("array")
@@ -1049,11 +1060,231 @@ def build_pdm_case(doc, workdir):
     d2 = App.openDocument(path)
     new = d2.getObject("Bracket")
     nd = (cy((30, 6, 0), (0, 0, 1), 3), ci((30, 6, 10), (0, 0, 1), 3))
-    b = scene(doc, BASE, new.Shape, [jspec("revolute", BR["revolute"], nd)])
+    b = scene(doc, BASE, new.Shape, [jspec("revolute", BR["revolute"], nd)], kwargs={"alignment": App.Placement()})
     b.new = new
     b.extra_docs = [d2]
     b.revision = "A.2"
     doc.saveAs(os.path.join(workdir, "assembly.FCStd"))   # a link into another document needs both saved
+    return b
+
+
+
+# --- adversarial cases from the independent verifier of run 040 (G06 slice 2a) -----------------
+
+def _bar(boss_x=None, boss=(2, 2, 1)):
+    s = Part.makeBox(100, 20, 10)
+    if boss_x is not None:
+        s = s.fuse(Part.makeBox(boss[0], boss[1], boss[2], V(boss_x, 9, 10)))
+    return solid(s)
+
+
+def _turn(shape, axis, deg, centre):
+    return moved(shape, App.Placement(V(0, 0, 0), App.Rotation(V(*axis), deg), V(*centre)))
+
+
+_TIERS_UP = lambda w: solid(Part.makeBox(w, 20, 5))
+_X20 = pl((1, 0, 0), 20)
+
+
+@case("one_to_one")
+def a1_step_removed_lower_face_two_mm_away(doc):
+    # the upper step's +x face (x = 20) is gone; the lower tier's +x face is a different face 2 mm away
+    return scene(doc, tiers(), _TIERS_UP(22), [jspec("slider", _X20, UN)])
+
+
+@case("one_to_one")
+def a2_step_removed_lower_face_one_mm_away(doc):
+    return scene(doc, tiers(), _TIERS_UP(21), [jspec("slider", _X20, UN)])
+
+
+@case("one_to_one")
+def a3_step_removed_lower_face_ten_mm_away(doc):
+    return scene(doc, tiers(), _TIERS_UP(30), [jspec("slider", _X20, UN)])
+
+
+@case("one_to_one")
+def b1_upper_step_shorter_top_face_follows(doc):
+    # the whole part is lower, the top face of the upper step is still that face: z = 10 becomes z = 8
+    new = solid(Part.makeBox(40, 20, 5).fuse(Part.makeBox(20, 20, 3, V(0, 0, 5))))
+    return scene(doc, tiers(), new, [jspec("planar", pl((0, 0, 1), 10), pl((0, 0, 1), 8), g=pl((0, 0, -1), 0))])
+
+
+@case("one_to_one")
+def c1_hole_gone_other_hole_elsewhere_and_wider(doc):
+    # r3 hole removed, an r3.9 hole sits 20 mm away: moved and resized is another feature
+    return scene(doc, bracket(holes=((10, 6, 3),)), bracket(holes=((30, 6, 3.9),)),
+                 [jspec("cylindrical", BR["cylindrical"], UN)])
+
+
+@case("one_to_one")
+def c2_hole_gone_wider_hole_nearby(doc):
+    return scene(doc, bracket(holes=((10, 6, 3),)), bracket(holes=((10, 14, 4),)),
+                 [jspec("cylindrical", BR["cylindrical"], UN)])
+
+
+@case("one_to_one")
+def c4_first_of_two_holes_gone_second_shifted(doc):
+    # the hole at x = 10 is gone and the one at x = 30 moved by 0.5: the survivor is not the removed hole
+    return scene(doc, _TWO_HOLES, bracket(holes=((30.5, 6, 3),)),
+                 [jspec("cylindrical", (cy((10, 6, 0), (0, 0, 1), 3),) * 2, UN)])
+
+
+@case("one_to_one")
+def c5_second_of_two_holes_gone_first_shifted(doc):
+    return scene(doc, _TWO_HOLES, bracket(holes=((10.5, 6, 3),)),
+                 [jspec("cylindrical", (cy((30, 6, 0), (0, 0, 1), 3),) * 2, UN)])
+
+
+_H = lambda x, r=3: (cy((x, 6, 0), (0, 0, 1), r),) * 2
+
+
+@case("one_to_one")
+def d1_both_holes_referenced_first_gone_second_shifted(doc):
+    js = [jspec("cylindrical", _H(10), UN, name="J0"), jspec("cylindrical", _H(30), _H(30.5), name="J1")]
+    return scene(doc, _TWO_HOLES, bracket(holes=((30.5, 6, 3),)), js, mode="two", plate_n=2)
+
+
+@case("one_to_one")
+def d2_both_holes_referenced_both_shifted(doc):
+    js = [jspec("cylindrical", _H(10), _H(10.5), name="J0"), jspec("cylindrical", _H(30), _H(30.5), name="J1")]
+    return scene(doc, _TWO_HOLES, bracket(holes=((10.5, 6, 3), (30.5, 6, 3))), js, mode="two", plate_n=2)
+
+
+@case("one_to_one")
+def d3_both_holes_referenced_radii_changed(doc):
+    js = [jspec("cylindrical", _H(10), _H(10, 3.5), name="J0"), jspec("cylindrical", _H(30), _H(30, 2.9), name="J1")]
+    return scene(doc, _TWO_HOLES, bracket(holes=((10, 6, 3.5), (30, 6, 2.9))), js, mode="two", plate_n=2)
+
+
+# a near-symmetric bar: the part as placed and the part turned fit about equally, so the alignment is ambiguous
+_BAR_BOSS = _bar(96)
+_BAR_C = (50, 10, 5)
+_TOP, _XEND = pl((0, 0, 1), 10), pl((1, 0, 0), 100)
+
+
+@case("alignment")
+def e1_bar_turned_about_x_two_references(doc):
+    js = [jspec("slider", _TOP, AMB, name="J0"), jspec("slider", _XEND, AMB, name="J1")]
+    return scene(doc, _BAR_BOSS, _turn(_BAR_BOSS, (1, 0, 0), 180, _BAR_C), js)
+
+
+@case("alignment")
+def e2_bar_turned_about_x_boss_top(doc):
+    return scene(doc, _BAR_BOSS, _turn(_BAR_BOSS, (1, 0, 0), 180, _BAR_C), [jspec("slider", pl((0, 0, 1), 11), AMB)])
+
+
+@case("alignment")
+def e3_bar_turned_about_z_boss_top_and_end(doc):
+    js = [jspec("slider", pl((0, 0, 1), 11), AMB, name="J0"), jspec("slider", _XEND, AMB, name="J1")]
+    return scene(doc, _BAR_BOSS, _turn(_BAR_BOSS, (0, 0, 1), 180, _BAR_C), js)
+
+
+@case("alignment")
+def e4_bar_translated_by_7(doc):
+    plc = App.Placement(V(7, 0, 0), App.Rotation())
+    return scene(doc, _BAR_BOSS, moved(_BAR_BOSS, plc), [jspec("slider", _XEND, pl((1, 0, 0), 107))], still=True)
+
+
+_CUBE_BOSS = solid(Part.makeBox(20, 20, 20).fuse(Part.makeBox(1, 1, 1, V(19, 19, 20))))
+
+
+@case("alignment")
+def e5_cube_with_corner_boss_turned_quarter(doc):
+    # no principal axes to enumerate (equal moments): identity is kept and says so; the boss top cannot
+    # be matched, the +x face lies on the turning axis and is the same face
+    new = _turn(_CUBE_BOSS, (1, 0, 0), 90, (10, 10, 10))
+    js = [jspec("planar", pl((0, 0, 1), 21), UN, name="J0"), jspec("slider", pl((1, 0, 0), 20), pl((1, 0, 0), 20), name="J1")]
+    return scene(doc, _CUBE_BOSS, new, js)
+
+
+@case("alignment")
+def e7_boss_moved_to_the_other_end(doc):
+    # the same shape as e3: indistinguishable from a turned part
+    js = [jspec("slider", pl((0, 0, 1), 11), AMB, name="J0"), jspec("slider", _XEND, AMB, name="J1")]
+    return scene(doc, _BAR_BOSS, _bar(2), js)
+
+
+# --- delete_old must not destroy what is still used --------------------------------------------
+
+def _other_user(doc, target, mode_name="Assembly2"):
+    asm2 = doc.addObject("Assembly::AssemblyObject", mode_name)
+    lk = asm2.newObject("App::Link", "OtherUse")
+    lk.LinkedObject = target
+    return lk
+
+
+@case("delete_safety")
+def t6_delete_old_direct_part_used_by_another_assembly(doc):
+    b = scene(doc, BASE, _BOSSED, [_same("revolute")], mode="direct", still=True)
+    _other_user(doc, b.old)
+    doc.recompute()
+    b.apply_kwargs = {"delete_old": True}
+    b.expect_kept = ["Old"]
+    return b
+
+
+@case("delete_safety")
+def t7_delete_old_source_linked_by_another_assembly(doc):
+    b = scene(doc, BASE, _BOSSED, [_same("revolute")], mode="source", still=True)
+    _other_user(doc, b.old)
+    doc.recompute()
+    b.apply_kwargs = {"delete_old": True}
+    b.expect_kept = ["Old"]
+    return b
+
+
+@case("delete_safety")
+def t8_delete_old_direct_part_used_by_an_expression(doc):
+    b = scene(doc, BASE, _BOSSED, [_same("revolute")], mode="direct", still=True)
+    holder = doc.addObject("Part::Box", "Holder")
+    holder.setExpression("Length", "Old.Shape.BoundBox.XLength")
+    doc.recompute()
+    b.apply_kwargs = {"delete_old": True}
+    b.expect_kept = ["Old"]
+    return b
+
+
+@case("delete_safety")
+def t9_delete_old_direct_part_nobody_else_uses(doc):
+    b = scene(doc, BASE, _BOSSED, [_same("revolute")], mode="direct", still=True)
+    b.apply_kwargs = {"delete_old": True}
+    b.expect_deleted = ["Old"]
+    return b
+
+
+def _body_scene(doc, other_user):
+    """A PartDesign body (a sketch and a pad: a 40 x 20 x 10 box) replaced by a box with a boss."""
+    body = doc.addObject("PartDesign::Body", "Body")
+    sk = body.newObject("Sketcher::SketchObject", "Sketch")
+    pts = [V(0, 0, 0), V(40, 0, 0), V(40, 20, 0), V(0, 20, 0)]
+    for i in range(4):
+        sk.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 4]))
+    pad = body.newObject("PartDesign::Pad", "Pad")
+    pad.Profile = sk
+    pad.Length = 10
+    doc.recompute()
+    old_shape = solid(body.Shape)
+    new = bracket(holes=(), bosses=((0, 5, 5, 10, 4),))
+    b = scene(doc, old_shape, new, [jspec("planar", BR["planar"], BR["planar"])], mode="direct", still=True, old_obj=body)
+    if other_user:
+        lk = doc.addObject("App::Link", "PadUser")
+        lk.LinkedObject = pad
+    doc.recompute()
+    b.apply_kwargs = {"delete_old": True}
+    return b
+
+
+@case("delete_safety")
+def t10_delete_old_body_nobody_else_uses(doc):
+    b = _body_scene(doc, False)
+    b.expect_deleted = ["Body", "Sketch", "Pad"]
+    return b
+
+
+@case("delete_safety")
+def t11_delete_old_body_whose_pad_is_linked_elsewhere(doc):
+    b = _body_scene(doc, True)
+    b.expect_kept = ["Body"]
     return b
 
 

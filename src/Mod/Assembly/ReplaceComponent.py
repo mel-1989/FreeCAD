@@ -17,10 +17,14 @@ left in the document (hidden, out of the assembly) unless ``delete_old`` is set.
 
 Matching. Every reference names one or two elements (face, edge, vertex) of the old part. They are
 matched to elements of the new part by geometry in the part's local frame, after aligning the new
-part to the old one (identity unless the principal axes of inertia and the centre of mass, tried in all four proper
-sign combinations, overlap the old part better by 0.1 of the union volume; a tie between two such
-alignments is reported as an ambiguous alignment, and a part that fits exactly only when mirrored is
-reported as such and not matched). Within the aligned frame:
+part to the old one. The alignment is one decision per part, never mixed: identity unless the
+principal axes of inertia and the centre of mass, tried in all four proper sign combinations,
+overlap the old part better by 0.1 of the union volume; a tie between two such alignments, a part
+that fits exactly only when mirrored, and a part that fits about as well as placed as turned (an
+alternative that overlaps at least as well as identity, within 0.1, and explains a different set
+of the old faces by exact twins, while identity explains some too) are reported (ambiguous
+alignment, or mirrored) and not matched: every reference of that part is then ambiguous or
+unmatched, and the caller resolves it by passing the alignment. Within the aligned frame:
 
 1. exact: same kind, same surface or curve type, same normal or axis (sign-free for axes), same
    radius, same size and a centre within 1e-6 mm; exactly one such element is a match (basis
@@ -28,13 +32,34 @@ reported as such and not matched). Within the aligned frame:
 2. adapted: otherwise the candidates are the elements of the same kind and type with the same
    normal or axis (within 1e-4 rad), the same concavity, a radius within 35 percent, an area or
    length ratio within 3 and at least 80 percent of the old element's neighbouring elements still
-   around them; they are ranked
-   by a cost (position relative to the part size, size change, radius change, neighbour change); a
-   new element that is already the exact twin of another old element is not a candidate (a hole that
-   was removed is not matched to the hole that stayed);
-   the best one is a match (basis ``adapted``) unless a second one is within 10 percent of its
-   cost (or 0.01), which makes the reference ``ambiguous``; no candidate makes it ``unmatched``
-   with the reason.
+   around them; a surface or circle with a radius may be moved or resized but not both (an axis
+   shift of more than 2 percent of the part's diagonal together with a radius change of more than
+   5 percent is a different feature, not a revision of this one); the candidates are ranked by a
+   cost (position relative to the part size, size change, radius change, neighbour change);
+3. one to one: a new element belongs to one old element. Every old element of the same kind (not
+   only the referenced ones) that is eligible for a candidate is its rival: a rival that is an
+   exact twin, or whose cost is lower by more than half again and 0.01 beyond the candidate's own
+   (cost_o >= 2 * cost_rival + 0.01), owns it, and the candidate drops out; a rival whose cost is
+   within that band makes the candidate contested and the reference ``ambiguous`` (both old elements
+   see the conflict, neither is given the element); a rival clearly worse than the candidate is
+   ignored. The best remaining candidate is a match (basis ``adapted``) unless a second one is
+   within 10 percent of its cost (or 0.01), which makes the reference ``ambiguous``; no candidate
+   makes it ``unmatched`` with the reason, naming the old element that owns the candidates that
+   dropped out.
+
+Broken joints. A joint with a reference that was not matched is never deleted and never solved
+against a guess: it is suppressed, its unmatched sub-names get FreeCAD's broken-link marker (a leading
+"?", which Joint.execute turns into a recompute error and UtilsAssembly.findPlacement into a
+BrokenReferenceError instead of an identity placement), and it carries a persistent string property
+``ReplaceBroken`` that says what the matcher found (empty when the joint is sound; ``is_broken(joint)``
+reads it). Unsuppressing such a joint is refused with a console error (JointObject.Joint.onChanged) because
+the solver would skip it without a word. ``repair(joint, reference, elements)`` sets the chosen elements
+(checked against the part), clears the marker, unsuppresses and solves.
+
+Deleting the old part. ``delete_old`` removes only what nothing else uses: an object that anything outside
+the replaced instance still uses (``InList``, a link or an expression, in any open document) is kept and
+listed in the report's ``kept_old`` with the users; a PartDesign body goes with its own features and
+origin, or stays whole.
 
 The element index is never used to decide anything. A vertex or edge that belongs to a joint
 reference together with a face is searched only among the sub-elements of the matched face.
@@ -68,6 +93,9 @@ IOU_SAME = 1e-6         # overlap difference below which two alignments are the 
 IOU_EXACT = 1.0 - 1e-6  # overlap that counts as the same shape
 IOU_FIT = 0.3           # identity is kept for a symmetric part when the two overlap at least this much
 IOU_MARGIN = 0.1        # another alignment must overlap this much better than identity to replace it
+MOVE_TOL = 0.02         # axis shift (fraction of the part's diagonal) above which a feature counts as moved
+RESIZE_TOL = 0.05       # relative radius change above which a feature counts as resized
+CLEAR_REL = 1.0         # a rival must beat a candidate by this fraction (plus AMBIG_ABS) to own it
 
 _ELEMENT_RE = re.compile(r"^(Face|Edge|Vertex)(\d+)$")
 _SKIP_GROUPS = ("App::Origin", "App::Line", "App::Plane", "App::Point", "Assembly::JointGroup",
@@ -308,7 +336,7 @@ def _collect_grounded(assembly, hosts):
 
 class _El:
     __slots__ = ("kind", "name", "cls", "center", "size", "dir", "radius", "concave", "adj",
-                 "pos_n", "parents", "children", "signed")
+                 "pos_n", "parents", "children", "signed", "axpt")
 
     def __init__(self, kind, name):
         self.kind = kind
@@ -324,6 +352,7 @@ class _El:
         self.parents = []
         self.children = []
         self.signed = False
+        self.axpt = None      # a point on the axis (cylinder, circle) or the centre (sphere)
 
 
 def _unit(v):
@@ -395,12 +424,15 @@ class _Model:
                 if el.cls == "Sphere":
                     el.concave = n.dot(p - c) < 0
                     el.radius = s.Radius
+                    el.axpt = c
                 else:
                     a = _unit(ax)
                     radial = (p - c) - a * a.dot(p - c)
                     el.concave = n.dot(radial) < 0
                     el.dir = _sign_free(a)
                     el.radius = getattr(s, "Radius", None)
+                    if el.cls == "Cylinder":
+                        el.axpt = c
                     if el.cls == "Cone":
                         el.radius = getattr(s, "SemiAngle", None)
         except Exception:
@@ -423,6 +455,8 @@ class _Model:
             elif el.cls in ("Circle", "Ellipse"):
                 el.dir = _sign_free(c.Axis)
                 el.radius = getattr(c, "Radius", None)
+                if el.cls == "Circle":
+                    el.axpt = c.Center
         except Exception:
             el.cls = "Unknown"
         return el
@@ -454,7 +488,8 @@ class _Model:
         el = self.els[name]
         d = ""
         if el.dir is not None:
-            d = "%.3f,%.3f,%.3f" % tuple((c + 0.0) for c in (el.dir.x, el.dir.y, el.dir.z))
+            # round before formatting: a rotated part has -1e-16 where the original has 0, and "-0.000" is not "0.000"
+            d = "%.3f,%.3f,%.3f" % tuple((round(c, 3) + 0.0) for c in (el.dir.x, el.dir.y, el.dir.z))
         return "%s:%s:%s" % (el.kind, el.cls, d)
 
     def _adjacency(self, el):
@@ -545,24 +580,81 @@ def _cost(o, n, mo, mn):
     return cost
 
 
+def _axis_offset(o, n):
+    """Distance between the axes (cylinder, circle) or the centres (sphere) of two elements, or None."""
+    if o.axpt is None or n.axpt is None:
+        return None
+    v = n.axpt - o.axpt
+    if o.dir is not None:
+        v = v - o.dir * o.dir.dot(v)
+    return v.Length
+
+
+def _adapt_reason(o, n, mo):
+    """Why ``n`` cannot be an adapted match of ``o``, or None if it may be."""
+    bad = _compatible(o, n, ANG_ADAPT)
+    if bad is not None:
+        return bad
+    if o.kind != "Vertex":
+        if max(n.size, 1e-12) / max(o.size, 1e-12) > SIZE_RATIO_MAX or \
+                max(o.size, 1e-12) / max(n.size, 1e-12) > SIZE_RATIO_MAX:
+            return "size changed by more than a factor of %g" % SIZE_RATIO_MAX
+        if _adj_similarity(o.adj, n.adj) < ADJ_MIN:
+            return "its neighbouring elements changed"
+    if o.radius is not None and n.radius is not None:
+        off = _axis_offset(o, n)
+        if off is not None and off > MOVE_TOL * mo.diag and _rel(o.radius, n.radius) > RESIZE_TOL:
+            return "moved by %.3g mm and resized by %d%% (a different feature, not a revision of this one)" % (
+                off, int(round(100 * _rel(o.radius, n.radius))))
+    return None
+
+
+class _Table:
+    """Who else wants a new element: for each new element of one kind, the old elements that are
+    eligible for it with their cost (0 for an exact twin). Built lazily, per new element."""
+
+    def __init__(self, mo, mn, kind):
+        self.mo, self.mn, self.kind = mo, mn, kind
+        self._rivals = {}
+
+    def rivals(self, n_name):
+        if n_name not in self._rivals:
+            ne = self.mn.els[n_name]
+            out = []
+            for on in self.mo.order[self.kind]:
+                o = self.mo.els[on]
+                if o.cls != ne.cls:
+                    continue
+                if _is_exact(o, ne):
+                    out.append((0.0, on))
+                elif _adapt_reason(o, ne, self.mo) is None:
+                    out.append((_cost(o, ne, self.mo, self.mn), on))
+            self._rivals[n_name] = out
+        return self._rivals[n_name]
+
+    def verdict(self, o_name, n_name, cost):
+        """("free",), ("lost", other, why) or ("contested", other, why) for old element ``o_name`` taking ``n_name``."""
+        contested = None
+        for c2, o2 in self.rivals(n_name):
+            if o2 == o_name:
+                continue
+            if c2 == 0.0:
+                return ("lost", o2, "it is the exact twin of %s" % o2)
+            if cost >= (1.0 + CLEAR_REL) * c2 + AMBIG_ABS:
+                return ("lost", o2, "it is a better fit for %s" % o2)
+            if c2 >= (1.0 + CLEAR_REL) * cost + AMBIG_ABS:
+                continue
+            if contested is None:
+                contested = ("contested", o2, "%s fits it about as well" % o2)
+        return contested or ("free",)
+
+
 def _claims(mo, mn, kind):
-    """New elements that exactly coincide with exactly one old element: {new name: old name}.
-
-    An adapted match may not take an element another old element already owns (a hole that was
-    removed must not be matched to the hole that stayed)."""
-    out, seen = {}, {}
-    for on in mo.order[kind]:
-        o = mo.els[on]
-        for nn in mn.order[kind]:
-            if _is_exact(o, mn.els[nn]):
-                seen[nn] = seen.get(nn, []) + [on]
-    for nn, ons in seen.items():
-        if len(ons) == 1:
-            out[nn] = ons[0]
-    return out
+    """The one-to-one table for one kind of element (see the module docstring)."""
+    return _Table(mo, mn, kind)
 
 
-def _decide(o, pool, mo, mn, claims=None):
+def _decide(o, pool, mo, mn, table=None):
     """Match one old element against the new-part names in ``pool``.
 
     Returns dict(status, new, candidates, reason, basis, cost)."""
@@ -575,20 +667,24 @@ def _decide(o, pool, mo, mn, claims=None):
     cands, why = [], {}
     for n in pool:
         ne = mn.els[n]
-        if claims is not None and claims.get(n) not in (None, o.name):
-            why["it is already the exact twin of %s" % claims[n]] = why.get("it is already the exact twin of %s" % claims[n], 0) + 1
-            continue
-        bad = _compatible(o, ne, ANG_ADAPT)
-        if bad is None and o.kind != "Vertex":
-            if max(ne.size, 1e-12) / max(o.size, 1e-12) > SIZE_RATIO_MAX or \
-                    max(o.size, 1e-12) / max(ne.size, 1e-12) > SIZE_RATIO_MAX:
-                bad = "size changed by more than a factor of %g" % SIZE_RATIO_MAX
-            elif _adj_similarity(o.adj, ne.adj) < ADJ_MIN:
-                bad = "its neighbouring elements changed"
+        bad = _adapt_reason(o, ne, mo)
         if bad is None:
             cands.append((_cost(o, ne, mo, mn), n))
         else:
             why[bad] = why.get(bad, 0) + 1
+    contested = {}
+    if table is not None and cands:
+        kept = []
+        for c, n in cands:
+            v = table.verdict(o.name, n, c)
+            if v[0] == "lost":
+                key = "%s is not available: %s" % (n, v[2])
+                why[key] = why.get(key, 0) + 1
+            else:
+                kept.append((c, n))
+                if v[0] == "contested":
+                    contested[n] = v[1]
+        cands = kept
     if not cands:
         if why:
             reason = "no candidate: " + "; ".join("%s (%d)" % (k, v) for k, v in sorted(why.items()))
@@ -598,17 +694,19 @@ def _decide(o, pool, mo, mn, claims=None):
     cands.sort(key=lambda c: (c[0], c[1]))
     best = cands[0]
     tied = [c for c in cands[1:] if c[0] - best[0] <= max(AMBIG_ABS, AMBIG_REL * best[0])]
-    if tied:
+    if tied or best[1] in contested:
         allc = [best] + tied
+        reason = "%d candidates are equally good" % len(allc) if tied else \
+            "%s is also wanted by %s of the old part, which fits it %s" % (
+                best[1], contested[best[1]], "about as well")
         return {"status": "ambiguous", "new": None, "candidates": [(n, c) for c, n in allc],
-                "basis": "adapted", "cost": best[0],
-                "reason": "%d candidates are equally good" % len(allc)}
+                "basis": "adapted", "cost": best[0], "reason": reason}
     return {"status": "matched", "new": best[1], "candidates": [], "basis": "adapted", "cost": best[0], "reason": ""}
 
 
-def _match_element(o_name, mo, mn, pool_names, claims=None):
+def _match_element(o_name, mo, mn, pool_names, table=None):
     """Hook for the mutants: decide one old element."""
-    return _decide(mo.els[o_name], pool_names, mo, mn, claims)
+    return _decide(mo.els[o_name], pool_names, mo, mn, table)
 
 
 # ---------------------------------------------------------------- alignment
@@ -648,6 +746,59 @@ def _iou(a, b):
 def _single_solid(shape):
     sol = shape.Solids
     return sol[0] if len(sol) == 1 else None
+
+
+def _face_twins(mo, shape):
+    """{old face: frozenset of the faces of ``shape`` that are its exact twins} (empty entries left out)."""
+    mn = _Model(shape)
+    out = {}
+    for on in mo.order["Face"]:
+        o = mo.els[on]
+        hits = frozenset(nn for nn in mn.order["Face"] if _is_exact(o, mn.els[nn]))
+        if hits:
+            out[on] = hits
+    return out
+
+
+def _alignment_conflict(old_shape, new_shape, iou_id, proper):
+    """Is identity, which the overlap alone would keep, contradicted by an alternative alignment?
+
+    The alternatives that count overlap the old part at least as well as identity does (within
+    IOU_SAME) and no better than IOU_MARGIN above it (better than that replaces identity before we
+    get here). Faces are compared by exact twins: if identity and an alternative both explain some old
+    faces exactly but by different new faces, the part fits as placed and as turned and nothing in
+    the geometry says which one the designer meant: ("ambiguous", (note, alternatives)). If identity
+    explains no old face and an alternative explains some, the alternative is adopted:
+    ("adopt", (overlap, placement, shape)). Otherwise None. A part that is the same under both
+    (the same twins) is not a conflict."""
+    comp = [c for c in proper if c[0] >= iou_id - IOU_SAME]
+    if not comp:
+        return None
+    mo = _Model(old_shape)
+    twins_id = _face_twins(mo, new_shape)
+    amb, adopt = [], []
+    seen = []
+    for c in comp:
+        tw = _face_twins(mo, c[2])
+        if tw == twins_id or not tw or tw in seen:
+            continue
+        seen.append(tw)
+        (adopt if not twins_id else amb).append((c, tw))
+    if amb:
+        alts = [_plc_json(c[1]) for c, _tw in amb]
+        return "ambiguous", ("the new part overlaps the old one about as well as placed (%.4f) as turned (%.4f), "
+                             "and the two alignments match different faces exactly (%d old faces explained as placed, "
+                             "%d when turned): pass the alignment" % (iou_id, max(c[0] for c, _t in amb),
+                                                                      len(twins_id), len(amb[0][1])), alts)
+    if adopt:
+        adopt.sort(key=lambda x: -x[0][0])
+        if len(adopt) > 1 and adopt[0][0][0] - adopt[1][0][0] <= IOU_SAME:
+            alts = [_plc_json(c[1]) for c, _tw in adopt]
+            return "ambiguous", ("several turned alignments explain faces exactly and overlap equally well: "
+                                 "pass the alignment", alts)
+        c = adopt[0][0]
+        return "adopt", (c[0], c[1], c[2])
+    return None
 
 
 def _choose_alignment(old_shape, new_shape, forced=None):
@@ -698,7 +849,16 @@ def _choose_alignment(old_shape, new_shape, forced=None):
                 info.update(method="mirrored", overlap=1.0)
                 return None, info, None
     if iou_id >= best[0] - IOU_MARGIN:
-        return App.Placement(), info, new_shape.copy()
+        verdict = _alignment_conflict(old_shape, new_shape, iou_id, proper)
+        if verdict is None:
+            return App.Placement(), info, new_shape.copy()
+        kind, payload = verdict
+        if kind == "adopt":
+            info.update(method="inertia", overlap=payload[0],
+                        note="identity explains none of the old faces by an exact twin, the turned part explains some")
+            return payload[1], info, payload[2]
+        info.update(method="ambiguous", overlap=iou_id, note=payload[0], alternatives=payload[1])
+        return None, info, None
     close = [c for c in proper if c[0] >= best[0] - IOU_SAME]
     if len(close) > 1:
         info.update(method="ambiguous", overlap=best[0],
@@ -916,10 +1076,14 @@ def _plan(assembly, old, new, choices=None, alignment=None):
         "hosts": [h.obj.Name for h in hosts],
         "alignment": {"method": ainfo["method"], "overlap": ainfo.get("overlap"),
                       "placement": _plc_json(plc) if plc is not None else None,
-                      "note": ainfo.get("note", "")},
+                      "note": ainfo.get("note", ""),
+                      "alternatives": ainfo.get("alternatives", [])},
         "tolerances": {"position_mm": POS_TOL, "size_rel": SIZE_TOL, "angle_exact_rad": ANG_EXACT,
                        "angle_adapted_rad": ANG_ADAPT, "radius_change_max": RADIUS_ADAPT,
-                       "size_ratio_max": SIZE_RATIO_MAX, "neighbours_min": ADJ_MIN},
+                       "size_ratio_max": SIZE_RATIO_MAX, "neighbours_min": ADJ_MIN,
+                       "move_tol_diag": MOVE_TOL, "resize_tol": RESIZE_TOL, "clear_rel": CLEAR_REL,
+                       "ambiguity_abs": AMBIG_ABS, "ambiguity_rel": AMBIG_REL,
+                       "alignment_margin": IOU_MARGIN},
         "joints": sorted(joints.values(), key=lambda j: j["joint"]),
         "grounded": [g.Name for g, _h in _collect_grounded(assembly, hosts)],
         "references": counts,
@@ -1007,8 +1171,23 @@ def _write_ref(joint, prop, comp, subs):
     setattr(joint, prop, (comp, list(subs)))
 
 
-def _break_joint(doc, joint):
-    """A joint with a reference that could not be matched: kept, suppressed, its reference marked."""
+BROKEN_PROP = "ReplaceBroken"
+
+
+def is_broken(joint):
+    """True if a replace left ``joint`` with a reference it could not remap and nobody has repaired it."""
+    return bool(getattr(joint, BROKEN_PROP, ""))
+
+
+def _break_joint(doc, joint, reason=""):
+    """A joint with a reference that could not be matched: kept, suppressed, its references marked with a
+    leading "?" and a persistent, visible ``ReplaceBroken`` string property that says why. The property
+    stays (empty) after a repair; ``is_broken`` reads it."""
+    if not hasattr(joint, BROKEN_PROP):
+        joint.addProperty("App::PropertyString", BROKEN_PROP, "Replace",
+                          "Set by Replace component when a reference could not be remapped; "
+                          "empty when the joint is sound. Repair it with ReplaceComponent.repair.")
+    setattr(joint, BROKEN_PROP, reason or "a reference could not be remapped")
     if hasattr(joint, "Suppressed"):
         joint.Suppressed = True
 
@@ -1018,6 +1197,19 @@ def _solve(assembly):
         return assembly.solve()
     except Exception as exc:
         return "error: %s" % exc
+
+
+def _why_broken(rf, old, new):
+    """One line for the ReplaceBroken property: the reference, the old elements, what the matcher said."""
+    parts = []
+    for r in rf.result:
+        if r["status"] == "matched":
+            continue
+        cand = ", ".join(c["element"] for c in r["candidates"])
+        parts.append("%s %s: %s%s%s" % (rf.prop, r["old_element"] or r["sub"], r["status"],
+                                        (" (" + r["reason"] + ")") if r["reason"] else "",
+                                        (" candidates: " + cand) if cand else ""))
+    return "replace %s -> %s: %s" % (old.Label, new.Label, "; ".join(parts))
 
 
 def _apply_ref(rf, new_comp, new_tokens):
@@ -1049,7 +1241,7 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
     report, ctx = _plan(assembly, old, new, choices=choices, alignment=alignment)
     refs, hosts, plc = ctx["refs"], ctx["hosts"], ctx["plc"]
     doc.openTransaction("Replace component")
-    deleted = []
+    deleted, kept = [], []
     try:
         new_comp = {}
         for h in hosts:
@@ -1063,12 +1255,12 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
                 lk.LinkedObject = ctx["new_top"]
                 lk.Placement = _new_link_placement(h.obj, plc)
                 new_comp[h.obj.Name] = lk
-        broken = set()
+        broken = {}
         for rf in refs:
             if not _apply_ref(rf, new_comp, ctx["new_tokens"]):
-                broken.add(rf.joint.Name)
+                broken.setdefault(rf.joint.Name, []).append(_why_broken(rf, old, new))
         for name in sorted(broken):
-            _break_joint(doc, doc.getObject(name))
+            _break_joint(doc, doc.getObject(name), "; ".join(broken[name]))
         for g, h in _collect_grounded(assembly, hosts):
             if h.obj.Name in new_comp:
                 g.ObjectToGround = new_comp[h.obj.Name]
@@ -1081,7 +1273,7 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
         doc.recompute()
         solve_code = _solve(assembly)
         if delete_old:
-            deleted = _delete_old(doc, hosts)
+            deleted, kept = _delete_old(doc, hosts)
         doc.recompute()
     except Exception:
         doc.abortTransaction()
@@ -1090,22 +1282,149 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
     report["applied"] = True
     report["solve"] = {"code": solve_code}
     report["deleted_old"] = deleted
+    report["kept_old"] = kept
     report["new_components"] = {k: v.Name for k, v in new_comp.items()}
     return _json_safe(report)
 
 
+def _deletion_set(obj):
+    """``obj`` and what only it owns: a PartDesign body takes its features and origin with it."""
+    members = [obj]
+    if obj.TypeId == "PartDesign::Body" or (hasattr(obj, "Tip") and hasattr(obj, "Group")):
+        stack = list(obj.Group)
+        while stack:
+            m = stack.pop(0)
+            if m not in members:
+                members.append(m)
+                stack.extend(getattr(m, "Group", []))
+        origin = getattr(obj, "Origin", None)
+        if origin is not None:
+            for m in [origin] + list(origin.OutList):
+                if m not in members:
+                    members.append(m)
+    return members
+
+
+def _outside_users(members):
+    """Objects, in any open document, that use one of ``members`` and are not among them: links and
+    other references (``InList`` and a scan of every open document, since an external link does not
+    always show in ``InList``) and expressions that name the object."""
+    inside = {(m.Document.Name, m.Name) for m in members}
+    users = {}
+    docs = list(App.listDocuments().values())
+    for m in members:
+        for o in m.InList:
+            users[(o.Document.Name, o.Name)] = o
+        pats = [re.compile(r"(?<![\w])%s(?![\w])" % re.escape(x)) for x in {m.Name, m.Label}]
+        for d in docs:
+            for o in d.Objects:
+                if o in members:
+                    continue
+                if m in o.OutList:
+                    users[(d.Name, o.Name)] = o
+                    continue
+                for ent in getattr(o, "ExpressionEngine", []) or []:
+                    if any(p.search(str(ent[1])) for p in pats):
+                        users[(d.Name, o.Name)] = o
+                        break
+    return [o for k, o in sorted(users.items())
+            if k not in inside and not o.isDerivedFrom("App::DocumentObjectGroup")]
+
+
+def _remove_set(doc, members):
+    """Remove ``members`` (the object first in the list) from the document, dependants first."""
+    for m in reversed(members):
+        if m.Document.getObject(m.Name) is not None:
+            doc.removeObject(m.Name)
+
+
 def _delete_old(doc, hosts):
-    deleted = []
-    for h in hosts:
-        if h.mode == "adopt":
-            name = h.obj.Name
-            doc.removeObject(name)
-            deleted.append(name)
-    if not deleted:
-        leaf = hosts[0].leaf
-        users = [o for o in leaf.InList if not o.isDerivedFrom("App::DocumentObjectGroup")]
-        if not users:
-            name = leaf.Name
-            doc.removeObject(name)
-            deleted.append(name)
-    return deleted
+    """Delete what the replaced instance left behind, but never an object anything else still uses.
+
+    Returns (deleted names, kept: [{"name", "label", "reason", "users"}])."""
+    deleted, kept = [], []
+    targets = [h.obj for h in hosts if h.mode == "adopt"]
+    if not targets:
+        targets = [hosts[0].leaf]
+    for obj in targets:
+        members = _deletion_set(obj)
+        users = _outside_users(members)
+        if users:
+            names = ["%s:%s" % (u.Document.Name, u.Name) for u in users]
+            kept.append({"name": obj.Name, "label": obj.Label,
+                         "reason": "still used by %s" % ", ".join(names), "users": names})
+            continue
+        names = [m.Name for m in members]
+        _remove_set(doc, members)
+        deleted.extend(names)
+    return deleted, kept
+
+
+# ------------------------------------------------------------------- repair
+
+def _check_element(comp, subs, index, element):
+    """Raise ReplaceError unless ``element`` exists on the part that sub-reference ``index`` reaches."""
+    if not element:
+        return
+    path, _el = _split_sub(subs[index])
+    m = _ELEMENT_RE.match(element)
+    if not m:
+        raise ReplaceError("%r is not a face, edge or vertex name" % element)
+    try:
+        if index == 1 and m.group(1) == "Edge" and _kind_of(_split_sub(subs[0])[1]) == "Face":
+            face = Part.getShape(comp, path + _split_sub(subs[0])[1], needSubElement=True)
+            ok = 1 <= int(m.group(2)) <= len(face.Edges)
+        else:
+            shp = Part.getShape(comp, path + element, needSubElement=True)
+            ok = not shp.isNull()
+    except Exception as exc:
+        raise ReplaceError("%s is not an element of the part this reference reaches (%s)" % (element, exc))
+    if not ok:
+        raise ReplaceError("%s is not an element of the part this reference reaches" % element)
+
+
+def repair(joint, reference, elements):
+    """Set the chosen new element(s) of a joint reference a replace left broken, and clear the marker.
+
+    ``reference`` is ``"Reference1"`` or ``"Reference2"``; ``elements`` is one element name for every
+    sub-name of the reference (a string), or a list with one name per sub-name (a face and an edge:
+    the edge is numbered within the face, as FreeCAD holds it). The names are checked against the part
+    the reference reaches. When no reference of the joint is broken any more the ``ReplaceBroken`` text is
+    cleared, the joint is unsuppressed and the assembly solved; otherwise the text is rewritten to
+    name what is left. One undo transaction. Returns ``{"joint", "reference", "subs", "still_broken", "solve"}``."""
+    if reference not in _JOINT_PROPS:
+        raise ValueError("reference must be Reference1 or Reference2, not %r" % (reference,))
+    comp, subs = getattr(joint, reference)
+    if comp is None or not any("?" in x for x in subs):
+        raise ReplaceError("%s.%s is not a broken reference" % (joint.Name, reference))
+    names = [elements] * len(subs) if isinstance(elements, str) else list(elements)
+    if len(names) != len(subs):
+        raise ValueError("%s.%s has %d sub-names, %d elements given" % (joint.Name, reference, len(subs), len(names)))
+    new_subs = []
+    for sub, el in zip(subs, names):
+        path, _old = _split_sub(sub.replace("?", ""))
+        new_subs.append(path + el)
+    for i, el in enumerate(names):
+        _check_element(comp, new_subs, i, el)
+    doc = joint.Document
+    doc.openTransaction("Repair joint reference")
+    try:
+        _write_ref(joint, reference, comp, new_subs)
+        left = [p for p in _JOINT_PROPS if getattr(joint, p)[0] is not None and any("?" in x for x in getattr(joint, p)[1])]
+        solve_code = None
+        if left:
+            setattr(joint, BROKEN_PROP, "%s still broken (repaired %s)" % (", ".join(left), reference))
+        else:
+            setattr(joint, BROKEN_PROP, "")
+            joint.Suppressed = False
+            doc.recompute()
+            asm = joint.Proxy.getAssembly(joint) if hasattr(joint.Proxy, "getAssembly") else None
+            if asm is not None:
+                solve_code = _solve(asm)
+        doc.recompute()
+    except Exception:
+        doc.abortTransaction()
+        raise
+    doc.commitTransaction()
+    return _json_safe({"joint": joint.Name, "reference": reference, "subs": list(getattr(joint, reference)[1]),
+                       "still_broken": left, "solve": solve_code})
