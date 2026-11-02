@@ -820,6 +820,23 @@ def big_grid_225(doc, asm):
     return truth
 
 
+# -------------------------------------------- all three classes in one assembly (GUI scenes)
+
+@case("mixed", clearance=3.0)
+def mixed_all_classes(doc, asm):
+    """One interference, one touching pair, one close pair and a clearance set that the close pair violates.
+
+    A and B overlap by 4 mm along x (4 * 10 * 10 = 400 mm^3); D touches B's far face; C stands 2.5 mm from A's near face."""
+    import Interference
+
+    box(asm, "A")
+    box(asm, "B", pos=(6, 0, 0))
+    box(asm, "C", pos=(-12.5, 0, 0))
+    box(asm, "D", pos=(16, 0, 0))
+    Interference.set_clearance_set(asm, "Keep clear", 5.0, [("A", "C")])
+    return T({("A", "B"): 400.0}, touching=[("B", "D")], close={("A", "C"): 2.5})
+
+
 def build_case(doc, name):
     """Build case ``name`` into ``doc`` (a fresh document); returns (assembly, truth)."""
     c = CASES[name]

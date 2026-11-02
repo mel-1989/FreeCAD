@@ -21,6 +21,8 @@
 #                                                                           *
 # **************************************************************************/
 
+FreeCAD.__unit_test__ += ["TestAssemblyInterferenceGui"]
+
 
 class AssemblyCommandGroup:
     def __init__(self, cmdlist, menu, tooltip=None):
@@ -72,6 +74,7 @@ class AssemblyWorkbench(Workbench):
         import CommandCreateSimulation
         import CommandCreateSnapshot
         import CommandCreateBom
+        import CommandCheckInterference
         import Preferences
 
         FreeCADGui.addLanguagePath(":/translations")
@@ -91,6 +94,7 @@ class AssemblyWorkbench(Workbench):
             "Assembly_CreateSnapshot",
             "Assembly_CreateSimulation",
             "Assembly_CreateBom",
+            "Assembly_CheckInterference",
         ]
 
         cmdListMenuOnly = [
