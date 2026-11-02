@@ -35,6 +35,13 @@ CLASS_TEXT = {"interfering": "Interference", "touching": "Touching", "close": "T
 PAIR_HEADERS = ["Kind", "Part A", "Part B", "Common volume (mm³)", "Distance (mm)"]
 SET_HEADERS = ["Clearance set", "Part A", "Part B", "Distance (mm)", "Required (mm)"]
 NODE_NAME = "AssemblyInterferenceHighlight"
+NODE_COMMON = NODE_NAME + "Common"
+NODE_OUTLINE_A = NODE_NAME + "OutlineA"
+NODE_OUTLINE_B = NODE_NAME + "OutlineB"
+NODE_TINT_A = NODE_NAME + "TintA"
+NODE_TINT_B = NODE_NAME + "TintB"
+#: parts with this many edges or fewer (sphere, cylinder, cone) also get a tinted face overlay
+FEW_EDGES = 3
 
 
 def part_text(desc):
@@ -73,7 +80,7 @@ class Highlight:
         return max(diag * 0.002, 1e-4)
 
     @staticmethod
-    def _line_node(shape, color, width, defl):
+    def _line_node(shape, color, width, defl, name=""):
         """Polylines of every edge of ``shape``."""
         sep = coin.SoSeparator()
         mat = coin.SoMaterial()
@@ -94,6 +101,7 @@ class Highlight:
                 counts.append(len(p))
         coords = coin.SoCoordinate3()
         coords.point.setValues(0, len(pts), pts)
+        sep.setName(name)
         lines = coin.SoLineSet()
         lines.numVertices.setValues(0, len(counts), counts)
         for n in (mat, style, light, coords, lines):
@@ -101,10 +109,11 @@ class Highlight:
         return sep
 
     @staticmethod
-    def _solid_node(shape, color, transparency, defl):
+    def _solid_node(shape, color, transparency, defl, name=""):
         """Shaded faces of ``shape`` (tessellated)."""
         verts, tris = shape.tessellate(defl)
         sep = coin.SoSeparator()
+        sep.setName(name)
         mat = coin.SoMaterial()
         mat.diffuseColor = color
         mat.transparency = transparency
@@ -160,10 +169,13 @@ class Highlight:
         depth.function = coin.SoDepthBuffer.ALWAYS
         root.addChild(depth)
         if common is not None and not common.isNull() and common.Solids:
-            root.addChild(self._solid_node(common, COL_COMMON, 0.15, defl))
+            root.addChild(self._solid_node(common, COL_COMMON, 0.15, defl, NODE_COMMON))
             root.addChild(self._line_node(common, COL_COMMON_EDGE, 2, defl))
-        root.addChild(self._line_node(shape_a, COL_A, 2, defl))
-        root.addChild(self._line_node(shape_b, COL_B, 2, defl))
+        for shape, color, name, tint in ((shape_a, COL_A, NODE_OUTLINE_A, NODE_TINT_A), (shape_b, COL_B, NODE_OUTLINE_B, NODE_TINT_B)):
+            if len(shape.Edges) <= FEW_EDGES:
+                # a sphere's only visible edge is its seam: a faint tinted copy of the part shows where it is
+                root.addChild(self._solid_node(shape, color, 0.8, defl, tint))
+            root.addChild(self._line_node(shape, color, 2, defl, name))
         if gap is not None:
             root.addChild(self._gap_node(gap[0], gap[1], COL_GAP))
         sg.addChild(root)
@@ -256,6 +268,13 @@ class TaskCheckInterference:
         self.error.hide()
         lay.addWidget(self.error)
 
+        self.notice = QtWidgets.QLabel()
+        self.notice.setObjectName("notice")
+        self.notice.setWordWrap(True)
+        self.notice.setStyleSheet("background-color: #fff1b8; color: #3a2f00; padding: 2px 6px;")   # informational, own colours: readable on any theme
+        self.notice.hide()
+        lay.addWidget(self.notice)
+
         self.pairs = self._table("pairs", PAIR_HEADERS)
         lay.addWidget(self.pairs)
 
@@ -335,7 +354,21 @@ class TaskCheckInterference:
             problems += [str(u.get("error")) for u in self.sets_report["unresolved"]]
         if problems:
             self.show_error(translate("Assembly", "Could not check:") + " " + "; ".join(problems))
+        self.notice.setText(self.notice_text())
+        self.notice.setVisible(bool(self.notice.text()))
         self.summary.setText(self.summary_text())
+
+    def notice_text(self):
+        """Parts that were found but hold no solid, so they could not be tested (the API's ``skipped_non_solid``)."""
+        recs = []
+        for rep in (self.report, self.sets_report):
+            for rec in (rep or {}).get("skipped_non_solid", []):
+                if all(part_text(rec) != part_text(r) for r in recs):
+                    recs.append(rec)
+        if not recs:
+            return ""
+        names = ", ".join("%s (%s)" % (part_text(r), r.get("shape_type", "no solid")) for r in recs)
+        return translate("Assembly", "Not tested, because they hold no solid: %s. Only solids are checked.") % names
 
     def summary_text(self):
         if not self.report:
@@ -415,24 +448,27 @@ class TaskCheckInterference:
         names = "%s / %s" % (part_text(rec["a"]), part_text(rec["b"]))
         if rec["class"] == "interfering":
             common = a.common(b)
-            self.highlight.show(a, b, common=common)
-            self.details.setText(translate("Assembly", "%s share %.3f mm³ (red in the 3D view).") % (names, common.Volume))
+            shown = self.highlight.show(a, b, common=common)
+            text = translate("Assembly", "%s share %.3f mm³") % (names, common.Volume)
+            self.details.setText(text + (translate("Assembly", " (red in the 3D view).") if shown else "."))
             return
         pts = rec.get("points")
         gap = (App.Vector(*pts[0]), App.Vector(*pts[1])) if pts else None
-        self.highlight.show(a, b, gap=gap)
+        shown = self.highlight.show(a, b, gap=gap)
+        line = translate("Assembly", ", magenta line") if shown else ""
         if rec["class"] == "touching":
-            self.details.setText(translate("Assembly", "%s touch (closest distance %.3f mm, magenta line).") % (names, rec["distance_mm"]))
+            self.details.setText(translate("Assembly", "%s touch (closest distance %.3f mm%s).") % (names, rec["distance_mm"], line))
         else:
-            self.details.setText(translate("Assembly", "%s are %.3f mm apart (magenta line).") % (names, rec["distance_mm"]))
+            self.details.setText(translate("Assembly", "%s are %.3f mm apart%s.") % (names, rec["distance_mm"], translate("Assembly", " (magenta line)") if shown else ""))
 
     def _show_violation(self, rec):
         a, b = self._shapes_of(rec)
         dist, pts, _info = a.distToShape(b)
         gap = (pts[0][0], pts[0][1]) if pts else None
-        self.highlight.show(a, b, gap=gap)
-        self.details.setText(translate("Assembly", "%s / %s are %.3f mm apart; set \"%s\" requires %.3f mm (magenta line).") % (
-            part_text(rec["a"]), part_text(rec["b"]), dist, rec["set"], rec["required_mm"]))
+        shown = self.highlight.show(a, b, gap=gap)
+        self.details.setText(translate("Assembly", "%s / %s are %.3f mm apart; set \"%s\" requires %.3f mm%s.") % (
+            part_text(rec["a"]), part_text(rec["b"]), dist, rec["set"], rec["required_mm"],
+            translate("Assembly", " (magenta line)") if shown else ""))
 
     # ---- task dialog protocol
 

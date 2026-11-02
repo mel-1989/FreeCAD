@@ -50,7 +50,7 @@ class CommandCheckInterference:
 
     def Activated(self):
         assembly = target_assembly()
-        if assembly is None:
+        if assembly is None or Gui.Control.activeDialog():   # Gui.runCommand ignores IsActive: never build a second, hidden panel
             return
         from InterferencePanel import TaskCheckInterference
 

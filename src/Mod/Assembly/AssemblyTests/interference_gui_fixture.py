@@ -20,6 +20,10 @@ def scene_doc(name, case=DEFAULT_CASE):
     if App.GuiUp:
         for obj in asm.Group:
             obj.ViewObject.Visibility = True
+            # with the GUI up a link array's elements start hidden: show them, except where the case is about hidden ones
+            if "hidden" not in case and "suppressed" not in case:
+                for el in getattr(obj, "ElementList", []) if getattr(obj, "ShowElement", False) else []:
+                    el.Visibility = True
     return doc, asm, truth
 
 

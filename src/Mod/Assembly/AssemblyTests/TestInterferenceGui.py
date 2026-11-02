@@ -27,6 +27,32 @@ def highlight_nodes(doc_name):
     return act.getPaths().getLength()
 
 
+def node_points(doc_name, node_name):
+    """Coordinates (list of xyz tuples) of the SoCoordinate3 inside the highlight node called ``node_name``; None if absent."""
+    sg = Gui.getDocument(doc_name).ActiveView.getSceneGraph()
+    act = coin.SoSearchAction()
+    act.setName(coin.SbName(node_name))
+    act.apply(sg)
+    path = act.getPath()
+    if path is None:
+        return None
+    node = path.getTail()
+    for i in range(node.getNumChildren()):
+        ch = node.getChild(i)
+        if isinstance(ch, coin.SoCoordinate3):
+            return [tuple(ch.point[k].getValue()) for k in range(ch.point.getNum())]
+    return None
+
+
+def bbox_of(points):
+    xs, ys, zs = zip(*points)
+    return (min(xs), min(ys), min(zs), max(xs), max(ys), max(zs))
+
+
+def bbox_tuple(bb):
+    return (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)
+
+
 def scene_children(doc_name):
     return Gui.getDocument(doc_name).ActiveView.getSceneGraph().getNumChildren()
 
@@ -130,6 +156,130 @@ class TestInterferenceGui(unittest.TestCase):
                     Gui.Control.closeDialog()
                 Gui.updateGui()
                 self.assertEqual(highlight_nodes(self.doc.Name), 0)
+
+    # ---- the notice for parts that hold no solid
+
+    def switch_case(self, case):
+        App.closeDocument(self.doc.Name)
+        self.doc, self.asm, self.truth = F.scene_doc("InterfGui2", case)
+        App.setActiveDocument(self.doc.Name)
+        Gui.ActiveDocument = Gui.getDocument(self.doc.Name)
+        Gui.updateGui()
+
+    def test_non_solid_parts_are_named_in_a_notice(self):
+        self.switch_case("face_wire_shell_sketch_listed")
+        panel = self.open_panel()
+        skipped = panel.report["skipped_non_solid"]
+        self.assertGreaterEqual(len(skipped), 3)
+        self.assertFalse(panel.notice.isHidden())
+        text = panel.notice.text()
+        for rec in skipped:
+            self.assertIn(rec["label"], text)
+            self.assertIn(rec["shape_type"], text)
+        self.assertIn("no solid", text)
+        self.assertTrue(panel.error.isHidden(), "a skipped non-solid part is not an error")
+        self.assertIn("1 parts checked", panel.summary.text())
+
+    def test_notice_is_hidden_when_every_part_is_a_solid(self):
+        panel = self.open_panel()
+        self.assertTrue(panel.notice.isHidden())
+        self.assertEqual(panel.notice.text(), "")
+
+    # ---- the highlight geometry is in assembly placement
+
+    def check_highlight_geometry(self, case):
+        self.switch_case(case)
+        panel = self.open_panel()
+        rows = [i for i, r in enumerate(panel.pair_rows) if r["class"] == "interfering"]
+        self.assertTrue(rows, "%s %s %s" % (case, panel.report["pairs"], panel.report["stats"]))
+        tol = 1e-3
+        for row in rows:
+            rec = panel.pair_rows[row]
+            panel.select_pair(row)
+            Gui.updateGui()
+            a, b = panel.shapes[rec["a"]["path"]], panel.shapes[rec["b"]["path"]]
+            common = node_points(self.doc.Name, "AssemblyInterferenceHighlightCommon")
+            self.assertIsNotNone(common, "no common-solid geometry in the highlight")
+            for got, want in zip(bbox_of(common), bbox_tuple(a.common(b).BoundBox)):
+                self.assertAlmostEqual(got, want, delta=tol, msg="common solid, %s row %d" % (case, row))
+            for node, shape in (("AssemblyInterferenceHighlightOutlineA", a), ("AssemblyInterferenceHighlightOutlineB", b)):
+                pts = node_points(self.doc.Name, node)
+                self.assertIsNotNone(pts, node)
+                for got, want in zip(bbox_of(pts), bbox_tuple(shape.BoundBox)):
+                    self.assertAlmostEqual(got, want, delta=tol, msg="%s, %s row %d" % (node, case, row))
+        return panel
+
+    def test_highlight_geometry_link_part_placed(self):
+        panel = self.check_highlight_geometry("link_part_placed")
+        # independent of the API: LP is turned 180 degrees about z at (20,0,0); X is the box (12,-4,0) of size 4
+        rec = panel.pair_rows[0]
+        panel.select_pair(0)
+        common = node_points(self.doc.Name, "AssemblyInterferenceHighlightCommon")
+        for got, want in zip(bbox_of(common), (12, -4, 0, 14, 0, 4)):
+            self.assertAlmostEqual(got, want, delta=1e-3)
+
+    def test_highlight_geometry_array_link_overlap(self):
+        self.check_highlight_geometry("array_link_overlap")
+
+    def test_highlight_geometry_nested_subassembly(self):
+        panel = self.check_highlight_geometry("nested_subassembly")
+        # Sub sits at z=15, its box at (3,0,-6): the 10 mm box A and the sub box share x[3,10], y[0,10], z[9,10]
+        panel.select_pair(0)
+        common = node_points(self.doc.Name, "AssemblyInterferenceHighlightCommon")
+        for got, want in zip(bbox_of(common), (3, 0, 9, 10, 10, 10)):
+            self.assertAlmostEqual(got, want, delta=1e-3)
+
+    # ---- sphere outlines, no 3D view, a second panel
+
+    def test_sphere_gets_a_tinted_overlay(self):
+        self.switch_case("sph_contained")
+        panel = self.open_panel()
+        panel.select_pair(0)
+        for node in ("TintA", "TintB"):
+            pts = node_points(self.doc.Name, "AssemblyInterferenceHighlight" + node)
+            self.assertTrue(pts and len(pts) > 20, node)
+        self.assertIsNone(node_points(self.doc.Name, "AssemblyInterferenceHighlightTintC"))
+
+    def test_boxes_get_no_tinted_overlay(self):
+        panel = self.open_panel()
+        panel.select_pair(0)
+        self.assertIsNone(node_points(self.doc.Name, "AssemblyInterferenceHighlightTintA"))
+        self.assertIsNotNone(node_points(self.doc.Name, "AssemblyInterferenceHighlightOutlineA"))
+
+    def test_details_do_not_claim_a_3d_view_without_one(self):
+        panel = self.open_panel()
+        panel.highlight.show = lambda *a, **k: False
+        for row, word in ((0, "red"), (1, "magenta"), (2, "magenta")):
+            panel.select_pair(row)
+            self.assertNotIn(word, panel.details.text())
+            self.assertNotIn("3D view", panel.details.text())
+        panel.select_violation(0)
+        self.assertNotIn("magenta", panel.details.text())
+        del panel.highlight.show
+        panel.select_pair(0)
+        self.assertIn("red in the 3D view", panel.details.text())
+
+    def test_running_the_command_twice_opens_one_panel(self):
+        Gui.Selection.addSelection(self.doc.Name, self.asm.Name)
+        Gui.runCommand("Assembly_CheckInterference")
+        Gui.updateGui()
+        first = Gui.Control.activeDialog()
+        self.assertTrue(first)
+        made = []
+        import InterferencePanel as P
+        orig = P.TaskCheckInterference.__init__
+
+        def counting(this, *a, **k):
+            made.append(1)
+            orig(this, *a, **k)
+        P.TaskCheckInterference.__init__ = counting
+        try:
+            Gui.runCommand("Assembly_CheckInterference")
+            Gui.updateGui()
+        finally:
+            P.TaskCheckInterference.__init__ = orig
+        self.assertEqual(made, [], "a second panel was built while one was open")
+        self.assertTrue(Gui.Control.activeDialog())
 
     # ---- the check must not dirty the document
 
