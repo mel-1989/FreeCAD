@@ -8,6 +8,7 @@ overridden joint value edited since (drift), the state the panel shows in its sc
 """
 
 import json
+import re
 
 import FreeCAD as App
 
@@ -15,6 +16,7 @@ import AssemblyConfiguration as AC
 from AssemblyTests import configuration_corpus as C
 from AssemblyTests import feature_gui_fixture as FG
 
+_GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 SLIDER = "JCd"
 SLIDER_FAR = 90.0
 
@@ -71,4 +73,8 @@ grab_png = FG.grab_png
 
 def signature(rig):
     """Everything the 5a corpus compares: every object and property, configuration objects included."""
-    return json.loads(json.dumps(AC.full_signature(rig.doc), default=str))
+    sig = json.loads(json.dumps(AC.full_signature(rig.doc), default=str))
+    for rec in sig.values():
+        for k in [k for k, v in rec["props"].items() if k in ("Id", "Uid") or (isinstance(v, str) and _GUID.match(v))]:
+            rec["props"].pop(k)            # GUIDs differ between two documents
+    return sig

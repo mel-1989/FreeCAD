@@ -78,6 +78,7 @@ class AssemblyWorkbench(Workbench):
         import CommandCreateBom
         import CommandCheckInterference
         import CommandCreateAssemblyFeature
+        import CommandConfigurations
         import Preferences
 
         FreeCADGui.addLanguagePath(":/translations")
@@ -100,6 +101,7 @@ class AssemblyWorkbench(Workbench):
             "Assembly_CheckInterference",
             "Assembly_CreateAssemblyCut",
             "Assembly_CreateAssemblyHole",
+            "Assembly_Configurations",
         ]
 
         cmdListMenuOnly = [

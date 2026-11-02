@@ -48,6 +48,8 @@ set(Assembly_Scripts
     AssemblyFeaturePanel.py
     ViewProviderAssemblyFeature.py
     TestAssemblyFeatureGui.py
+    CommandConfigurations.py
+    ConfigurationsPanel.py
     ViewProviderAssemblyConfiguration.py
     TestAssemblyConfigurationsGui.py
 )
