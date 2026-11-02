@@ -128,6 +128,14 @@ def _m_clearance(doc):
     doc.B.Placement.Base = FreeCAD.Vector(10.5, 0, 0)
 
 
+def _m_asm_overlap(doc):
+    doc.B.Placement.Base = FreeCAD.Vector(5, 0, 0)
+
+
+def _m_asm_close(doc):
+    doc.B.Placement.Base = FreeCAD.Vector(10.5, 0, 0)
+
+
 def _m_mass(doc):
     doc.Box.ShapeMaterial = builders._material("Aluminum-6061-T6")
 
@@ -151,6 +159,8 @@ MUTANTS = [
     ("bbox", {"check": "bbox", "expect": {"Box": {"size": [10, 20, 30]}}}, "box", _m_bbox, "Box"),
     ("interference", {"check": "interference"}, "pair_gap2", _m_interference, "A"),
     ("clearance", {"check": "clearance", "min": 1.0}, "pair_gap2", _m_clearance, "A:"),
+    ("assembly_interference", {"check": "assembly_interference"}, "asm_pair_gap2", _m_asm_overlap, "A"),
+    ("clearance_sets", {"check": "clearance_sets"}, "asm_pair_gap2", _m_asm_close, "A"),
     ("mass", {"check": "mass", "expect": {"Box": {"mass_kg": 0.0078}}}, "steel_box", _m_mass, "Box"),
     ("thickness", {"check": "thickness", "min_required": 1.5}, "plate", _m_thickness, "Box:Face"),
 ]
