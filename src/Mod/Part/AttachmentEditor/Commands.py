@@ -93,6 +93,10 @@ class CommandEditAttachment:
                 "Part_EditAttachment",
                 "Opens the attachment editor to change the attachment of the selected object",
             ),
+            "StatusTip": QT_TRANSLATE_NOOP(
+                "Part_EditAttachment",
+                "Opens the attachment editor to change the attachment of the selected object",
+            ),
         }
 
     def Activated(self):

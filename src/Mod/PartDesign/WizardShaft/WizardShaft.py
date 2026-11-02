@@ -225,7 +225,7 @@ class WizardShaftGui:
         ToolTip = QtCore.QT_TRANSLATE_NOOP(
             "PartDesign_WizardShaft", "Starts the shaft design wizard"
         )
-        return {"Pixmap": IconPath, "MenuText": MenuText, "ToolTip": ToolTip}
+        return {"Pixmap": IconPath, "MenuText": MenuText, "ToolTip": ToolTip, "StatusTip": ToolTip}
 
     def IsActive(self):
         return FreeCAD.ActiveDocument is not None
@@ -253,7 +253,7 @@ class WizardShaftGuiCallback:
         ToolTip = QtCore.QT_TRANSLATE_NOOP(
             "PartDesign_WizardShaftCallBack", "Start the shaft design wizard"
         )
-        return {"Pixmap": IconPath, "MenuText": MenuText, "ToolTip": ToolTip}
+        return {"Pixmap": IconPath, "MenuText": MenuText, "ToolTip": ToolTip, "StatusTip": ToolTip}
 
 
 FreeCADGui.addCommand("PartDesign_WizardShaft", WizardShaftGui())

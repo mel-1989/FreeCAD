@@ -24,6 +24,7 @@ if(BUILD_GUI)
           InitGui.py
           TestPartGui.py
           TestPartPreview.py
+          TestUpstreamCommandsGui.py
     )
 endif(BUILD_GUI)
 

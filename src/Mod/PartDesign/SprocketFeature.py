@@ -67,6 +67,9 @@ class CommandSprocket:
             "ToolTip": QtCore.QT_TRANSLATE_NOOP(
                 "PartDesign_Sprocket", "Creates or edits the sprocket definition."
             ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
+                "PartDesign_Sprocket", "Creates or edits the sprocket definition."
+            ),
         }
 
     def Activated(self):

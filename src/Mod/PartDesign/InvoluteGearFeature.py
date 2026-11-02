@@ -64,6 +64,9 @@ class CommandInvoluteGear:
             "ToolTip": QtCore.QT_TRANSLATE_NOOP(
                 "PartDesign_InvoluteGear", "Creates or edits the involute gear definition"
             ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
+                "PartDesign_InvoluteGear", "Creates or edits the involute gear definition"
+            ),
         }
 
     def Activated(self):

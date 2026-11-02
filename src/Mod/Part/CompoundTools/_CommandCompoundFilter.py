@@ -65,6 +65,15 @@ class _CommandCompoundFilter:
                 "as reference, for example,\n"
                 "for collision or distance filtering.",
             ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
+                "Part_CompoundFilter",
+                "Filters out objects from the selected compound "
+                "by characteristics like volume,\n"
+                "area, or length, or by choosing specific items.\n"
+                "If a second object is selected, it will be used "
+                "as reference, for example,\n"
+                "for collision or distance filtering.",
+            ),
         }
 
     def Activated(self):

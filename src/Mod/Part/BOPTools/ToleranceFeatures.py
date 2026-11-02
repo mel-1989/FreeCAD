@@ -235,6 +235,10 @@ class CommandToleranceSet:
                 "Part_ToleranceSet",
                 "Creates a parametric copy of the selected object with all contained tolerances set to at least a certain minimum value",
             ),
+            "StatusTip": QtCore.QT_TRANSLATE_NOOP(
+                "Part_ToleranceSet",
+                "Creates a parametric copy of the selected object with all contained tolerances set to at least a certain minimum value",
+            ),
         }
 
     def Activated(self):
