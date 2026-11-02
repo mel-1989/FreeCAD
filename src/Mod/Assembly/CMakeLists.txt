@@ -39,6 +39,7 @@ set(Assembly_Scripts
     UtilsAssembly.py
     Interference.py
     InterferencePanel.py
+    ReplaceComponent.py
     TestAssemblyInterferenceGui.py
     CommandCheckInterference.py
 )
@@ -72,6 +73,8 @@ SET(AssemblyTests_SRCS
     AssemblyTests/TestSimulationExport.py
     AssemblyTests/TestInterference.py
     AssemblyTests/interference_corpus.py
+    AssemblyTests/TestReplaceComponent.py
+    AssemblyTests/replace_corpus.py
     AssemblyTests/interference_gui_fixture.py
     AssemblyTests/TestInterferenceGui.py
     AssemblyTests/mocks/__init__.py

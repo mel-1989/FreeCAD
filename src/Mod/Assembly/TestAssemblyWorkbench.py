@@ -28,6 +28,7 @@ from AssemblyTests.TestCommandInsertLink import TestCommandInsertLink
 from AssemblyTests.TestCommandCreateView import TestCommandCreateView
 from AssemblyTests.TestSimulationExport import TestSimulationExport
 from AssemblyTests.TestInterference import TestInterference
+from AssemblyTests.TestReplaceComponent import TestReplaceComponent
 
 # Use the modules so that code checkers don't complain (flake8)
 True if TestCore else False
@@ -35,3 +36,4 @@ True if TestCommandInsertLink else False
 True if TestCommandCreateView else False
 True if TestSimulationExport else False
 True if TestInterference else False
+True if TestReplaceComponent else False
