@@ -7,6 +7,8 @@ come from tolerances.json, never from constants here.
 
 import itertools
 
+import FreeCAD
+
 from . import thickness as _thickness
 from .entities import entity
 from .tolerances import resolve
@@ -122,15 +124,43 @@ def _pairs(doc, params):
             yield a, b
 
 
+# Pairwise primitives shared with Assembly/Interference.py (G06): one core, two callers.
+# Defaults reproduce F2's behaviour exactly (no margin, no touching class).
+
+def bbox_overlap(sa, sb, margin=0.0):
+    """Broad phase: do the two bounding boxes overlap?
+
+    With margin 0 this is exactly ``sa.BoundBox.intersect(sb.BoundBox)``. A positive margin
+    enlarges one box by ``margin`` before the test, so two boxes whose gap is at most
+    ``margin`` along every axis still count as candidates (clearance and contact search).
+    """
+    ba = getattr(sa, "BoundBox", sa)  # a shape, or an already-computed BoundBox
+    bb = getattr(sb, "BoundBox", sb)
+    if margin:
+        ba = FreeCAD.BoundBox(ba)
+        ba.enlarge(margin)
+    return bool(ba.intersect(bb))
+
+
+def common_volume(sa, sb):
+    """Exact volume of the Boolean common of two shapes (OCCT BRepAlgoAPI_Common)."""
+    return sa.common(sb).Volume
+
+
+def min_distance(sa, sb):
+    """Minimum distance between two shapes: ``(dist, points, info)`` from OCCT BRepExtrema."""
+    return sa.distToShape(sb)
+
+
 def check_interference(doc, params):
     tol = resolve(params)["interference_volume_mm3"]
     hits, n = [], 0
     for a, b in _pairs(doc, params):
         n += 1
         sa, sb = _shape(a), _shape(b)
-        if not sa.BoundBox.intersect(sb.BoundBox):
+        if not bbox_overlap(sa, sb):
             continue
-        vol = sa.common(sb).Volume
+        vol = common_volume(sa, sb)
         if vol > tol:
             hits.append({"a": a.Name, "b": b.Name, "volume_mm3": vol})
     ents = sorted({entity(doc.getObject(x)) for h in hits for x in (h["a"], h["b"])})
@@ -147,7 +177,7 @@ def check_clearance(doc, params):
     slack = tols["clearance_abs_mm"]
     pairs, bad, ents = [], [], set()
     for a, b in _pairs(doc, params):
-        dist, pts, info = _shape(a).distToShape(_shape(b))
+        dist, pts, info = min_distance(_shape(a), _shape(b))
         rec = {"a": a.Name, "b": b.Name, "distance_mm": dist}
         if info and pts:
             # info is one (typeA, idxA, paramA, typeB, idxB, paramB) tuple per solution
@@ -160,6 +190,63 @@ def check_clearance(doc, params):
             bad.append(rec)
             ents.update(rec.get("entities", [entity(a), entity(b)]))
     return (not bad), sorted(ents), {"min_required_mm": need, "pairs": pairs, "violations": bad}
+
+
+def _top_assemblies(doc, names=None):
+    out = []
+    for o in doc.Objects:
+        if o.TypeId != "Assembly::AssemblyObject":
+            continue
+        if names is not None and o.Name not in names:
+            continue
+        # an assembly reachable from another one (contained, or through any link) is checked there
+        if any(p.TypeId in ("Assembly::AssemblyObject", "Assembly::AssemblyLink")
+               for p in o.InListRecursive):
+            continue
+        out.append(o)
+    return out
+
+
+def check_assembly_interference(doc, params):
+    """G06: interfering pairs (and, with ``clearance``, close pairs) of every assembly.
+
+    Params: ``objects`` (assembly names), ``clearance``, ``contact_tol``, ``ignore``,
+    ``ignore_names``, ``fail_on_touching``. Imports Assembly lazily so AgentCore loads without it.
+    """
+    import Interference
+
+    bad, ents, reports = [], set(), {}
+    for asm in _top_assemblies(doc, params.get("objects")):
+        rep = Interference.check(asm, contact_tol=params.get("contact_tol"),
+                                 clearance=params.get("clearance", 0.0),
+                                 ignore=params.get("ignore"), ignore_names=params.get("ignore_names"))
+        reports[asm.Name] = rep
+        fail = {"interfering", "close"} | ({"touching"} if params.get("fail_on_touching") else set())
+        for p in rep["pairs"]:
+            if p["class"] in fail:
+                bad.append({"assembly": asm.Name, **p})
+                ents.update((p["a"]["entity"], p["b"]["entity"]))
+        for e in rep["errors"]:  # unresolved parts and failed pair checks: never an ok
+            bad.append({"assembly": asm.Name, "error": e})
+            if e.get("entity"):
+                ents.add(e["entity"])
+    return (not bad), sorted(ents), {"assemblies": reports, "violations": bad}
+
+
+def check_clearance_sets(doc, params):
+    """G06: every named clearance set stored in an assembly, with its violations."""
+    import Interference
+
+    bad, ents, reports = [], set(), {}
+    for asm in _top_assemblies(doc, params.get("objects")):
+        rep = Interference.check_clearance_sets(asm)
+        reports[asm.Name] = rep
+        for v in rep["violations"]:
+            bad.append({"assembly": asm.Name, **v})
+            ents.update((v["a"]["entity"], v["b"]["entity"]))
+        for u in rep["unresolved"]:
+            bad.append({"assembly": asm.Name, **u})
+    return (not bad), sorted(ents), {"assemblies": reports, "violations": bad}
 
 
 def _density(obj, params):
@@ -271,6 +358,8 @@ CHECKS = {
     "clearance": check_clearance,
     "mass": check_mass,
     "thickness": check_thickness,
+    "assembly_interference": check_assembly_interference,
+    "clearance_sets": check_clearance_sets,
     "_selftest_abort": _selftest_abort,
     "_selftest_kill": _selftest_kill,
     "_selftest_sleep": _selftest_sleep,

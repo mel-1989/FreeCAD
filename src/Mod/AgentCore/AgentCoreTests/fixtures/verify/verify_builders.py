@@ -58,6 +58,16 @@ def build(name):
     elif kind == "pair":
         _box(doc, "A", (t["size"],) * 3)
         _box(doc, "B", (t["size"],) * 3, (t["dx"], 0, 0))
+    elif kind == "asm_pair":  # G06: boxes inside an Assembly plus a clearance set on them
+        import Interference
+
+        asm = doc.addObject("Assembly::AssemblyObject", "Assembly")
+        for nm, dx in (("A", 0), ("B", t["dx"])):
+            b = asm.newObject("Part::Box", nm)
+            b.Length = b.Width = b.Height = t["size"]
+            b.Placement.Base = FreeCAD.Vector(dx, 0, 0)
+        doc.recompute()
+        Interference.set_clearance_set(asm, "pair", t["set_min"], [("A", "B")])
     elif kind == "box_sphere":
         _box(doc, "A", (t["size"],) * 3)
         sp = doc.addObject("Part::Sphere", "B")

@@ -10,6 +10,7 @@
     "sphere_shell": {"kind": "sphere_shell", "ro": 10, "ri": 8, "thickness_min": 2.0},
     "pair_overlap": {"kind": "pair", "size": 10, "dx": 5, "interference_volume": 500.0, "distance": 0.0},
     "pair_gap2": {"kind": "pair", "size": 10, "dx": 12, "interference_volume": 0.0, "distance": 2.0},
+    "asm_pair_gap2": {"kind": "asm_pair", "size": 10, "dx": 12, "set_min": 1.0},
     "pair_gap05": {"kind": "pair", "size": 10, "dx": 10.5, "interference_volume": 0.0, "distance": 0.5},
     "box_sphere": {"kind": "box_sphere", "size": 10, "r": 2, "center": [15, 5, 5], "interference_volume": 0.0, "distance": 3.0},
     "box_cylinder": {"kind": "box_cylinder", "size": 10, "r": 2, "h": 10, "base": [15, 5, 0], "interference_volume": 0.0, "distance": 3.0},

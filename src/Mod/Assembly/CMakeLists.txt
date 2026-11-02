@@ -37,6 +37,7 @@ set(Assembly_Scripts
     AssemblyImport.py
     SoSwitchMarker.py
     UtilsAssembly.py
+    Interference.py
 )
 
 if(BUILD_GUI)
@@ -61,6 +62,8 @@ SET(AssemblyTests_SRCS
     AssemblyTests/TestCommandCreateView.py
     AssemblyTests/TestCommandInsertLink.py
     AssemblyTests/TestSimulationExport.py
+    AssemblyTests/TestInterference.py
+    AssemblyTests/interference_corpus.py
     AssemblyTests/mocks/__init__.py
     AssemblyTests/mocks/MockGui.py
 )
