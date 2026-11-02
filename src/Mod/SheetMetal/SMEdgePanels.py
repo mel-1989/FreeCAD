@@ -636,6 +636,7 @@ class ConvertSolidPanel(FeaturePanel):
         lst = QtWidgets.QListWidget()
         lst.setObjectName(name)
         lst.setMaximumHeight(70)
+        lst.setMinimumHeight(40)   # three lists share the panel: let a short panel squeeze them instead of clipping the rows below
         lst.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         add = QtWidgets.QPushButton("Set from selection" if single else "Add selected")
         add.setObjectName(name + "_add")
