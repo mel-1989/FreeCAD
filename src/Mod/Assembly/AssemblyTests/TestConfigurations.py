@@ -45,6 +45,11 @@ class Tally:
         self.probes = Counter()
 
 
+def _reaches(reach, toks):
+    """Independent of the module under test: does any path of the joint start with the component's tokens."""
+    return any(r[:len(toks)] == toks for r in reach)
+
+
 def _hit(path, sup):
     return any(path == s or path.startswith(s + ".") for s in sup)
 
@@ -182,9 +187,12 @@ def check_state(b, cfg, default_keys, tally, tmp, with_export=True):
             probs.append("joint %s was deleted" % name)
     for j, owner, grp, grounded in AC._joints(asm):
         if grounded:
+            reach = AC._joint_reach(j, owner, grounded)
+            if any(_reaches(reach, c.path.split(".")) for c in b.comps if c.path in sup):
+                probs.append("grounded joint %s still grounds a suppressed component" % j.Name)
             continue
         reach = AC._joint_reach(j, owner, grounded)
-        touching = any(AC._touches(reach, c.path.split(".")) for c in b.comps if _hit(c.path, sup)
+        touching = any(_reaches(reach, c.path.split(".")) for c in b.comps if _hit(c.path, sup)
                        and c.path in sup)
         if touching and not j.Suppressed:
             probs.append("joint %s reaches a suppressed component and is not suppressed" % j.Name)
@@ -560,20 +568,8 @@ def _m_joint_suppression_not_restored():
     return dict(_restore=_wrap_restore(edit))
 
 
-def _m_alt_placement_not_restored():
-    def edit(a, c, d):
-        for rec in d["links"].values():
-            rec["placement"] = None
-    real = AC._restore
-
-    def restore(assembly, cfg):
-        if cfg.Defaults:
-            d = json.loads(cfg.Defaults)
-            for rec in d["links"].values():
-                rec["placement"] = AC._pl_json(assembly.Document.getObject(list(d["links"])[0]).Placement)
-            cfg.Defaults = json.dumps(d, sort_keys=True)
-        return real(assembly, cfg)
-    return dict(_restore=restore)
+def _m_linked_object_not_restored():
+    return dict(_restore=_wrap_restore(lambda a, c, d: d.__setitem__("links", {})))
 
 
 MUTANTS = {
@@ -594,7 +590,7 @@ MUTANTS = {
     "expression_override_allowed": _m_expression_allowed,
     "joint_values_not_restored": _m_joint_values_not_restored,
     "joint_suppression_not_restored": _m_joint_suppression_not_restored,
-    "link_placement_not_restored": _m_alt_placement_not_restored,
+    "alternative_part_not_restored": _m_linked_object_not_restored,
 }
 
 
@@ -631,31 +627,28 @@ def expression_problems():
 
 
 def user_edit_problems():
-    """Edits to properties no configuration overrides survive a switch (including a placement the user
-    moved after the solver did)."""
+    """Edits to properties no configuration overrides survive switches: a label, a joint's label and the
+    placement of a component no joint reaches (the solver rewrites the placement of a jointed one at every
+    recompute, so a manual edit of it is not a durable edit in FreeCAD)."""
     doc = App.newDocument("CfgEdit")
     problems = []
     try:
         b = C.build_case(doc, "three_configs")
+        free = b.asm.newObject("Part::Box", "Free")
+        doc.recompute()
         for cfg in b.cfgs.values():
             AC.create(b.asm, cfg.name, **cfg.create)
-        AC.activate(b.asm, "Lift")
-        lc = doc.getObject("LC")
-        moved = App.Placement(lc.Placement.Base + App.Vector(0, 0, 3), lc.Placement.Rotation)
-        lc.Placement = moved
+        AC.activate(b.asm, "Slide")
+        moved = App.Placement(App.Vector(7, 8, 9), App.Rotation(App.Vector(0, 0, 1), 30))
+        free.Placement = moved
         doc.getObject("LA").Label = "renamed by the user"
-        jb = doc.getObject("JA")
-        AC.activate(b.asm, None)
-        if not lc.Placement.isSame(moved, 1e-9):
-            problems.append("a placement the user moved after the solve was overwritten on the switch")
-        if doc.getObject("LA").Label != "renamed by the user":
-            problems.append("a label edit was lost")
-        AC.activate(b.asm, "NoB")
-        AC.activate(b.asm, "NoAD")
-        if doc.getObject("LA") is None or doc.getObject("LA").Label != "renamed by the user":
-            problems.append("a label edit was lost across switches")
-        if not lc.Placement.isSame(moved, 1e-9):
-            problems.append("the user's placement was lost across switches")
+        doc.getObject("JA").Label = "joint renamed"
+        for step in (None, "NoB", "NoAD", "Slide", None):
+            AC.activate(b.asm, step)
+            if not free.Placement.isSame(moved, 1e-9):
+                problems.append("the placement of an unjointed component the user moved was lost at %s" % step)
+            if doc.getObject("LA").Label != "renamed by the user" or doc.getObject("JA").Label != "joint renamed":
+                problems.append("a label edit was lost at %s" % step)
     finally:
         App.closeDocument(doc.Name)
     return problems
@@ -730,7 +723,7 @@ def drift_problems():
             problems.append("captured configuration puts P at %g, want 40" % p.Placement.Base.x)
         j.Distance = 55.0
         AC.discard(b.asm)
-        if abs(j.Distance - 40.0) > 1e-9 or abs(p.Placement.Base.x - 40.0) > POS_TOL:
+        if abs(AC._num(j.Distance) - 40.0) > 1e-9 or abs(p.Placement.Base.x - 40.0) > POS_TOL:
             problems.append("discard did not write the configuration back")
         AC.activate(b.asm, None)
     finally:
