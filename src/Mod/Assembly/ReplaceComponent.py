@@ -21,8 +21,9 @@ part to the old one. The alignment is one decision per part, never mixed: identi
 principal axes of inertia and the centre of mass, tried in all four proper sign combinations,
 overlap the old part better by 0.1 of the union volume; a tie between two such alignments, a part
 that fits exactly only when mirrored, and a part that fits about as well as placed as turned (an
-alternative that overlaps at least as well as identity, within 0.1, and explains a different set
-of the old faces by exact twins, while identity explains some too) are reported (ambiguous
+alternative whose overlap is at least identity's and less than 0.1 above it, which would otherwise
+let identity stand, and which explains a different set of the old faces by exact twins while
+identity explains some too) are reported (ambiguous
 alignment, or mirrored) and not matched: every reference of that part is then ambiguous or
 unmatched, and the caller resolves it by passing the alignment. Within the aligned frame:
 
