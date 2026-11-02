@@ -1403,7 +1403,12 @@ def repair(joint, reference, elements):
         raise ValueError("%s.%s has %d sub-names, %d elements given" % (joint.Name, reference, len(subs), len(names)))
     new_subs = []
     for sub, el in zip(subs, names):
-        path, _old = _split_sub(sub.replace("?", ""))
+        path, old_el = _split_sub(sub.replace("?", ""))
+        old_kind, new_kind = old_el.rstrip("0123456789"), el.rstrip("0123456789")
+        if old_kind and old_kind != new_kind:
+            raise ReplaceError(
+                "%s.%s: %s replaces a %s; give an element of the same kind" % (joint.Name, reference, el, old_kind)
+            )
         new_subs.append(path + el)
     for i, el in enumerate(names):
         _check_element(comp, new_subs, i, el)

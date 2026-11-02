@@ -372,6 +372,11 @@ def broken_machinery():
             problems.append("repair accepted an element the part does not have")
         except R.ReplaceError:
             pass
+        try:
+            R.repair(j, "Reference2", "Edge1")
+            problems.append("repair accepted an edge where the reference held a face")
+        except R.ReplaceError:
+            pass
         if not R.is_broken(j):
             problems.append("a refused repair cleared the marker")
         try:
