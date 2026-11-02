@@ -583,12 +583,10 @@ def _mut_alignment_check_off():
 
 def _mut_near_check_off():
     R._near_conflict = lambda *a, **k: []
-    _mut_reference_probe_off()   # on n1 the reference check reads the same turn, so it goes off with the near-twin one
 
 
-def _mut_reference_probe_off():
-    orig = R._choose_alignment
-    R._choose_alignment = lambda old, new, forced=None, probe=None: orig(old, new, forced, None)
+def _mut_symmetry_rule_off():
+    R._symmetry_verdict = lambda *a, **k: None
 
 
 def _mut_suppression_forgotten():
@@ -667,7 +665,7 @@ MUTANTS = {
     "moved_and_resized_allowed": (_mut_move_and_resize_allowed, "c2_hole_gone_wider_hole_nearby"),
     "alignment_conflict_check_off": (_mut_alignment_check_off, "e3_bar_turned_about_z_boss_top_and_end"),
     "near_twin_alignment_check_off": (_mut_near_check_off, "n1_bracket_turned_and_gained_a_small_hole"),
-    "referenced_element_alignment_check_off": (_mut_reference_probe_off, "n5_symmetric_plate_turned_and_gained_an_offcentre_hole"),
+    "symmetry_rule_off": (_mut_symmetry_rule_off, "n5_symmetric_plate_turned_and_gained_an_offcentre_hole"),
     "user_suppression_forgotten_by_repair": (_mut_suppression_forgotten, "@suppression_and_offset"),
     "delete_old_ignores_other_users": (_mut_delete_ignores_users, "t6_delete_old_direct_part_used_by_another_assembly"),
     "body_features_orphaned": (_mut_body_features_orphaned, "t10_delete_old_body_nobody_else_uses"),
@@ -685,7 +683,7 @@ def mutated(name):
     saved = {k: getattr(R, k) for k in ("_match_element", "_choose_alignment", "_decide", "_new_link_placement",
                                         "_write_ref", "_break_joint", "_collect_refs", "_solve", "_new_ref_value", "apply",
                                         "ADJ_MIN", "RADIUS_ADAPT", "SIZE_RATIO_MAX", "_claims", "MOVE_TOL",
-                                        "_alignment_conflict", "_near_conflict", "_outside_users", "_deletion_set", "repair",
+                                        "_alignment_conflict", "_near_conflict", "_symmetry_verdict", "_outside_users", "_deletion_set", "repair",
                                         "_check_element")}
     saved_u = U.findPlacement
     saved_j = JointObject.Joint.onChanged
@@ -983,6 +981,10 @@ class TestReplaceComponent(unittest.TestCase):
         for name, turned_label in (("n1_bracket_turned_and_gained_a_small_hole", "turned 180\u00b0 about Y"),
                                    ("n2_bracket_turned_and_gained_a_boss", "turned 180\u00b0 about Y"),
                                    ("n5_symmetric_plate_turned_and_gained_an_offcentre_hole", "turned 180\u00b0 about Y"),
+                                   ("n6_symmetric_plate_turned_about_y_edge_only_reference", "turned 180\u00b0 about Y"),
+                                   ("n7_symmetric_plate_turned_about_x_edge_only_reference", "turned 180\u00b0 about X"),
+                                   ("n8_symmetric_plate_turned_vertex_only_reference", "turned 180\u00b0 about Y"),
+                                   ("n11_bracket_turned_and_lost_a_chamfered_end", "turned 178\u00b0 about Y"),   # an inertia alignment, not exact
                                    ("e3_bar_turned_about_z_boss_top_and_end", "turned 180\u00b0 about Z")):
             with self.subTest(case=name):
                 doc = App.newDocument("Rc_cand")
@@ -1017,13 +1019,18 @@ class TestReplaceComponent(unittest.TestCase):
                     App.closeDocument(doc.Name)
 
     def test_unambiguous_alignment_has_no_candidates(self):
-        for name in ("n3_control_plain_revision_gained_a_small_hole", "n4_control_plain_revision_gained_a_boss"):
+        for name, method in (("n3_control_plain_revision_gained_a_small_hole", "identity"),
+                             ("n4_control_plain_revision_gained_a_boss", "identity"),
+                             ("n13_control_symmetric_plate_gained_a_hole_reference_is_the_centre_hole", "identity"),
+                             ("n14_control_asymmetric_bracket_gained_a_tiny_hole_far_away", "identity"),
+                             ("n15_control_symmetric_plate_resized_keeping_the_symmetry", "inertia"),
+                             ("n16_control_symmetric_plate_made_thicker", "identity")):
             with self.subTest(case=name):
                 doc = App.newDocument("Rc_ctl")
                 try:
                     b = C.build_case(doc, name)
                     rep = R.plan(b.asm, b.old, b.new)
-                    self.assertEqual(rep["alignment"]["method"], "identity")
+                    self.assertEqual(rep["alignment"]["method"], method)
                     self.assertEqual(rep["alignment"]["candidates"], [])
                     self.assertEqual(rep["references"]["matched"], 1)
                 finally:
