@@ -41,7 +41,9 @@ element is invariant. This is the D6 rule: ambiguous is reported, never picked s
 of element the reference holds (face, edge, vertex, face and edge, face and vertex). A turn under which
 the new part is symmetric about its own centre of mass is left out: the new part as placed and turned
 is then one body, and the joint ends up on the same place of the assembly either way (a resize that
-keeps the symmetry, from any corner, stays matched).
+keeps the symmetry, from any corner, stays matched). A resize that keeps the topology (same face, edge
+and vertex counts and adjacency, every face with a twin of the same type and normal or axis as placed)
+stands as placed whatever the symmetry: position and size are free, features are not.
 
 The near twin rule, for parts that are not symmetric. A part turned and also changed (a bracket turned
 180 degrees that gains a small hole or boss, or loses an end) has no exact twins left, so the question is
@@ -917,7 +919,7 @@ def _alignment_conflict(old_shape, new_shape, iou_id, proper):
     return None
 
 
-def _symmetry_turns(so, sn):
+def _symmetry_turns(so, sn, old_only=False):
     """The proper turns T (placements about the old part's centre of mass) under which the old solid
     ``so`` is its own image (overlap with itself turned at least IOU_EXACT) and the new solid ``sn`` is
     not (so the part turned by T is a different body from the part as placed), each with the new part
@@ -927,7 +929,8 @@ def _symmetry_turns(so, sn):
     moments are equal, the turns by 90, 120, 180, 240 and 270 degrees about the distinct axis and the
     180 degree turns about axes in the plane of the equal moments (the world axes projected into it,
     and those turned by 45 degrees); where all three are equal, the quarter and half turns about the
-    world axes. A candidate is kept only if the overlap test says the old part really has it."""
+    world axes. A candidate is kept only if the overlap test says the old part really has it. With
+    ``old_only`` the new part is not looked at: the turns of the old part alone, [(Placement, None)]."""
     pp = so.PrincipalProperties
     com = so.CenterOfMass
     mom = pp["Moments"]
@@ -958,6 +961,9 @@ def _symmetry_turns(so, sn):
         so_t.transformShape(plc.toMatrix())
         if _iou(so, so_t) < IOU_EXACT:
             continue
+        if old_only:
+            out.append((plc, None))
+            continue
         # the new part turned in place (about its own centre of mass): if that is the same body, the part
         # as placed and the part turned are one reading (a resize that keeps the symmetry, from any corner)
         in_place = sn.copy()
@@ -968,6 +974,55 @@ def _symmetry_turns(so, sn):
         sn_t.transformShape(plc.toMatrix())
         out.append((plc, sn_t))
     return out
+
+
+SAME_POS_N = 1e-3   # bounding-box-relative position of interchangeable faces under a resize (fraction of the extent)
+
+
+def _same_topology(old_shape, new_shape):
+    """Is the new part the old one resized: the same faces, edges and vertices in the same adjacency?
+
+    Equal face, edge and vertex counts, and every old face has a twin of the same surface type, concavity
+    and normal or axis (as placed, no turn tried) with the same set of neighbouring faces, matched one to
+    one (position and size, radius included, may differ; faces that look alike, the holes of a plate, must
+    also keep their place in the bounding box to within SAME_POS_N). Features added or removed change the counts or
+    the adjacency, so they never pass; a bar lengthened, a cube made a plate, a plate scaled all do."""
+    mo, mn = _Model(old_shape), _Model(new_shape)
+    if any(len(mo.order[k]) != len(mn.order[k]) for k in ("Face", "Edge", "Vertex")):
+        return False
+
+    def key(m, n):
+        return (m._desc(n), m.els[n].concave is True, m.els[n].adj)
+    groups = {}
+    for n in mo.order["Face"]:
+        groups.setdefault(key(mo, n), []).append(mo.els[n])
+    new_groups = {}
+    for n in mn.order["Face"]:
+        new_groups.setdefault(key(mn, n), []).append(mn.els[n])
+    if {k: len(v) for k, v in groups.items()} != {k: len(v) for k, v in new_groups.items()}:
+        return False
+    # faces that cannot be told apart by type and direction (the two holes of a plate) are paired by where they
+    # sit in the part's bounding box, which a resize keeps and a feature moved against its twin does not
+    for k, olds in groups.items():
+        if len(olds) > 1:
+            for o in olds:
+                if min((o.pos_n - n.pos_n).Length for n in new_groups[k]) > SAME_POS_N:
+                    return False
+    return True
+
+
+def _resize_stands(so, sn):
+    """The old part is symmetric under a proper turn and the new part is an ordinary resize of it.
+
+    An ordinary resize is "as placed": the new part keeps the old part's topology (``_same_topology``) and
+    stays where the old one was (the bounding boxes overlap; a copy moved elsewhere or turned onto another
+    axis away from the old place is not a resize). Then neither the symmetry rule nor the near twin rule
+    has anything to ask: identity stands."""
+    if not so.BoundBox.intersect(sn.BoundBox):
+        return False
+    if not _symmetry_turns(so, sn, old_only=True):
+        return False
+    return _same_topology(so, sn)
 
 
 def _symmetry_verdict(so, sn, new_shape, iou_id, probe):
@@ -984,9 +1039,12 @@ def _symmetry_verdict(so, sn, new_shape, iou_id, probe):
     includes the doubly symmetric plate that gains an off-centre hole without being turned: nothing in
     the geometry says it was not, unless every referenced element is invariant. A turn under which the
     new part is symmetric too is left out (both readings give the same body), which keeps a resize that
-    keeps the symmetry matched."""
+    keeps the symmetry matched. A new part with the old part's topology (``_same_topology``: an ordinary
+    resize) is no change of the kind the rule is about: it stands as placed."""
     if probe is None:
         return None
+    if _resize_stands(so, sn):
+        return ("stand",)
     turns = _symmetry_turns(so, sn)
     if not turns:
         return None
@@ -1033,6 +1091,9 @@ def _choose_alignment(old_shape, new_shape, forced=None, probe=None):
         return App.Placement(), info, new_shape.copy()
     fo, fn = _frame(so), _frame(sn)
     if fo is None or fn is None:
+        if _resize_stands(so, sn):
+            info["note"] = "same topology (a resize), identity kept"
+            return App.Placement(), info, new_shape.copy()
         if iou_id >= IOU_FIT:
             sv = _symmetry_verdict(so, sn, new_shape, iou_id, probe)
             if sv is not None and sv[0] == "ambiguous":

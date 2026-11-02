@@ -309,6 +309,20 @@ def run_case(name, checks=("plan", "apply", "undo")):
         if R.signature(doc) != before_sig:
             res["problems"].append("plan changed the document")
         stats, probs = classify(rep, b.truth, C.CASES[name].opts.get("reported_ok", False))
+        # a reference that matches only because the caller passed an alignment is reported (needs alignment), not
+        # matched: the default plan (no alignment) is what counts for matched, the hinted plan must give the truth
+        stats["hinted_ok"] = stats["ok"]
+        stats["needs_alignment"] = 0
+        if "alignment" in b.kwargs:
+            known = {k: tl for k, tl in b.truth.items() if all(t[0] == "el" for t in tl)}
+            rep_d = R.plan(asm, b.old, b.new, **{k: v for k, v in b.kwargs.items() if k != "alignment"})
+            st_d, pr_d = classify(rep_d, known, allow_reported=True)
+            stats["wrong"] += st_d["wrong"]
+            res["problems"] += [x for x in pr_d if "remapped to" in x]
+            stats["ok"] = st_d["ok"]
+            stats["reported"] = st_d["reported"]
+            stats["needs_alignment"] = st_d["reported"]
+            res["default_plan"] = rep_d
         res["stats"] = stats
         res["problems"] += probs
         if C.CASES[name].opts.get("renumbers"):
@@ -589,6 +603,10 @@ def _mut_symmetry_rule_off():
     R._symmetry_verdict = lambda *a, **k: None
 
 
+def _mut_resize_exemption_off():
+    R._same_topology = lambda *a, **k: False
+
+
 def _mut_suppression_forgotten():
     orig = R._break_joint
 
@@ -666,6 +684,7 @@ MUTANTS = {
     "alignment_conflict_check_off": (_mut_alignment_check_off, "e3_bar_turned_about_z_boss_top_and_end"),
     "near_twin_alignment_check_off": (_mut_near_check_off, "n1_bracket_turned_and_gained_a_small_hole"),
     "symmetry_rule_off": (_mut_symmetry_rule_off, "n5_symmetric_plate_turned_and_gained_an_offcentre_hole"),
+    "resize_exemption_off": (_mut_resize_exemption_off, "core_resize_cube_to_flat_plate"),
     "user_suppression_forgotten_by_repair": (_mut_suppression_forgotten, "@suppression_and_offset"),
     "delete_old_ignores_other_users": (_mut_delete_ignores_users, "t6_delete_old_direct_part_used_by_another_assembly"),
     "body_features_orphaned": (_mut_body_features_orphaned, "t10_delete_old_body_nobody_else_uses"),
@@ -683,7 +702,7 @@ def mutated(name):
     saved = {k: getattr(R, k) for k in ("_match_element", "_choose_alignment", "_decide", "_new_link_placement",
                                         "_write_ref", "_break_joint", "_collect_refs", "_solve", "_new_ref_value", "apply",
                                         "ADJ_MIN", "RADIUS_ADAPT", "SIZE_RATIO_MAX", "_claims", "MOVE_TOL",
-                                        "_alignment_conflict", "_near_conflict", "_symmetry_verdict", "_outside_users", "_deletion_set", "repair",
+                                        "_alignment_conflict", "_near_conflict", "_symmetry_verdict", "_same_topology", "_outside_users", "_deletion_set", "repair",
                                         "_check_element")}
     saved_u = U.findPlacement
     saved_j = JointObject.Joint.onChanged
@@ -743,17 +762,26 @@ class TestReplaceComponent(unittest.TestCase):
                 total[k] = total.get(k, 0) + v
                 pc = per_class.setdefault(r["klass"], {})
                 pc[k] = pc.get(k, 0) + v
-        print("\n  per class (known refs: matched ok / reported not matched / wrong), unmatchable and ambiguous truths ok/total:")
-        for k, v in sorted(per_class.items()):
-            print("    %-16s known %2d  ok %2d  reported %2d  wrong %d   unmatchable %d/%d   ambiguous %d/%d"
-                  % (k, v["known"], v["ok"], v["reported"], v["wrong"], v["unmatchable_ok"], v["unmatchable"],
-                     v["ambiguous_ok"], v["ambiguous"]))
-        print("    %-16s known %2d  ok %2d  reported %2d  wrong %d   unmatchable %d/%d   ambiguous %d/%d"
-              % ("TOTAL", total["known"], total["ok"], total["reported"], total["wrong"], total["unmatchable_ok"],
-                 total["unmatchable"], total["ambiguous_ok"], total["ambiguous"]))
+        print("\n  per class (known refs: matched automatically / reported (needs alignment) / matched with the alignment given / wrong), unmatchable and ambiguous truths ok/total:")
+        for k, v in sorted(per_class.items()) + [("TOTAL", total)]:
+            print("    %-16s known %2d  automatic %2d  reported %2d  with hint %2d  wrong %d   unmatchable %d/%d   ambiguous %d/%d"
+                  % (k, v["known"], v["ok"], v["reported"], v["hinted_ok"], v["wrong"], v["unmatchable_ok"],
+                     v["unmatchable"], v["ambiguous_ok"], v["ambiguous"]))
+        print("    matched automatically / known: %d/%d = %.1f%%;  matched with the alignment given / known: %d/%d = %.1f%%;  "
+              "needing an alignment: %d;  wrong: %d" % (
+                  total["ok"], total["known"], 100.0 * total["ok"] / total["known"], total["hinted_ok"], total["known"],
+                  100.0 * total["hinted_ok"] / total["known"], total["needs_alignment"], total["wrong"]))
+        print("    cases whose known references need an alignment to match (%d references): %s" % (
+            total["needs_alignment"], ", ".join(sorted(n for n, r in self.results.items()
+                                                       if r["stats"] and r["stats"]["needs_alignment"]))))
+        print("    other known references reported, not matched, with no alignment hint: %s" % ", ".join(
+            "%s(%d)" % (n, r["stats"]["reported"]) for n, r in sorted(self.results.items())
+            if r["stats"] and r["stats"]["reported"] and not r["stats"]["needs_alignment"]))
         self.assertEqual(failures, [])
         self.assertEqual(total["wrong"], 0, "silent wrong remaps")
-        self.assertGreaterEqual(total["ok"] / total["known"], RATE_MIN)
+        self.assertGreaterEqual(total["ok"] / total["known"], RATE_MIN,
+                                "brief check 2: %d of %d known references matched automatically (%.1f%%)" % (
+                                    total["ok"], total["known"], 100.0 * total["ok"] / total["known"]))
         self.assertEqual(total["unmatchable_ok"], total["unmatchable"])
         self.assertEqual(total["ambiguous_ok"], total["ambiguous"])
 
@@ -1023,7 +1051,7 @@ class TestReplaceComponent(unittest.TestCase):
                              ("n4_control_plain_revision_gained_a_boss", "identity"),
                              ("n13_control_symmetric_plate_gained_a_hole_reference_is_the_centre_hole", "identity"),
                              ("n14_control_asymmetric_bracket_gained_a_tiny_hole_far_away", "identity"),
-                             ("n15_control_symmetric_plate_resized_keeping_the_symmetry", "inertia"),
+                             ("n15_control_symmetric_plate_resized_keeping_the_symmetry", "identity"),   # a resize: as placed (was inertia before the resize exemption)
                              ("n16_control_symmetric_plate_made_thicker", "identity")):
             with self.subTest(case=name):
                 doc = App.newDocument("Rc_ctl")

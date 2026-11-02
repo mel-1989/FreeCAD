@@ -793,11 +793,11 @@ def two_holes_second_removed_open(doc):
 
 # --- from the Assembly workbench's own tests (TestCore) ---------------------------------------
 
-def _core_boxes(doc, old_dims, new_dims, ref_old, ref_new, jtype_index=0, rack=False, open_alignment=False):
+def _core_boxes(doc, old_dims, new_dims, ref_old, ref_new, jtype_index=0, rack=False):
     """TestCore.test_solve_assembly: two Part::Box in an assembly, Face6 + Vertex7 fixed joint.
 
-    A box is symmetric under half turns (a cube under quarter turns too), so a resized box may have been
-    turned: the caller passes the identity as the alignment unless ``open_alignment`` is set."""
+    A box is symmetric under half turns (a cube under quarter turns too), but a resize keeps the topology,
+    so the part stands as placed with the default alignment (``_same_topology``)."""
     b = Built()
     asm = doc.addObject("Assembly::AssemblyObject", "Assembly")
     jg = asm.newObject("Assembly::JointGroup", "Joints")
@@ -823,12 +823,7 @@ def _core_boxes(doc, old_dims, new_dims, ref_old, ref_new, jtype_index=0, rack=F
     b.mode = "direct"
     b.hosts = [box]
     b.moving = [box]
-    if open_alignment:
-        b.truth["Fixed.Reference2"] = [("ambiguous", frozenset()), ("ambiguous", frozenset())]
-        b.expect_broken.append("Fixed")
-    else:
-        b.kwargs = given_identity()
-        b.truth["Fixed.Reference2"] = [("el", one(newbox.Shape, ref_new[0])), ("el", one(newbox.Shape, ref_new[1]))]
+    b.truth["Fixed.Reference2"] = [("el", one(newbox.Shape, ref_new[0])), ("el", one(newbox.Shape, ref_new[1]))]
     assert one(local(box), ref_old[0]) == "Face6" and one(local(box), ref_old[1]) == "Vertex7"
     return b
 
@@ -840,13 +835,28 @@ def core_solve_assembly_resized(doc):
                        (pl((0, 0, 1), 10), vx((20, 14, 10))))
 
 
+# Resize controls: an ordinary resize keeps the topology, so it matches on the default alignment even though the
+# old part is symmetric under a turn that the new part is not (a bar lengthened, a cube made a flat plate).
 @case("workbench_tests")
-def core_solve_assembly_resized_open(doc):
-    # the cube 10 x 10 x 10 becomes 20 x 14 x 10: a cube is symmetric under quarter turns and the new box is not
-    # under the one about X (its sides are 14 and 10), so "resized" and "resized and turned" are two readings
-    L, W, H = 10, 10, 10
-    return _core_boxes(doc, (L, W, H), (20, 14, 10), (pl((0, 0, 1), H), vx((L, W, H))),
-                       (pl((0, 0, 1), 10), vx((20, 14, 10))), open_alignment=True)
+def core_resize_square_bar_lengthened(doc):
+    return _core_boxes(doc, (10, 10, 40), (10, 10, 60), (pl((0, 0, 1), 40), vx((10, 10, 40))),
+                       (pl((0, 0, 1), 60), vx((10, 10, 60))))
+
+
+@case("workbench_tests")
+def core_resize_cube_to_flat_plate(doc):
+    return _core_boxes(doc, (10, 10, 10), (15, 15, 4), (pl((0, 0, 1), 10), vx((10, 10, 10))),
+                       (pl((0, 0, 1), 4), vx((15, 15, 4))))
+
+
+@case("workbench_tests")
+def core_resize_two_hole_plate_scaled(doc):
+    # the two-hole bracket is symmetric under a half turn about Y; scaled uniformly by 1.05 it still has its two
+    # holes, each where it was in proportion, so no feature was added, removed or moved: placed, not turned
+    old = bracket(holes=((10, 6, 3), (30, 6, 3)))
+    new = bracket(w=42, d=21, h=10.5, holes=((10.5, 6.3, 3.15), (31.5, 6.3, 3.15)))
+    return scene(doc, old, new, [jspec("cylindrical", (cy((10, 6, 0), (0, 0, 1), 3),) * 2,
+                                       (cy((10.5, 6.3, 0), (0, 0, 1), 3.15),) * 2)])
 
 
 @case("workbench_tests")
@@ -934,7 +944,7 @@ def core_generated_array_joint(doc):
     assert one(source.Shape, pl((-1, 0, 0), 0)) == "Face1"
     b.truth["Joint.Reference1"] = [t]
     b.truth["Joint.Reference2"] = [t]
-    b.kwargs = given_identity()     # the source is a cube: symmetric under quarter turns, so the caller says it was not turned
+    # the source is a cube: symmetric under quarter turns, but 10 x 10 x 10 to 12 x 10 x 10 is a resize: placed
     return b
 
 
