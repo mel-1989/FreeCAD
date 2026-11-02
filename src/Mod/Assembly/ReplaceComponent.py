@@ -1231,6 +1231,16 @@ def _apply_ref(rf, new_comp, new_tokens):
     return ok
 
 
+def _tree_path(assembly, obj):
+    """The instance path of ``obj`` in ``assembly`` ("Sub.Old"): object names from the top group down."""
+    names = [obj.Name]
+    cur = obj.getParentGeoFeatureGroup()
+    while cur is not None and cur != assembly:
+        names.insert(0, cur.Name)
+        cur = cur.getParentGeoFeatureGroup()
+    return ".".join(names)
+
+
 def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
     """Replace ``old`` by ``new`` in one undo transaction and return the report.
 
@@ -1245,6 +1255,7 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
     deleted, kept = [], []
     try:
         new_comp = {}
+        paths = {h.obj.Name: _tree_path(assembly, h.obj) for h in hosts if h.mode == "adopt"}
         for h in hosts:
             if h.mode == "repoint":
                 if not plc.isSame(App.Placement(), 1e-9):
@@ -1271,11 +1282,26 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
                 if parent is not None:
                     parent.removeObject(h.obj)
                 h.obj.Visibility = False
+        # objects of the assembly that keep component selectors (assembly features) retarget them
+        retargeted = []
+        replaced = {h.obj.Name: (h.obj, new_comp[h.obj.Name], paths[h.obj.Name],
+                                 (paths[h.obj.Name].rsplit(".", 1)[0] + "." if "." in paths[h.obj.Name] else "")
+                                 + new_comp[h.obj.Name].Name)
+                    for h in hosts if h.obj.Name in new_comp}
+        if replaced:
+            for member in list(assembly.Group):
+                hook = getattr(getattr(member, "Proxy", None), "onComponentReplaced", None)
+                if hook is not None:
+                    retargeted.extend(hook(member, replaced))
         doc.recompute()
         solve_code = _solve(assembly)
         if delete_old:
             deleted, kept = _delete_old(doc, hosts)
         doc.recompute()
+        for member in list(assembly.Group):
+            hook = getattr(getattr(member, "Proxy", None), "scopeProblems", None)
+            if hook is not None:
+                retargeted.extend(hook(member))
     except Exception:
         doc.abortTransaction()
         raise
@@ -1285,6 +1311,7 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
     report["deleted_old"] = deleted
     report["kept_old"] = kept
     report["new_components"] = {k: v.Name for k, v in new_comp.items()}
+    report["feature_updates"] = retargeted
     return _json_safe(report)
 
 
