@@ -2,10 +2,13 @@
 """Task panel for assembly cuts and holes (cad-fork G06 slice 4b). Imported only with the GUI up.
 
 The panel creates or edits one assembly feature through the slice 4a API (``AssemblyFeature``). The
-whole session runs inside one document transaction: the feature exists while the panel is open so
-that the preview can ask it what it cuts (``AssemblyFeature.affected``), OK commits the transaction
-(one undo step) and Cancel aborts it, which removes a new feature or puts an edited one back exactly
-as it was. The preview lists the components the feature will cut with the volume each loses and
+feature exists while the panel is open so that the preview can ask it what it cuts
+(``AssemblyFeature.affected``), but no document transaction is open during the session, so the
+working feature is never in the undo history and the user's other edits (made while the panel is open,
+each in its own transaction) are never swept up with it. Cancel deletes a new feature or writes the
+three properties the panel touches (Spec, ToolObject, Scope) back on an edited one, nothing else. OK
+puts the feature back to its starting state and then makes the final change in one short transaction,
+so the feature is its own single undo step. The preview lists the components the feature will cut with the volume each loses and
 draws the removed material in the 3D view as temporary Coin geometry under the selection root (the
 node a picture capture renders). That geometry is not a document object and changes no view
 provider.
@@ -58,6 +61,12 @@ def _is_face(sub):
 def has_wires(obj):
     shp = getattr(obj, "Shape", None)
     return shp is not None and not shp.isNull() and len(shp.Wires) > 0
+
+
+def is_profile(obj):
+    """A sketch or planar wire/face shape: wires and neither solids nor shells (a solid is a tool, not a profile)."""
+    shp = getattr(obj, "Shape", None)
+    return has_wires(obj) and not shp.Solids and not shp.Shells
 
 
 def has_solid(obj):
@@ -118,6 +127,8 @@ class TaskAssemblyFeature:
     """Create (``feature`` None) or edit (``feature`` given) a cut or hole of ``assembly``."""
 
     def __init__(self, assembly, kind="cut", feature=None, selection=None):
+        if Gui.Control.activeDialog():   # before anything touches the document
+            raise RuntimeError("another task dialog is already open")
         if feature is not None:
             kind = feature.Kind
         self.assembly = assembly
@@ -139,6 +150,11 @@ class TaskAssemblyFeature:
         sel = list(selection) if selection is not None else list(Gui.Selection.getSelection())
         self._selection = [o for o in sel if o is not assembly]
         self._active = False
+        self._cur = None            # (spec, tool object, scope) of the last valid input
+        self._scope_dirty = False   # the user touched the scope controls
+        self._orig = None
+        if feature is not None:
+            self._orig = {"Spec": feature.Spec, "ToolObject": feature.ToolObject, "Scope": list(feature.Scope)}
 
         self.form = QtWidgets.QWidget()
         self.form.setObjectName("Assembly_TaskAssemblyFeature")
@@ -154,37 +170,52 @@ class TaskAssemblyFeature:
             self._load(feature)
         else:
             self._defaults()
-        self._open_transaction()
         self._active = True
         self.form.destroyed.connect(self._form_gone)
         self.refresh()
 
-    # ---- transaction
+    # ---- leaving the session
 
-    def _open_transaction(self):
-        title = translate("Assembly", "Edit %s") % self.feature.Label if self.editing else translate(
-            "Assembly", "Create %s") % translate("Assembly", TITLES[self.kind]).lower()
-        self.doc.openTransaction(title)
-        self.tx = True
+    def _doc_alive(self):
+        return self.document_name in App.listDocuments()
 
-    def _end_transaction(self, commit):
-        if not getattr(self, "tx", False):
+    def _restore_edited(self):
+        """Put an edited feature's Spec, ToolObject and Scope back (no transaction is open: nothing is recorded)."""
+        feat = self.feature
+        o = self._orig
+        if feat.Spec != o["Spec"]:
+            feat.Spec = o["Spec"]
+        if feat.ToolObject is not o["ToolObject"]:
+            feat.ToolObject = o["ToolObject"]
+        if list(feat.Scope) != o["Scope"]:
+            feat.Scope = list(o["Scope"])
+        feat.Proxy.results = None
+
+    def _discard(self):
+        """Undo the session's effect on the document: delete a new feature, restore an edited one."""
+        if self.discarded or not self._doc_alive():
+            self.discarded = True
             return
-        self.tx = False
-        if self.document_name not in App.listDocuments():
+        self.discarded = True
+        feat = self.feature
+        if feat is None:
             return
-        if commit:
-            self.doc.commitTransaction()
+        if self.editing:
+            self._restore_edited()
         else:
-            self.doc.abortTransaction()
+            self.doc.removeObject(feat.Name)
+            self.feature = None
+
+    discarded = False
 
     def _form_gone(self, *_):
         """Gui.Control.closeDialog() calls neither accept nor reject, nor does closing the document: tidy up."""
         self.preview.clear()
-        try:
-            self._end_transaction(False)
-        except Exception:  # noqa: BLE001  (the document is going away)
-            pass
+        if not self.done:
+            try:
+                self._discard()
+            except Exception:  # noqa: BLE001  (the document is going away)
+                pass
 
     # ---- tool fields
 
@@ -292,6 +323,8 @@ class TaskAssemblyFeature:
         self.components.itemChanged.connect(self._item_changed)
 
     def _scope_mode_changed(self, explicit):
+        if self._active:
+            self._scope_dirty = True
         if explicit:
             self.components.setEnabled(True)
             if not self._explicit_touched and self.reached is not None:
@@ -316,6 +349,7 @@ class TaskAssemblyFeature:
     def set_explicit_scope(self, keys):
         """Switch to the checked list and check exactly ``keys`` (what a user does with the radio and the boxes)."""
         self._explicit_touched = True
+        self._scope_dirty = True
         self.scope_some.blockSignals(True)
         self.scope_some.setChecked(True)
         self.scope_some.blockSignals(False)
@@ -327,7 +361,12 @@ class TaskAssemblyFeature:
         self.scope_all.setChecked(True)
 
     def _scope_value(self):
-        """The ``Scope`` to write, or None when the checked list is empty (nothing to cut)."""
+        """The ``Scope`` to write, or None when the checked list is empty (nothing to cut).
+
+        An edit whose scope controls were not touched keeps the stored selectors as they are (prefixes and
+        selectors that match nothing included)."""
+        if self.editing and not self._scope_dirty:
+            return list(self._orig["Scope"])
         if self.scope_all.isChecked():
             return []
         keys = self.checked_keys()
@@ -368,14 +407,20 @@ class TaskAssemblyFeature:
 
     def _defaults(self):
         if self.kind == "cut":
+            mode = 0
             for o in self._selection:
-                if has_wires(o):
+                if is_profile(o):
                     self.tool_obj = o
                     break
+                if has_solid(o):   # a selected solid is a solid tool, never a profile
+                    self.tool_obj = o
+                    mode = 1
+                    break
             self.tool_kind.blockSignals(True)
-            self.tool_kind.setCurrentIndex(0)
+            self.tool_kind.setCurrentIndex(mode)
             self.tool_kind.blockSignals(False)
-            self._default_direction()
+            if mode == 0:
+                self._default_direction()
         else:
             for sel in Gui.Selection.getSelectionEx("*", 0):
                 if sel.SubElementNames and _is_face(sel.SubElementNames[0]):
@@ -498,7 +543,7 @@ class TaskAssemblyFeature:
     def use_selected_object(self):
         """Take the selected object as the profile or solid tool."""
         mode = self._tool_mode()
-        ok = has_wires if mode == TOOL_EXTRUDE else has_solid
+        ok = is_profile if mode == TOOL_EXTRUDE else has_solid
         for o in Gui.Selection.getSelection():
             if o is not self.assembly and o is not self.feature and ok(o):
                 self.set_tool_object(o)
@@ -594,6 +639,7 @@ class TaskAssemblyFeature:
     def _item_changed(self, *_):
         if self._active:
             self._explicit_touched = True
+            self._scope_dirty = True
         self._changed()
 
     def _changed(self, *_):
@@ -612,7 +658,7 @@ class TaskAssemblyFeature:
                                     cbore_diameter=spec["cbore_diameter"], cbore_depth=spec["cbore_depth"],
                                     scope=scope)
             self.feature = feat
-            return
+            return feat
         text = json.dumps(spec, sort_keys=True)
         if feat.Spec != text:
             feat.Spec = text
@@ -621,6 +667,7 @@ class TaskAssemblyFeature:
         if list(feat.Scope) != list(scope):
             feat.Scope = list(scope)
         feat.Proxy.results = None
+        return feat
 
     def refresh(self):
         """Read the widgets, update the feature, recompute what it cuts and redraw the preview."""
@@ -630,11 +677,16 @@ class TaskAssemblyFeature:
         if problem is None and scope is None:
             problem = translate("Assembly", "No component is checked, so the feature would cut nothing.")
         self.problem = problem
+        self._cur = (spec, tool_obj, scope) if problem is None else None
         self.rows, self.errors = [], []
+        # components may have moved since the panel opened: look at them again on every refresh
+        self.insts = I.resolve(self.assembly, include_hidden=True, apply_features=False).insts
+        self.labels = {i.key: part_text(i.describe(self.assembly)) for i in self.insts}
         items = []
         if problem is None:
             try:
                 self._write(spec, tool_obj, scope)
+                self.feature.Proxy.results = None
                 aff = AF.affected(self.feature)
                 self.errors = [e.get("error", str(e)) for e in aff["errors"]]
                 self.rows = [(c["path"], c["removed_mm3"]) for c in aff["components"]]
@@ -703,30 +755,40 @@ class TaskAssemblyFeature:
         return int(getattr(ok, "value", ok)) | int(getattr(cancel, "value", cancel))
 
     def accept(self):
-        if self.problem or self.feature is None:
+        if self.problem or self.feature is None or self._cur is None:
             self._message(self.problem or translate("Assembly", "Nothing to create yet."))
             return False
+        spec, tool_obj, scope = self._cur
         self.preview.clear()
-        feat = self.feature
+        # back to the starting state outside any transaction, then the real change as one undo step
+        self._discard()
+        self.discarded = False
+        title = translate("Assembly", "Edit %s") % self.feature.Label if self.editing else translate(
+            "Assembly", "Create %s") % translate("Assembly", TITLES[self.kind]).lower()
+        self.doc.openTransaction(title)
         try:
-            self.doc.recompute()
-        except Exception:  # noqa: BLE001
-            pass
-        if not self.editing and App.GuiUp and getattr(feat, "ViewObject", None) is not None:
+            feat = self._write(spec, tool_obj, scope)
             try:
-                import ViewProviderAssemblyFeature as VP
-                VP.attach(feat)
-            except Exception:  # noqa: BLE001  (the tree icon is cosmetic)
+                self.doc.recompute()
+            except Exception:  # noqa: BLE001
                 pass
-        self._end_transaction(True)
+            if not self.editing and App.GuiUp and getattr(feat, "ViewObject", None) is not None:
+                try:
+                    import ViewProviderAssemblyFeature as VP
+                    VP.attach(feat)
+                except Exception:  # noqa: BLE001  (the tree icon is cosmetic)
+                    pass
+        except Exception:
+            self.doc.abortTransaction()
+            raise
+        self.doc.commitTransaction()
+        self.discarded = True
         self.done = True
         return True
 
     def reject(self):
         self.preview.clear()
-        self._end_transaction(False)
-        if self.feature is not None and self.editing:
-            self.feature.Proxy.results = None
+        self._discard()
         self.done = True
         return True
 

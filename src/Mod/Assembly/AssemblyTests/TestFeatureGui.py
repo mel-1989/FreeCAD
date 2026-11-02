@@ -481,3 +481,153 @@ class TestFeatureGui(unittest.TestCase):
         self.assertAlmostEqual(p.pos[2].value(), 10.0, places=4)
         self.assertAlmostEqual(p.axis[2].value(), -1.0, places=4)
         p.reject()
+
+    # ---- repair round (run 043): other edits, unchanged scope, solid selection, second panel, moved components
+
+    def full_signature(self):
+        from AssemblyTests.TestAssemblyFeature import _norm
+        out = {}
+        for d in self.ctx.docs:
+            objs = {}
+            for o in d.Objects:
+                props = {}
+                for p in o.PropertiesList:
+                    if p == "_Part_ShapeCache":
+                        continue
+                    try:
+                        props[p] = _norm(o.getPropertyByName(p))
+                    except Exception:  # noqa: BLE001
+                        props[p] = "unreadable"
+                objs[o.Name] = (o.TypeId, props)
+            out[d.Name] = objs
+        return out
+
+    def test_edits_made_while_the_panel_is_open_survive_cancel(self):
+        self.load("hole_through_stack")
+        panel = self.open_panel()
+        self.assertTrue(panel.rows)
+        new_base = App.Vector(1, 2, 3)
+        self.doc.openTransaction("move P1")
+        self.doc.getObject("P1").Placement = App.Placement(new_base, App.Rotation())
+        self.doc.commitTransaction()
+        self.doc.openTransaction("user object")
+        self.doc.addObject("App::FeaturePython", "UserObj")
+        self.doc.commitTransaction()
+        panel.reject()
+        Gui.Control.closeDialog()
+        Gui.updateGui()
+        self.assertIsNotNone(self.doc.getObject("UserObj"))
+        self.assertEqual(self.doc.getObject("P1").Placement.Base, new_base)
+        self.assertEqual(AF.features(self.asm), [])
+
+    def test_after_ok_one_undo_removes_only_the_feature(self):
+        self.load("hole_through_stack")
+        panel = self.open_panel()
+        new_base = App.Vector(1, 2, 3)
+        self.doc.openTransaction("move P1")
+        self.doc.getObject("P1").Placement = App.Placement(new_base, App.Rotation())
+        self.doc.commitTransaction()
+        undo_before = self.doc.UndoCount
+        self.assertTrue(panel.accept())
+        Gui.Control.closeDialog()
+        self.assertEqual(self.doc.UndoCount, undo_before + 1)
+        self.doc.undo()
+        self.assertEqual(AF.features(self.asm), [])
+        self.assertEqual(self.doc.getObject("P1").Placement.Base, new_base, "the unrelated placement change stayed")
+
+    def test_cancel_of_an_edit_keeps_edits_made_meanwhile(self):
+        feat = self.made_feature("hole_through_stack")
+        panel = self.open_panel(feature=feat)
+        panel.diameter.setValue(2.0)
+        self.doc.openTransaction("move P1")
+        self.doc.getObject("P1").Placement = App.Placement(App.Vector(0, 0, 0.5), App.Rotation())
+        self.doc.commitTransaction()
+        panel.reject()
+        Gui.Control.closeDialog()
+        self.assertEqual(F.json.loads(feat.Spec)["diameter"], self.recipe["spec"]["diameter"])
+        self.assertAlmostEqual(self.doc.getObject("P1").Placement.Base.z, 0.5)
+
+    def test_edit_then_ok_unchanged_leaves_every_corpus_feature_as_it_was(self):
+        from AssemblyTests.feature_corpus import CASES
+        from AssemblyTests import feature_corpus as C
+        checked, bad = 0, []
+        for name in sorted(CASES):
+            ctx, _truth = C.build_case(name)
+            self.ctx, self.doc, self.asm = ctx, ctx.doc, ctx.asm
+            F.show_all(ctx.asm)
+            App.setActiveDocument(ctx.doc.Name)
+            Gui.ActiveDocument = Gui.getDocument(ctx.doc.Name)
+            Gui.updateGui()
+            for feat in AF.features(ctx.asm):
+                checked += 1
+                ctx.doc.recompute()
+                before = self.full_signature()
+                from AssemblyFeaturePanel import TaskAssemblyFeature
+                panel = TaskAssemblyFeature(ctx.asm, feature=feat, selection=[])
+                Gui.Control.showDialog(panel)
+                ok = panel.accept()
+                Gui.Control.closeDialog()
+                if not ok or self.full_signature() != before:
+                    bad.append(name)
+            for n in list(App.listDocuments()):
+                App.closeDocument(n)
+        self.assertGreater(checked, 20)
+        self.assertEqual(bad, [])
+
+    def test_edit_then_ok_keeps_a_prefix_scope(self):
+        from AssemblyTests import feature_corpus as C
+        self.ctx, _t = C.build_case("scope_by_path_prefix")
+        self.doc, self.asm = self.ctx.doc, self.ctx.asm
+        F.show_all(self.asm)
+        App.setActiveDocument(self.doc.Name)
+        Gui.ActiveDocument = Gui.getDocument(self.doc.Name)
+        feat = AF.features(self.asm)[0]
+        self.assertEqual(list(feat.Scope), ["Sub"])
+        from AssemblyFeaturePanel import TaskAssemblyFeature
+        panel = TaskAssemblyFeature(self.asm, feature=feat, selection=[])
+        Gui.Control.showDialog(panel)
+        panel.accept()
+        Gui.Control.closeDialog()
+        self.assertEqual(list(feat.Scope), ["Sub"])
+
+    def test_a_selected_solid_is_the_solid_tool_not_a_profile(self):
+        self.load("solid_tool_cylinder")
+        tool = self.doc.getObject("ToolCyl")
+        from AssemblyFeaturePanel import TaskAssemblyFeature, is_profile
+        self.assertFalse(is_profile(tool))
+        panel = TaskAssemblyFeature(self.asm, kind="cut", selection=[tool])
+        self.assertEqual(panel.tool_kind.currentData(), "solid")
+        self.assertIs(panel.tool_obj, tool)
+        self.assertEqual((panel.dir_x.value(), panel.dir_y.value(), panel.dir_z.value()), (0.0, 0.0, -1.0),
+                         "no direction was derived from the solid")
+        panel.tool_kind.setCurrentIndex(0)
+        self.assertFalse(panel.use_selected_object())   # extrude mode refuses a solid
+        panel.reject()
+        self.assertEqual(AF.features(self.asm), [])
+
+    def test_a_second_panel_is_refused_before_it_touches_the_document(self):
+        self.load("hole_blind")
+        before = F.doc_signature(self.doc)
+        first = self.open_panel()
+        from AssemblyFeaturePanel import TaskAssemblyFeature
+        with self.assertRaises(RuntimeError):
+            TaskAssemblyFeature(self.asm, kind="hole", selection=[])
+        self.assertFalse(self.doc.HasPendingTransaction)
+        first.reject()
+        Gui.Control.closeDialog()
+        self.assertEqual(F.doc_signature(self.doc), before)
+
+    def test_the_preview_follows_a_component_that_moves_while_the_panel_is_open(self):
+        self.load("hole_blind")
+        panel = self.open_panel()
+        self.assertTrue(close_enough(panel.rows[0][1], 3.141592653589793 * 9 * 4))
+        plate = self.asm.getObject("Plate")
+        plate.Placement = App.Placement(App.Vector(10, 0, 0), App.Rotation())   # the hole (x 7..13) now cuts half as much
+        self.doc.recompute()
+        panel.diameter.setValue(6.001)
+        self.assertLess(panel.rows[0][1], 0.75 * 3.141592653589793 * 9 * 4)
+        items = panel._preview_items(AF.affected(panel.feature))
+        removed = items[0][1]
+        self.assertAlmostEqual(removed.Volume, panel.rows[0][1], delta=0.05 * panel.rows[0][1],
+                               msg="the red removed-material shape was taken from the plate's old position")
+        panel.reject()
