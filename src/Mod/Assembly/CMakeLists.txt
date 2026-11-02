@@ -38,6 +38,7 @@ set(Assembly_Scripts
     SoSwitchMarker.py
     UtilsAssembly.py
     Interference.py
+    AssemblyFeature.py
     InterferencePanel.py
     ReplaceComponent.py
     TestAssemblyInterferenceGui.py
@@ -75,6 +76,8 @@ SET(AssemblyTests_SRCS
     AssemblyTests/interference_corpus.py
     AssemblyTests/TestReplaceComponent.py
     AssemblyTests/replace_corpus.py
+    AssemblyTests/TestAssemblyFeature.py
+    AssemblyTests/feature_corpus.py
     AssemblyTests/interference_gui_fixture.py
     AssemblyTests/TestInterferenceGui.py
     AssemblyTests/mocks/__init__.py
