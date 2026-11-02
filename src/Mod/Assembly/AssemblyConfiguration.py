@@ -27,6 +27,13 @@ live in the active configuration's ``Defaults`` string (JSON, floats written exa
 ``Applied``; both are cleared when the configuration is left, so an inactive configuration holds only its
 ``Overrides``.
 
+What a switch writes back. Only what the configuration itself changed: the overridden joint values, the
+suppression state of joints, group membership and visibility of suppressed components, the link target of an
+alternative and the joint references (with their placements) that the alternative-part remap rewrote.
+Everything else the user edited stays, including the other properties of those joints and the placement of a
+suppressed or alternative component (a placement is written back only while it still holds the value the
+activation left it with).
+
 Drift. An edit to a property a configuration overrides, made while it is active, is reported by ``status``;
 ``activate`` refuses to leave while drift exists until ``capture`` (the edit becomes the configuration's value)
 or ``discard`` (the configuration's value is written back). Edits to properties no configuration overrides
@@ -78,6 +85,20 @@ class ConfigurationDriftError(ConfigurationError):
 class AssemblyConfiguration:
     """Proxy of a configuration object; it has no behaviour of its own."""
 
+    @classmethod
+    def attach(cls, obj):
+        """Re-attach the proxy to a configuration object whose proxy was lost (a file re-saved by a FreeCAD
+        without this module keeps the properties but drops the proxy)."""
+        obj.Proxy = cls.__new__(cls)
+
+    def unsetupObject(self, obj):
+        """Deleting the active configuration first puts the assembly back to its defaults."""
+        try:
+            _on_delete(obj)
+        except Exception as exc:  # never let a failure here break the deletion itself
+            App.Console.PrintError("AssemblyConfiguration: restoring the defaults of %s failed: %s\n"
+                                   % (obj.Name, exc))
+
     def __init__(self, obj):
         obj.addProperty("App::PropertyString", "Overrides", PROP_GROUP, "Overrides (JSON)")
         obj.addProperty("App::PropertyString", "Defaults", PROP_GROUP,
@@ -91,21 +112,33 @@ class AssemblyConfiguration:
         pass
 
 
+_CONFIG_PROPS = ("Overrides", "Defaults", "Applied", "Active")
+
+
 def _is_config(obj):
-    return isinstance(getattr(obj, "Proxy", None), AssemblyConfiguration)
+    """By proxy, or by properties alone (the proxy is lost when stable FreeCAD re-saves a file)."""
+    if isinstance(getattr(obj, "Proxy", None), AssemblyConfiguration):
+        return True
+    return obj.TypeId == "App::FeaturePython" and all(p in obj.PropertiesList for p in _CONFIG_PROPS)
 
 
 def configurations(assembly):
     """The configuration objects of the assembly, in creation order."""
-    return [o for o in assembly.Group if _is_config(o)]
+    out = [o for o in assembly.Group if _is_config(o)]
+    for o in out:
+        if not isinstance(getattr(o, "Proxy", None), AssemblyConfiguration):
+            AssemblyConfiguration.attach(o)
+    return out
 
 
 def active(assembly):
-    """The active configuration object, or None (the default)."""
-    for c in configurations(assembly):
-        if c.Active:
+    """The active configuration object, or None (the default). If several are marked ``Active`` (one was set
+    by hand), the one that holds applied state is the real one."""
+    marked = [c for c in configurations(assembly) if c.Active]
+    for c in marked:
+        if c.Applied:
             return c
-    return None
+    return marked[0] if marked else None
 
 
 def _find(assembly, name):
@@ -246,19 +279,35 @@ class _Comp:
         self.tokens = path.split(".")
 
 
+def _suppressed_members(assembly, container):
+    """Group members the active configuration has taken out of ``container`` (they still belong to the
+    default component set, so a path through them is valid)."""
+    cfg = active(assembly)
+    if cfg is None or not cfg.Defaults:
+        return []
+    doc = assembly.Document
+    d = json.loads(cfg.Defaults)
+    return [o for o in (doc.getObject(r["name"]) for r in d["components"].values()
+                        if r.get("kind") == "group" and r["container"] == container.Name) if o is not None]
+
+
+def _default_group(assembly, container):
+    return list(container.Group) + _suppressed_members(assembly, container)
+
+
 def _resolve_component(assembly, path):
     doc = assembly.Document
     toks = path.split(".")
     container = assembly
     for tok in toks[:-1]:
         o = doc.getObject(tok)
-        if o is None or o not in container.Group:
+        if o is None or o not in _default_group(assembly, container):
             raise ConfigurationError("%r: %s is not inside %s" % (path, tok, container.Name))
         container = o
     obj = doc.getObject(toks[-1])
     if obj is None:
         raise ConfigurationError("%r names no object" % path)
-    if obj in container.Group and obj.TypeId not in _SKIP_TYPES and not _is_config(obj) \
+    if obj in _default_group(assembly, container) and obj.TypeId not in _SKIP_TYPES and not _is_config(obj) \
             and not _rc._is_joint(obj):
         return _Comp(path, obj, container, "group")
     if obj.TypeId == "App::LinkElement":
@@ -396,39 +445,44 @@ class _State:
     def __init__(self):
         self.defaults = {"components": {}, "joints": {}, "links": {}, "features": {}, "placements": {}}
         self.applied = {"components": [], "alternatives": {}, "joint_values": {}, "joints_suppressed": [],
-                        "features": {}, "placements": {}}
+                        "features": {}, "placements": {}, "joint_refs": {}}
         self.report = {"suppressed": [], "alternatives": [], "suppressed_joints": [], "joint_values": [],
                        "features": []}
 
 
-def _snapshot_joint(state, j, grp, grounded):
-    if j.Name in state.defaults["joints"]:
+def _snapshot_joint(state, j, grp, grounded, props=()):
+    """Remember the default of ``props`` of the joint (only what a configuration is about to change)."""
+    rec = state.defaults["joints"].get(j.Name)
+    if rec is None:
+        rec = state.defaults["joints"][j.Name] = {"grounded": grounded, "group": grp.Name,
+                                                  "index": list(grp.Group).index(j)}
+    if grounded:
         return
-    rec = {"grounded": grounded, "group": grp.Name, "index": list(grp.Group).index(j)}
-    if not grounded:
-        for prop in _JOINT_SNAPSHOT_PROPS:
-            if not hasattr(j, prop):
-                continue
-            v = getattr(j, prop)
-            if prop.startswith("Reference"):
-                rec[prop] = None if v is None or v[0] is None else [v[0].Name, list(v[1])]
-            elif isinstance(v, App.Placement):
-                rec[prop] = _pl_json(v)
-            elif isinstance(v, bool):
-                rec[prop] = v
-            else:
-                rec[prop] = _num(v)
-    state.defaults["joints"][j.Name] = rec
+    for prop in props:
+        if prop in rec or not hasattr(j, prop):
+            continue
+        v = getattr(j, prop)
+        if prop.startswith("Reference"):
+            rec[prop] = None if v is None or v[0] is None else [v[0].Name, list(v[1])]
+        elif isinstance(v, App.Placement):
+            rec[prop] = _pl_json(v)
+        elif isinstance(v, bool):
+            rec[prop] = v
+        else:
+            rec[prop] = _num(v)
 
 
-def _restore_joint(assembly, name, rec):
+def _restore_joint(assembly, name, rec, skipped):
     doc = assembly.Document
     j = doc.getObject(name)
     if j is None:
+        skipped.append({"kind": "joint", "name": name, "why": "deleted"})
         return
     if rec["grounded"]:
         grp = doc.getObject(rec["group"])
-        if j not in grp.Group:
+        if grp is None:
+            skipped.append({"kind": "joint", "name": name, "why": "its joint group was deleted"})
+        elif j not in grp.Group:
             lst = list(grp.Group)
             lst.insert(min(rec["index"], len(lst)), j)
             grp.Group = lst
@@ -439,7 +493,12 @@ def _restore_joint(assembly, name, rec):
         v = rec[prop]
         if prop.startswith("Reference"):
             cur = getattr(j, prop)
-            want = None if v is None else (doc.getObject(v[0]), list(v[1]))
+            target = None if v is None else doc.getObject(v[0])
+            if v is not None and target is None:
+                skipped.append({"kind": "joint reference", "name": "%s.%s" % (name, prop),
+                                "why": "%s was deleted" % v[0]})
+                continue
+            want = None if v is None else (target, list(v[1]))
             if (cur is None) != (want is None) or (cur is not None and (cur[0] != want[0] or list(cur[1]) != want[1])):
                 setattr(j, prop, want)
         elif isinstance(v, dict):
@@ -458,8 +517,10 @@ def _remove_from_group(state, comp):
     lst = list(cont.Group)
     idx = lst.index(comp.obj)
     state.defaults["components"][comp.path] = {"kind": "group", "container": cont.Name, "name": comp.obj.Name,
-                                               "index": idx}
+                                               "index": idx, "visible": bool(comp.obj.Visibility)}
     cont.removeObject(comp.obj)
+    # outside the group nothing would hide it: a suppressed component must not be drawn as a loose object
+    comp.obj.Visibility = False
 
 
 def _suppress_component(assembly, state, comp):
@@ -493,13 +554,16 @@ def _apply_alternative(assembly, state, path, part_name):
     by_joint = {}
     for rf in refs:
         by_joint.setdefault(rf.joint.Name, []).append(rf)
-    for jname in by_joint:
+    for jname, rfs in by_joint.items():
         j = doc.getObject(jname)
+        if all(rf.status == "matched" for rf in rfs):
+            props = [p for rf in rfs for p in (rf.prop, rf.prop.replace("Reference", "Placement"))]
+        else:
+            props = ["Suppressed"]
         for jj, owner, grp, grounded in _joints(assembly):
             if jj == j:
-                _snapshot_joint(state, j, grp, grounded)
-    state.defaults["links"][link.Name] = {"linked": link.LinkedObject.Name if link.LinkedObject else None,
-                                          "placement": _pl_json(link.Placement)}
+                _snapshot_joint(state, j, grp, grounded, props)
+    state.defaults["links"][link.Name] = {"linked": link.LinkedObject.Name if link.LinkedObject else None}
     if not plc.isSame(App.Placement(), 1e-9):
         link.Placement = link.Placement * plc
     link.LinkedObject = ctx["new_top"]
@@ -566,6 +630,14 @@ def _apply(assembly, cfg):
     st = _State()
     comps = [_resolve_component(assembly, p) for p in ov["suppress"]]
     joints = _joints(assembly)
+    # an expression added to an overridden property after the configuration was made would win silently
+    for path in ov["alternatives"]:
+        _refuse_expression(_find_link(assembly, path).obj, "LinkedObject")
+    for jname, vals in ov["joints"].items():
+        for prop in vals:
+            _refuse_expression(_joint_by_name(assembly, jname), prop)
+    for fname in ov["features"]:
+        _refuse_expression(_feature_by_name(assembly, fname), "Suppressed")
     for comp in _components(assembly):
         st.defaults["placements"][comp.Name] = _pl_json(comp.Placement)
     for f in ov["features"]:
@@ -577,10 +649,11 @@ def _apply(assembly, cfg):
         reach = _joint_reach(j, owner, grounded)
         if any(_touches(reach, c.tokens) for c in comps):
             touched.append((j, grounded, grp))
-        if j.Name in ov["joints"]:
-            _snapshot_joint(st, j, grp, grounded)
-        elif any(_touches(reach, c.tokens) for c in comps):
-            _snapshot_joint(st, j, grp, grounded)
+        hit = any(_touches(reach, c.tokens) for c in comps)
+        if j.Name in ov["joints"] and not grounded:
+            _snapshot_joint(st, j, grp, grounded, list(ov["joints"][j.Name]) + (["Suppressed"] if hit else []))
+        elif hit:
+            _snapshot_joint(st, j, grp, grounded, ["Suppressed"])
     for path in sorted(ov["alternatives"]):
         _apply_alternative(assembly, st, path, ov["alternatives"][path])
     # components in descending group index so the stored indexes stay valid
@@ -607,38 +680,84 @@ def _apply(assembly, cfg):
     return st
 
 
-def _restore(assembly, cfg):
-    """Write back, verbatim, the defaults ``cfg`` stored; leave the configuration inactive."""
+def _ref_json(v):
+    return None if v is None or v[0] is None else [v[0].Name, list(v[1])]
+
+
+def _record_joint_refs(assembly, st):
+    """What the alternative-part remap left in the joint references it rewrote (for drift detection)."""
     doc = assembly.Document
+    for jname, rec in st.defaults["joints"].items():
+        j = doc.getObject(jname)
+        for prop in rec:
+            if prop.startswith("Reference") or prop.startswith("Placement"):
+                v = getattr(j, prop)
+                st.applied["joint_refs"].setdefault(jname, {})[prop] = (
+                    _ref_json(v) if prop.startswith("Reference") else _pl_json(v))
+
+
+def _placement_map(assembly, defaults):
+    """Placements after an activation: every component, suppressed ones (outside the group) included."""
+    doc = assembly.Document
+    out = {o.Name: _pl_json(o.Placement, exact=False) for o in _components(assembly)}
+    for rec in defaults["components"].values():
+        if rec.get("kind") == "group":
+            o = doc.getObject(rec["name"])
+            if o is not None and o.Name not in out and hasattr(o, "Placement"):
+                out[o.Name] = _pl_json(o.Placement, exact=False)
+    return out
+
+
+def _restore(assembly, cfg):
+    """Write back, verbatim, what ``cfg`` changed; leave the configuration inactive.
+
+    An object the user deleted while the configuration was active is skipped and named in the returned list;
+    the rest is restored all the same."""
+    doc = assembly.Document
+    skipped = []
     d = json.loads(cfg.Defaults) if cfg.Defaults else None
     if d is None:
         cfg.Active = False
-        return
+        return skipped
     applied = json.loads(cfg.Applied)
     for rec in sorted((r for r in d["components"].values() if isinstance(r, dict) and r["kind"] == "group"),
                       key=lambda r: r["index"]):
         cont, obj = doc.getObject(rec["container"]), doc.getObject(rec["name"])
+        if obj is None or cont is None:
+            skipped.append({"kind": "component", "name": rec["name"],
+                            "why": "deleted" if obj is None else "its container %s was deleted" % rec["container"]})
+            continue
         if obj not in cont.Group:
             lst = list(cont.Group)
             lst.insert(min(rec["index"], len(lst)), obj)
             cont.Group = lst
+        if rec.get("visible") and not obj.Visibility:
+            obj.Visibility = True
     for rec in d["components"].values():
         if isinstance(rec, dict) and rec["kind"] == "element":
             el = doc.getObject(rec["name"])
-            if bool(el.Suppressed) != rec["suppressed"]:
+            if el is None:
+                skipped.append({"kind": "component", "name": rec["name"], "why": "deleted"})
+            elif bool(el.Suppressed) != rec["suppressed"]:
                 el.Suppressed = rec["suppressed"]
     for name, rec in d["links"].items():
         link = doc.getObject(name)
         want = doc.getObject(rec["linked"]) if rec["linked"] else None
-        if link.LinkedObject != want:
+        if link is None:
+            skipped.append({"kind": "link", "name": name, "why": "deleted"})
+        elif rec["linked"] and want is None:
+            skipped.append({"kind": "link", "name": name, "why": "its source %s was deleted" % rec["linked"]})
+        elif link.LinkedObject != want:
             link.LinkedObject = want
-        if not _same_pl(link.Placement, _pl_from(rec["placement"]), 0.0):
-            link.Placement = _pl_from(rec["placement"])
     for jname, rec in sorted(d["joints"].items(), key=lambda kv: kv[1]["index"]):
-        _restore_joint(assembly, jname, rec)
+        _restore_joint(assembly, jname, rec, skipped)
     import AssemblyFeature
     for fname, val in d["features"].items():
-        AssemblyFeature.set_suppressed(doc.getObject(fname), val)
+        f = doc.getObject(fname)
+        if f is None:
+            skipped.append({"kind": "feature", "name": fname, "why": "deleted"})
+        else:
+            AssemblyFeature.set_suppressed(f, val)
     # placements: restore what the solve moved; keep a placement the user moved again afterwards
     for name, plc in d["placements"].items():
         o = doc.getObject(name)
@@ -652,6 +771,27 @@ def _restore(assembly, cfg):
     cfg.Defaults = ""
     cfg.Applied = ""
     cfg.Active = False
+    return skipped
+
+
+def _on_delete(cfg):
+    """The active configuration is being removed from its document: restore the defaults first, so no
+    component stays suppressed with the record of what to restore gone. Edits to overridden properties
+    (drift) are not kept: the configuration they belonged to is gone."""
+    if not cfg.Active or not cfg.Defaults:
+        return
+    assembly = cfg.getParentGeoFeatureGroup()
+    if assembly is None:
+        return
+    drift = _drift(assembly, cfg)
+    if drift:
+        App.Console.PrintWarning("AssemblyConfiguration: deleting %s discards edits of %s\n" % (
+            cfg.Label, ", ".join("%s.%s" % (x["target"], x["property"]) for x in drift)))
+    skipped = _restore(assembly, cfg)
+    for sk in skipped:
+        App.Console.PrintWarning("AssemblyConfiguration: %s %s not restored: %s\n" % (sk["kind"], sk["name"],
+                                                                                       sk["why"]))
+    _refresh_consumers(assembly)
 
 
 # ------------------------------------------------------------------ drift and status
@@ -667,6 +807,11 @@ def _drift(assembly, cfg):
     def add(kind, obj, prop, expected, found):
         out.append({"kind": kind, "target": obj.Name, "entity": _entity(obj), "property": prop,
                     "expected": expected, "found": found})
+
+    def expression(obj, prop):
+        hit = _expr_for(obj, prop)
+        if hit:
+            add("expression", obj, prop, "no expression", "%s = %s" % hit)
     for path in ap["components"]:
         comp = _resolve_component_loose(assembly, path)
         if comp is None:
@@ -674,27 +819,50 @@ def _drift(assembly, cfg):
         if comp.kind == "element":
             if not comp.obj.Suppressed:
                 add("component", comp.obj, "Suppressed", True, False)
-        elif comp.obj in comp.container.Group:
+        elif comp.container is not None and comp.obj in comp.container.Group:
             add("component", comp.obj, "Group", "suppressed", "member of %s" % comp.container.Name)
     for path, part in ap["alternatives"].items():
         link = doc.getObject(path.split(".")[-1])
+        if link is None:
+            continue
         cur = link.LinkedObject.Name if link.LinkedObject else None
         if cur != part:
             add("alternative", link, "LinkedObject", part, cur)
+        expression(link, "LinkedObject")
     for jname, vals in ap["joint_values"].items():
         j = doc.getObject(jname)
+        if j is None:
+            continue
         for prop, want in vals.items():
             now = _value_json(getattr(j, prop))
             if not _value_same(now, want):
                 add("joint_value", j, prop, want, now)
+            expression(j, prop)
+    for jname, props in ap.get("joint_refs", {}).items():
+        j = doc.getObject(jname)
+        if j is None:
+            continue
+        for prop, want in props.items():
+            v = getattr(j, prop)
+            if prop.startswith("Reference"):
+                now = _ref_json(v)
+                if now != want:
+                    add("joint_ref", j, prop, want, now)
+            else:
+                now = _pl_json(v)
+                if not _same_pl(_pl_from(now), _pl_from(want), 1e-9):
+                    add("joint_ref", j, prop, want, now)
     for jname in ap["joints_suppressed"]:
         j = doc.getObject(jname)
         if j is not None and hasattr(j, "Suppressed") and not j.Suppressed:
             add("joint_suppressed", j, "Suppressed", True, False)
     for fname, val in ap["features"].items():
         f = doc.getObject(fname)
+        if f is None:
+            continue
         if bool(f.Suppressed) != val:
             add("feature", f, "Suppressed", val, bool(f.Suppressed))
+        expression(f, "Suppressed")
     return out
 
 
@@ -706,7 +874,7 @@ def _resolve_component_loose(assembly, path):
     for tok in toks[:-1]:
         container = doc.getObject(tok)
     obj = doc.getObject(toks[-1])
-    if obj is None:
+    if obj is None or container is None:
         return None
     return _Comp(path, obj, container, "element" if obj.TypeId == "App::LinkElement" else "group")
 
@@ -719,7 +887,9 @@ def status(assembly):
             "configurations": [c.Label for c in configurations(assembly)],
             "active": cfg.Label if cfg else None,
             "drift": _drift(assembly, cfg) if cfg else [],
-            "suppressed": suppressed(assembly)}
+            "suppressed": suppressed(assembly),
+            "warnings": ["%s is marked Active but holds no applied state; it is ignored" % c.Label
+                         for c in configurations(assembly) if c.Active and c != cfg]}
 
 
 def suppressed(assembly):
@@ -750,12 +920,17 @@ def activate(assembly, name=None):
     pref, old_pref = _autosolve_off()
     doc.openTransaction("Activate configuration")
     try:
+        skipped = []
         if cur is not None:
-            _restore(assembly, cur)
+            skipped = _restore(assembly, cur)
+        for c in configurations(assembly):
+            if c.Active and c != target:  # a second hand-set Active flag
+                c.Active = False
         rep = _empty_report()
         code = 0
         if target is not None:
             st = _apply(assembly, target)
+            _record_joint_refs(assembly, st)
             target.Defaults = json.dumps(st.defaults, sort_keys=True)
             target.Active = True
             rep = st.report
@@ -764,7 +939,8 @@ def activate(assembly, name=None):
         if target is not None:
             code = _solve(assembly)
             doc.recompute()
-            st.applied["placements"] = {o.Name: _pl_json(o.Placement, exact=False) for o in _components(assembly)}
+            st.applied["placements"] = _placement_map(assembly, st.defaults)
+            _record_joint_refs(assembly, st)
             target.Applied = json.dumps(st.applied, sort_keys=True)
     except Exception:
         doc.abortTransaction()
@@ -774,6 +950,7 @@ def activate(assembly, name=None):
     doc.commitTransaction()
     out = status(assembly)
     out.update(changed=True, previous=cur.Label if cur else None, solve={"code": code}, **rep)
+    out["restore_skipped"] = skipped
     out["placements"] = {o.Name: _pl_json(o.Placement) for o in _components(assembly)}
     return out
 
@@ -823,7 +1000,7 @@ def capture(assembly):
             doc.recompute()
         finally:
             pref.SetBool("SolveInJointCreation", old_pref)
-    ap["placements"] = {o.Name: _pl_json(o.Placement, exact=False) for o in _components(assembly)}
+    ap["placements"] = _placement_map(assembly, json.loads(cfg.Defaults))
     cfg.Applied = json.dumps(ap, sort_keys=True)
     doc.commitTransaction()
     return status(assembly)
@@ -842,9 +1019,23 @@ def discard(assembly):
     pref, old_pref = _autosolve_off()
     doc.openTransaction("Discard configuration drift")
     try:
+        if any(d["kind"] == "expression" for d in drift):
+            for d in drift:
+                if d["kind"] == "expression":
+                    doc.getObject(d["target"]).setExpression(d["property"], None)
+            drift = _drift(assembly, cfg)  # the values the cleared expressions left behind
+            solve_again = True
+        else:
+            solve_again = False
         for d in drift:
             obj = doc.getObject(d["target"])
-            if d["kind"] == "joint_value":
+            if d["kind"] == "joint_ref":
+                if d["property"].startswith("Reference"):
+                    w = d["expected"]
+                    setattr(obj, d["property"], None if w is None else (doc.getObject(w[0]), list(w[1])))
+                else:
+                    setattr(obj, d["property"], _pl_from(d["expected"]))
+            elif d["kind"] == "joint_value":
                 setattr(obj, d["property"], _value_from(d["property"], d["expected"]))
             elif d["kind"] == "feature":
                 import AssemblyFeature
@@ -862,10 +1053,10 @@ def discard(assembly):
                     comp.container.removeObject(obj)
         _refresh_consumers(assembly)
         doc.recompute()
-        if any(d["kind"] == "joint_value" for d in drift):
+        if solve_again or any(d["kind"] in ("joint_value", "joint_ref") for d in drift):
             _solve(assembly)
             doc.recompute()
-            ap["placements"] = {o.Name: _pl_json(o.Placement, exact=False) for o in _components(assembly)}
+            ap["placements"] = _placement_map(assembly, json.loads(cfg.Defaults))
             cfg.Applied = json.dumps(ap, sort_keys=True)
     except Exception:
         doc.abortTransaction()

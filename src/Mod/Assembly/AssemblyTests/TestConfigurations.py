@@ -483,8 +483,9 @@ def _m_backwards():
             except Exception:
                 pass
             d["links"].pop(lname)
+            d["placements"].pop(lname, None)   # the matcher cannot give the old placement back verbatim
         for jname in list(d["joints"]):
-            if any(k in d["joints"][jname] for k in ("Reference1",)) and jname in ("JM", "JB"):
+            if jname == "JM":   # the matcher run backwards neither un-suppresses a joint nor gives a reference back
                 d["joints"].pop(jname)
     return dict(_restore=_wrap_restore(edit))
 
@@ -572,7 +573,58 @@ def _m_linked_object_not_restored():
     return dict(_restore=_wrap_restore(lambda a, c, d: d.__setitem__("links", {})))
 
 
+def _m_delete_active_orphans():
+    return dict(_on_delete=lambda cfg: None)
+
+
+def _m_restore_crashes_on_deleted():
+    real = AC._restore
+
+    def restore(assembly, cfg):
+        if cfg.Defaults:
+            for rec in json.loads(cfg.Defaults)["components"].values():
+                if assembly.Document.getObject(rec["name"]) is None:
+                    raise ValueError("PropertyLinkList: invalid document object")
+        return real(assembly, cfg)
+    return dict(_restore=restore)
+
+
+def _m_joint_snapshot_everything():
+    real = AC._snapshot_joint
+    return dict(_snapshot_joint=lambda state, j, grp, grounded, props=(): real(
+        state, j, grp, grounded, AC._JOINT_SNAPSHOT_PROPS))
+
+
+def _m_suppressed_placement_not_tracked():
+    return dict(_placement_map=lambda assembly, defaults: {
+        o.Name: AC._pl_json(o.Placement, exact=False) for o in AC._components(assembly)})
+
+
+def _m_suppressed_stays_visible():
+    real = AC._remove_from_group
+
+    def remove(state, comp):
+        real(state, comp)
+        comp.obj.Visibility = True
+    return dict(_remove_from_group=remove)
+
+
+def _m_proxy_required():
+    return dict(_is_config=lambda obj: isinstance(getattr(obj, "Proxy", None), AC.AssemblyConfiguration))
+
+
+def _m_validate_against_live_group():
+    return dict(_default_group=lambda assembly, container: list(container.Group))
+
+
 MUTANTS = {
+    "delete_active_leaves_components_suppressed": _m_delete_active_orphans,
+    "restore_crashes_on_deleted_object": _m_restore_crashes_on_deleted,
+    "restore_reverts_whole_joint": _m_joint_snapshot_everything,
+    "suppressed_placement_not_tracked": _m_suppressed_placement_not_tracked,
+    "suppressed_component_stays_visible": _m_suppressed_stays_visible,
+    "configuration_needs_proxy": _m_proxy_required,
+    "copy_validates_live_group": _m_validate_against_live_group,
     "solve_joints_of_suppressed_kept": _m_no_joint_suppress,
     "suppress_by_hiding_only": _m_hide_only,
     "bom_and_features_not_refreshed": _m_no_consumer_refresh,
@@ -652,6 +704,267 @@ def user_edit_problems():
     finally:
         App.closeDocument(doc.Name)
     return problems
+
+
+# ------------------------------------------------------------------ repair 1 scenarios
+
+def _fresh(name):
+    doc = App.newDocument(name)
+    b = C.rig(doc)
+    doc.recompute()
+    return doc, b.asm
+
+
+def _plc(x, y, z):
+    return App.Placement(App.Vector(x, y, z), App.Rotation())
+
+
+def delete_active_problems():
+    """Deleting the active configuration puts the assembly back to its defaults (finding 1)."""
+    doc, asm = _fresh("RepDelete")
+    problems = []
+    try:
+        sig0 = AC.signature(doc)
+        AC.create(asm, "S", suppress=["LB", "LA"])
+        AC.activate(asm, "S")
+        doc.removeObject(AC.active(asm).Name)
+        if AC.signature(doc) != sig0:
+            problems.append("deleting the active configuration did not restore the default signature")
+        if doc.LB not in asm.Group or doc.LA not in asm.Group or doc.JB.Suppressed:
+            problems.append("a suppressed component or joint stayed suppressed after its configuration was deleted")
+        if not doc.LB.Visibility:
+            problems.append("a restored component stayed hidden")
+    finally:
+        App.closeDocument(doc.Name)
+    return problems
+
+
+def deleted_object_problems():
+    """A suppressed object the user deleted while its configuration was active: the restore finishes."""
+    doc, asm = _fresh("RepGone")
+    problems = []
+    try:
+        AC.create(asm, "S", suppress=["LB", "LA"])
+        AC.activate(asm, "S")
+        doc.removeObject("LB")
+        try:
+            rep = AC.activate(asm, None)
+        except Exception as exc:
+            return ["activate(None) raised %s: %s" % (type(exc).__name__, exc)]
+        json.dumps(rep)
+        if AC.status(asm)["active"] is not None:
+            problems.append("the assembly is stuck in the configuration")
+        if doc.LA not in asm.Group or doc.JA.Suppressed:
+            problems.append("the other suppressed component was not restored")
+        if not any(sk["name"] == "LB" for sk in rep.get("restore_skipped", [])):
+            problems.append("the deleted object is not reported: %s" % rep.get("restore_skipped"))
+    finally:
+        App.closeDocument(doc.Name)
+    return problems
+
+
+def user_edit_kept_problems():
+    """Edits to properties a configuration does not override survive a switch (finding 3)."""
+    doc, asm = _fresh("RepKeep")
+    problems = []
+    try:
+        C.src_box(doc, "Alt", 10, 10, 12)
+        fl = asm.newObject("App::Link", "FL")      # no joint reaches it: nothing but the user places it
+        fl.LinkedObject = doc.CubeSrc
+        fl.Placement = _plc(60, 60, 30)
+        doc.recompute()
+        AC.create(asm, "S", suppress=["LB", "FL"], joints={"JCd": {"Distance": 70.0}})
+        AC.create(asm, "Al", alternatives={"FL": "Alt"})
+        AC.activate(asm, "S")
+        jb_pl = _plc(9, 9, 9)
+        doc.JB.Placement1 = jb_pl
+        ref = (doc.GL, ["Face2"])
+        doc.JB.Reference1 = ref
+        fl_pl = _plc(3, 4, 5)
+        fl.Placement = fl_pl
+        doc.JCd.Placement1 = _plc(1, 2, 3)
+        doc.GL.Placement = _plc(0, 0, -1)
+        if AC.status(asm)["drift"]:
+            problems.append("an edit of a property no configuration overrides is reported as drift: %s"
+                            % AC.status(asm)["drift"])
+        AC.activate(asm, None)
+        if not fl.Placement.isSame(fl_pl, 1e-9):
+            problems.append("the Placement of a suppressed component was reverted")
+        AC.activate(asm, "S")
+        fl.Placement = _plc(8, 8, 8)
+        AC.activate(asm, "Al")
+        la_pl = _plc(11, 12, 13)
+        fl.Placement = la_pl
+        AC.activate(asm, None)
+        if not doc.JB.Placement1.isSame(jb_pl, 1e-9):
+            problems.append("Placement1 of a joint a configuration suppressed was reverted")
+        if doc.JB.Reference1[1] != ["Face2"]:
+            problems.append("Reference1 of a joint a configuration suppressed was reverted")
+        if not fl.Placement.isSame(la_pl, 1e-9):
+            problems.append("the Placement of an alternative component was reverted")
+        if not doc.JCd.Placement1.isSame(_plc(1, 2, 3), 1e-9):
+            problems.append("Placement1 of a joint whose only override is Distance was reverted")
+        if not doc.GL.Placement.isSame(_plc(0, 0, -1), 1e-9):
+            problems.append("the Placement of a grounded component was reverted")
+    finally:
+        App.closeDocument(doc.Name)
+    return problems
+
+
+def remap_edit_drift_problems():
+    """A joint reference the alternative-part remap rewrote and the user then edited is drift."""
+    doc, asm = _fresh("RepRemap")
+    problems = []
+    try:
+        C.src_box(doc, "Alt", 10, 10, 12)
+        doc.recompute()
+        AC.create(asm, "Al", alternatives={"LA": "Alt"})
+        AC.activate(asm, "Al")
+        refs = json.loads(AC.active(asm).Applied)["joint_refs"]
+        if not refs:
+            return ["the remap recorded no joint references"]
+        jname = sorted(refs)[0]
+        prop = sorted(p for p in refs[jname] if p.startswith("Placement"))[0]
+        setattr(getattr(doc, jname), prop, _plc(5, 6, 7))
+        drift = AC.status(asm)["drift"]
+        if not [d for d in drift if d["target"] == jname and d["property"] == prop]:
+            problems.append("an edit of %s.%s, rewritten by the remap, is not drift: %s" % (jname, prop, drift))
+        try:
+            AC.activate(asm, None)
+            problems.append("switching away from an edited remapped reference was not refused")
+        except AC.ConfigurationDriftError:
+            pass
+        AC.discard(asm)
+        if AC.status(asm)["drift"]:
+            problems.append("discard left drift on the remapped reference")
+        AC.activate(asm, None)
+    finally:
+        App.closeDocument(doc.Name)
+    return problems
+
+
+def lost_proxy_problems():
+    """Configuration objects are recognised by their properties when the proxy is gone (finding 4)."""
+    doc, asm = _fresh("RepProxy")
+    problems = []
+    try:
+        AC.create(asm, "S", suppress=["LB"])
+        AC.create(asm, "T", joints={"JCd": {"Distance": 70.0}})
+        AC.activate(asm, "S")
+        for o in list(asm.Group):
+            if o.TypeId == "App::FeaturePython":
+                o.Proxy = None
+        if AC.status(asm)["configurations"] != ["S", "T"] or AC.status(asm)["active"] != "S":
+            problems.append("configurations without a proxy are not recognised: %s" % AC.status(asm))
+        AC.activate(asm, "T")
+        if doc.LB not in asm.Group:
+            problems.append("activation through a recovered configuration did not restore the defaults")
+        if not isinstance(AC.active(asm).Proxy, AC.AssemblyConfiguration):
+            problems.append("the proxy was not re-attached")
+    finally:
+        App.closeDocument(doc.Name)
+    return problems
+
+
+def copy_active_problems():
+    doc, asm = _fresh("RepCopy")
+    problems = []
+    try:
+        AC.create(asm, "S", suppress=["LB"])
+        AC.activate(asm, "S")
+        try:
+            AC.copy(asm, "S", "S2")
+        except AC.ConfigurationError as exc:
+            return ["copy of the active configuration failed: %s" % exc]
+        cp = [c for c in AC.configurations(asm) if c.Label == "S2"][0]
+        if json.loads(cp.Overrides)["suppress"] != ["LB"]:
+            problems.append("the copy lost the suppression")
+        AC.activate(asm, "S2")
+        if AC.suppressed(asm) != ["LB"]:
+            problems.append("the copy does not suppress LB")
+    finally:
+        App.closeDocument(doc.Name)
+    return problems
+
+
+def visibility_problems():
+    """A suppressed component is hidden; its Visibility comes back verbatim (finding 6)."""
+    doc, asm = _fresh("RepVis")
+    problems = []
+    try:
+        doc.LA.Visibility = False
+        AC.create(asm, "S", suppress=["LA", "LB"])
+        AC.activate(asm, "S")
+        if doc.LB.Visibility or doc.LA.Visibility:
+            problems.append("a suppressed component is still visible")
+        AC.activate(asm, None)
+        if not doc.LB.Visibility:
+            problems.append("a visible component stayed hidden after the restore")
+        if doc.LA.Visibility:
+            problems.append("a hidden component became visible after the restore")
+    finally:
+        App.closeDocument(doc.Name)
+    return problems
+
+
+def expression_after_problems():
+    """An expression added to an overridden property after the configuration was made (finding 7)."""
+    doc, asm = _fresh("RepExpr")
+    problems = []
+    try:
+        AC.create(asm, "T", joints={"JCd": {"Distance": 70.0}})
+        doc.JCd.setExpression("Distance", "40 mm + 5 mm")
+        sig = AC.full_signature(doc)
+        try:
+            AC.activate(asm, "T")
+            problems.append("activation with an expression on an overridden property was accepted")
+        except AC.ConfigurationError as exc:
+            if "40 mm + 5 mm" not in str(exc):
+                problems.append("the refusal does not name the expression: %s" % exc)
+        if AC.full_signature(doc) != sig or AC.active(asm) is not None:
+            problems.append("a refused activation changed the document")
+        doc.JCd.setExpression("Distance", None)
+        AC.activate(asm, "T")
+        doc.JCd.setExpression("Distance", "70 mm")
+        if not [d for d in AC.status(asm)["drift"] if d["kind"] == "expression"]:
+            problems.append("an expression set while active is not reported as drift")
+        try:
+            AC.activate(asm, None)
+            problems.append("switching away with an expression drift was accepted")
+        except AC.ConfigurationDriftError:
+            pass
+        AC.discard(asm)
+        if AC.status(asm)["drift"] or doc.JCd.ExpressionEngine:
+            problems.append("discard did not clear the expression")
+        AC.activate(asm, None)
+    finally:
+        App.closeDocument(doc.Name)
+    return problems
+
+
+def stale_active_problems():
+    doc, asm = _fresh("RepStale")
+    problems = []
+    try:
+        AC.create(asm, "S", suppress=["LB"])
+        AC.create(asm, "T", suppress=["LA"])
+        AC.activate(asm, "S")
+        t = [c for c in AC.configurations(asm) if c.Label == "T"][0]
+        t.Active = True
+        st = AC.status(asm)
+        if st["active"] != "S" or not st["warnings"]:
+            problems.append("a hand-set Active flag is not reported: %s" % st)
+        AC.activate(asm, None)
+        if t.Active or AC.status(asm)["warnings"]:
+            problems.append("the stale Active flag survived a switch")
+    finally:
+        App.closeDocument(doc.Name)
+    return problems
+
+
+REPAIR_PROBES = (delete_active_problems, deleted_object_problems, user_edit_kept_problems,
+                 remap_edit_drift_problems, lost_proxy_problems, copy_active_problems, visibility_problems,
+                 expression_after_problems, stale_active_problems)
 
 
 def save_reopen_problems(name):
@@ -838,6 +1151,11 @@ class TestConfigurations(unittest.TestCase):
             finally:
                 App.closeDocument(doc.Name)
 
+    def test_repair_1_regressions(self):
+        for fn in REPAIR_PROBES:
+            with self.subTest(scenario=fn.__name__):
+                self.assertEqual(fn(), [])
+
     def test_mutants_are_caught(self):
         self.assertGreaterEqual(len(MUTANTS), 12)
         probe_cases = list(C.CASES)
@@ -854,7 +1172,8 @@ class TestConfigurations(unittest.TestCase):
                         if problems:
                             failing.append(name)
                     for label, fn in (("expression", expression_problems), ("user_edit", user_edit_problems),
-                                      ("drift", drift_problems)):
+                                      ("drift", drift_problems)) + tuple(
+                            (f.__name__, f) for f in REPAIR_PROBES):
                         try:
                             if fn():
                                 failing.append(label)
