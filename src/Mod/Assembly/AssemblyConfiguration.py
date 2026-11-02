@@ -122,12 +122,24 @@ def _is_config(obj):
     return obj.TypeId == "App::FeaturePython" and all(p in obj.PropertiesList for p in _CONFIG_PROPS)
 
 
+def _attach_view(obj):
+    """With the GUI up give the object its view provider (lazy import: this module stays headless-importable)."""
+    if not App.GuiUp:
+        return
+    try:
+        import ViewProviderAssemblyConfiguration as VP
+        VP.attach(obj)
+    except Exception as exc:  # a missing view provider must never break the API
+        App.Console.PrintWarning("AssemblyConfiguration: no view provider for %s: %s\n" % (obj.Name, exc))
+
+
 def configurations(assembly):
     """The configuration objects of the assembly, in creation order."""
     out = [o for o in assembly.Group if _is_config(o)]
     for o in out:
         if not isinstance(getattr(o, "Proxy", None), AssemblyConfiguration):
             AssemblyConfiguration.attach(o)
+            _attach_view(o)
     return out
 
 
@@ -379,6 +391,7 @@ def create(assembly, name, suppress=(), alternatives=None, joints=None, features
     try:
         obj = assembly.newObject("App::FeaturePython", "Configuration")
         AssemblyConfiguration(obj)
+        _attach_view(obj)
         obj.Label = name
         obj.Overrides = json.dumps(ov, sort_keys=True)
         obj.Active = False
@@ -423,12 +436,12 @@ def describe(cfg):
 
 def _components(assembly):
     """Objects whose placement the solver may write: components of every container, link array elements."""
+    import AssemblyFeature
     out = []
     for c in _containers(assembly):
         for o in c.Group:
             if o.TypeId in _SKIP_TYPES or _is_config(o) or not hasattr(o, "Placement"):
                 continue
-            import AssemblyFeature
             if o.TypeId == "Assembly::AssemblyObject" or AssemblyFeature.is_feature(o):
                 continue
             out.append(o)

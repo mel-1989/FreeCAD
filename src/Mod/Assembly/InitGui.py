@@ -23,6 +23,7 @@
 
 FreeCAD.__unit_test__ += ["TestAssemblyInterferenceGui"]
 FreeCAD.__unit_test__ += ["TestAssemblyFeatureGui"]
+FreeCAD.__unit_test__ += ["TestAssemblyConfigurationsGui"]
 
 
 class AssemblyCommandGroup:
