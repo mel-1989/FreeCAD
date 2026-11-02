@@ -17,6 +17,15 @@ Behaviour sources, all public: OCCT Boolean operations and BRepExtrema documenta
 whose ``Part.getShape(..., transform=True)`` resolves the placement of a sub-object path.
 Hidden parts follow the object ``Visibility`` property of each object on the path.
 
+Which shapes are checked: only shapes that contain at least one solid (a solid, or a
+compound/compsolid holding solids). Every other visible shape (face, wire, edge, open or
+closed shell, sketch geometry) is listed in ``skipped_non_solid`` with its shape type; a closed
+shell is not a solid and is listed, not checked. A visible leaf that cannot be resolved (a link
+whose target is gone, a Part::Feature with a null or invalid shape, a failed placement lookup)
+is an entry in ``errors`` with kind ``unresolved`` and a reason; it is never dropped silently.
+Hidden leaves are not resolved and only counted (``hidden_skipped``: hidden leaves that hold
+solids). Objects that carry no geometry at all (empty groups, origins) are ignored.
+
 Limits (slice 1a): the broad phase is a sweep along X followed by a box test, quadratic in
 the worst case; large assemblies are G05's work. The check does not solve joints: it reads
 the placements the assembly currently holds.
@@ -78,12 +87,25 @@ class Instance:
 
 # ------------------------------------------------------------------ walking
 
+_LINK_TYPES = ("App::Link", "App::LinkElement", "Assembly::AssemblyLink")
+
+
+class _Unresolved(Exception):
+    """A visible leaf whose shape cannot be obtained (the message is the reason)."""
+
+
 def _is_suppressed(obj):
     return obj.TypeId == "App::LinkElement" and bool(getattr(obj, "Suppressed", False))
 
 
+def _is_array_element(parent, sub):
+    """True for a child of a link array whose elements are not shown as LinkElement objects."""
+    return (parent.TypeId == "App::Link" and parent.ElementCount > 0 and not parent.ShowElement
+            and re.fullmatch(r"\d+\.", sub) is not None)
+
+
 def _walk(root):
-    """Every solid-bearing leaf below ``root`` as an Instance (hidden ones flagged)."""
+    """Every geometry-candidate leaf below ``root`` as an Instance (hidden ones flagged)."""
     out = []
 
     def rec(path, objs, labels, hidden):
@@ -93,9 +115,17 @@ def _walk(root):
             child = root.getSubObject(cpath, 1)
             if child is None or child.TypeId in _SKIP_TYPES or _is_suppressed(child):
                 continue
+            if _is_array_element(parent, sub):
+                # ShowElement=False: the child is the linked source; visibility follows the array
+                # (already in ``hidden``) and the element's own flag, never the source object.
+                idx = int(sub[:-1])
+                label = "%s[%d]" % (parent.Label, idx)
+                chidden = hidden or parent.isElementVisible(sub[:-1]) == 0
+            else:
+                label = child.Label
+                chidden = hidden or (getattr(child, "Visibility", True) is False)
             cobjs = objs + [child]
-            clabels = labels + [child.Label]
-            chidden = hidden or (getattr(child, "Visibility", True) is False)
+            clabels = labels + [label]
             if not child.isDerivedFrom("Part::Feature") and child.getSubObjects():
                 rec(cpath, cobjs, clabels, chidden)
                 continue
@@ -107,10 +137,16 @@ def _walk(root):
 
 
 def _component_key(key, objs):
-    """The part this leaf belongs to: its enclosing App::Part or plain Link, else itself."""
+    """The part this leaf belongs to: its enclosing App::Part or plain Link, else itself.
+
+    A plain link to a sub-assembly is not one part: the sub-assembly's own parts stay separate,
+    exactly as when the sub-assembly is contained, so its internal pairs are reported once, in
+    the assembly that reaches it (F2 does not check such a sub-assembly as a top level).
+    """
     if len(objs) >= 2:
         par = objs[-2]
-        if par.TypeId == "App::Part" or (par.TypeId == "App::Link" and par.ElementCount == 0):
+        if par.TypeId == "App::Part" or (par.TypeId == "App::Link" and par.ElementCount == 0
+                                         and par.getLinkedObject(True).TypeId != "Assembly::AssemblyObject"):
             return key.rsplit(".", 1)[0]
     return key
 
@@ -119,31 +155,101 @@ def _is_hidden(inst):
     return inst.hidden
 
 
+def _leaf_kind(inst):
+    """("geometry" | "none" | "error", reason) for a leaf, from the objects alone (no placement)."""
+    obj = inst.objs[-1]
+    try:
+        lo = obj.getLinkedObject(True)
+    except Exception as exc:
+        return "error", "link cannot be resolved: %s" % exc
+    is_link = obj.TypeId in _LINK_TYPES
+    if lo is None or (is_link and lo.TypeId in _LINK_TYPES):
+        return "error", "link target is missing"
+    if not hasattr(lo, "Shape"):
+        if is_link and not lo.getSubObjects():
+            return "error", "link target %s has no shape" % lo.Label
+        return "none", ""
+    shp = lo.Shape
+    if shp.isNull():
+        if lo.TypeId.startswith("Sketcher::"):
+            return "geometry", ""  # an empty sketch: listed as a non-solid, not an error
+        return "error", "null shape (%s recomputed with errors: %s)" % (lo.Label, ",".join(lo.State))
+    return "geometry", ""
+
+
+def _raw_has_solids(inst):
+    lo = inst.objs[-1].getLinkedObject(True)
+    shp = getattr(lo, "Shape", None)
+    return shp is not None and not shp.isNull() and bool(shp.Solids)
+
+
 def _instance_shape(root, inst):
-    """The leaf's shape in the assembly's global frame, or None when it has no solids."""
+    """The leaf's shape in the assembly's global frame; raises _Unresolved when it has none."""
     try:
         shp = Part.getShape(root, inst.key + ".", needSubElement=False, transform=True)
-    except Exception:
-        return None
-    if shp is None or shp.isNull() or not shp.Solids:
-        return None
+    except Exception as exc:
+        raise _Unresolved("shape lookup failed: %s" % exc)
+    if shp is None or shp.isNull():
+        if inst.objs[-1].getLinkedObject(True).TypeId.startswith("Sketcher::"):
+            return Part.Shape()
+        raise _Unresolved("shape is null")
+    if not shp.isValid():
+        raise _Unresolved("shape is invalid")
     return shp
 
 
-def instances(assembly, include_hidden=False):
-    """Instances with shapes and cached bounding boxes (hidden ones only on request)."""
-    res = []
+def _note_error(errors, root, inst, reason):
+    errors.append({"kind": "unresolved", **inst.describe(root), "reason": reason})
+
+
+class Resolved:
+    """Result of resolving every leaf: solids to check, and everything that was set aside."""
+
+    def __init__(self):
+        self.insts = []
+        self.errors = []
+        self.bad = []       # (Instance, reason) for each entry in errors
+        self.skipped = []   # visible leaves without solids
+        self.hidden = 0     # hidden leaves holding solids
+
+
+def resolve(assembly, include_hidden=False):
+    res = Resolved()
     for inst in _walk(assembly):
-        if _is_hidden(inst) and not include_hidden:
+        kind, why = _leaf_kind(inst)
+        if kind == "none":
             continue
-        shp = _instance_shape(assembly, inst)
-        if shp is None:
+        if _is_hidden(inst) and not include_hidden:
+            if kind == "geometry" and _raw_has_solids(inst):
+                res.hidden += 1
+            continue
+        if kind == "error":
+            _note_error(res.errors, assembly, inst, why)
+            res.bad.append((inst, why))
+            continue
+        try:
+            shp = _instance_shape(assembly, inst)
+            if shp is None:
+                raise _Unresolved("no shape returned")
+        except _Unresolved as exc:
+            _note_error(res.errors, assembly, inst, str(exc))
+            res.bad.append((inst, str(exc)))
+            continue
+        if shp.isNull() or not shp.Solids:
+            rec = inst.describe(assembly)
+            rec["shape_type"] = shp.ShapeType if not shp.isNull() else "Empty"
+            res.skipped.append(rec)
             continue
         inst.shape = shp
         inst.box = App.BoundBox(shp.BoundBox)
-        inst.idx = len(res)
-        res.append(inst)
+        inst.idx = len(res.insts)
+        res.insts.append(inst)
     return res
+
+
+def instances(assembly, include_hidden=False):
+    """Solid instances with shapes and cached bounding boxes (hidden ones only on request)."""
+    return resolve(assembly, include_hidden).insts
 
 
 # ------------------------------------------------------------- ignore rules
@@ -212,6 +318,19 @@ def _classify(a, b, clearance, contact, vol_tol):
     return None, vol, dist, pts_out
 
 
+def _normalise_ignore(ignore):
+    out = []
+    for r in ignore or []:
+        if isinstance(r, str):
+            out.append(r)
+            continue
+        r = tuple(r)
+        if len(r) != 2 or not all(isinstance(x, str) for x in r):
+            raise ValueError("ignore entries are a selector string or a pair of two selector strings, got %r" % (r,))
+        out.append(r)
+    return out
+
+
 def check(assembly, contact_tol=None, clearance=0.0, ignore=None, ignore_names=None,
           include_hidden=False, volume_tol=None):
     """Interference / touching / clearance report for one assembly, JSON-serialisable.
@@ -229,12 +348,11 @@ def check(assembly, contact_tol=None, clearance=0.0, ignore=None, ignore_names=N
     contact = tol["contact_mm"] if contact_tol is None else float(contact_tol)
     vol_tol = tol["interference_volume_mm3"] if volume_tol is None else float(volume_tol)
     clearance = float(clearance or 0.0)
-    ignore = [r if isinstance(r, str) else tuple(r) for r in (ignore or [])]
+    ignore = _normalise_ignore(ignore)
     patterns = [re.compile(p) for p in (ignore_names or [])]
 
-    all_inst = _walk(assembly)
-    hidden = sum(1 for i in all_inst if _is_hidden(i))
-    insts = instances(assembly, include_hidden=include_hidden)
+    res = resolve(assembly, include_hidden=include_hidden)
+    insts = res.insts
     t1 = time.perf_counter()
 
     n = len(insts)
@@ -255,13 +373,13 @@ def check(assembly, contact_tol=None, clearance=0.0, ignore=None, ignore_names=N
                 skipped["ignored"] += 1
     t2 = time.perf_counter()
 
-    reports, errors, clear = [], [], 0
+    reports, errors, clear = [], list(res.errors), 0
     for i, j in cand:
         a, b = insts[i], insts[j]
         try:
             cls, vol, dist, pts = _classify(a, b, clearance, contact, vol_tol)
         except Exception as exc:  # OCCT failures are reported, never hidden
-            errors.append({"a": a.key, "b": b.key, "error": str(exc)})
+            errors.append({"kind": "pair", "a": a.key, "b": b.key, "error": str(exc)})
             continue
         if cls is None:
             clear += 1
@@ -288,9 +406,12 @@ def check(assembly, contact_tol=None, clearance=0.0, ignore=None, ignore_names=N
                    "ignore_names": list(ignore_names or [])},
         "pairs": reports,
         "errors": errors,
+        "skipped_non_solid": res.skipped,
         "stats": {
             "instances": n,
-            "hidden_skipped": 0 if include_hidden else hidden,
+            "unresolved": len(res.errors),
+            "non_solid_skipped": len(res.skipped),
+            "hidden_skipped": 0 if include_hidden else res.hidden,
             "pairs_total": pairs_total,
             "pairs_same_part": skipped["same_part"],
             "pairs_ignored": skipped["ignored"],
@@ -351,7 +472,8 @@ def check_clearance_sets(assembly, sets=None):
     """
     t0 = time.perf_counter()
     slack = _resolve_tol(None)["clearance_abs_mm"]
-    insts = instances(assembly, include_hidden=True)
+    res = resolve(assembly, include_hidden=True)
+    insts = res.insts
     sets = get_clearance_sets(assembly) if sets is None else sets
     out_sets, violations, unresolved = [], [], []
     for st in sets:
@@ -360,8 +482,11 @@ def check_clearance_sets(assembly, sets=None):
             ma = [i for i in insts if _matches(i, sel_a)]
             mb = [i for i in insts if _matches(i, sel_b)]
             if not ma or not mb:
+                miss = sel_a if not ma else sel_b
+                why = [i.label + ": " + r for i, r in res.bad if _matches(i, miss)]
                 rec = {"set": st["name"], "a": sel_a, "b": sel_b,
-                       "error": "selector matches no solid: " + (sel_a if not ma else sel_b)}
+                       "error": ("selector matches an unresolved part (" + "; ".join(why) + "): " + miss) if why
+                       else "selector matches no solid: " + miss}
                 unresolved.append(rec)
                 rows.append(rec)
                 continue
@@ -389,6 +514,7 @@ def check_clearance_sets(assembly, sets=None):
     return {
         "schema": SCHEMA, "assembly": {"name": assembly.Name, "label": assembly.Label},
         "sets": out_sets, "violations": violations, "unresolved": unresolved,
+        "errors": res.errors, "skipped_non_solid": res.skipped,
         "ok": not violations and not unresolved,
         "stats": {"sets": len(out_sets), "pairs": sum(len(s["pairs"]) for s in out_sets),
                   "time_s": time.perf_counter() - t0},

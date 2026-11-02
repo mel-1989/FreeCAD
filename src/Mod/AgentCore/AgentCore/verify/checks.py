@@ -199,7 +199,9 @@ def _top_assemblies(doc, names=None):
             continue
         if names is not None and o.Name not in names:
             continue
-        if any(p.TypeId in ("Assembly::AssemblyObject", "Assembly::AssemblyLink") for p in o.InList):
+        # an assembly reachable from another one (contained, or through any link) is checked there
+        if any(p.TypeId in ("Assembly::AssemblyObject", "Assembly::AssemblyLink")
+               for p in o.InListRecursive):
             continue
         out.append(o)
     return out
@@ -224,8 +226,10 @@ def check_assembly_interference(doc, params):
             if p["class"] in fail:
                 bad.append({"assembly": asm.Name, **p})
                 ents.update((p["a"]["entity"], p["b"]["entity"]))
-        for e in rep["errors"]:
+        for e in rep["errors"]:  # unresolved parts and failed pair checks: never an ok
             bad.append({"assembly": asm.Name, "error": e})
+            if e.get("entity"):
+                ents.add(e["entity"])
     return (not bad), sorted(ents), {"assemblies": reports, "violations": bad}
 
 

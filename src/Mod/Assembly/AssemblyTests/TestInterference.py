@@ -35,8 +35,15 @@ def evaluate(rep, truth):
             got["touching"].add(k)
         else:
             got[p["class"]][k] = p["volume_mm3"] if p["class"] == "interfering" else p["distance_mm"]
-    if rep["errors"]:
-        problems.append("errors: %s" % rep["errors"])
+    bad = [e for e in rep["errors"] if e.get("kind") != "unresolved"]
+    if bad:
+        problems.append("errors: %s" % bad)
+    unres = {e["path"] for e in rep["errors"] if e.get("kind") == "unresolved"}
+    if unres != truth["errors"]:
+        problems.append("unresolved got %s want %s" % (sorted(unres), sorted(truth["errors"])))
+    skipped = {e["path"] for e in rep["skipped_non_solid"]}
+    if skipped != truth["skipped"]:
+        problems.append("skipped_non_solid got %s want %s" % (sorted(skipped), sorted(truth["skipped"])))
     for cls in ("interfering", "close"):
         miss = set(truth[cls]) - set(got[cls])
         extra = set(got[cls]) - set(truth[cls])
@@ -105,6 +112,10 @@ def _drop_elements(which):
             return keep
         I._walk = f
     return install
+
+
+def _mut_errors_swallowed(I):
+    I._note_error = lambda *a, **k: None
 
 
 def _mut_hidden_included(I):
@@ -201,6 +212,7 @@ MUTANTS = {
     "link_placement_ignored": (_mut_link_placement_ignored, "link_offset_overlap"),
     "array_last_element_missed": (_drop_elements("last"), "array_last_element_only"),
     "array_first_element_missed": (_drop_elements("first"), "array_first_element_only"),
+    "unresolved_parts_swallowed": (_mut_errors_swallowed, "link_deleted_target"),
     "hidden_part_included": (_mut_hidden_included, "hidden_box"),
     "hidden_parent_not_inherited": (_mut_hidden_leaf_only, "hidden_part_hides_children"),
     "subassembly_placement_applied_twice": (_mut_placement_applied_twice, "nested_part_translated"),
@@ -221,7 +233,7 @@ MUTANTS = {
 def mutated(name):
     saved = {k: getattr(Interference, k) for k in
              ("_broad_phase", "_instance_shape", "_walk", "_is_hidden", "_classify", "_same_part",
-              "_ignored", "_core", "_resolve_tol")}
+              "_ignored", "_core", "_resolve_tol", "_note_error")}
     try:
         MUTANTS[name][0](Interference)
         yield
@@ -289,6 +301,81 @@ class TestInterference(unittest.TestCase):
         self.assertEqual(nested["b"]["link_path"], ["Outer", "Inner", "Box"])
         for key in ("pairs_total", "pairs_after_broad_phase", "exact_checks", "timings_s"):
             self.assertIn(key, rep["stats"])
+
+    def test_array_elements_named_distinctly(self):
+        for name in ("array_noshow_hidden_source", "array_noshow_visible_source"):
+            rep = self.run_case(name)
+            self.assertEqual(rep["stats"]["instances"], 3, name)
+            labels = {p[s]["label"] for p in rep["pairs"] for s in ("a", "b")}
+            self.assertEqual(labels, {"Arr[0]", "Arr[1]", "Arr[2]"}, name)
+        hid = self.run_case("array_noshow_hidden_element")
+        self.assertEqual(hid["stats"]["hidden_skipped"], 1)
+        self.assertEqual(self.run_case("array_noshow_array_hidden")["stats"]["hidden_skipped"], 3)
+
+    def test_unresolved_and_non_solid_reporting(self):
+        rep = self.run_case("link_deleted_target")
+        err = [e for e in rep["errors"] if e["kind"] == "unresolved"]
+        self.assertEqual([(e["label"], e["path"]) for e in err], [("Broken", "Broken")])
+        self.assertTrue(err[0]["reason"])
+        self.assertEqual(rep["stats"]["unresolved"], 1)
+        rep = self.run_case("face_wire_shell_sketch_listed")
+        types = {e["label"]: e["shape_type"] for e in rep["skipped_non_solid"]}
+        self.assertEqual(types, {"Face": "Face", "Wire": "Wire", "Shell": "Shell", "Sk": "Empty"})
+        self.assertEqual(rep["stats"]["hidden_skipped"], 0)   # the hidden face is not a hidden solid
+        self.assertEqual(rep["errors"], [])
+        self.assertEqual(self.run_case("hidden_box")["stats"]["hidden_skipped"], 1)
+        json.dumps(rep)
+
+    def test_verify_fails_on_unresolved_parts(self):
+        from AgentCore import verify
+        for name in ("link_deleted_target", "null_shape_part"):
+            res = verify.run_checks(self.docs[name].Document, [{"check": "assembly_interference"}])["results"][0]
+            self.assertEqual(res["status"], "ok", res)
+            self.assertFalse(res["ok"], name)
+            self.assertTrue(any("error" in v for v in res["details"]["violations"]), name)
+        # a non-solid shape is listed but does not fail the check
+        res = verify.run_checks(self.docs["face_wire_shell_sketch_listed"].Document,
+                                [{"check": "assembly_interference"}])["results"][0]
+        self.assertTrue(res["ok"], res)
+        # a clearance-set selector naming an unresolved part is reported, not ok
+        asm = self.docs["link_deleted_target"]
+        rep = Interference.check_clearance_sets(asm, sets=[{"name": "s", "min_mm": 1.0, "pairs": [["Broken", "A"]]}])
+        self.assertFalse(rep["ok"])
+        self.assertIn("unresolved", rep["unresolved"][0]["error"])
+        self.assertEqual(len(rep["errors"]), 1)
+
+    def test_subassembly_through_plain_link_counted_once(self):
+        from AgentCore import verify
+        from AgentCore.verify import checks
+        doc = App.newDocument("Itf_sublink")
+        try:
+            sub = doc.addObject("Assembly::AssemblyObject", "Sub")
+            C.box(sub, "a")
+            C.box(sub, "b", pos=(5, 0, 0))
+            top = doc.addObject("Assembly::AssemblyObject", "Top")
+            top.newObject("App::Link", "PL").LinkedObject = sub
+            doc.recompute()
+            self.assertEqual([o.Name for o in checks._top_assemblies(doc)], ["Top"])
+            res = verify.run_checks(doc, [{"check": "assembly_interference"}])["results"][0]
+            self.assertFalse(res["ok"])
+            self.assertEqual(len(res["details"]["violations"]), 1)
+            self.assertEqual(list(res["details"]["assemblies"]), ["Top"])
+            # a stray link outside any assembly does not hide the sub-assembly
+            doc2 = App.newDocument("Itf_sublink2")
+            sub2 = doc2.addObject("Assembly::AssemblyObject", "Sub")
+            doc2.addObject("App::Link", "Stray").LinkedObject = sub2
+            doc2.recompute()
+            self.assertEqual([o.Name for o in checks._top_assemblies(doc2)], ["Sub"])
+            App.closeDocument(doc2.Name)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_ignore_entries_validated(self):
+        asm = self.docs["ignore_listed_pair"]
+        for bad in (["A", "B", "C"], ["A"], [[]], [("A", 3)]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                Interference.check(asm, ignore=[bad])
+        Interference.check(asm, ignore=["A", ("A", "B"), ["A", "B"]])
 
     def test_mutants_are_caught(self):
         self.assertGreaterEqual(len(MUTANTS), 10)

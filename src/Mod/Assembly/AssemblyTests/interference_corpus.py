@@ -8,8 +8,9 @@ own boolean results: boxes by arithmetic, cylinders and spheres by closed formul
 2 pi h^2 (3 r - h) / 3 with h = r - D/2, octant of a ball, regular octagon 2 (sqrt 2 - 1) s^2).
 
 Truth format: ``{"interfering": {(a, b): volume_mm3}, "touching": {(a, b), ...},
-"close": {(a, b): distance_mm}}`` where a and b are instance paths as the API reports them
-(``"A"``, ``"LB"``, ``"Arr.1"``, ``"Sub.Box"``). Pairs not listed are clear.
+"close": {(a, b): distance_mm}, "errors": {path, ...}, "skipped": {path, ...}}`` where a and b are instance paths as the API reports them
+(``"A"``, ``"LB"``, ``"Arr.1"``, ``"Sub.Box"``). Pairs not listed are clear. ``errors`` lists visible leaves that must be reported as unresolved,
+``skipped`` visible leaves that hold no solid (listed in ``skipped_non_solid``).
 """
 
 import math
@@ -40,9 +41,9 @@ def case(klass, name=None, big=False, own=False, **params):
     return deco
 
 
-def T(interfering=None, touching=(), close=None):
+def T(interfering=None, touching=(), close=None, errors=(), skipped=()):
     return {"interfering": dict(interfering or {}), "touching": set(map(frozenset, touching)),
-            "close": dict(close or {})}
+            "close": dict(close or {}), "errors": set(errors), "skipped": set(skipped)}
 
 
 def P(a, b):
@@ -98,7 +99,7 @@ def link(asm, name, target, pos=(0, 0, 0), rot=None):
     return lk
 
 
-def link_array(doc, asm, name, target, count, pitch):
+def link_array(doc, asm, name, target, count, pitch, show_element=True):
     arr = asm.newObject("App::Link", name)
     arr.LinkedObject = target
     arr.ElementCount = count
@@ -106,6 +107,8 @@ def link_array(doc, asm, name, target, count, pitch):
     doc.recompute()
     for i, el in enumerate(arr.ElementList):
         el.Placement = plc(pitch * i)
+    if not show_element:
+        arr.ShowElement = False  # the placements stay in PlacementList
     doc.recompute()
     return arr
 
@@ -435,6 +438,100 @@ def array_suppressed_element(doc, asm):
     arr.ElementList[1].Suppressed = True
     doc.recompute()
     return T(touching=[("Arr.0", "Arr.2")])
+
+
+@case("array")
+def array_noshow_hidden_source(doc, asm):
+    """ShowElement=False with the corpus convention of a hidden source: the array stays visible."""
+    link_array(doc, asm, "Arr", source_box(doc), 3, 8, show_element=False)
+    return T({("Arr.0", "Arr.1"): 200.0, ("Arr.1", "Arr.2"): 200.0})
+
+
+@case("array")
+def array_noshow_visible_source(doc, asm):
+    src = source_box(doc)
+    src.Visibility = True
+    link_array(doc, asm, "Arr", src, 3, 8, show_element=False)
+    return T({("Arr.0", "Arr.1"): 200.0, ("Arr.1", "Arr.2"): 200.0})
+
+
+@case("array")
+def array_noshow_hidden_element(doc, asm):
+    arr = link_array(doc, asm, "Arr", source_box(doc), 3, 5, show_element=False)
+    arr.setElementVisible("1", False)
+    return T(touching=[("Arr.0", "Arr.2")])
+
+
+@case("array")
+def array_noshow_array_hidden(doc, asm):
+    """Hiding the array hides every element, whatever the source says."""
+    box(asm, "V1", pos=(100, 0, 0))
+    box(asm, "V2", pos=(108, 0, 0))
+    src = source_box(doc)
+    src.Visibility = True
+    link_array(doc, asm, "Arr", src, 3, 8, show_element=False).Visibility = False
+    return T({("V1", "V2"): 200.0})
+
+
+@case("nested")
+def assembly_link_instance(doc, asm):
+    """An Assembly::AssemblyLink places a copy of another assembly at its own placement."""
+    sub = doc.addObject("Assembly::AssemblyObject", "Sub")
+    box(sub, "SB", pos=(3, 0, 0))
+    al = asm.newObject("Assembly::AssemblyLink", "AL")
+    al.LinkedObject = sub
+    al.Placement = plc(1000)
+    doc.recompute()
+    leaf = "AL." + al.getSubObjects()[0].rstrip(".")
+    box(asm, "X", pos=(1008, 0, 0))   # AL box spans x 1003..1013, X 1008..1018
+    return T({(leaf, "X"): 500.0})
+
+
+# --------------------------------------------- parts that cannot be checked
+
+@case("unresolved")
+def link_deleted_target(doc, asm):
+    box(asm, "A")
+    box(asm, "B", pos=(5, 0, 0))
+    src = source_box(doc, "GoneSrc")
+    link(asm, "Broken", src, (2, 0, 0))
+    doc.recompute()
+    doc.removeObject("GoneSrc")
+    return T({("A", "B"): 500.0}, errors=["Broken"])
+
+
+@case("unresolved")
+def null_shape_part(doc, asm):
+    box(asm, "A")
+    box(asm, "B", pos=(5, 0, 0))
+    box(asm, "Bad", size=(0, 10, 10))   # a zero dimension: the recompute fails, the shape is null
+    return T({("A", "B"): 500.0}, errors=["Bad"])
+
+
+@case("unresolved")
+def hidden_unresolved_not_an_error(doc, asm):
+    """A hidden leaf is not resolved, so a broken hidden part is not reported."""
+    vis = _visible_pair(asm)
+    box(asm, "Bad", size=(0, 10, 10)).Visibility = False
+    return T(vis)
+
+
+@case("nonsolid")
+def face_wire_shell_sketch_listed(doc, asm):
+    """Only solids are checked: a face, a wire, a closed shell and a sketch are listed, not tested."""
+    import Part
+    box(asm, "A")
+    f = asm.newObject("Part::Feature", "Face")
+    f.Shape = Part.makePlane(10, 10, App.Vector(5, 0, 5))
+    w = asm.newObject("Part::Feature", "Wire")
+    w.Shape = Part.makePolygon([App.Vector(0, 5, 5), App.Vector(20, 5, 5)])
+    sh = asm.newObject("Part::Feature", "Shell")
+    sh.Shape = Part.makeShell(Part.makeBox(10, 10, 10, App.Vector(5, 0, 0)).Faces)
+    asm.newObject("Sketcher::SketchObject", "Sk")
+    hid = asm.newObject("Part::Feature", "HiddenFace")
+    hid.Shape = Part.makePlane(10, 10)
+    hid.Visibility = False
+    return T(skipped=["Face", "Wire", "Shell", "Sk"])
 
 
 def _generated(length, count=3):
