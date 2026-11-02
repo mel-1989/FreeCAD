@@ -38,6 +38,9 @@ set(Assembly_Scripts
     SoSwitchMarker.py
     UtilsAssembly.py
     Interference.py
+    InterferencePanel.py
+    TestAssemblyInterferenceGui.py
+    CommandCheckInterference.py
 )
 
 if(BUILD_GUI)
@@ -55,6 +58,11 @@ SET(AssemblyScripts_SRCS
     Assembly/__init__.py
 )
 
+# Command icons shipped as files (the compiled icon resource would need a rebuild of the GUI library); referenced by path.
+SET(Assembly_Icons
+    icons/Assembly_CheckInterference.svg
+)
+
 
 SET(AssemblyTests_SRCS
     AssemblyTests/__init__.py
@@ -64,6 +72,8 @@ SET(AssemblyTests_SRCS
     AssemblyTests/TestSimulationExport.py
     AssemblyTests/TestInterference.py
     AssemblyTests/interference_corpus.py
+    AssemblyTests/interference_gui_fixture.py
+    AssemblyTests/TestInterferenceGui.py
     AssemblyTests/mocks/__init__.py
     AssemblyTests/mocks/MockGui.py
 )
@@ -72,6 +82,7 @@ SET(AssemblyTests_SRCS
 SET(all_files
     ${AssemblyTests_SRCS}
     ${AssemblyScripts_SRCS}
+    ${Assembly_Icons}
 )
 
 ADD_CUSTOM_TARGET(AssemblyScripts ALL
@@ -109,4 +120,10 @@ INSTALL(
         ${AssemblyScripts_SRCS}
     DESTINATION
         Mod/Assembly/Assembly
+)
+INSTALL(
+    FILES
+        ${Assembly_Icons}
+    DESTINATION
+        Mod/Assembly/icons
 )
