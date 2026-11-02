@@ -121,26 +121,27 @@ class AssemblyFeature:
                 obj.Dependencies = deps
 
     def onComponentReplaced(self, obj, replaced):
-        """Called by Replace Component with {old object name: (old object, new link)}.
+        """Called by Replace Component with {old name: (old object, new link, old path, new path)}.
 
-        Retargets scope selectors that name a replaced instance to the new one; returns what it did,
-        and anything it could not retarget, as a list of JSON-friendly records.
+        The paths are the instance paths in the assembly ("Sub.Old"), at any depth. Retargets scope
+        selectors that name a replaced instance (by path, or by bare name or label) or something below it;
+        returns what it did as a list of JSON-friendly records.
         """
         out = []
         scope = list(obj.Scope)
         new_scope = []
         for sel in scope:
             hit = None
-            for name, (old, new) in replaced.items():
-                for ident in (old.Name, old.Label):
+            for old, new, old_path, new_path in replaced.values():
+                for ident, repl in ((old_path, new_path), (old.Name, new.Name), (old.Label, new.Name)):
                     if sel == ident or sel.startswith(ident + "."):
-                        hit = (new.Name + sel[len(ident):], old, new)
+                        hit = repl + sel[len(ident):]
                         break
                 if hit:
                     break
             if hit:
-                out.append({"feature": obj.Name, "kind": "scope_retargeted", "from": sel, "to": hit[0]})
-                new_scope.append(hit[0])
+                out.append({"feature": obj.Name, "kind": "scope_retargeted", "from": sel, "to": hit})
+                new_scope.append(hit)
             else:
                 new_scope.append(sel)
         if new_scope != scope:
@@ -148,21 +149,12 @@ class AssemblyFeature:
         self.results = None
         return out
 
-    def onDocumentRestored(self, obj):
-        self.results = None
-
-    def dumps(self):
-        return None
-
-    def loads(self, state):
-        self.results = None
-        return None
-
-    def __getstate__(self):
-        return None
-
-    def __setstate__(self, state):
-        self.results = None
+    def scopeProblems(self, obj):
+        """Scope selectors of an active feature that match no component, as JSON-friendly records."""
+        asm = obj.getParentGeoFeatureGroup()
+        if asm is None or obj.Suppressed:
+            return []
+        return _unmatched(obj, _instances(asm))
 
 
 def _spec(feature):
@@ -328,6 +320,12 @@ def _build_tool(assembly, feat, boxes):
 def _in_scope(feat, inst):
     sel = list(feat.Scope)
     return not sel or any(_itf._matches(inst, s) for s in sel)
+
+
+def _unmatched(feat, insts):
+    return [{"kind": "scope_unmatched", "feature": feat.Name, "selector": sel,
+             "error": "scope selector %r matches no component" % sel}
+            for sel in feat.Scope if not any(_itf._matches(i, sel) for i in insts)]
 
 
 def _active_features(assembly):
@@ -545,7 +543,7 @@ def affected(feature):
     res = getattr(feature.Proxy, "results", None)
     if res is None:
         return out
-    out["errors"] = list(res["errors"])
+    out["errors"] = list(res["errors"]) + _unmatched(feature, insts)
     for inst in insts:
         ent = res["per"][inst.key]
         if ent["cut"]:
@@ -567,6 +565,7 @@ def report(assembly):
         out["features"].append(affected(f))
     for f in feats:
         out["errors"].extend(f.Proxy.results["errors"])
+        out["errors"].extend(_unmatched(f, insts))
     for inst in insts:
         total, names = 0.0, []
         for f in feats:

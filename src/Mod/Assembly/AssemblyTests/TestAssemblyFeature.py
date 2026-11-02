@@ -331,6 +331,67 @@ def replace_problems():
     return out
 
 
+def nested_problems():
+    """Replace inside a sub-assembly (depth 1 and 2) retargets the full-path scope; unmatched scopes are reported."""
+    import ReplaceComponent as RC
+    out = []
+    for tag, depth in (("replace_nested_depth1", 1), ("replace_nested_depth2", 2)):
+        doc = App.newDocument("Nest")
+        try:
+            asm = doc.addObject("Assembly::AssemblyObject", "Assembly")
+            host = asm.newObject("App::Part", "Sub")
+            path = "Sub"
+            if depth == 2:
+                host = host.newObject("App::Part", "Inner")
+                path = "Sub.Inner"
+            old = host.newObject("Part::Box", "Old")
+            new = asm.newObject("Part::Box", "New")
+            new.Placement = C.plc(50, 0, 0)
+            f = AF.make_cut(asm, AF.box_tool((4, 100, 100), (3, -1, -1)), scope=[path + ".Old"])
+            doc.recompute()
+            before = {c_["path"]: c_["removed_mm3"] for c_ in AF.report(asm)["components"]}
+            rep = RC.apply(asm, old, new, delete_old=False)
+            doc.recompute()
+            want = path + ".Old_replaced"
+            rr = AF.report(asm)
+            got = {c_["path"]: c_["removed_mm3"] for c_ in rr["components"]}
+            if not _vol_ok(before.get(path + ".Old", -1), 400.0):
+                out.append(tag + ": before the replace %s" % before)
+            if list(f.Scope) != [want] or not _vol_ok(got.get(want, -1), 400.0):
+                out.append(tag + ": scope %s removed %s" % (list(f.Scope), got))
+            if not any(u.get("kind") == "scope_retargeted" for u in rep["feature_updates"]):
+                out.append(tag + ": no scope update reported")
+            if rr["errors"] or any(u.get("kind") == "scope_unmatched" for u in rep["feature_updates"]):
+                out.append(tag + ": spurious scope error %s" % rr["errors"])
+        finally:
+            App.closeDocument(doc.Name)
+    doc = App.newDocument("Unmatched")
+    try:
+        tag = "unmatched_scope_reported"
+        asm = doc.addObject("Assembly::AssemblyObject", "Assembly")
+        asm.newObject("Part::Box", "A")
+        f = AF.make_cut(asm, AF.box_tool((4, 100, 100), (3, -1, -1)), scope=["A", "Nope"])
+        doc.recompute()
+        for label, errs in (("report", AF.report(asm)["errors"]), ("affected", AF.affected(f)["errors"])):
+            if [e.get("selector") for e in errs if e.get("kind") == "scope_unmatched"] != ["Nope"]:
+                out.append("%s: %s errors %s" % (tag, label, errs))
+        AF.set_suppressed(f, True)
+        if AF.report(asm)["errors"]:
+            out.append(tag + ": suppressed feature reports scope errors")
+        AF.set_suppressed(f, False)
+        import ReplaceComponent as RC
+        asm.newObject("Part::Box", "Old").Placement = C.plc(20, 0, 0)
+        new = asm.newObject("Part::Box", "New")
+        new.Placement = C.plc(50, 0, 0)
+        doc.recompute()
+        rep = RC.apply(asm, asm.getObject("Old"), new)
+        if not any(u.get("kind") == "scope_unmatched" and u["selector"] == "Nope" for u in rep["feature_updates"]):
+            out.append(tag + ": replace result lacks the unmatched selector: %s" % rep["feature_updates"])
+    finally:
+        App.closeDocument(doc.Name)
+    return out
+
+
 # ------------------------------------------------------------------ mutants
 
 def _mut_scope_ignored(AFm, I):
@@ -455,6 +516,25 @@ def _mut_scope_not_retargeted(AFm, I):
     AFm.AssemblyFeature.onComponentReplaced = lambda self, obj, replaced: []
 
 
+def _mut_nested_not_retargeted(AFm, I):
+    def hook(self, obj, replaced):
+        out, scope = [], list(obj.Scope)
+        new_scope = []
+        for sel in scope:
+            for old, new, _op, _np in replaced.values():
+                if sel in (old.Name, old.Label):
+                    sel = new.Name
+                    break
+            new_scope.append(sel)
+        obj.Scope = new_scope
+        return out
+    AFm.AssemblyFeature.onComponentReplaced = hook
+
+
+def _mut_unmatched_not_reported(AFm, I):
+    AFm._unmatched = lambda feat, insts: []
+
+
 def _mut_interference_reads_raw(AFm, I):
     I._apply_assembly_features = lambda assembly, res: None
 
@@ -487,6 +567,8 @@ MUTANTS = {
     "visibility_not_in_signature": (_mut_visibility_not_in_signature, "visibility_show_after_cut_no_recompute"),
     "feature_dropped_on_replace": (_mut_dependencies_as_plain_links, "replace_scope_all"),
     "scope_not_retargeted_on_replace": (_mut_scope_not_retargeted, "replace_scope_explicit"),
+    "nested_selector_not_retargeted": (_mut_nested_not_retargeted, "replace_nested_depth1"),
+    "unmatched_scope_not_reported": (_mut_unmatched_not_reported, "unmatched_scope_reported"),
     "interference_reads_raw_shapes": (_mut_interference_reads_raw, "pin_through_hole"),
     "features_applied_out_of_order": (_mut_cuts_not_in_assembly_order, "two_cuts_overlapping"),
 }
@@ -702,6 +784,9 @@ class TestAssemblyFeature(unittest.TestCase):
     def test_replace_component_keeps_and_retargets_features(self):
         self.assertEqual(replace_problems(), [])
 
+    def test_nested_replace_and_unmatched_scope(self):
+        self.assertEqual(nested_problems(), [])
+
     def test_interference_follows_visibility(self):
         doc = App.newDocument("VisItf")
         try:
@@ -789,7 +874,7 @@ class TestAssemblyFeature(unittest.TestCase):
                             problems = [repr(exc)]
                         if problems:
                             failing.append(name)
-                    for label, fn in (("pin_through_hole", pin_problems), (None, replace_problems)):
+                    for label, fn in (("pin_through_hole", pin_problems), (None, replace_problems), (None, nested_problems)):
                         try:
                             probs = fn()
                             if probs and label:
@@ -810,3 +895,4 @@ class TestAssemblyFeature(unittest.TestCase):
             self.assertEqual(evaluate_case(name, with_delete=False)[0], [], name)
         self.assertEqual(pin_problems(), [])
         self.assertEqual(replace_problems(), [])
+        self.assertEqual(nested_problems(), [])
