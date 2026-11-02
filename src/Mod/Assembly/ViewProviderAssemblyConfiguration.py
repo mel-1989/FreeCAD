@@ -7,6 +7,11 @@ would throw those edits away, so the user is asked first. The guard covers the G
 tree command calls ``onDelete`` before it removes the object); ``doc.removeObject`` from a script does not
 go through a view provider, and there ``AssemblyConfiguration.unsetupObject`` restores the defaults and
 prints a warning as before. ``AssemblyConfiguration.delete`` refuses to delete an active configuration.
+
+Several configurations selected for one Delete are one decision: when the selection holds the active
+configuration with drift, the user is asked once for the whole set, and a refusal keeps every selected
+configuration, not only the active one (the tree command asks each object in turn, so the answer is kept in
+``_batch`` until each selected configuration has been asked about).
 """
 
 import os
@@ -41,6 +46,27 @@ def ask_discard_and_delete(cfg, drift):
     return box.clickedButton() is delete
 
 
+_batch = {}     # configuration Name -> the answer of the one question asked for the selection being deleted
+
+
+def _selected_configurations(cfg):
+    """The configurations of cfg's document that are selected right now (cfg itself included)."""
+    import AssemblyConfiguration as AC
+
+    out = {cfg.Name: cfg}
+    try:
+        for o in Gui.Selection.getSelection(cfg.Document.Name):
+            if AC._is_config(o):
+                out[o.Name] = o
+    except Exception:
+        pass
+    return out
+
+
+def _clear_batch():
+    _batch.clear()
+
+
 def open_editor(cfg):
     """Open the Configurations panel unless another dialog is open. Returns True when it was opened."""
     asm = cfg.getParentGeoFeatureGroup()
@@ -71,14 +97,30 @@ class ViewProviderAssemblyConfiguration:
         import AssemblyConfiguration as AC
 
         cfg = vobj.Object
-        try:
-            asm = cfg.getParentGeoFeatureGroup()
-            drift = AC._drift(asm, cfg) if asm is not None and cfg.Active else []
-        except Exception:
-            drift = []
-        if not drift:
+        if cfg.Name in _batch:                      # decided with the rest of the selection
+            return _batch.pop(cfg.Name)
+        selected = _selected_configurations(cfg)
+        guarded = None
+        for c in selected.values():
+            try:
+                asm = c.getParentGeoFeatureGroup()
+                drift = AC._drift(asm, c) if asm is not None and c.Active else []
+            except Exception:
+                drift = []
+            if drift:
+                guarded = (c, drift)
+                break
+        if guarded is None:
             return True
-        return bool(ask_discard_and_delete(cfg, drift))
+        answer = bool(ask_discard_and_delete(*guarded))
+        for name in selected:
+            if name != cfg.Name:
+                _batch[name] = answer
+        if _batch:
+            from PySide import QtCore
+
+            QtCore.QTimer.singleShot(0, _clear_batch)   # a stale answer must not outlive the command
+        return answer
 
     def updateData(self, obj, prop):
         return None

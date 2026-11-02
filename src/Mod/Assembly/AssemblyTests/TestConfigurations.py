@@ -1154,6 +1154,37 @@ class TestConfigurations(unittest.TestCase):
         finally:
             App.closeDocument(doc.Name)
 
+    def test_names_are_checked_the_same_by_create_copy_and_rename(self):
+        doc = App.newDocument("CfgNames")
+        try:
+            b = C.build_case(doc, "suppress_LA")
+            AC.create(b.asm, "ok", suppress=["LA"])
+            before = [c.Label for c in AC.configurations(b.asm)]
+            bad = ("", "   ", "\t", "Default", "default", " DEFAULT ", None, 7,
+                   "ok", " ok ", "LB")      # empty, reserved, not text, taken by a configuration, by another object
+            for name in bad:
+                with self.subTest(name=name):
+                    with self.assertRaises(AC.ConfigurationError):
+                        AC.create(b.asm, name)
+                    with self.assertRaises(AC.ConfigurationError):
+                        AC.copy(b.asm, "ok", name)
+                    AC.create(b.asm, "other")
+                    try:
+                        with self.assertRaises(AC.ConfigurationError):
+                            AC.rename(b.asm, "other", name)
+                        self.assertEqual(AC._find(b.asm, "other").Label, "other")
+                    finally:
+                        doc.removeObject(AC._find(b.asm, "other").Name)
+            self.assertEqual([c.Label for c in AC.configurations(b.asm)], before)
+            # the name is stored trimmed; "/" is an ordinary character and is kept as typed
+            AC.create(b.asm, "  a/b  ", suppress=["LA"])
+            self.assertEqual(AC._find(b.asm, "a/b").Label, "a/b")
+            AC.rename(b.asm, "a/b", " c/d ")
+            self.assertEqual(AC._find(b.asm, "c/d").Label, "c/d")
+            AC.rename(b.asm, "c/d", "c/d")      # to itself: nothing to do
+        finally:
+            App.closeDocument(doc.Name)
+
     def test_report_is_json_and_cites_entities(self):
         doc = App.newDocument("CfgRep")
         try:

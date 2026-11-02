@@ -14,7 +14,7 @@ import unittest
 
 import FreeCAD as App
 import FreeCADGui as Gui
-from PySide import QtGui, QtWidgets
+from PySide import QtCore, QtGui, QtWidgets
 
 import AssemblyConfiguration as AC
 import ConfigurationsPanel as CP
@@ -405,6 +405,60 @@ class TestConfigurationsGui(GuiCase):
         self.assertEqual(self.doc.getObject(F.SLIDER).Distance.Value, 70.0)
         self.assertEqual(len(panel.steps), 3)                    # discard, deactivate, delete
 
+    def test_the_names_the_api_refuses_are_refused_in_the_panel_and_the_default_row_is_told_by_identity(self):
+        panel = self.start()
+        for label, fn in (("add empty", lambda: panel.add("")), ("add blank", lambda: panel.add("  ")),
+                          ("add Default", lambda: panel.add(" DEFAULT ")),
+                          ("rename to Default", lambda: panel.rename("default", name="Light")),
+                          ("rename to empty", lambda: panel.rename("", name="Light")),
+                          ("copy to Default", lambda: panel.copy("Default", name="Light"))):
+            with self.subTest(label):
+                fn()
+                self.assertTrue(panel.error.text(), label)
+                self.assertEqual(panel.labels(), ["Light", "Short", "NoCut"])
+        self.assertEqual(panel.steps, [])
+        self.assertEqual([self.panel.list.item(i).data(QtCore.Qt.UserRole + 2) for i in range(4)],
+                         [True, False, False, False])
+        # a configuration that carries the reserved label (made before it was reserved) is not the default row
+        AC._find(self.asm, "NoCut").Label = "Default"
+        panel.refresh()
+        self.assertEqual([it for it in panel.rows()][0][0], "")
+        self.assertTrue(panel.list.item(3).text().startswith("Default (configuration)"))
+        self.assertTrue(panel.select("Default"))
+        self.assertEqual(panel.list.currentRow(), 3)
+        self.assertTrue(panel.select(""))
+        self.assertEqual(panel.list.currentRow(), 0)
+
+    def test_delete_of_a_selection_with_the_active_configuration_with_drift_is_one_decision(self):
+        self.load()
+        AC.activate(self.asm, "Light")
+        F.edit_slider(self.rig, 80.0)
+        light, short = AC._find(self.asm, "Light").Name, AC._find(self.asm, "Short").Name
+        for answer in (False, True):
+            for order in ((light, short), (short, light)):
+                self.tearDown()
+                self.setUp()
+                self.load()
+                AC.activate(self.asm, "Light")
+                F.edit_slider(self.rig, 80.0)
+                names = [AC._find(self.asm, "Light").Name, AC._find(self.asm, "Short").Name]
+                self.prompts.discard_and_delete = answer
+                Gui.Selection.clearSelection()
+                for n in order:
+                    Gui.Selection.addSelection(self.doc.Name, n)
+                Gui.runCommand("Std_Delete", 0)
+                self.settle(0.2)
+                labels = [c.Label for c in AC.configurations(self.asm)]
+                with self.subTest(answer=answer, order=order):
+                    self.assertEqual(len(self.prompts.asked), 1)         # asked once for the set
+                    if answer:
+                        self.assertEqual(labels, ["NoCut"])
+                    else:
+                        self.assertEqual(labels, ["Light", "Short", "NoCut"])
+                        self.assertEqual(AC.status(self.asm)["active"], "Light")
+                        self.assertEqual(self.doc.getObject(F.SLIDER).Distance.Value, 80.0)
+                    self.assertEqual(VPC._batch, {})
+
     def test_delete_of_the_active_configuration_without_drift_returns_to_the_defaults(self):
         panel = self.start(active="Light")
         panel.select("Light")
@@ -536,6 +590,108 @@ class TestConfigurationsGui(GuiCase):
         self.close_panel()
         self.assertEqual(sorted(panel.labels()), ["Light", "NoCut", "Short"])   # a recreated one is last in the group
         self.assertEqual(json.loads(AC._find(self.asm, "Short").Overrides)["suppress"], ["LA", "LD"])
+
+    # ---- Cancel after an unrelated edit must bring the drift back too
+
+    def state(self):
+        st = AC.status(self.asm)
+        return {"active": st["active"], "drift": sorted((d["target"], d["property"], d["found"]) for d in st["drift"]),
+                "labels": [c.Label for c in AC.configurations(self.asm)],
+                "slider": self.doc.getObject(F.SLIDER).Distance.Value, "LBin": self.doc.LB in self.asm.Group}
+
+    def user_edit(self):
+        self.doc.openTransaction("User edit")
+        self.doc.LC.Label = "Mine"
+        self.doc.commitTransaction()
+
+    def cancel_reports(self):
+        """Replace the report question; returns the list the problems are collected in."""
+        got = []
+        saved = getattr(CP, "report_problems", None)
+        CP.report_problems = lambda parent, problems: got.append(list(problems))
+        self.addCleanup(setattr, CP, "report_problems", saved) if saved else self.addCleanup(delattr, CP, "report_problems")
+        return got
+
+    def test_cancel_after_discard_and_an_unrelated_edit_keeps_the_drift(self):
+        panel = self.start(drift=True, active="Light")
+        got = self.cancel_reports()
+        before = self.state()
+        self.assertEqual(before["slider"], 80.0)
+        panel.discard()
+        self.user_edit()
+        self.close_panel()
+        self.assertEqual(self.state(), before)
+        self.assertEqual(self.doc.LC.Label, "Mine")
+        self.assertEqual(got, [])
+
+    def test_cancel_after_delete_of_the_active_configuration_and_an_unrelated_edit_keeps_drift_and_order(self):
+        panel = self.start(drift=True, active="Light")
+        got = self.cancel_reports()
+        before = self.state()
+        self.prompts.discard_and_delete = True
+        panel.select("Light")
+        panel.delete()
+        self.user_edit()
+        self.close_panel()
+        self.assertEqual(self.state(), before)           # slider 80 as drift, Light first in the group again
+        self.assertEqual(self.doc.LC.Label, "Mine")
+        self.assertEqual(got, [])
+
+    def test_cancel_after_capture_and_an_unrelated_edit_keeps_the_drift(self):
+        panel = self.start(drift=True, active="Light")
+        before = self.state()
+        panel.capture()
+        self.user_edit()
+        self.close_panel()
+        self.assertEqual(self.state(), before)
+        self.assertEqual(json.loads(AC._find(self.asm, "Light").Overrides)["joints"][F.SLIDER]["Distance"], 90.0)
+
+    def test_cancel_after_a_switch_with_discard_and_an_unrelated_edit_keeps_the_drift(self):
+        panel = self.start(drift=True, active="Light")
+        before = self.state()
+        self.prompts.drift.append("discard")
+        panel.select("Short")
+        panel.activate()
+        self.user_edit()
+        self.close_panel()
+        self.assertEqual(self.state(), before)
+
+    def test_cancel_tells_the_user_what_it_could_not_restore(self):
+        panel = self.start(drift=True, active="Light")
+        got = self.cancel_reports()
+        panel.discard()
+        self.user_edit()
+        # a drift the API cannot write back: pretend the recorded edit is an expression
+        panel.snapshot["drift"].append({"kind": "expression", "target": F.SLIDER, "entity": "", "property": "Distance",
+                                        "expected": "no expression", "found": "x = 1"})
+        self.close_panel()
+        self.assertEqual(len(got), 1)
+        self.assertIn("%s.Distance" % F.SLIDER, got[0][0])
+
+    def test_undoing_cancel_configurations_leaves_a_working_document(self):
+        panel = self.start(drift=True, active="Light")
+        panel.discard()
+        panel.select("Short")
+        panel.activate()
+        self.user_edit()
+        before_cancel = self.state()
+        n0 = self.doc.UndoCount
+        self.close_panel()
+        steps = self.doc.UndoCount - n0           # the fallback may take more than one step (each API call commits its own)
+        self.assertGreaterEqual(steps, 1)
+        after_cancel = self.state()
+        self.assertNotEqual(after_cancel, before_cancel)
+        for _ in range(steps):
+            self.doc.undo()
+        self.settle()
+        self.assertEqual(self.state(), before_cancel)                  # the panel's last step is back, intact
+        self.assertEqual(self.doc.LC.Label, "Mine")
+        for _ in range(steps):
+            self.doc.redo()
+        self.settle()
+        self.assertEqual(self.state(), after_cancel)
+        self.doc.recompute()
+        self.assertEqual([o.Name for o in self.doc.Objects if "Invalid" in o.State], [])
 
     def test_closing_the_dialog_without_a_button_cancels(self):
         panel = self.start()

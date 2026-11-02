@@ -19,7 +19,7 @@ Discard consumed below such an interleaved edit cannot be restored (drift is not
 
 Switching away from a configuration with drift is never silent: the drifted properties are listed and the user
 chooses Capture, Discard or Cancel. The questions the panel asks (a name, the drift choice, a confirmation) are
-module-level functions (``ask_name``, ``ask_new``, ``ask_drift``) that tests replace.
+module-level functions (``ask_name``, ``ask_new``, ``ask_drift``, ``report_problems``) that tests replace.
 
 Behaviour sources: the slice 5a API; Qt widget documentation; FreeCAD's task dialog and document observer
 interfaces. Wording and layout are this project's own.
@@ -91,6 +91,16 @@ def ask_drift(parent, drift, target):
     box.setDefaultButton(QtWidgets.QMessageBox.Cancel)
     box.exec_()
     return "capture" if box.clickedButton() is cap else "discard" if box.clickedButton() is dis else "cancel"
+
+
+def report_problems(parent, problems):
+    """Tell the user what Cancel could not put back. Replaceable for tests."""
+    box = QtWidgets.QMessageBox(parent)
+    box.setIcon(QtWidgets.QMessageBox.Warning)
+    box.setWindowTitle(translate("Assembly", "Cancel could not restore everything"))
+    box.setText(translate("Assembly", "These changes made in the Configurations panel could not be taken back:"))
+    box.setInformativeText("\n".join(problems))
+    box.exec_()
 
 
 def drift_text(drift):
@@ -243,7 +253,8 @@ class TaskConfigurations:
         """Select the row of ``label`` (None or "" for the default row)."""
         want = label or ""
         for i in range(self.list.count()):
-            if self.list.item(i).data(QtCore.Qt.UserRole) == want:
+            it = self.list.item(i)
+            if it.data(QtCore.Qt.UserRole) == want and bool(it.data(QtCore.Qt.UserRole + 2)) == (want == ""):
                 self.list.setCurrentRow(i)
                 return True
         return False
@@ -270,13 +281,19 @@ class TaskConfigurations:
         keep = self.selected()
         self.list.blockSignals(True)
         self.list.clear()
-        rows = [("", st["active"] is None)] + [(c.Label, c.Label == st["active"]) for c in AC.configurations(self.assembly)]
+        rows = [(None, st["active"] is None)] + [(c.Label, c.Label == st["active"]) for c in AC.configurations(self.assembly)]
         for label, is_active in rows:
-            text = (translate("Assembly", DEFAULT_LABEL) if label == "" else label) + (
-                "  " + translate("Assembly", "(active)") if is_active else "")
+            # The default row is told from a configuration by identity (ROLE_DEFAULT), never by its text: a
+            # configuration made before "Default" was reserved may carry that label.
+            is_default = label is None
+            label = "" if is_default else label
+            shown = translate("Assembly", DEFAULT_LABEL) if is_default else (
+                label + " " + translate("Assembly", "(configuration)") if label.lower() == AC.RESERVED_NAME else label)
+            text = shown + ("  " + translate("Assembly", "(active)") if is_active else "")
             item = QtWidgets.QListWidgetItem(text)
             item.setData(QtCore.Qt.UserRole, label)
             item.setData(QtCore.Qt.UserRole + 1, is_active)
+            item.setData(QtCore.Qt.UserRole + 2, is_default)
             if is_active:
                 f = item.font()
                 f.setBold(True)
@@ -391,7 +408,7 @@ class TaskConfigurations:
         name = self._target(name)
         if name is None:
             return False
-        target = None if name in ("", "default") else name
+        target = None if name == "" or (name == "default" and name not in self.labels()) else name
         if target is not None and target == self._status()["active"]:
             return False
         drift = self._status()["drift"]
@@ -506,6 +523,8 @@ class TaskConfigurations:
     def _take_snapshot(self):
         st = AC.status(self.assembly)
         return {"active": st["active"],
+                "drift": json.loads(json.dumps(st["drift"])),
+                "group": [o.Name for o in self.assembly.Group],
                 "configs": {c.Name: {"label": c.Label, "overrides": c.Overrides, "defaults": c.Defaults,
                                      "applied": c.Applied, "active": bool(c.Active)}
                             for c in AC.configurations(self.assembly)}}
@@ -550,19 +569,42 @@ class TaskConfigurations:
             elif want is not None:
                 c = by_label.get(want)
                 rec = next((r for r in snap["configs"].values() if r["label"] == want), None)
-                if c is not None and rec is not None and not AC.status(asm)["drift"]:
+                if c is not None and rec is not None:
                     for prop, key in (("Defaults", "defaults"), ("Applied", "applied")):
                         if getattr(c, prop) != rec[key]:
                             setattr(c, prop, rec[key])
+            if want is not None and AC.status(asm)["active"] == want:
+                problems += _write_drift(asm, snap["drift"])
             keep = {r["label"] for r in snap["configs"].values()}
             for c in list(AC.configurations(asm)):
                 if c.Label not in keep and not c.Active:
                     doc.removeObject(c.Name)
+            problems += self._restore_order()
         except Exception:
             doc.abortTransaction()
             raise
         doc.commitTransaction()
         return problems
+
+    def _restore_order(self):
+        """Put the configurations back at their positions in the group (a recreated one is appended)."""
+        snap, asm = self.snapshot, self.assembly
+        want = [(i, rec["label"]) for i, nm in enumerate(snap["group"])
+                for rec in [snap["configs"].get(nm)] if rec is not None]
+        order = [o for o in asm.Group]
+        cfgs = {c.Label: c for c in AC.configurations(asm)}
+        for index, label in sorted(want):
+            c = cfgs.get(label)
+            if c is not None:
+                order.remove(c)
+                order.insert(min(index, len(order)), c)
+        if [o.Name for o in order] == [o.Name for o in asm.Group]:
+            return []
+        try:
+            asm.Group = order
+        except Exception as exc:  # noqa: BLE001
+            return ["the order of the configurations could not be restored: %s" % exc]
+        return []
 
     def cancel_changes(self):
         """Take back everything the panel did. Returns a list of problems (empty when all is back)."""
@@ -592,9 +634,11 @@ class TaskConfigurations:
             self.done = True
             if self._alive():
                 try:
-                    self.cancel_changes()
+                    problems = self.cancel_changes()
                 except Exception:  # noqa: BLE001  (the document is going away)
-                    pass
+                    problems = []
+                if problems:
+                    report_problems(None, problems)
 
     # ---- task dialog protocol
 
@@ -611,10 +655,15 @@ class TaskConfigurations:
     def reject(self):
         self._stop_observing()
         if not self.done and self._alive():
+            problems = []
             try:
-                self.cancel_changes()
+                problems = self.cancel_changes()
+            except Exception as exc:  # noqa: BLE001
+                problems = ["Cancel failed: %s" % exc]
             finally:
                 self.done = True
+            if problems:
+                report_problems(self.form, problems)
         self.done = True
         return True
 
@@ -629,6 +678,39 @@ class TaskConfigurations:
 
     def isAllowedAlterSelection(self):
         return True
+
+
+def _write_drift(asm, drift):
+    """Write the values the user had edited (drift at open) back. Returns what could not be restored."""
+    doc = asm.Document
+    problems = []
+    for d in drift:
+        what = "%s.%s" % (d["target"], d["property"])
+        obj = doc.getObject(d["target"])
+        found, kind = d["found"], d["kind"]
+        try:
+            if obj is None:
+                problems.append("%s: the object is gone" % what)
+            elif kind == "joint_value":
+                setattr(obj, d["property"], AC._value_from(d["property"], found))
+            elif kind == "feature":
+                import AssemblyFeature
+                AssemblyFeature.set_suppressed(obj, found)
+            elif kind == "alternative":
+                obj.LinkedObject = doc.getObject(found) if found else None
+            elif kind == "joint_ref" and d["property"].startswith("Reference"):
+                setattr(obj, d["property"], None if found is None else (doc.getObject(found[0]), list(found[1])))
+            elif kind == "joint_ref":
+                setattr(obj, d["property"], AC._pl_from(found))
+            elif kind == "joint_suppressed" or (kind == "component" and obj.TypeId == "App::LinkElement"):
+                obj.Suppressed = bool(found)
+            else:
+                problems.append("%s: the edit (%s) cannot be put back" % (what, kind))
+        except Exception as exc:  # noqa: BLE001
+            problems.append("%s: %s" % (what, exc))
+    if drift:
+        doc.recompute()
+    return problems
 
 
 def _val(v):

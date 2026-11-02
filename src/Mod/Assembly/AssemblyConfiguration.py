@@ -352,6 +352,28 @@ def _feature_by_name(assembly, name):
 
 # ------------------------------------------------------------------ creating
 
+RESERVED_NAME = "default"
+
+
+def check_name(assembly, name, own=None):
+    """The trimmed name of a configuration, or ``ConfigurationError``.
+
+    Refused: a name that is not text, an empty or whitespace-only one, "Default" (any case; it is the row of the
+    assembly's own values), one that another configuration already has, and one that FreeCAD would change when
+    it sets the label (a label another object of the document already carries gets a numeric suffix, a
+    character such as "/" is accepted as is and kept). ``own`` is the configuration being renamed."""
+    if not isinstance(name, str):
+        raise ConfigurationError("a configuration name must be text, not %r" % (name,))
+    name = name.strip()
+    if not name:
+        raise ConfigurationError("a configuration needs a name (it is empty)")
+    if name.lower() == RESERVED_NAME:
+        raise ConfigurationError("%r is reserved for the assembly's own values; choose another name" % name)
+    if any(c.Label == name and c != own for c in configurations(assembly)):
+        raise ConfigurationError("a configuration named %r exists" % name)
+    return name
+
+
 def create(assembly, name, suppress=(), alternatives=None, joints=None, features=None):
     """Add a configuration. Validates every target; refuses an expression-driven property.
 
@@ -359,8 +381,7 @@ def create(assembly, name, suppress=(), alternatives=None, joints=None, features
     ``Offset2``; a placement is ``{"base": [...], "rotation": [qx, qy, qz, qw]}`` or an ``App.Placement``).
     ``features`` maps an assembly feature name to its ``Suppressed`` value. One undo transaction.
     """
-    if any(c.Label == name for c in configurations(assembly)):
-        raise ConfigurationError("a configuration named %r exists" % name)
+    name = check_name(assembly, name)
     ov = {"suppress": [str(p) for p in suppress], "alternatives": {}, "joints": {}, "features": {}}
     for p in ov["suppress"]:
         _resolve_component(assembly, p)
@@ -393,6 +414,8 @@ def create(assembly, name, suppress=(), alternatives=None, joints=None, features
         AssemblyConfiguration(obj)
         _attach_view(obj)
         obj.Label = name
+        if obj.Label != name:       # another object of the document already has this label
+            raise ConfigurationError("the name %r is used by another object of the document" % name)
         obj.Overrides = json.dumps(ov, sort_keys=True)
         obj.Active = False
     except Exception:
@@ -415,9 +438,14 @@ def delete(assembly, name):
 
 def rename(assembly, name, new_name):
     c = _find(assembly, name)
-    if any(o.Label == new_name for o in configurations(assembly)):
-        raise ConfigurationError("a configuration named %r exists" % new_name)
+    new_name = check_name(assembly, new_name, own=c)
+    old = c.Label
+    if new_name == old:
+        return
     c.Label = new_name
+    if c.Label != new_name:         # another object of the document already has this label
+        c.Label = old
+        raise ConfigurationError("the name %r is used by another object of the document" % new_name)
 
 
 def copy(assembly, name, new_name):
