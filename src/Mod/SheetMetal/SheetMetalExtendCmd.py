@@ -419,6 +419,7 @@ if SheetMetalTools.isGuiLoaded():
                     # The name of a svg file available in the resources.
                     "Pixmap": os.path.join(icons_path, "SheetMetal_ExtendBySketch.svg"),
                     "MenuText": translate("SheetMetal", "Extend by Sketch"),
+                    "Accel": "T",
                     "StatusTip": translate("SheetMetal", "Extend a side face using a sketch"),
                     "ToolTip": translate(
                         "SheetMetal",
