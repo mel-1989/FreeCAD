@@ -543,7 +543,7 @@ class TaskConfigurations:
     def _converge(self):
         """Revert what is left through the API (an unrelated edit sits above the panel's steps)."""
         snap, asm, doc = self.snapshot, self.assembly, self.doc
-        problems = []
+        problems = _later_edits(doc, snap["drift"]) if AC.status(asm)["active"] == snap["active"] else []
         by_name = {c.Name: c for c in AC.configurations(asm)}
         doc.openTransaction("Cancel configurations")
         try:
@@ -678,6 +678,26 @@ class TaskConfigurations:
 
     def isAllowedAlterSelection(self):
         return True
+
+
+def _later_edits(doc, drift):
+    """Edits made after the panel's own steps to a property the drift at open will overwrite."""
+    out = []
+    for d in drift:
+        obj = doc.getObject(d["target"])
+        if obj is None or d["kind"] != "joint_value":
+            continue
+        try:
+            cur = getattr(obj, d["property"])
+            cur = cur.Value if hasattr(cur, "Value") else cur
+            if d["property"].startswith("Offset"):
+                cur = AC._pl_json(cur)
+            if not AC._value_same(cur, d["expected"]) and not AC._value_same(cur, d["found"]):
+                out.append("%s.%s: your later edit (%s) was replaced by the value before the panel opened (%s)"
+                           % (d["target"], d["property"], _val(cur), _val(d["found"])))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
 
 
 def _write_drift(asm, drift):

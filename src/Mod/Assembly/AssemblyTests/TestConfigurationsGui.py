@@ -656,6 +656,18 @@ class TestConfigurationsGui(GuiCase):
         self.close_panel()
         self.assertEqual(self.state(), before)
 
+    def test_cancel_tells_the_user_when_it_replaces_a_later_edit_to_the_same_value(self):
+        panel = self.start(drift=True, active="Light")
+        got = self.cancel_reports()
+        panel.discard()
+        self.doc.openTransaction("User edit")
+        self.doc.getObject(F.SLIDER).Distance = 33.0
+        self.doc.commitTransaction()
+        self.close_panel()
+        self.assertEqual(self.state()["slider"], 80.0)
+        self.assertEqual(len(got), 1)
+        self.assertTrue(any("%s.Distance" % F.SLIDER in p and "later edit" in p for p in got[0]), got)
+
     def test_cancel_tells_the_user_what_it_could_not_restore(self):
         panel = self.start(drift=True, active="Light")
         got = self.cancel_reports()
