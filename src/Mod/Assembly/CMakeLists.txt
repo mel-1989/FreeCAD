@@ -48,6 +48,10 @@ set(Assembly_Scripts
     AssemblyFeaturePanel.py
     ViewProviderAssemblyFeature.py
     TestAssemblyFeatureGui.py
+    CommandConfigurations.py
+    ConfigurationsPanel.py
+    ViewProviderAssemblyConfiguration.py
+    TestAssemblyConfigurationsGui.py
 )
 
 if(BUILD_GUI)
@@ -71,6 +75,7 @@ SET(Assembly_Icons
     icons/Assembly_CreateAssemblyCut.svg
     icons/Assembly_CreateAssemblyHole.svg
     icons/Assembly_EditAssemblyFeature.svg
+    icons/Assembly_Configurations.svg
 )
 
 
@@ -92,6 +97,8 @@ SET(AssemblyTests_SRCS
     AssemblyTests/TestInterferenceGui.py
     AssemblyTests/feature_gui_fixture.py
     AssemblyTests/TestFeatureGui.py
+    AssemblyTests/configuration_gui_fixture.py
+    AssemblyTests/TestConfigurationsGui.py
     AssemblyTests/mocks/__init__.py
     AssemblyTests/mocks/MockGui.py
 )

@@ -962,9 +962,43 @@ def stale_active_problems():
     return problems
 
 
+def lost_feature_proxy_problems():
+    """Assembly features are recognised by their properties when the proxy is gone (a stable re-save drops it)."""
+    import AssemblyFeature as AF
+    doc, asm = _fresh("RepFeatProxy")
+    problems = []
+    try:
+        C.rig_feature(C.Built(doc, asm))
+        doc.recompute()
+        cut = AF.effective_shape(asm, "LA").Volume
+        AC.create(asm, "NoCut", features={"Cut1": True})
+        AC.create(asm, "S", suppress=["LB"])
+        for o in list(asm.Group):
+            if o.TypeId == "App::FeaturePython" and "Spec" in o.PropertiesList:
+                o.Proxy = None
+        if [f.Name for f in AF.features(asm)] != ["Cut1"]:
+            return ["a feature without a proxy is not recognised: %s" % [f.Name for f in AF.features(asm)]]
+        if not isinstance(doc.Cut1.Proxy, AF.AssemblyFeature):
+            problems.append("the feature proxy was not re-attached")
+        doc.recompute()
+        if abs(AF.effective_shape(asm, "LA").Volume - cut) > 1e-6:
+            problems.append("the recovered feature no longer cuts")
+        AC.activate(asm, "NoCut")
+        if abs(AF.effective_shape(asm, "LA").Volume - 1000.0) > 1e-6:
+            problems.append("a configuration did not suppress the recovered feature")
+        AC.activate(asm, "S")
+        if doc.Cut1.Suppressed or abs(AF.effective_shape(asm, "LA").Volume - cut) > 1e-6:
+            problems.append("switching away did not restore the recovered feature")
+    except Exception as exc:
+        problems.append("%s: %s" % (type(exc).__name__, exc))
+    finally:
+        App.closeDocument(doc.Name)
+    return problems
+
+
 REPAIR_PROBES = (delete_active_problems, deleted_object_problems, user_edit_kept_problems,
                  remap_edit_drift_problems, lost_proxy_problems, copy_active_problems, visibility_problems,
-                 expression_after_problems, stale_active_problems)
+                 expression_after_problems, stale_active_problems, lost_feature_proxy_problems)
 
 
 def save_reopen_problems(name):
@@ -1117,6 +1151,37 @@ class TestConfigurations(unittest.TestCase):
                 AC.create(b.asm, "ok", suppress=["LB"])
             json.dumps(AC.activate(b.asm, "ok"))
             json.dumps(AC.status(b.asm))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_names_are_checked_the_same_by_create_copy_and_rename(self):
+        doc = App.newDocument("CfgNames")
+        try:
+            b = C.build_case(doc, "suppress_LA")
+            AC.create(b.asm, "ok", suppress=["LA"])
+            before = [c.Label for c in AC.configurations(b.asm)]
+            bad = ("", "   ", "\t", "Default", "default", " DEFAULT ", None, 7,
+                   "ok", " ok ", "LB")      # empty, reserved, not text, taken by a configuration, by another object
+            for name in bad:
+                with self.subTest(name=name):
+                    with self.assertRaises(AC.ConfigurationError):
+                        AC.create(b.asm, name)
+                    with self.assertRaises(AC.ConfigurationError):
+                        AC.copy(b.asm, "ok", name)
+                    AC.create(b.asm, "other")
+                    try:
+                        with self.assertRaises(AC.ConfigurationError):
+                            AC.rename(b.asm, "other", name)
+                        self.assertEqual(AC._find(b.asm, "other").Label, "other")
+                    finally:
+                        doc.removeObject(AC._find(b.asm, "other").Name)
+            self.assertEqual([c.Label for c in AC.configurations(b.asm)], before)
+            # the name is stored trimmed; "/" is an ordinary character and is kept as typed
+            AC.create(b.asm, "  a/b  ", suppress=["LA"])
+            self.assertEqual(AC._find(b.asm, "a/b").Label, "a/b")
+            AC.rename(b.asm, "a/b", " c/d ")
+            self.assertEqual(AC._find(b.asm, "c/d").Label, "c/d")
+            AC.rename(b.asm, "c/d", "c/d")      # to itself: nothing to do
         finally:
             App.closeDocument(doc.Name)
 
