@@ -13,7 +13,8 @@ cylinders).
 Truth: ``T(removed={path: mm3}, per={feature: {path: mm3}}, then=[(action, T2), ...])``.
 ``path`` is the instance path as the API reports it ("A", "L2", "Arr.1", "Sub.Box"); every
 component not listed must be unchanged, bit for bit. ``then`` lists actions run in order
-(move a part, re-solve the joints, suppress a feature) with the truth that holds afterwards.
+(move a part, re-solve the joints, suppress a feature) with the truth that holds afterwards; an entry
+``(action, truth, False)`` is read without a document recompute after the action.
 """
 
 import math
@@ -520,6 +521,45 @@ def hidden_component_not_cut(ctx):
     box(ctx.asm, "B", pos=(12, 0, 0))
     cut_box(ctx, (5, 0, 0), (12, 5, 10))  # x [5,17] reaches both; the hidden one stays whole
     return T({"B": 250.0})
+
+
+def _vis_case(start_hidden, recompute):
+    def build(ctx):
+        a = box(ctx.asm, "A")
+        a.Visibility = not start_hidden
+        cut_box(ctx, (-1, 0, 0), (6, 10, 10))  # x up to 5: half of A
+
+        def hide(c):
+            a.Visibility = False
+
+        def show(c):
+            a.Visibility = True
+        first = T() if start_hidden else T({"A": 500.0})
+        return T(first["removed"], then=[(show, T({"A": 500.0}), recompute), (hide, T(), recompute),
+                                         (show, T({"A": 500.0}), recompute)] if start_hidden else
+                 [(hide, T(), recompute), (show, T({"A": 500.0}), recompute), (hide, T(), recompute)])
+    return build
+
+
+for _hid in (False, True):
+    for _rc in (True, False):
+        case("hidden", "visibility_%s_after_cut_%s" % ("show" if _hid else "hide", "recompute" if _rc else "no_recompute"))(
+            _vis_case(_hid, _rc))
+
+
+@case("hidden")
+def hidden_container_not_cut(ctx):
+    sub = ctx.asm.newObject("App::Part", "Sub")
+    box(sub, "S1")
+    box(ctx.asm, "B", pos=(12, 0, 0))
+    cut_box(ctx, (-1, 0, 0), (20, 5, 10))  # x [-1,19]: both
+
+    def hide(c):
+        sub.Visibility = False
+
+    def show(c):
+        sub.Visibility = True
+    return T({"Sub.S1": 500.0, "B": 350.0}, then=[(hide, T({"B": 350.0}), False), (show, T({"Sub.S1": 500.0, "B": 350.0}), False)])
 
 
 # ---------------------------------------------------------------------- sequence

@@ -44,7 +44,7 @@ from AgentCore.verify.tolerances import resolve as _resolve_tol
 SCHEMA = "cadfork.assembly.feature/1"
 PROP_GROUP = "AssemblyFeature"
 _INCLUDE_HIDDEN = True
-_UNSET = object()
+_DEP_PROP = "App::PropertyLinkListGlobal"
 
 
 # ---------------------------------------------------------------- tool specs
@@ -102,7 +102,9 @@ class AssemblyFeature:
         obj.addProperty("App::PropertyStringList", "Scope", PROP_GROUP,
                         "Component selectors the feature reaches; empty means every component")
         obj.addProperty("App::PropertyBool", "Suppressed", PROP_GROUP, "Switch the feature off")
-        obj.addProperty("App::PropertyLinkList", "Dependencies", PROP_GROUP,
+        # Global: a plain link list makes the group treat the feature and the components as one cluster, and
+        # removing a component from the assembly (what Replace Component does) would drag the feature out with it
+        obj.addProperty(_DEP_PROP, "Dependencies", PROP_GROUP,
                         "Components whose placement a re-cut depends on")
         obj.setPropertyStatus("Dependencies", "Hidden")
         obj.Proxy = self
@@ -112,6 +114,39 @@ class AssemblyFeature:
     def execute(self, obj):
         self.results = None
         self.executions = getattr(self, "executions", 0) + 1
+        asm = obj.getParentGeoFeatureGroup()
+        if asm is not None:  # components added or replaced since the last run
+            deps = _dependency_objects(asm, upto=obj)
+            if list(obj.Dependencies) != deps:
+                obj.Dependencies = deps
+
+    def onComponentReplaced(self, obj, replaced):
+        """Called by Replace Component with {old object name: (old object, new link)}.
+
+        Retargets scope selectors that name a replaced instance to the new one; returns what it did,
+        and anything it could not retarget, as a list of JSON-friendly records.
+        """
+        out = []
+        scope = list(obj.Scope)
+        new_scope = []
+        for sel in scope:
+            hit = None
+            for name, (old, new) in replaced.items():
+                for ident in (old.Name, old.Label):
+                    if sel == ident or sel.startswith(ident + "."):
+                        hit = (new.Name + sel[len(ident):], old, new)
+                        break
+                if hit:
+                    break
+            if hit:
+                out.append({"feature": obj.Name, "kind": "scope_retargeted", "from": sel, "to": hit[0]})
+                new_scope.append(hit[0])
+            else:
+                new_scope.append(sel)
+        if new_scope != scope:
+            obj.Scope = new_scope
+        self.results = None
+        return out
 
     def onDocumentRestored(self, obj):
         self.results = None
@@ -313,6 +348,11 @@ def _shape_desc(shp):
             round(bb.ZMin, 9), round(bb.ZMax, 9))
 
 
+def _inst_desc(inst):
+    """What a cut depends on for one component: where it sits, its shape and whether it shows."""
+    return (inst.key, bool(inst.hidden), _shape_desc(inst.shape))
+
+
 def _signature(assembly, feats, insts):
     fd = []
     for f in feats:
@@ -324,7 +364,7 @@ def _signature(assembly, feats, insts):
                 tool = (f.ToolObject.Name, None)
         fd.append((f.Name, f.Kind, f.Spec, tuple(f.Scope), bool(f.Suppressed), tool,
                    tuple(assembly.Placement.Matrix.A)))
-    idesc = tuple((i.key, _shape_desc(i.shape)) for i in insts)
+    idesc = tuple(_inst_desc(i) for i in insts)
     return (tuple(fd), idesc)
 
 

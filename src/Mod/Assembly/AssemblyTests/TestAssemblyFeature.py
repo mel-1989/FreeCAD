@@ -221,9 +221,11 @@ def evaluate_case(name, tally=None, with_delete=True):
         base_snap, base_bytes = part_snapshot(ctx), saved_signature(ctx._src)
         base_raw = {k: brep_hash(v.shape) for k, v in raw_map(ctx.asm).items()}
         problems += eval_phase(ctx, truth, tally)
-        for action, t2 in truth["then"]:
+        for step in truth["then"]:
+            action, t2 = step[0], step[1]
             action(ctx)
-            ctx.doc.recompute()
+            if len(step) < 3 or step[2]:
+                ctx.doc.recompute()
             problems += eval_phase(ctx, t2, tally)
         if with_delete:
             for f in list(ctx.features):
@@ -280,6 +282,50 @@ def pin_problems():
             full = PI * r_pin ** 2 * 10.0
             if len(p2) != 1 or p2[0][0] != "interfering" or not _vol_ok(p2[0][1], full):
                 out.append("pin r=%s suppressed hole: %s want interfering %r" % (r_pin, p2, full))
+        finally:
+            App.closeDocument(doc.Name)
+    return out
+
+
+# ------------------------------------------------------------ replace tests
+
+def replace_problems():
+    """Replace Component keeps the feature, cuts the new component where it sits and retargets the scope."""
+    import ReplaceComponent as RC
+    out = []
+    for tag, scope in (("replace_scope_all", None), ("replace_scope_explicit", ["Old"])):
+        doc = App.newDocument("Rep")
+        try:
+            asm = doc.addObject("Assembly::AssemblyObject", "Assembly")
+            old = asm.newObject("Part::Box", "Old")
+            new = asm.newObject("Part::Box", "New")
+            new.Placement = C.plc(50, 0, 0)
+            c = asm.newObject("Part::Box", "C")
+            c.Placement = C.plc(5, 0, 20)
+            f = AF.make_cut(asm, AF.box_tool((4, 100, 100), (3, -1, -1)), scope=scope)
+            doc.recompute()
+            rep = RC.apply(asm, old, new, delete_old=False)
+            doc.recompute()
+            names = [o.Name for o in asm.Group]
+            tag_out = tag + ": "
+            if f.Name not in names or f.getParentGeoFeatureGroup() != asm:
+                out.append(tag_out + "feature left the assembly: %s" % names)
+                continue
+            rr = {c_["path"]: c_["removed_mm3"] for c_ in AF.report(asm)["components"]}
+            if not _vol_ok(rr.get("Old_replaced", -1), 400.0) or rr.get("New", 0.0) != 0.0:
+                out.append(tag_out + "removed volumes %s" % rr)
+            if scope and list(f.Scope) != ["Old_replaced"]:
+                out.append(tag_out + "scope %s" % list(f.Scope))
+            if scope and not any(u.get("kind") == "scope_retargeted" for u in rep["feature_updates"]):
+                out.append(tag_out + "no scope update reported")
+            # interference after the replace reads the cut shapes: C overlaps what is left of Old_replaced
+            c.Placement = C.plc(5, 0, 0)
+            doc.recompute()
+            pairs = {frozenset((p["a"]["path"], p["b"]["path"])): p["volume_mm3"]
+                     for p in Interference.check(asm)["pairs"] if p["class"] == "interfering"}
+            want = frozenset(("Old_replaced", "C"))
+            if want not in pairs or not _vol_ok(pairs[want], 300.0):
+                out.append(tag_out + "interference after replace %s" % pairs)
         finally:
             App.closeDocument(doc.Name)
     return out
@@ -397,6 +443,18 @@ def _mut_assembly_placement_ignored(AFm, I):
     AFm._asm_matrix = lambda assembly: App.Matrix()
 
 
+def _mut_visibility_not_in_signature(AFm, I):
+    AFm._inst_desc = lambda inst: (inst.key, AFm._shape_desc(inst.shape))
+
+
+def _mut_dependencies_as_plain_links(AFm, I):
+    AFm._DEP_PROP = "App::PropertyLinkList"   # the group then treats the feature and the parts as one cluster
+
+
+def _mut_scope_not_retargeted(AFm, I):
+    AFm.AssemblyFeature.onComponentReplaced = lambda self, obj, replaced: []
+
+
 def _mut_interference_reads_raw(AFm, I):
     I._apply_assembly_features = lambda assembly, res: None
 
@@ -426,6 +484,9 @@ MUTANTS = {
     "face_contact_counted_as_cut": (_mut_touching_counts_as_cut, "tool_touches_face_only"),
     "local_frame_back_transform_skipped": (_mut_local_frame_skipped, "link_placed_and_turned"),
     "assembly_placement_not_applied_to_tool": (_mut_assembly_placement_ignored, "assembly_placement_applied_to_tool"),
+    "visibility_not_in_signature": (_mut_visibility_not_in_signature, "visibility_show_after_cut_no_recompute"),
+    "feature_dropped_on_replace": (_mut_dependencies_as_plain_links, "replace_scope_all"),
+    "scope_not_retargeted_on_replace": (_mut_scope_not_retargeted, "replace_scope_explicit"),
     "interference_reads_raw_shapes": (_mut_interference_reads_raw, "pin_through_hole"),
     "features_applied_out_of_order": (_mut_cuts_not_in_assembly_order, "two_cuts_overlapping"),
 }
@@ -436,12 +497,15 @@ def mutated(name):
     saved_af = {k: getattr(AF, k) for k in dir(AF) if k.startswith("_") and callable(getattr(AF, k))
                 and not k.startswith("__")}
     saved_af["features"] = AF.features
+    saved_af["_DEP_PROP"] = AF._DEP_PROP
+    saved_af["_onComponentReplaced"] = AF.AssemblyFeature.onComponentReplaced
     saved_i = {k: getattr(Interference, k) for k in ("_instance_shape", "_apply_assembly_features")}
     saved_exec = AF.AssemblyFeature.execute
     try:
         MUTANTS[name][0](AF, Interference)
         yield
     finally:
+        AF.AssemblyFeature.onComponentReplaced = saved_af.pop("_onComponentReplaced")
         for k, v in saved_af.items():
             setattr(AF, k, v)
         for k, v in saved_i.items():
@@ -635,6 +699,30 @@ class TestAssemblyFeature(unittest.TestCase):
     def test_pin_through_assembly_hole(self):
         self.assertEqual(pin_problems(), [])
 
+    def test_replace_component_keeps_and_retargets_features(self):
+        self.assertEqual(replace_problems(), [])
+
+    def test_interference_follows_visibility(self):
+        doc = App.newDocument("VisItf")
+        try:
+            asm = doc.addObject("Assembly::AssemblyObject", "Assembly")
+            a = asm.newObject("Part::Box", "A")
+            b = asm.newObject("Part::Box", "B")
+            b.Placement = C.plc(4, 0, 0)
+            AF.make_cut(asm, AF.box_tool((6, 10, 10), (-1, 0, 0)), scope=["A"])
+            doc.recompute()
+
+            def vol():
+                ps = Interference.check(asm)["pairs"]
+                return ps[0]["volume_mm3"] if ps else 0.0
+            self.assertTrue(_vol_ok(vol(), 500.0))
+            a.Visibility = False
+            self.assertEqual(vol(), 0.0)
+            a.Visibility = True
+            self.assertTrue(_vol_ok(vol(), 500.0))
+        finally:
+            App.closeDocument(doc.Name)
+
     def test_interference_without_features_unchanged_path(self):
         doc = App.newDocument("NoFeat")
         try:
@@ -701,11 +789,15 @@ class TestAssemblyFeature(unittest.TestCase):
                             problems = [repr(exc)]
                         if problems:
                             failing.append(name)
-                    try:
-                        if pin_problems():
-                            failing.append("pin_through_hole")
-                    except Exception:
-                        failing.append("pin_through_hole")
+                    for label, fn in (("pin_through_hole", pin_problems), (None, replace_problems)):
+                        try:
+                            probs = fn()
+                            if probs and label:
+                                failing.append(label)
+                            for pr in probs if not label else []:
+                                failing.append(pr.split(":")[0])
+                        except Exception:
+                            failing.append(label or "replace_scope_all")
                 table.append((mname, catcher, failing))
                 self.assertTrue(failing, "mutant %s survived" % mname)
                 self.assertIn(catcher, failing, "mutant %s not caught by %s" % (mname, catcher))
@@ -717,3 +809,4 @@ class TestAssemblyFeature(unittest.TestCase):
         for name in C.CASES:
             self.assertEqual(evaluate_case(name, with_delete=False)[0], [], name)
         self.assertEqual(pin_problems(), [])
+        self.assertEqual(replace_problems(), [])

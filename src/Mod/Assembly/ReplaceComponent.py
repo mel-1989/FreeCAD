@@ -1271,6 +1271,14 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
                 if parent is not None:
                     parent.removeObject(h.obj)
                 h.obj.Visibility = False
+        # objects of the assembly that keep component selectors (assembly features) retarget them
+        retargeted = []
+        replaced = {h.obj.Name: (h.obj, new_comp[h.obj.Name]) for h in hosts if h.obj.Name in new_comp}
+        if replaced:
+            for member in list(assembly.Group):
+                hook = getattr(getattr(member, "Proxy", None), "onComponentReplaced", None)
+                if hook is not None:
+                    retargeted.extend(hook(member, replaced))
         doc.recompute()
         solve_code = _solve(assembly)
         if delete_old:
@@ -1285,6 +1293,7 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
     report["deleted_old"] = deleted
     report["kept_old"] = kept
     report["new_components"] = {k: v.Name for k, v in new_comp.items()}
+    report["feature_updates"] = retargeted
     return _json_safe(report)
 
 
