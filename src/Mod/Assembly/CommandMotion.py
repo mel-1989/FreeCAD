@@ -436,6 +436,14 @@ class CommandAddMotionContact(_AddLoad):
         "contact has no friction.</p>")
     status = QT_TRANSLATE_NOOP("Assembly_AddMotionContact", "Add a contact between two parts")
 
+    def picks_ok(self, asm):
+        """Two different parts, not both grounded (a contact between two parts that never move can never act)."""
+        if not super().picks_ok(asm):
+            return False
+        study = target_study(asm)
+        comps = [c for c, *_ in picked_components(asm)]
+        return study is None or MO.grounded_pair(study, comps[0], comps[1]) is None
+
     def add(self, study, picks):
         a, b = picks
         v = ask_values(Gui.getMainWindow(), translate("Assembly", "Add contact"),

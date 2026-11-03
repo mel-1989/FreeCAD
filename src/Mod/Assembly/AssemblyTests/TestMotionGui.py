@@ -852,6 +852,18 @@ class TestMotionCommands(unittest.TestCase):
         for text in (info["menuText"], info["toolTip"], info["statusTip"]):
             self.assertNotIn("motion study", text.lower())
 
+    def test_the_contact_command_is_inactive_for_two_grounded_parts(self):
+        Gui.activateWorkbench("AssemblyWorkbench")
+        e = self.load("damped", "single")
+        rig = e.rig.rig
+        shelf = rig.box("Shelf", 50, 50, 10, F.MC.P(F.MC.V(300, 300, 50), F.MC.R()))
+        F.MC.cc.ground(rig.jg, shelf)
+        rig.finish()
+        self.select(("Assembly", "G." + GROUND), ("Assembly", "Shelf." + corner(50, 50, 10)))
+        self.assertFalse(self.cmd("Assembly_AddMotionContact").isActive())
+        self.select(("Assembly", "G." + GROUND), ("Assembly", "Block." + BLOCK))
+        self.assertTrue(self.cmd("Assembly_AddMotionContact").isActive())
+
     def test_a_contact_is_listed_and_does_not_break_run_plots_or_playback(self):
         Gui.activateWorkbench("AssemblyWorkbench")
         for mode in ("single", "link"):
