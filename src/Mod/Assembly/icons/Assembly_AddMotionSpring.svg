@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Assembly_AddMotionSpring</title>
+  <rect x="4" y="22" width="6" height="20" fill="#cfe8c4" stroke="#3b7d23" stroke-width="2.5"/>
+  <rect x="54" y="22" width="6" height="20" fill="#cfe8c4" stroke="#3b7d23" stroke-width="2.5"/>
+  <path d="M10 32 L16 32 L20 20 L28 44 L36 20 L44 44 L48 32 L54 32" fill="none" stroke="#1d5a96" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

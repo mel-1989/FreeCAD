@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Assembly_EditMotionStudy</title>
+  <path d="M8 54 L8 10 M8 54 L58 54" fill="none" stroke="#1d5a96" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M12 44 C20 14 28 14 34 34 C40 54 48 50 56 20" fill="none" stroke="#a35a00" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M40 8 L52 8 L52 20 Z" fill="#b9d6f2" stroke="#1d5a96" stroke-width="2.5" stroke-linejoin="round"/>
+</svg>

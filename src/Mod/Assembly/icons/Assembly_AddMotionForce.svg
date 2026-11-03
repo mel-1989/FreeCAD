@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Assembly_AddMotionForce</title>
+  <circle cx="14" cy="32" r="5" fill="#fbd9a8" stroke="#a35a00" stroke-width="3"/>
+  <path d="M20 32 L56 32 M46 22 L56 32 L46 42" fill="none" stroke="#a35a00" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

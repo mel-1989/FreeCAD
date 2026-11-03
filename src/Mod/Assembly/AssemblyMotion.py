@@ -276,6 +276,16 @@ def masses(study):
     return [_reattach(o) for o in study.Group if is_mass(o)]
 
 
+def study_of(obj):
+    """The study that holds a load or a mass (the study itself for a study), or None."""
+    if is_study(obj):
+        return obj
+    for o in obj.InList:
+        if is_study(o):
+            return o
+    return None
+
+
 def assembly_of(study):
     for o in study.InList:
         if o.isDerivedFrom("Assembly::AssemblyObject"):
@@ -696,6 +706,10 @@ class Model:
                 else:
                     self.warnings.append("the mass of %s is skipped: the part is suppressed" % name)
         if not any(b.moving for b in self.order):
+            gone = [n for n in sorted(by) if self.asm.Document.getObject(n) is None]
+            if gone:
+                raise MotionRefused(["no part moves: the only mass belongs to a part that no longer exists (%s); "
+                                     "remove its mass object or add the part back" % ", ".join(gone)])
             self.warnings.append("no part moves: the mechanism has no free joint")
         for w in self.warnings:
             App.Console.PrintWarning("AssemblyMotion: %s\n" % w)
@@ -1029,9 +1043,11 @@ def _quat(R):
 
 # ------------------------------------------------------------------ running
 
-def _grid(study):
-    step = _q(study.TimeStep)
-    end = _q(study.TimeEnd)
+def _grid(study, end=None, step=None):
+    """The output grid. ``end`` and ``step`` override the study's own values (the GUI panel runs on edits it has not
+    applied yet); None reads the study."""
+    step = _q(study.TimeStep if step is None else step)
+    end = _q(study.TimeEnd if end is None else end)
     if not (math.isfinite(step) and math.isfinite(end)) or step <= 0 or end <= 0:
         raise MotionError("the time span and the step must be finite and positive (TimeEnd=%r, TimeStep=%r)"
                           % (end, step))
@@ -1067,14 +1083,14 @@ def _bad_constant(name):
     raise MotionError("%s is not a number" % name)
 
 
-def _run_dynamic(study):
+def _run_dynamic(study, end=None, step=None):
     np = _np()
     try:
         from scipy.integrate import solve_ivp
     except ImportError:
         raise MotionError("the dynamic mode needs SciPy (scipy.integrate), which this FreeCAD does not provide")
     model = Model(study)
-    step, grid = _grid(study)
+    step, grid = _grid(study, end, step)
     n = model.n
     q0 = np.zeros(n)
     qd0 = np.zeros(n)
@@ -1139,18 +1155,18 @@ def _run_dynamic(study):
     return out
 
 
-def _run_kinematic(study):
+def _run_kinematic(study, end=None, step=None):
     """One driven joint through the assembly's own kinematic solver (OndselSolver)."""
     asm = assembly_of(study)
     joint = _lookup(asm.Document, study.DriveJoint)
     if joint is None:
         raise MotionError("the kinematic study has no DriveJoint")
-    step, grid = _grid(study)
+    step, grid = _grid(study, end, step)
     doc = asm.Document
     live = live_components(asm)
     sim = asm.newObject("App::FeaturePython", "MotionSim")
     sim.addExtension("App::GroupExtensionPython")
-    for n, t, v in (("aTimeStart", "App::PropertyTime", 0.0), ("bTimeEnd", "App::PropertyTime", _q(study.TimeEnd)),
+    for n, t, v in (("aTimeStart", "App::PropertyTime", 0.0), ("bTimeEnd", "App::PropertyTime", _q(study.TimeEnd if end is None else end)),
                     ("cTimeStepOutput", "App::PropertyTime", step),
                     ("fGlobalErrorTolerance", "App::PropertyFloat", _q(study.SolverTolerance))):
         sim.addProperty(t, n, "Simulation", "")
@@ -1194,6 +1210,28 @@ def _run_kinematic(study):
     }
 
 
+def _compute(study, end=None, step=None):
+    return _run_kinematic(study, end, step) if study.Mode == "Kinematic" else _run_dynamic(study, end, step)
+
+
+def compute(study, time_end=None, step=None):
+    """The result of a run as a dict, without writing anything into the study (the GUI panel runs this and applies
+    the result on OK). ``time_end`` and ``step`` override the study's values. The assembly's placements are put back
+    and no part document is touched; no undo transaction is opened. ``json.dumps(res, sort_keys=True)`` of it is
+    exactly the string ``run`` stores when the overrides are the study's own values."""
+    asm = assembly_of(study)
+    saved = _save_placements(asm)
+    try:
+        return _compute(study, time_end, step)
+    finally:
+        _restore_placements(asm, saved)
+
+
+def result_text(res):
+    """The string form in which a result is stored in ``Result``."""
+    return json.dumps(res, sort_keys=True)
+
+
 def run(study, keep_frame=None):
     """Run the study. Returns the result (see ``to_json``). The assembly's placements are put back unless
     ``keep_frame`` (a step index) asks to keep one frame; no part document is touched."""
@@ -1202,8 +1240,8 @@ def run(study, keep_frame=None):
     saved = _save_placements(asm)
     try:
         with _transaction(doc, "Run motion study"):
-            res = _run_kinematic(study) if study.Mode == "Kinematic" else _run_dynamic(study)
-            _write_series(study, json.dumps(res, sort_keys=True))
+            res = _compute(study)
+            _write_series(study, result_text(res))
     finally:
         _restore_placements(asm, saved)
     if keep_frame is not None:
@@ -1269,6 +1307,130 @@ def first_collision(study, part_a, part_b, classes=("interfering",), **interfere
     finally:
         _restore_placements(asm, saved)
     return None
+
+
+def check_grid(end, step):
+    """(step, number of steps) of a time span, or a ``MotionError`` that says what is wrong with it (the same refusal
+    a run makes)."""
+    class _S:
+        TimeEnd, TimeStep = end, step
+    st, grid = _grid(_S)
+    return st, len(grid) - 1
+
+
+def apply_study(study, time_end=None, step=None, result=None, title="Edit motion study"):
+    """Set the span and the step and store ``result`` (a dict from ``compute``) as one undo transaction. None leaves
+    a value alone; nothing is opened when nothing differs from what the study holds."""
+    edits = {}
+    if time_end is not None and _q(time_end) != _q(study.TimeEnd):
+        edits["TimeEnd"] = time_end
+    if step is not None and _q(step) != _q(study.TimeStep):
+        edits["TimeStep"] = step
+    text = None if result is None else result_text(result)
+    if text is not None and text == study.Result:
+        text = None
+    if not edits and text is None:
+        return False
+    check_grid(edits.get("TimeEnd", study.TimeEnd), edits.get("TimeStep", study.TimeStep))
+    with _transaction(study.Document, title):
+        _assign(study, edits)
+        if text is not None:
+            _write_series(study, text)
+    return True
+
+
+# ------------------------------------------------------------------ plotted quantities
+
+AXES = ("x", "y", "z")
+
+
+def quantities(res):
+    """What can be plotted from a result: ``[{"id", "label", "unit", "kind"}]``. A position is the part placement's
+    base point (mm); a velocity is the velocity of that point (mm/s); a spring or damper force is the force along the
+    line between its two points (N, positive when the spring is stretched or the damper's ends move apart)."""
+    out = []
+    for p in res["parts"]:
+        for a in AXES:
+            out.append({"id": "position:%s:%s" % (p["name"], a), "kind": "position", "unit": "mm",
+                        "label": "%s position %s" % (p["name"], a.upper())})
+    if res["mode"] == "Dynamic":
+        for p in res["parts"]:
+            for a in AXES:
+                out.append({"id": "velocity:%s:%s" % (p["name"], a), "kind": "velocity", "unit": "mm/s",
+                            "label": "%s velocity %s" % (p["name"], a.upper())})
+        for ld in res["loads"]:
+            if ld["applied"] and ld["kind"] in ("Spring", "Damper"):
+                out.append({"id": "force:%s" % ld["name"], "kind": "force", "unit": "N",
+                            "label": "%s force" % ld["name"]})
+    return out
+
+
+def series_of(study, res, quantity, derived=None):
+    """``(t, values, info)`` of one quantity of ``res``. Positions come straight from the stored placements.
+    Velocities and forces are computed from the stored joint coordinates and rates (``derived_series``), which
+    needs the assembly at the placements it had when the run started: pass the dict from one ``derived_series`` call
+    taken in that state as ``derived`` to reuse it."""
+    info = next((q for q in quantities(res) if q["id"] == quantity), None)
+    if info is None:
+        raise MotionError("the result has no quantity %r" % quantity)
+    if info["kind"] == "position":
+        _k, name, axis = quantity.split(":")
+        p = next(p for p in res["parts"] if p["name"] == name)
+        i = AXES.index(axis)
+        return list(res["t"]), [d["base"][i] for d in p["placements"]], info
+    if derived is None:
+        derived = derived_series(study, res)
+    return list(res["t"]), list(derived[quantity]), info
+
+
+def derived_series(study, res):
+    """Velocity and force series of a dynamic result, ``{quantity id: [values]}``, from the stored joint coordinates and
+    rates and the kinematic model of the study. The assembly must be at the placements it had when the study was run
+    (the panel restores them before it calls this); nothing is written."""
+    if res["mode"] != "Dynamic":
+        return {}
+    model = Model(study)
+    np = model.np
+    doc = model.asm.Document
+    by_joint = {j["name"]: j for j in res["joints"]}
+    n_t = len(res["t"])
+    parts = [b for b in model.order if b.moving]
+    out = {}
+    for b in parts:
+        for a in AXES:
+            out["velocity:%s:%s" % (b.name, a)] = []
+    for p in res["parts"]:
+        if p["name"] not in {b.name for b in parts}:
+            for a in AXES:
+                out["velocity:%s:%s" % (p["name"], a)] = [0.0] * n_t
+    flds = []
+    for ld in loads(study):
+        if ld.Kind in ("Spring", "Damper") and any(r["name"] == ld.Name and r["applied"] for r in res["loads"]):
+            b1 = model._body_of(_lookup(doc, ld.Part1))
+            b2 = model._body_of(_lookup(doc, ld.Part2))
+            flds.append((ld, b1, b1.world0(_mmvec(ld.Point1), np), b2, b2.world0(_mmvec(ld.Point2), np)))
+            out["force:%s" % ld.Name] = []
+    for k in range(n_t):
+        q = np.zeros(model.n)
+        qd = np.zeros(model.n)
+        for j in model.joints:
+            rec = by_joint[j.obj.Name]
+            q[j.dof] = rec["q"][k]
+            qd[j.dof] = rec["qd"][k]
+        Rd, td, A, O = model.kin(q)
+        for b in parts:
+            base, _R = model.pose(b, Rd, td)
+            v = model.jac(b, base * 1e-3, A, O)[0] @ qd * 1e3
+            for i, a in enumerate(AXES):
+                out["velocity:%s:%s" % (b.name, a)].append(float(v[i]))
+        for (ld, b1, x01, b2, x02) in flds:
+            (u, L), J1, J2 = model._pair(b1, x01, b2, x02, Rd, td, A, O, qd)
+            if ld.Kind == "Spring":
+                f = _spring_force(_q(ld.Stiffness), L, _free_length(ld) * 1e-3)
+            else:
+                f = _damper_force(_damping(ld), float(u @ ((J2 - J1) @ qd)))
+            out["force:%s" % ld.Name].append(float(f))
+    return out
 
 
 def signature(doc):

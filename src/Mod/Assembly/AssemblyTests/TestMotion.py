@@ -650,6 +650,90 @@ class TestMotion(unittest.TestCase):
         finally:
             App.closeDocument(doc.Name)
 
+    def test_a_run_whose_only_moving_part_was_deleted_is_refused(self):
+        """Slice 6a LOW, fixed in 6b: the run used to return an empty series with two warnings."""
+        for mode in MODES:
+            doc = App.newDocument("MotionGone")
+            try:
+                c = C.CASES["pend_30_L400"](doc, mode, None)
+                doc.removeObject("Bob")
+                with self.assertRaises(MO.MotionRefused) as cm:
+                    MO.run(c.study)
+                self.assertIn("Bob", str(cm.exception), mode)
+                self.assertIn("no longer exists", str(cm.exception), mode)
+                self.assertEqual(c.study.Result, "", "a refused run stores nothing")
+                with self.assertRaises(MO.MotionRefused):
+                    MO.compute(c.study)
+            finally:
+                App.closeDocument(doc.Name)
+
+    def test_compute_and_series_accessors_for_the_gui(self):
+        """Slice 6b: ``compute`` is a run that writes nothing, ``derived_series`` gives velocities and forces from the
+        stored joint coordinates, and ``apply_study`` is one transaction."""
+        doc = App.newDocument("MotionAcc")
+        try:
+            c = C.CASES["spring_mass_k200"](doc, "single", None)
+            study = c.study
+            sig0, undo0 = MO.signature(doc), doc.UndoCount
+            res = MO.compute(study)
+            self.assertEqual(MO.signature(doc), sig0, "compute writes nothing")
+            self.assertEqual(doc.UndoCount, undo0, "compute opens no transaction")
+            self.assertEqual(study.Result, "")
+            ran = MO.run(study)
+            self.assertEqual(MO.result_text(res), study.Result, "compute and run give the same bytes")
+            self.assertEqual(res, ran)
+            # overrides of the span and step equal a study that holds them
+            res2 = MO.compute(study, 1.0, 0.01)
+            MO._assign(study, {"TimeEnd": 1.0, "TimeStep": 0.01})
+            self.assertEqual(MO.result_text(res2), MO.result_text(MO.compute(study)))
+            self.assertEqual(len(res2["t"]), 101)
+            with self.assertRaises(MO.MotionError):
+                MO.compute(study, 1.0, 0.3)
+            # closed forms: x = 200 + 30 cos(wt) mm, v = -30 w sin(wt) mm/s, spring force 6 cos(wt) N
+            w = 200.0 ** 0.5
+            t, x, info = MO.series_of(study, res, "position:Block:x")
+            self.assertEqual(info["unit"], "mm")
+            _t, v, info = MO.series_of(study, res, "velocity:Block:x")
+            self.assertEqual(info["unit"], "mm/s")
+            _t, f, info = MO.series_of(study, res, "force:Spring")
+            self.assertEqual(info["unit"], "N")
+            import math
+            for series, fn, amp in ((x, lambda s: 200.0 + 30.0 * math.cos(w * s), 30.0),
+                                    (v, lambda s: -30.0 * w * math.sin(w * s), 30.0 * w),
+                                    (f, lambda s: 6.0 * math.cos(w * s), 6.0)):
+                self.assertLess(max(abs(a - fn(s)) for a, s in zip(series, res["t"])) / amp, 1e-5)
+            # a damper's force is c times the rate of lengthening: critical damping case
+            ids = [q["id"] for q in MO.quantities(res)]
+            self.assertIn("force:Spring", ids)
+            self.assertNotIn("force:Gravity", ids)
+            with self.assertRaises(MO.MotionError):
+                MO.series_of(study, res, "force:Nope")
+            # apply_study: one transaction for the span, the step and the result; nothing when nothing differs
+            u0 = doc.UndoCount
+            self.assertFalse(MO.apply_study(study, 1.0, 0.01, None))
+            self.assertEqual(doc.UndoCount, u0)
+            self.assertTrue(MO.apply_study(study, 0.5, 0.01, MO.compute(study, 0.5, 0.01)))
+            self.assertEqual(doc.UndoCount, u0 + 1)
+            self.assertEqual((study.TimeEnd, study.TimeStep), (0.5, 0.01))
+            with self.assertRaises(MO.MotionError):
+                MO.apply_study(study, 0.5, 0.3)
+            self.assertEqual(doc.UndoCount, u0 + 1)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_damper_force_series(self):
+        doc = App.newDocument("MotionDamp")
+        try:
+            c = C.CASES["damped_critical"](doc, "single", None)
+            res = MO.run(c.study)
+            _t, f, _i = MO.series_of(c.study, res, "force:Damper")
+            _t, v, _i = MO.series_of(c.study, res, "velocity:Block:x")
+            cd = 2.0 * (400.0 * 1.0) ** 0.5
+            # the damper lengthens at the block's speed (the other end is fixed): force = c v, with v in m/s
+            self.assertLess(max(abs(a - cd * b * 1e-3) for a, b in zip(f, v)) / max(abs(x) for x in f), 1e-9)
+        finally:
+            App.closeDocument(doc.Name)
+
     def test_suppressed_component_and_its_load_are_left_out(self):
         for name in ("suppressed_spring_to_pendulum", "suppressed_damper_to_pendulum"):
             for mode in MODES:
