@@ -1023,21 +1023,26 @@ App::DocumentObjectExecReturn* SubShapeBinder::execute()
 
 std::string SubShapeBinder::supportKey() const
 {
+    // Object names and subnames, taken from the link itself so that a target in a document that is not loaded (yet)
+    // still has a key.
     std::string key;
     for (const auto& l : Support.getSubListValues()) {
-        if (l.getValue()) {
-            key += l.getValue()->getFullName();
-            for (const auto& sub : l.getSubValues()) {
-                key += "|" + sub;
-            }
-            key += ";";
+        const auto* obj = l.getValue();
+        key += obj ? obj->getNameInDocument() : l.getObjectName();
+        for (const auto& sub : l.getSubValues()) {
+            key += "|" + sub;
         }
+        key += ";";
     }
     return key;
 }
 
 void SubShapeBinder::onDocumentRestored()
 {
+    // What the stored Support points at, resolved or not. An external document that loads while this one is restored may
+    // already have re-attached the link (the first Support change, adopted in onChanged without an update); this sets the
+    // key for every other load, so that the first change the user makes afterwards is judged against it.
+    boundKey = supportKey();
     if (_Version.getValue() < 2) {
         update(UpdateInit);
     }

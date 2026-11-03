@@ -1411,11 +1411,40 @@ def stock_frozen_binder_retarget_updates_and_relink_does_not():
         f.BindMode = "Frozen"
         f.Support = [(cyl, ("",))]                      # a deliberate retarget of a frozen binder
         chk(P, f.Shape.BoundBox.XMin > 40, "a retargeted frozen binder kept the old shape: %s" % f.Shape.BoundBox)
-        # a relink on reopen (the other document loads after this one) must not refresh it: covered cross-document by
-        # freeze_survives_save_reopen and frozen_datums_keep_their_geometry_through_save_and_reopen
-    finally:
+        # the same, as the first Support change after a save and reopen
+        g = body.newObject("PartDesign::SubShapeBinder", "G")
+        g.Support = [(box, ("",))]
+        doc.recompute()
+        g.BindMode = "Frozen"
+        doc.saveAs(os.path.join(d, "sb.FCStd"))
         App.closeDocument("SBStock")
+        doc = App.openDocument(os.path.join(d, "sb.FCStd"))
+        g2 = doc.getObject("G")
+        g2.Support = [(doc.getObject("Cyl"), ("",))]
+        chk(P, g2.Shape.BoundBox.XMin > 40, "same document: a retarget as the first change after reopening was skipped")
+    finally:
+        for n in list(App.listDocuments()):
+            App.closeDocument(n)
         shutil.rmtree(d, ignore_errors=True)
+    # cross-document: reopen with the skeleton loading after the subscriber; the relink keeps the frozen shape, the first
+    # retarget (to another item) updates it
+    with world(True) as w:
+        w.both("face", "sketch")
+        AS.freeze(w.binders["face"])
+        h0 = digest(w.binders["face"])
+        w.save()
+        dd = w.dir
+        for n in (w.doc.Name, w.sdoc.Name):
+            App.closeDocument(n)
+        doc = App.openDocument(os.path.join(dd, "subscriber.FCStd"))
+        b = doc.getObject("S_face")
+        chk(P, digest(b) == h0, "cross-document: the relink on reopen moved the frozen shape")
+        other = App.getDocument("skeleton").getObject(AS.find_item(App.getDocument("skeleton").getObject("Skel"), "sketch").Name)
+        b.Support = [(other, ("",))]
+        chk(P, digest(b) != h0 and K.same(K.observe_shape(b.Shape, "sketch"), K.truth("sketch")),
+            "cross-document: a retarget as the first change after reopening was skipped")
+        for n in list(App.listDocuments()):
+            App.closeDocument(n)
     return P
 
 
