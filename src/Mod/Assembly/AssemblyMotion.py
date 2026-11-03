@@ -87,8 +87,8 @@ reports, and there is no friction. ``energy.conservative`` is false when any con
 Starts that are refused, naming the pair: parts that overlap at the start (their common volume is not zero), a pair
 that starts inside the tolerance band without touching (gap above 1e-4 mm and not above the tolerance: the pair would
 count as touching from the start), and a contact whose two parts never move. After a run every output step is checked:
-a contact pair that overlaps, or whose closest-point direction reverses between two steps (a body passed through its
-partner), makes the run fail with ``MotionError`` instead of storing a wrong result.
+a contact pair that overlaps, or whose closest-point direction reverses between two steps in a way that cannot be shown
+harmless (a body may have passed through its partner), makes the run fail with ``MotionError`` instead of storing a wrong result.
 
 Limits (slice 6a, contact and stops now in 6c): no initial velocity except ``Velocities`` (JSON ``{joint name: value}`` in
 rad/s or mm/s); components must sit directly in the assembly (not in a sub-assembly); the joint frames must already
@@ -436,6 +436,10 @@ def add_contact(study, part1, part2, restitution=0.5, tolerance=CONTACT_TOLERANC
     ``restitution`` is Newton's coefficient (0 to 1), ``tolerance`` the gap in mm at which the pair counts as in
     contact. There is no friction."""
     _check_contact_values(name, restitution, tolerance)
+    for p in (part1, part2):
+        if not _is_part_object(p):
+            raise MotionError("a contact takes two part objects, got %r (a sub-element, name or shape is not accepted: "
+                              "pass the part itself)" % (p,))
     if _name_of(part1) == _name_of(part2):
         raise MotionError("a contact needs two different parts, got %s twice" % _name_of(part1))
     both = grounded_pair(study, part1, part2)
@@ -443,6 +447,11 @@ def add_contact(study, part1, part2, restitution=0.5, tolerance=CONTACT_TOLERANC
         raise MotionError("a contact needs a part that can move, but %s and %s are both grounded" % both)
     return _new_load(study, name, "Contact", Part1=part1, Part2=part2, Restitution=restitution,
                      ContactTolerance=tolerance)
+
+
+def _is_part_object(v):
+    """A document object (a part or link), not a name, shape, sub-element tuple or ``None``."""
+    return hasattr(v, "Name") and hasattr(v, "Document") and hasattr(v, "TypeId")
 
 
 def grounded_pair(study, part1, part2):
@@ -1402,6 +1411,21 @@ def _joint_sign(typ, sgn):
     return sgn
 
 
+_SAME_POSE = 1e-12          # joint coordinates closer than this count as the same pose in the post-run crossing check
+
+
+def _reach(p0, p1, radius):
+    """Largest distance (mm) any point of a part of bounding ``radius`` about its placement origin can have moved
+    between the placements ``p0`` and ``p1``: the origin's translation plus the rotation angle times the radius."""
+    return (p1.Base - p0.Base).Length + abs(float((p0.Rotation.inverted() * p1.Rotation).Angle)) * radius
+
+
+def _cannot_have_met(gap0, gap1, reach):
+    """True when two parts ``gap0`` and ``gap1`` mm apart at two steps, whose points moved at most ``reach`` mm
+    relative to each other in between, provably did not touch: meeting would need ``gap0 + gap1 <= reach``."""
+    return gap0 + gap1 > reach
+
+
 def _overlap_limit(small):
     """Common volume (mm^3) above which two parts count as overlapping."""
     return max(1e-9 * small, 1e-12)
@@ -1715,24 +1739,37 @@ class _Sim:
 
     def _check_no_crossing(self, Y):
         """After the run, at every output step: no contact pair overlaps, and no pair has changed sides between two
-        steps (the direction between its closest points reversed). Either means a body went into or through its
-        partner unseen, so the run is refused instead of stored."""
+        steps (the direction between its closest points reversed) without a proof that the two parts could not have met
+        in between. A pair that never touches may turn its closest-point direction as a body goes round a corner; it is
+        refused only when ``_could_not_have_met`` cannot show that the parts stayed apart. A touching step clears the
+        memory (a body that rests or slides on its partner may legitimately come off on any side), so a side change
+        across a touching step is not flagged (a known limit). Poses unchanged since the last probed step reuse its result (no second distance query or boolean)."""
         m = self.m
         np = m.np
         n = m.n
         for el in m.unilaterals:
             if el.kind != "contact":
                 continue
-            prev = None
+            radii = [max(float(np.linalg.norm(c)) for c in cs) * 1e3 for cs in el.corners]
+            prev = None                                     # (u, gap, placements, grid index, q) of the last step apart
+            last_q, last = None, None
             for k in range(Y.shape[1]):
-                gap, _row, data = el.probe(m, Y[:n, k])
+                q = Y[:n, k]
+                if last_q is not None and float(np.max(np.abs(q - last_q))) <= _SAME_POSE:
+                    gap, data, vol, pls = last
+                else:
+                    gap, _row, data = el.probe(m, q)
+                    vol = None
+                    if gap <= 1e-4:
+                        try:
+                            common = el.sh1.common(el.sh2)
+                            vol = float(common.Volume) if not common.isNull() else 0.0
+                        except Exception:                   # noqa: BLE001 - the boolean can fail on odd shapes
+                            vol = 0.0
+                    pls = (App.Placement(el.sh1.Placement), App.Placement(el.sh2.Placement))
+                    last_q, last = q.copy(), (gap, data, vol, pls)
                 t = float(self.grid[k])
                 if gap <= 1e-4:
-                    try:
-                        common = el.sh1.common(el.sh2)
-                        vol = float(common.Volume) if not common.isNull() else 0.0
-                    except Exception:                       # noqa: BLE001 - the boolean can fail on odd shapes
-                        vol = 0.0
                     if vol > _overlap_limit(min(abs(el.sh1.Volume), abs(el.sh2.Volume))):
                         raise MotionError("contact %s: the parts %s and %s overlap at t = %.6g s (common volume %.4g "
                                           "mm^3), so a body went into its partner between two checks; use a smaller "
@@ -1740,11 +1777,32 @@ class _Sim:
                     prev = None
                     continue
                 u = np.asarray(data["u"], dtype=float)
-                if prev is not None and float(prev @ u) < 0.0:
-                    raise MotionError("contact %s: the parts %s and %s changed sides between t = %.6g s and t = %.6g s, "
-                                      "so a body passed through its partner unseen; use a smaller step"
-                                      % (el.name, el.b1.name, el.b2.name, float(self.grid[k - 1]), t))
-                prev = u
+                if prev is not None and float(prev[0] @ u) < 0.0:
+                    if not self._could_not_have_met(el, radii, (prev[4], prev[1], prev[2]), (q.copy(), gap, pls)):
+                        raise MotionError("contact %s: the closest-point direction between the parts %s and %s "
+                                          "reversed between t = %.6g s and t = %.6g s, so the pair may have passed "
+                                          "through or beside each other unseen; use a smaller step"
+                                          % (el.name, el.b1.name, el.b2.name, float(self.grid[prev[3]]), t))
+                prev = (u, gap, pls, k, q.copy())
+
+    def _could_not_have_met(self, el, radii, a, b, depth=12):
+        """True when the pair provably did not touch between the poses ``a`` and ``b`` (each ``(q, gap, placements)``).
+        Meeting needs gap_a + gap_b <= reach, the most any point of either part can have moved relative to the other
+        (``_cannot_have_met``). When that cannot be excluded the interval is halved at the mean joint coordinates, the
+        parts taken to move on the straight line in joint space between two steps, and each half is judged the same way,
+        down to ``depth`` halvings: a body that goes round a corner is cleared, one that goes through its partner finds
+        a sample at zero gap (or a sub-interval it cannot clear) and stays refused."""
+        (qa, ga, pa), (qb, gb, pb) = a, b
+        reach = sum(_reach(p0, p1, r) for p0, p1, r in zip(pa, pb, radii))
+        if _cannot_have_met(ga, gb, reach):
+            return True
+        if depth == 0 or min(ga, gb) <= 1e-4:
+            return False
+        qm = 0.5 * (qa + qb)
+        gm, _row, _data = el.probe(self.m, qm)
+        mid = (qm, gm, (App.Placement(el.sh1.Placement), App.Placement(el.sh2.Placement)))
+        return (self._could_not_have_met(el, radii, a, mid, depth - 1)
+                and self._could_not_have_met(el, radii, mid, b, depth - 1))
 
     def _events(self):
         evs, owners = [], []

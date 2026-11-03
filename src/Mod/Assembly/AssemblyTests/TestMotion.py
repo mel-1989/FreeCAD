@@ -293,11 +293,58 @@ def probe_guard_retries_recover():
     return problems
 
 
+def _post_study(doc, off, step, v=1000.0, end=1.0, thick=20.0):
+    """A block sliding on an x rail at ``v`` mm/s with no gravity, past a fixed post ``off`` mm to the side (``off`` < 0
+    puts the post in the block's path), a declared contact between them."""
+    rig = C.Rig(doc, "single")
+    blk = rig.box("Block", 20, 20, 20, C.P(C.V(-300, 0, 100), C.R()))
+    y0 = 20 + off if off >= 0 else 0
+    post = rig.box("Post", thick, 20, 20, C.P(C.V(100, y0, 100), C.R()))
+    rig.fixed("PostFix", rig.G, post, (100 + thick / 2, y0 + 10, 110))
+    rig.slide("Rail", rig.G, blk, (-290, 10, 110), (1, 0, 0))
+    rig.finish()
+    study = C.new_study(rig, end, step)
+    MO.set_mass(study, blk, density=C.BLOCK_RHO)
+    MO.add_contact(study, blk, post, 0.5)
+    study.Velocities = json.dumps({"Rail": v})
+    return study
+
+
+def probe_pair_passing_beside_is_not_refused():
+    """A block passes a post 50 mm to the side at a 0.5 s step; they never come close, so the run completes."""
+    doc = App.newDocument("MotionBeside")
+    try:
+        try:
+            res = MO.run(_post_study(doc, 50.0, 0.5))
+        except MO.MotionError as exc:
+            return ["a pair that never touches was refused: %s" % exc]
+        x = C.pl_of(C.series(res, "Block")[-1]).Base.x
+        return [] if abs(x - (-300.0 + 1000.0 * res["t"][-1])) < 1e-6 else ["wrong end position %.6g" % x]
+    finally:
+        App.closeDocument(doc.Name)
+
+
+def probe_tunnelling_is_refused():
+    """Guard off, a block passes straight through a 2 mm post between two output steps at a 0.5 s step: refused, naming the
+    reversed closest-point direction (the post-run check is the backstop of the solver's guard)."""
+    doc = App.newDocument("MotionTunnel")
+    try:
+        with patched(_guard_enabled=lambda: False):
+            try:
+                MO.run(_post_study(doc, -1.0, 0.5, thick=2.0))
+            except MO.MotionError as exc:
+                return [] if "closest-point direction" in str(exc) else ["refused for another reason: %s" % exc]
+        return ["a block that went through a 2 mm post was stored"]
+    finally:
+        App.closeDocument(doc.Name)
+
+
 PROBES = {"guard_plan_needs_no_retries": probe_guard_plan_needs_no_retries,
           "guard_retries_recover": probe_guard_retries_recover, "part_documents": probe_part_documents_unchanged, "restores_placements": probe_run_restores_placements,
           "undo": probe_undo, "two_runs": probe_two_runs_identical,
           "overlap_refused": probe_overlapping_start_is_refused, "band_refused": probe_start_inside_the_band_is_refused,
-          "baumgarte": probe_baumgarte_pulls_a_displaced_lock_back}
+          "baumgarte": probe_baumgarte_pulls_a_displaced_lock_back,
+          "pass_beside": probe_pair_passing_beside_is_not_refused, "tunnelling": probe_tunnelling_is_refused}
 
 
 def save_reopen_problems(name="spring_mass_k200", mode="single"):
@@ -523,6 +570,18 @@ def _m_guard_removed():
     return dict(_guard_enabled=lambda: False)
 
 
+def _m_crossing_check_removed():
+    return dict(Sim__check_no_crossing=lambda self, Y: None)
+
+
+def _m_crossing_bound_always_clears():
+    return dict(_cannot_have_met=lambda g0, g1, reach: True)
+
+
+def _m_crossing_bound_never_clears():
+    return dict(_cannot_have_met=lambda g0, g1, reach: False)
+
+
 def _m_no_release_on_separation():
     return dict(_separation_value=lambda gap, tol: 1.0)
 
@@ -629,6 +688,9 @@ MUTANTS = {
     "guard_chunk_check_never_fails": (_m_chunk_check_never_fails, [], ["guard_retries_recover"]),
     "guard_plan_drops_the_acceleration_term": (_m_accel_term_dropped, [], ["guard_plan_needs_no_retries"]),
     "guard_constant_speed_chunk_30_times_too_long": (_m_constant_speed_chunk_30x, ["two_thin_plates_head_on_coarse_step"], []),
+    "crossing_check_removed": (_m_crossing_check_removed, [], ["tunnelling"]),
+    "crossing_bound_always_clears": (_m_crossing_bound_always_clears, [], ["tunnelling"]),
+    "crossing_bound_never_clears": (_m_crossing_bound_never_clears, [], ["pass_beside"]),
     "released_pair_not_re_armed_inside_the_band": (_m_no_resettle_after_release, ["contact_released_in_band_returns_to_rest"], []),
 }
 
@@ -1306,9 +1368,47 @@ class TestMotion(unittest.TestCase):
         with patched(_guard_enabled=lambda: False):
             with self.assertRaises(MO.MotionError) as cm:
                 run_case("ball_bounce_e09_step01", "single")
-        self.assertRegex(str(cm.exception), "changed sides|overlap at t =")
+        self.assertRegex(str(cm.exception), "closest-point direction|overlap at t =")
         rows, _c, _res = run_case("ball_bounce_e09_step01", "single")
         self.assertEqual(failing_rows(rows), [])
+
+    def test_a_pair_that_could_not_have_met_is_not_refused_but_a_tunnelling_body_is(self):
+        self.assertEqual(probe_pair_passing_beside_is_not_refused(), [])
+        self.assertEqual(probe_tunnelling_is_refused(), [])
+
+    def test_the_crossing_check_reuses_an_unchanged_pose(self):
+        """A block resting on the plate for 100 steps costs the check a couple of distance queries and booleans, not one
+        per step."""
+        calls = []
+        orig = MO._Contact.probe
+
+        def counting(self, model, q):
+            calls.append(1)
+            return orig(self, model, q)
+        with patched(MO._Sim, _check_no_crossing=lambda self, Y: None):
+            with patched(MO._Contact, probe=counting):
+                run_case("block_rests_on_plate", "single")
+        off = len(calls)
+        del calls[:]
+        with patched(MO._Contact, probe=counting):
+            rows, _c, res = run_case("block_rests_on_plate", "single")
+        self.assertEqual(failing_rows(rows), [])
+        self.assertLessEqual(len(calls) - off, 10, "%d probes in the check for %d steps" % (len(calls) - off, len(res["t"])))
+        self.assertGreater(len(res["t"]), 50)
+
+    def test_add_contact_takes_part_objects_only(self):
+        doc = App.newDocument("MotionContactArgs")
+        try:
+            rig, study, ball = ball_over_plate(doc, 100.0)
+            n0 = doc.UndoCount
+            for bad in ((ball, "Face1"), ball.Name, ball.Shape.Faces[0], None):
+                with self.assertRaises(MO.MotionError, msg=repr(bad)):
+                    MO.add_contact(study, bad, rig.G, 0.5)
+                with self.assertRaises(MO.MotionError, msg=repr(bad)):
+                    MO.add_contact(study, ball, bad, 0.5)
+            self.assertEqual(doc.UndoCount, n0)                              # a refusal leaves no transaction
+        finally:
+            App.closeDocument(doc.Name)
 
     def test_guard_retries_are_counted_and_recover_the_closed_form(self):
         self.assertEqual(probe_guard_retries_recover(), [])
