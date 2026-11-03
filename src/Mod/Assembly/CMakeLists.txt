@@ -42,6 +42,7 @@ set(Assembly_Scripts
     InterferencePanel.py
     ReplaceComponent.py
     AssemblyConfiguration.py
+    AssemblySkeleton.py
     TestAssemblyInterferenceGui.py
     CommandCheckInterference.py
     CommandCreateAssemblyFeature.py
@@ -93,6 +94,8 @@ SET(AssemblyTests_SRCS
     AssemblyTests/feature_corpus.py
     AssemblyTests/TestConfigurations.py
     AssemblyTests/configuration_corpus.py
+    AssemblyTests/TestSkeleton.py
+    AssemblyTests/skeleton_corpus.py
     AssemblyTests/interference_gui_fixture.py
     AssemblyTests/TestInterferenceGui.py
     AssemblyTests/feature_gui_fixture.py
