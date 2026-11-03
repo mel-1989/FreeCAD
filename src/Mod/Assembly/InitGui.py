@@ -24,6 +24,7 @@
 FreeCAD.__unit_test__ += ["TestAssemblyInterferenceGui"]
 FreeCAD.__unit_test__ += ["TestAssemblyFeatureGui"]
 FreeCAD.__unit_test__ += ["TestAssemblyConfigurationsGui"]
+FreeCAD.__unit_test__ += ["TestAssemblySkeletonGui"]
 
 
 class AssemblyCommandGroup:
@@ -79,6 +80,7 @@ class AssemblyWorkbench(Workbench):
         import CommandCheckInterference
         import CommandCreateAssemblyFeature
         import CommandConfigurations
+        import CommandSkeleton
         import Preferences
 
         FreeCADGui.addLanguagePath(":/translations")
@@ -102,6 +104,8 @@ class AssemblyWorkbench(Workbench):
             "Assembly_CreateAssemblyCut",
             "Assembly_CreateAssemblyHole",
             "Assembly_Configurations",
+            "Assembly_PublishSkeletonGeometry",
+            "Assembly_SubscribeSkeleton",
         ]
 
         cmdListMenuOnly = [

@@ -53,6 +53,9 @@ set(Assembly_Scripts
     ConfigurationsPanel.py
     ViewProviderAssemblyConfiguration.py
     TestAssemblyConfigurationsGui.py
+    CommandSkeleton.py
+    SkeletonPanel.py
+    TestAssemblySkeletonGui.py
 )
 
 if(BUILD_GUI)
@@ -77,6 +80,8 @@ SET(Assembly_Icons
     icons/Assembly_CreateAssemblyHole.svg
     icons/Assembly_EditAssemblyFeature.svg
     icons/Assembly_Configurations.svg
+    icons/Assembly_PublishSkeletonGeometry.svg
+    icons/Assembly_SubscribeSkeleton.svg
 )
 
 
@@ -102,6 +107,8 @@ SET(AssemblyTests_SRCS
     AssemblyTests/TestFeatureGui.py
     AssemblyTests/configuration_gui_fixture.py
     AssemblyTests/TestConfigurationsGui.py
+    AssemblyTests/skeleton_gui_fixture.py
+    AssemblyTests/TestSkeletonGui.py
     AssemblyTests/mocks/__init__.py
     AssemblyTests/mocks/MockGui.py
 )
