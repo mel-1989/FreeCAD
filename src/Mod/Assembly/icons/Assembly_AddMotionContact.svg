@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Assembly_AddMotionContact</title>
+  <rect x="6" y="48" width="52" height="10" fill="#cfe8c4" stroke="#3b7d23" stroke-width="2.5"/>
+  <circle cx="32" cy="30" r="14" fill="#cde3f7" stroke="#1d5a96" stroke-width="2.5"/>
+  <path d="M10 22 L16 28 M54 22 L48 28 M32 8 L32 12" fill="none" stroke="#1d5a96" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

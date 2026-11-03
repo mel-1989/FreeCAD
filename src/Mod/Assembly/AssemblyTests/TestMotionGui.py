@@ -658,10 +658,10 @@ class TestMotionGui(unittest.TestCase):
 
 
 class TestMotionCommands(unittest.TestCase):
-    """The seven commands: registration, when they are active, what they add."""
+    """The eight commands (the contact one from slice 6c): registration, when they are active, what they add."""
 
     NAMES = ("Assembly_CreateMotionStudy", "Assembly_EditMotionStudy", "Assembly_AddMotionGravity", "Assembly_AddMotionForce",
-             "Assembly_AddMotionTorque", "Assembly_AddMotionSpring", "Assembly_AddMotionDamper")
+             "Assembly_AddMotionTorque", "Assembly_AddMotionSpring", "Assembly_AddMotionDamper", "Assembly_AddMotionContact")
 
     def setUp(self):
         self.e = None
@@ -728,9 +728,10 @@ class TestMotionCommands(unittest.TestCase):
         self.select(("Assembly", "Block." + BLOCK))
         self.assertEqual(self.active(), base + ["Assembly_AddMotionForce", "Assembly_AddMotionTorque"])
         self.select(("Assembly", "G." + GROUND), ("Assembly", "Block." + BLOCK))
-        self.assertEqual(self.active(), base + ["Assembly_AddMotionSpring", "Assembly_AddMotionDamper"])
+        self.assertEqual(self.active(), base + ["Assembly_AddMotionSpring", "Assembly_AddMotionDamper", "Assembly_AddMotionContact"])
         self.select(("Assembly", "Block." + BLOCK), ("Assembly", "Block.Vertex1"))
         self.assertNotIn("Assembly_AddMotionSpring", self.active(), "two points on one part")
+        self.assertNotIn("Assembly_AddMotionContact", self.active(), "two points on one part")
         self.select(("Assembly", "G." + GROUND), ("Assembly", "Block." + BLOCK))
         MO.add_gravity(e.study)                                     # gravity is added once
         self.assertNotIn("Assembly_AddMotionGravity", self.active())
@@ -826,6 +827,63 @@ class TestMotionCommands(unittest.TestCase):
             e.prompts.values = [None]
             Gui.runCommand("Assembly_AddMotionDamper")
             self.assertEqual(e.doc.UndoCount, u0)
+
+    def test_the_contact_command_adds_one_contact_in_one_transaction_on_plain_and_linked_parts(self):
+        Gui.activateWorkbench("AssemblyWorkbench")
+        for mode in ("single", "link"):
+            e = self.load("damped", mode)
+            self.select(("Assembly", "G." + GROUND), ("Assembly", "Block." + BLOCK))
+            e.prompts.values = [{"e": 0.6, "tol": 0.02}]
+            c = self._undo_one(e, lambda: Gui.runCommand("Assembly_AddMotionContact"))
+            self.assertEqual(c[:3], ("Contact", "G", "Block"), mode)
+            ld = MO.loads(e.study)[-1]
+            self.assertEqual((ld.Restitution, ld.ContactTolerance), (0.6, 0.02))
+            u0 = e.doc.UndoCount                                            # cancelling the question adds nothing
+            e.prompts.values = [None]
+            Gui.runCommand("Assembly_AddMotionContact")
+            self.assertEqual(e.doc.UndoCount, u0)
+            e.prompts.values = [{"e": 1.5, "tol": 0.02}]                    # an impossible restitution is reported, not added
+            n0 = len(MO.loads(e.study))
+            Gui.runCommand("Assembly_AddMotionContact")
+            self.assertEqual((e.doc.UndoCount, len(MO.loads(e.study))), (u0, n0))
+            self.assertTrue(e.prompts.reported and "restitution" in e.prompts.reported[-1], e.prompts.reported)
+        # the texts use this project's words
+        info = self.cmd("Assembly_AddMotionContact").getInfo()
+        for text in (info["menuText"], info["toolTip"], info["statusTip"]):
+            self.assertNotIn("motion study", text.lower())
+
+    def test_a_contact_is_listed_and_does_not_break_run_plots_or_playback(self):
+        Gui.activateWorkbench("AssemblyWorkbench")
+        for mode in ("single", "link"):
+            e = self.load("pendulum", mode)
+            MO.add_contact(e.study, e.rig.parts["Bob"], e.rig.parts["G"], 0.7)
+            p = e.panel()
+            rows = p.rows()
+            self.assertTrue(any(r[0] == "Contact" and "restitution 0.7" in r[2] and "Bob" in r[2] and "G" in r[2]
+                                for r in rows), rows)
+            res = p.run()
+            self.assertIn("contact", res)
+            p.show_frame(len(res["t"]) // 2)
+            e.finish()
+            ids = [q["id"] for q in MO.quantities(res)]
+            self.assertTrue(any(i.startswith("velocity:") for i in ids))
+            derived = MO.derived_series(e.study, res)
+            for i in ids:
+                t, y, info = MO.series_of(e.study, res, i, derived)
+                self.assertEqual(len(t), len(y))
+            self.assertEqual(MO.stale_reason(e.study, res), "")
+
+    def test_the_recovery_hold_nests(self):
+        e = self.load("pendulum")
+        MP.hold_recovery(e.doc, True)
+        MP.hold_recovery(e.doc, True)
+        self.assertFalse(e.doc.canWriteRecoverySnapshot())
+        MP.hold_recovery(e.doc, False)
+        self.assertFalse(e.doc.canWriteRecoverySnapshot(), "one release must not undo the other hold")
+        MP.hold_recovery(e.doc, False)
+        self.assertTrue(e.doc.canWriteRecoverySnapshot())
+        MP.hold_recovery(e.doc, False)                               # an unmatched release does nothing
+        self.assertTrue(e.doc.canWriteRecoverySnapshot())
 
     def test_a_load_added_by_the_command_runs_like_one_added_by_the_api(self):
         Gui.activateWorkbench("AssemblyWorkbench")

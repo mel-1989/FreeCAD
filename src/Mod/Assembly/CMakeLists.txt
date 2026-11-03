@@ -93,6 +93,7 @@ SET(Assembly_Icons
     icons/Assembly_AddMotionTorque.svg
     icons/Assembly_AddMotionSpring.svg
     icons/Assembly_AddMotionDamper.svg
+    icons/Assembly_AddMotionContact.svg
 )
 
 
