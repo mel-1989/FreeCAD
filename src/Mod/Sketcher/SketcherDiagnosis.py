@@ -700,6 +700,7 @@ class _Diagnoser:
                 i for i in range(probe.n) if not probe.driving[i] and probe.types[i] in _DATUM_TYPES
             ],
             "inactive_constraints": probe.inactive,
+            "candidate_constraints": list(probe.candidates),
             "conflict_sets": [],
             "redundancy_groups": [],
             "complete": True,

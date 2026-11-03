@@ -141,6 +141,10 @@ class TestSketchDiagnosis(unittest.TestCase):
         if cls.previous is not None and cls.previous in FreeCAD.listDocuments():
             FreeCAD.setActiveDocument(cls.previous)
 
+    def assertNoScratchDocument(self):
+        left = [n for n in FreeCAD.listDocuments() if n.startswith("SketchDiagnosisScratch")]
+        self.assertEqual(left, [])
+
     def by_class(self, *classes):
         return [c for c in self.cases if c.cls in classes]
 
@@ -459,6 +463,20 @@ class TestSketchDiagnosis(unittest.TestCase):
                     self.assertNotIn(m, case.truth["reference"], case.name)
                     self.assertNotIn(m, case.truth["inactive"], case.name)
 
+    def testCandidatesAreActiveDrivingConstraints(self):
+        for case in self.cases:
+            want = [
+                i
+                for i, c in enumerate(case.sketch.Constraints)
+                if c.IsActive and c.Driving and c.Type != "InternalAlignment"
+            ]
+            self.assertEqual(self.results[case.name]["candidate_constraints"], want, case.name)
+
+    def testSuggestedRemovalIsTheNewestMember(self):
+        for case in self.cases:
+            for g in self.results[case.name]["redundancy_groups"]:
+                self.assertEqual(g["suggested_removal"], max(g["members"]), case.name)
+
     def testNonConflictingReferenceCasesHaveNoSets(self):
         for case in self.by_class("reference"):
             if not case.truth["conflicting"]:
@@ -494,6 +512,7 @@ class TestSketchDiagnosis(unittest.TestCase):
             before = _signature(case.sketch)
             SD.diagnose(case.sketch)
             self.assertEqual(before, _signature(case.sketch), case.name)
+            self.assertNoScratchDocument()
 
     def testDiagnosisLeavesUndoStackAndTouchedState(self):
         doc = FreeCAD.newDocument("SideEffectUndo")
@@ -512,6 +531,7 @@ class TestSketchDiagnosis(unittest.TestCase):
             r = SD.diagnose(sk)
             self.assertTrue(r["conflict_sets"])
             self.assertEqual(before, _signature(sk))
+            self.assertNoScratchDocument()
             self.assertGreaterEqual(doc.UndoCount, 1)
             doc.commitTransaction()
         finally:
@@ -534,6 +554,7 @@ class TestSketchDiagnosis(unittest.TestCase):
         finally:
             SD._enumerate_conflict_sets = original
         self.assertEqual(before, _signature(case.sketch))
+        self.assertNoScratchDocument()
 
     def testDiagnoseRejectsOtherObjects(self):
         box = self.doc.addObject("Part::Box", "NotASketch")

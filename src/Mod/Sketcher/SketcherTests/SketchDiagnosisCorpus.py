@@ -647,6 +647,16 @@ def _conflicting(doc, out):
     s.finish()
     add("batch_added_rectangle_conflict", s, [[0, 1, 2, 3, 6, 7, 8, 9]], 9)
 
+    # C15d one odd value against two equal ones: the best fix removes the odd
+    # value and leaves two equal dimensions, which are then redundant
+    s = _Sk(doc, "c_odd_one", bulk=True)
+    a = s.line(0, 0, 6, 0)
+    s.c("DistanceX", a, 1, a, 2, 5.0)
+    s.c("DistanceX", a, 1, a, 2, 6.0)
+    s.c("DistanceX", a, 1, a, 2, 6.0)
+    s.finish()
+    add("odd_value_against_two_equal", s, [[0, 1], [0, 2]], 0)
+
     # C16 overlapping conflicts with unrelated geometry between them
     s = _Sk(doc, "c_overlap2")
     a = s.line(0, 0, 5, 0)
