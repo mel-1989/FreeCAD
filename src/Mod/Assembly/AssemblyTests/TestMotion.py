@@ -462,6 +462,71 @@ def probe_arcs_clear_of_a_post_complete():
     return problems
 
 
+def probe_ball_landing_on_its_post_is_not_refused():
+    """The ball lands on top of a 1 mm post 150 mm along and bounces, guard on, at steps of 0.6, 0.3 and 0.1 s: the pair's
+    own resolved impact explains the reversed direction, so the run completes and ends where it does with no check, at
+    x = 290 mm, z = 210.9 mm."""
+    problems = []
+    for step in (0.6, 0.3, 0.1):
+        doc = App.newDocument("MotionLanding")
+        try:
+            res = MO.run(_bounce_study(doc, step, xcross=150.0))
+            p = C.pl_of(C.series(res, "Ball")[-1]).Base
+            if abs(p.x - 290.0) > 0.5 or abs(p.z - 210.86) > 0.5:
+                problems.append("at step %g the ball ended at (%.2f, %.2f), not (290, 210.86)" % (step, p.x, p.z))
+        except MO.MotionError as exc:
+            problems.append("a ball that landed on its post and bounced was refused at step %g: %s" % (step, exc))
+        finally:
+            App.closeDocument(doc.Name)
+    return problems
+
+
+def probe_s_shaped_cubic_is_not_cleared_by_its_midpoint():
+    """Two output states of the ball 0.6 s apart, 600 mm apart in x, with the same upward slope 4 m/s at both: the joint
+    cubic is S-shaped, back on its chord at the midpoint, and rises 230 mm at 127 ms (x = -173 mm), into a post standing there 190 mm above it. The
+    midpoint shows no deviation; the check must still not clear the interval."""
+    doc = App.newDocument("MotionSCurve")
+    out = []
+    try:
+        def check(self, Y):
+            m = self.m
+            np = m.np
+            el = next(e for e in m.unilaterals if e.kind == "contact")
+            radii = [max(float(np.linalg.norm(c)) for c in cs) * 1e3 for cs in el.corners]
+
+            def node(t, x):
+                q = np.zeros(m.n)
+                q[0] = x
+                v = np.zeros(m.n)
+                v[0], v[1] = 1.0, 4.0
+                gap, _r, _d = el.probe(m, q)
+                return (t, q, v, v.copy(), gap, (App.Placement(el.sh1.Placement), App.Placement(el.sh2.Placement)))
+            out.append(self._could_not_have_met(el, radii, node(0.0, 0.0), node(0.6, 0.6)))
+        _run_guard_off(_arc_study(doc, 0.6, xp=-173.0), _check_no_crossing=check)
+    finally:
+        App.closeDocument(doc.Name)
+    return ["an S-shaped cubic that rises into a post was cleared"] if out != [False] else []
+
+
+def probe_events_on_a_grid_time_and_simultaneous_events_keep_the_right_velocities():
+    """An event exactly on an output time gives that step's node the velocity after the event; two events at one time keep
+    the velocity before the first and after the last."""
+    import numpy
+    sim = MO._Sim.__new__(MO._Sim)
+    q = numpy.zeros(1)
+    sim._knots = [(0.3, q, numpy.array([-2.0]), numpy.array([1.0]), "p1"), (0.3, q, numpy.array([1.0]), numpy.array([0.5]), "p2")]
+    node = sim._node(0.3, q, numpy.array([-2.0]), 1.0, ())
+    ev = sim._events_at(0.3)
+    problems = []
+    if float(node[3][0]) != 0.5 or float(node[2][0]) != -2.0:
+        problems.append("the grid node carries v_in %s, v_out %s, not -2 and 0.5" % (node[2], node[3]))
+    if float(ev[1][0]) != -2.0 or float(ev[2][0]) != 0.5 or ev[3] != ["p1", "p2"]:
+        problems.append("two simultaneous events merged to %s" % (ev,))
+    if sim._events_at(0.31) is not None:
+        problems.append("an event 10 ms away was taken as simultaneous")
+    return problems
+
+
 PROBES = {"guard_plan_needs_no_retries": probe_guard_plan_needs_no_retries,
           "guard_retries_recover": probe_guard_retries_recover, "part_documents": probe_part_documents_unchanged, "restores_placements": probe_run_restores_placements,
           "undo": probe_undo, "two_runs": probe_two_runs_identical,
@@ -470,7 +535,10 @@ PROBES = {"guard_plan_needs_no_retries": probe_guard_plan_needs_no_retries,
           "pass_beside": probe_pair_passing_beside_is_not_refused, "tunnelling": probe_tunnelling_is_refused,
           "arc_through_post": probe_ballistic_arc_through_a_post_is_refused,
           "bounce_then_post": probe_bounce_then_post_inside_one_step_is_refused,
-          "arcs_clear": probe_arcs_clear_of_a_post_complete}
+          "arcs_clear": probe_arcs_clear_of_a_post_complete,
+          "landing_on_post": probe_ball_landing_on_its_post_is_not_refused,
+          "s_cubic": probe_s_shaped_cubic_is_not_cleared_by_its_midpoint,
+          "event_velocities": probe_events_on_a_grid_time_and_simultaneous_events_keep_the_right_velocities}
 
 
 def save_reopen_problems(name="spring_mass_k200", mode="single"):
@@ -716,6 +784,18 @@ def _m_crossing_bound_ignores_deviation():
     return dict(_inflation=lambda dev: 0.0)
 
 
+def _m_crossing_deviation_at_the_midpoint_only():
+    return dict(_cubic_offset=lambda qa, qb, va, vb, h: 0.0 * qa)
+
+
+def _m_crossing_distrusts_own_touch():
+    return dict(_TOUCH_FRACTION=0.0)
+
+
+def _m_crossing_node_keeps_pre_event_velocity():
+    return dict(Sim__node=lambda self, t, q, v, gap, pls: (t, q.copy(), v.copy(), v.copy(), gap, pls))
+
+
 def _m_no_release_on_separation():
     return dict(_separation_value=lambda gap, tol: 1.0)
 
@@ -827,6 +907,9 @@ MUTANTS = {
     "crossing_bound_never_clears": (_m_crossing_bound_never_clears, [], ["pass_beside"]),
     "crossing_midpoints_on_the_chord": (_m_crossing_midpoints_on_the_chord, [], ["arc_through_post", "bounce_then_post"]),
     "crossing_bound_ignores_the_path_deviation": (_m_crossing_bound_ignores_deviation, [], ["arc_through_post"]),
+    "crossing_deviation_measured_at_the_midpoint_only": (_m_crossing_deviation_at_the_midpoint_only, [], ["s_cubic"]),
+    "crossing_refuses_a_resolved_touch_of_its_own_pair": (_m_crossing_distrusts_own_touch, [], ["landing_on_post"]),
+    "crossing_grid_node_keeps_the_velocity_before_the_event": (_m_crossing_node_keeps_pre_event_velocity, [], ["event_velocities"]),
     "released_pair_not_re_armed_inside_the_band": (_m_no_resettle_after_release, ["contact_released_in_band_returns_to_rest"], []),
 }
 
@@ -1519,6 +1602,25 @@ class TestMotion(unittest.TestCase):
         self.assertEqual(probe_ballistic_arc_through_a_post_is_refused(), [])
         self.assertEqual(probe_bounce_then_post_inside_one_step_is_refused(), [])
         self.assertEqual(probe_arcs_clear_of_a_post_complete(), [])
+
+    def test_the_crossing_check_trusts_a_resolved_touch_and_bounds_the_whole_cubic(self):
+        """A ball landing on its post and bouncing is not refused (the solver resolved that touch); an S-shaped joint cubic
+        that is back on its chord at the midpoint is not cleared there; events on a grid time or at one time keep the
+        velocities the next interval starts with."""
+        self.assertEqual(probe_ball_landing_on_its_post_is_not_refused(), [])
+        self.assertEqual(probe_s_shaped_cubic_is_not_cleared_by_its_midpoint(), [])
+        self.assertEqual(probe_events_on_a_grid_time_and_simultaneous_events_keep_the_right_velocities(), [])
+
+    def test_the_cubic_offset_bound_holds_for_any_end_states(self):
+        """``_cubic_offset`` bounds the true excursion of the cubic Hermite curve from its chord for random end states."""
+        import random
+        rnd = random.Random(7)
+        for _ in range(300):
+            qa, qb, va, vb = (rnd.uniform(-1, 1) for _ in range(4))
+            h = rnd.uniform(0.1, 2)
+            s = (qb - qa) / h
+            worst = max(abs(h * ((va - s) * t * (1 - t) ** 2 - (vb - s) * t * t * (1 - t))) for t in (i / 200 for i in range(201)))
+            self.assertLessEqual(worst, MO._cubic_offset(qa, qb, va, vb, h) + 1e-12)
 
     def test_the_crossing_check_reuses_an_unchanged_pose(self):
         """A block resting on the plate for 100 steps costs the check a couple of distance queries and booleans, not one

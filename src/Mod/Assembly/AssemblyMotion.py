@@ -1280,6 +1280,21 @@ class _Contact:
             tot += max(float(np.linalg.norm(model.jac(b, R @ c + base, A, O)[0] @ v)) for c in cs)
         return tot
 
+    def levers(self, model, q):
+        """Per part, for each joint coordinate, the largest speed (mm per unit of the coordinate) of any bounding-box corner:
+        a Lipschitz constant of the part's placement in that coordinate at the pose ``q``."""
+        np = model.np
+        Rd, td, A, O = model.kin(q)
+        out = []
+        for b, cs in ((self.b1, self.corners[0]), (self.b2, self.corners[1])):
+            if not b.chain:
+                out.append(np.zeros(model.n))
+                continue
+            base, R = model.pose(b, Rd, td)
+            base = base * 1e-3
+            out.append(1e3 * np.max([np.linalg.norm(model.jac(b, R @ c + base, A, O)[0], axis=0) for c in cs], axis=0))
+        return out
+
     def check_start(self, model):
         """Refuse a start that is overlapping, or inside the tolerance band without touching."""
         np = model.np
@@ -1415,6 +1430,8 @@ def _joint_sign(typ, sgn):
     return sgn
 
 
+_KNOT_TOL = 1e-9            # events this close in time (s) count as simultaneous, or as on a grid node
+_TOUCH_FRACTION = 0.05      # the part of an interval next to its own pair's touch that the check trusts the solver for
 _SAME_POSE = 1e-12          # joint coordinates closer than this count as the same pose in the post-run crossing check
 
 
@@ -1424,16 +1441,32 @@ def _reach(p0, p1, radius):
     return (p1.Base - p0.Base).Length + abs(float((p0.Rotation.inverted() * p1.Rotation).Angle)) * radius
 
 
+def _hermite(qa, qb, va, vb, h, s):
+    """Value and slope of the cubic Hermite interpolant of the states ``(qa, va)`` and ``(qb, vb)`` a time ``h`` apart, at the
+    fraction ``s`` of the interval (standard cubic Hermite interpolation): exact for any path quadratic in time."""
+    s2, s3 = s * s, s * s * s
+    return ((2 * s3 - 3 * s2 + 1) * qa + (s3 - 2 * s2 + s) * h * va + (3 * s2 - 2 * s3) * qb + (s3 - s2) * h * vb,
+            (6 * s2 - 6 * s) * (qa - qb) / h + (3 * s2 - 4 * s + 1) * va + (3 * s2 - 2 * s) * vb)
+
+
 def _hermite_mid(qa, qb, va, vb, h):
-    """Value and slope at the midpoint of the cubic Hermite interpolant of the states ``(qa, va)`` and ``(qb, vb)`` a
-    time ``h`` apart (standard cubic Hermite interpolation): exact for any path that is quadratic in time."""
+    """The midpoint of ``_hermite``."""
     return 0.5 * (qa + qb) + h * (va - vb) / 8.0, 1.5 * (qb - qa) / h - 0.25 * (va + vb)
+
+
+def _cubic_offset(qa, qb, va, vb, h):
+    """Bound, per joint coordinate, of how far the cubic Hermite interpolant lies from the straight line between its end
+    values. With ``s`` the chord slope the offset is ``h [(va - s) t (1-t)^2 - (vb - s) t^2 (1-t)]``, and each basis term
+    peaks at 4/27 (t = 1/3, 2/3), so the whole cubic, S-shaped ones included, stays within ``h 4/27 (|va - s| + |vb - s|)``."""
+    s = (qb - qa) / h
+    return h * (4.0 / 27.0) * (abs(va - s) + abs(vb - s))
 
 
 def _deviation(p0, p1, pm, radius):
     """Distance (mm) a point of a part of bounding ``radius`` can lie from the chord between the placements ``p0`` and ``p1``
     when the part is at ``pm`` midway: the origin's offset from the midpoint of its end positions plus the angle between
-    ``pm`` and the half-way rotation times the radius."""
+    ``pm`` and the half-way rotation times the radius. A relative rotation of more than 180 degrees between the ends
+    reads as less (the angle saturates at 180 degrees), which can only make the check refuse, never clear."""
     off = (pm.Base - (p0.Base + p1.Base) * 0.5).Length
     return off + abs(float((p0.Rotation.slerp(p1.Rotation, 0.5).inverted() * pm.Rotation).Angle)) * radius
 
@@ -1621,7 +1654,7 @@ class _Sim:
         self.armed = {}
         self.chunks = 0
         self.retries = 0
-        self._knots = []                                # (t, q, v before, v after) at every event the run resolved
+        self._knots = []                                # (t, q, v before, v after, pair) at every event the run resolved
 
     def note(self, t, el, what, **kw):
         rec = {"t": float(t), "element": el.name, "what": what}
@@ -1754,7 +1787,7 @@ class _Sim:
             if fired_n > _MAX_EVENTS:
                 raise MotionError("more than %d contact events in one run: the pair is chattering" % _MAX_EVENTS)
             y = self._resolve(owners[i][0], owners[i][1], te, ye)
-            self._knots.append((te, ye[:n].copy(), ye[n:].copy(), y[n:].copy()))
+            self._knots.append((te, ye[:n].copy(), ye[n:].copy(), y[n:].copy(), owners[i][0]))
             t_cur = te
         if k0 < len(grid) or any(c is None for c in cols):
             raise MotionError("the integrator did not reach the end of the time span (%d of %d steps)" % (k0, len(grid)))
@@ -1803,49 +1836,85 @@ class _Sim:
                     continue
                 u = np.asarray(data["u"], dtype=float)
                 if prev is not None and float(prev[0] @ u) < 0.0:
-                    node = (t, q.copy(), Y[n:2 * n, k].copy(), Y[n:2 * n, k].copy(), gap, pls)
+                    node = self._node(t, q, Y[n:2 * n, k], gap, pls)
                     if not self._could_not_have_met(el, radii, prev[1], node):
                         raise MotionError("contact %s: the closest-point direction between the parts %s and %s "
                                           "reversed between t = %.6g s and t = %.6g s, so the pair may have passed "
                                           "through or beside each other unseen; use a smaller step"
                                           % (el.name, el.b1.name, el.b2.name, prev[1][0], t))
-                prev = (u, (t, q.copy(), Y[n:2 * n, k].copy(), Y[n:2 * n, k].copy(), gap, pls), k)
+                prev = (u, self._node(t, q, Y[n:2 * n, k], gap, pls), k)
+
+    def _events_at(self, t):
+        """The events the run resolved at the time ``t`` (within ``_KNOT_TOL``), merged into one: the state before the first,
+        the velocity after the last, and the pairs they belong to; None when there is none."""
+        ks = [k for k in self._knots if abs(k[0] - t) <= _KNOT_TOL]
+        return (ks[0][1], ks[0][2], ks[-1][3], [k[4] for k in ks]) if ks else None
+
+    def _node(self, t, q, v, gap, pls):
+        """The node of the output step at ``t``: the stored velocity is the one before an event that falls on the step, so
+        the velocity after it (that of the last simultaneous event) is the one the next interval starts with."""
+        ev = self._events_at(t)
+        return (t, q.copy(), v.copy(), ev[2].copy() if ev else v.copy(), gap, pls)
 
     def _could_not_have_met(self, el, radii, a, b, depth=12):
         """True when the pair provably did not touch between the nodes ``a`` and ``b``, each ``(t, q, v_in, v_out, gap,
         placements)`` (``v_in`` and ``v_out`` are the joint velocities just before and just after the node; they differ
         only at an event). An event inside the interval (a bounce, a lock or release: the velocity jumps) splits it
         there. Within a piece the joint path is taken as the cubic Hermite interpolant of the two end states, exact for
-        a quadratic path (a ballistic arc). Meeting needs gap_a + gap_b <= the path length of the relative motion,
-        which for a path no further than ``dev`` from the chord of the end placements is at most ``reach + 2 dev``
-        (``_cannot_have_met``); ``reach`` is the chord (``_reach``) and ``dev`` the distance of the Hermite midpoint's
-        placements from the chord's midpoint, summed over both parts. When that cannot be excluded the piece is halved
-        at the Hermite midpoint (value and slope) and each half is judged the same way, down to ``depth`` halvings: a
-        body that goes round a corner is cleared, one that goes through its partner finds a sample at zero gap (or a
-        piece it cannot clear) and stays refused. What this does not prove: a path that departs from its cubic by more
-        than the midpoint shows (a fourth-order wiggle between two steps with no event), and any event the integrator
-        did not stop at."""
+        a quadratic path (a ballistic arc). Meeting needs gap_a + gap_b <= reach + 2 dev (``_cannot_have_met``), where
+        ``reach`` is the chord of the end placements (``_reach``) and ``dev`` bounds how far the path lies from that chord,
+        summed over both parts: the placement's own bulge along the straight joint line (measured at its midpoint) plus
+        the whole cubic's offset from that line, ``_cubic_offset`` per joint coordinate carried to mm by the largest
+        corner speed per coordinate at the two ends and the line's midpoint (``_Contact.levers``; exact for sliders, a
+        sampled constant where a chain's lever arms change within the piece). When that cannot be excluded the piece is
+        halved at the Hermite midpoint (value and slope) and each half is judged the same way, down to ``depth``
+        halvings: a body that goes round a corner is cleared, one that goes through its partner finds a sample at zero
+        gap (or a piece it cannot clear) and stays refused. An event of this very pair at its touch (the solver
+        found and resolved the touch, so it is not an unseen one) splits it there and the halves are judged from just
+        before to just after the touch (``_TOUCH_FRACTION`` of each half); the touch itself is trusted, an event of
+        another pair that finds this one touching is not. What this does not prove: the lever arms along a piece, a
+        fourth-order wiggle beyond the cubic, and any event the integrator did not stop at."""
         m = self.m
         ta, tb = a[0], b[0]
-        inner = [k for k in getattr(self, "_knots", []) if ta < k[0] < tb]
+        inner = [k for k in getattr(self, "_knots", []) if ta + _KNOT_TOL < k[0] < tb - _KNOT_TOL]
         if inner:
-            t, q, v_in, v_out = min(inner, key=lambda k: k[0])
+            t0 = min(k[0] for k in inner)
+            t = t0
+            q, v_in, v_out, pairs = self._events_at(t0)
             g, _row, _data = el.probe(m, q)
-            if g <= 1e-4:
+            pls = (App.Placement(el.sh1.Placement), App.Placement(el.sh2.Placement))
+            c = (t, q, v_in, v_out, g, pls)
+            own = any(x is el for x in pairs) and g <= 2.0 * el.tol + 1e-4      # a contact event fires inside the tolerance band
+            if g > 1e-4 and not own:
+                return self._could_not_have_met(el, radii, a, c, depth) and self._could_not_have_met(el, radii, c, b, depth)
+            if not own:
                 return False
-            c = (t, q, v_in, v_out, g, (App.Placement(el.sh1.Placement), App.Placement(el.sh2.Placement)))
-            return (self._could_not_have_met(el, radii, a, c, depth) and self._could_not_have_met(el, radii, c, b, depth))
+            f = _TOUCH_FRACTION
+            nodes = []
+            for (n0, n1, vs, ve, s) in ((a, c, a[3], v_in, 1.0 - f), (c, b, v_out, b[2], f)):
+                qn, vn = _hermite(n0[1], n1[1], vs, ve, n1[0] - n0[0], s)
+                gn, _row, _data = el.probe(m, qn)
+                if gn <= 1e-4:
+                    return False
+                nodes.append((n0[0] + s * (n1[0] - n0[0]), qn, vn, vn, gn,
+                              (App.Placement(el.sh1.Placement), App.Placement(el.sh2.Placement))))
+            return self._could_not_have_met(el, radii, a, nodes[0], depth) and self._could_not_have_met(el, radii, nodes[1], b, depth)
         _ta, qa, _vi, va, ga, pa = a
         _tb, qb, vb, _vo, gb, pb = b
         h = tb - ta
+        qc = 0.5 * (qa + qb)
+        el._place(m, qc)
+        pc = (App.Placement(el.sh1.Placement), App.Placement(el.sh2.Placement))
+        reach = sum(_reach(p0, p1, r) for p0, p1, r in zip(pa, pb, radii))
+        off = _cubic_offset(qa, qb, va, vb, h)
+        lev = [m.np.maximum(m.np.maximum(x, y), z) for x, y, z in zip(el.levers(m, qa), el.levers(m, qb), el.levers(m, qc))]
+        dev = sum(_deviation(p0, p1, p2, r) + float(l @ off) for p0, p1, p2, r, l in zip(pa, pb, pc, radii, lev))
+        if _cannot_have_met(ga, gb, reach + _inflation(dev)):
+            return True
         qm, vm = _hermite_mid(qa, qb, va, vb, h)
         gm, _row, _data = el.probe(m, qm)
         pm = (App.Placement(el.sh1.Placement), App.Placement(el.sh2.Placement))
         mid = (0.5 * (ta + tb), qm, vm, vm, gm, pm)
-        reach = sum(_reach(p0, p1, r) for p0, p1, r in zip(pa, pb, radii))
-        dev = sum(_deviation(p0, p1, p2, r) for p0, p1, p2, r in zip(pa, pb, pm, radii))
-        if _cannot_have_met(ga, gb, reach + _inflation(dev)):
-            return True
         if depth == 0 or min(ga, gb) <= 1e-4 or gm <= 1e-4:
             return False
         return (self._could_not_have_met(el, radii, a, mid, depth - 1)
