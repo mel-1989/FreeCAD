@@ -466,7 +466,11 @@ def _check_contact_values(what, restitution, tolerance):
 
 
 def edit_load(load, **props):
-    """Change properties of a load (one undo transaction)."""
+    """Change properties of a load (one undo transaction). A contact's restitution and tolerance are checked as in
+    ``add_contact``."""
+    if load.Kind == "Contact" and ("Restitution" in props or "ContactTolerance" in props):
+        _check_contact_values(load.Name, props.get("Restitution", load.Restitution),
+                              props.get("ContactTolerance", load.ContactTolerance))
     with _transaction(load.Document, "Edit dynamic analysis load"):
         _assign(load, props)
     return load
@@ -1365,6 +1369,29 @@ def _guard_enabled():
     return True
 
 
+def _allow(el, gap):
+    """Relative displacement (m) of the pair that one guard chunk may cover."""
+    return max(0.5 * el.t_min, 0.8 * (gap - el.tol) * 1e-3)
+
+
+def _plan_accel(a):
+    return a
+
+
+def _plan_chunk(v0, a, allow):
+    """Longest chunk (s) over which 1.5 (v0 + a h) h stays within ``allow``: speed bound ``v0`` (m/s) and the bound ``a`` (m/s^2)
+    of its rate of change."""
+    if a > 1e-12:
+        return (-1.5 * v0 + math.sqrt(2.25 * v0 * v0 + 6.0 * a * allow)) / (3.0 * a)
+    if v0 > 1e-12:
+        return allow / (1.5 * v0)
+    return math.inf
+
+
+def _chunk_too_long(dt, v0, v1, allow):
+    return 1.5 * dt * max(v0, v1) > allow * (1.0 + 1e-9)
+
+
 def _unarmed_in_band():
     return True
 
@@ -1711,17 +1738,11 @@ class _Sim:
         h_min, items = max(self.grid[-1] - t, self.step), []
         for el in guards:
             gap = el.probe(m, q)[0]
-            allow = max(0.5 * el.t_min, 0.8 * (gap - el.tol) * 1e-3)
+            allow = _allow(el, gap)
             v0 = el.speed(m, q, qd)
-            a = el.speed(m, q, qdd)
+            a = _plan_accel(el.speed(m, q, qdd))
             items.append((el, v0, allow))
-            if a > 1e-12:
-                h = (-1.5 * v0 + math.sqrt(2.25 * v0 * v0 + 6.0 * a * allow)) / (3.0 * a)
-            elif v0 > 1e-12:
-                h = allow / (1.5 * v0)
-            else:
-                h = math.inf
-            h_min = min(h_min, h)
+            h_min = min(h_min, _plan_chunk(v0, a, allow))
         return h_min, items
 
     def _chunk_ok(self, plan, t0, t1, y1):
@@ -1732,7 +1753,7 @@ class _Sim:
         m = self.m
         for el, v0, allow in plan[1]:
             v1 = el.speed(m, y1[:m.n], y1[m.n:])
-            if 1.5 * dt * max(v0, v1) > allow * (1.0 + 1e-9):
+            if _chunk_too_long(dt, v0, v1, allow):
                 return False
         return True
 

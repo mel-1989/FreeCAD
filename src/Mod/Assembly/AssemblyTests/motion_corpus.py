@@ -877,6 +877,60 @@ def make_release_by_spring(name):
 make_release_by_spring("contact_released_by_spring")
 
 
+def make_release_in_band(name, eps=1e-4, end=0.2, step=0.0002):
+    """The set-up of ``contact_released_by_spring`` with block B's swing tuned so that, at the top of each swing, the spring pushes
+    block A up by only ``eps`` times A's weight more than the weight: the multiplier goes tensile (the pair is released while A is
+    still inside the tolerance band) for a few hundred microseconds, and then the push drops below the weight again. A rises by
+    far less than the tolerance and comes back, so physically it never leaves the plate, and B keeps oscillating about its static
+    stretch, z_B = z_B0 + a (1 - cos w t), the whole run. Without the re-arming after a release the pair stays armed with its gap
+    inside the band, cannot see the turn-around, and A falls through the plate. The output step is 0.2 ms because the solver's
+    step is capped at it and the whole excursion lasts under 2 ms: with a step of 2 ms the integrator can step over the
+    turn-around and the pair is lost even with the re-arming (a limit of the slice, recorded in the run note)."""
+    k, L0 = 500.0, 40.0
+    mA = mB = 1.0
+    x_eq = mB * G / k * 1e3
+    a = (1.0 + eps) * (x_eq + mA * G / k * 1e3)
+    x0 = x_eq + a
+    w = math.sqrt(k / mB)
+    tol = MO.CONTACT_TOLERANCE
+    zB0 = -(L0 + x0) - 50.0
+    t_top = math.pi / w
+
+    def build(doc, mode, host=None):
+        rig = Rig(doc, mode, host)
+        A = rig.box("A", 50, 50, 50, P(V(150, 0, 0), R()))
+        B = rig.box("B", 50, 50, 50, P(V(150, 0, zB0), R()))
+        rig.slide("Rail", rig.G, A, (175, 25, 25), (0, 0, -1))
+        rig.slide("RailB", A, B, (175, 25, zB0 + 25), (0, 0, -1))
+        rig.finish()
+        study = new_study(rig, end, step)
+        MO.set_mass(study, A, density=BLOCK_RHO)
+        MO.set_mass(study, B, density=BLOCK_RHO)
+        MO.add_gravity(study)
+        MO.add_spring(study, A, rig.L(A, (175, 25, 0)), B, rig.L(B, (175, 25, zB0 + 50)), k, L0)
+        MO.add_contact(study, A, rig.G, 0.5)
+
+        def check(res, rows):
+            t = res["t"]
+            zA = [pl_of(d).Base.z for d in series(res, "A")]
+            zB = [pl_of(d).Base.z for d in series(res, "B")]
+            rel = _events(res, "release")
+            rows.add(name, "the pair is released inside the band near the top of the first swing (s)",
+                     abs(rel[0]["t"] - t_top) if rel else 1.0, 5e-3, "%d releases, first at %s; the top of the swing is %.4f s"
+                     % (len(rel), "%.5f s" % rel[0]["t"] if rel else "never", t_top))
+            rows.add(name, "A never goes below the plate surface (mm)", max(0.0, -min(zA)), 1e-9, "lowest z_A %.3g mm" % min(zA))
+            rows.add(name, "A never rises above the tolerance band (mm)", max(0.0, max(zA) - tol), 1e-9, "highest z_A %.3g mm" % max(zA))
+            rows.add(name, "B oscillates about its static stretch the whole run (mm)",
+                     max(abs(zB[i] - (zB0 + a * (1.0 - math.cos(w * t[i])))) for i in range(len(t))), 1e-5)
+            contact_rows_common(rows, name, res, tol, 0.5, False)
+        return Case(name, "contact/release", rig, study, check, step, study.TimeEnd, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_release_in_band("contact_released_in_band_returns_to_rest")
+
+
 # joint stops: a point-mass pendulum (L = 400 mm, released at 60 degrees from the vertical, hand mass) with a revolute
 # limit of 0 to 0.05 rad in the joint's own convention (the verifier's case of slice 6a: the pendulum must stop there
 # and not swing to 1.047 rad), and a block on a slider with a length limit
@@ -1213,6 +1267,70 @@ def make_pressed_ball(name, e=0.9, h_mm=5.0, accel=100.0, end=0.4, step=0.004):
 
 
 make_pressed_ball("ball_pressed_captured_by_the_interval_rule")
+
+
+def make_two_plates(name, h_mm=0.5, vA=200.0, vB=1800.0, mA=1e-3, mB=3e-3, e=0.6, step=0.1, end=0.5):
+    """Two thin plates (``h_mm`` thick, no gravity) on opposing sliders close head-on: A comes down at ``vA`` mm/s, B goes up at
+    ``vB`` mm/s, from a 199.5 mm gap, and the output step is coarse (0.1 s: the fast plate covers hundreds of its own
+    thicknesses per step). Each plate carries a point mass (``mA``, ``mB`` kg). They meet when the gap has shrunk to the
+    tolerance, at t = (199.5 - tol) / (vA + vB) in mm and mm/s. Momentum and Newton restitution along z give the speeds after
+    the impact: uA' = (mA uA + mB uB - mB e (uA - uB)) / (mA + mB) and uB' = (mA uA + mB uB + mA e (uA - uB)) / (mA + mB), with
+    uA = -vA and uB = +vB; from there each plate keeps its speed (no gravity, and the plates do not meet again). The guard's
+    plan for a constant speed is exact (a chunk covers allow / 1.5 of the speed bound), so the run needs no retries."""
+    tol = MO.CONTACT_TOLERANCE
+    uA, uB = -vA * 1e-3, vB * 1e-3
+    M = mA + mB
+    uA2 = (mA * uA + mB * uB - mB * e * (uA - uB)) / M
+    uB2 = (mA * uA + mB * uB + mA * e * (uA - uB)) / M
+    gap0 = 300.0 - (100.0 + h_mm)
+    t_i = (gap0 - tol) / (vA + vB)
+
+    def build(doc, mode, host=None):
+        rig = Rig(doc, mode, host, ground_size=(1, 1, 1))
+        rig.G.Placement = P(V(5000, 5000, -1), R())             # the ground is out of the way: both plates move
+        A = rig.box("PlateA", 100, 100, h_mm, P(V(-50, -50, 300), R()))
+        B = rig.box("PlateB", 100, 100, h_mm, P(V(-50, -50, 100), R()))
+        rig.slide("SlideA", rig.G, A, (0, 0, 300), (0, 0, -1))
+        rig.slide("SlideB", rig.G, B, (0, 0, 100), (0, 0, 1))
+        rig.finish()
+        study = new_study(rig, end, step)
+        MO.set_mass(study, A, mass=mA, com=(50, 50, h_mm / 2), inertia=[0.0] * 6)
+        MO.set_mass(study, B, mass=mB, com=(50, 50, h_mm / 2), inertia=[0.0] * 6)
+        MO.add_contact(study, A, B, e)
+        study.Velocities = json.dumps({"SlideA": vA, "SlideB": vB})
+
+        def check(res, rows):
+            t = res["t"]
+            za = [pl_of(d).Base.z for d in series(res, "PlateA")]
+            zb = [pl_of(d).Base.z for d in series(res, "PlateB")]
+            imp = _events(res, "impact")
+            rows.add(name, "exactly one impact, no capture", 0.0 if len(imp) == 1 and not _events(res, "capture") else 1.0, 0.0,
+                     "%d impacts" % len(imp))
+            rows.add(name, "impact time (s)", abs(imp[0]["t"] - t_i) if imp else 1.0, 1e-8, "truth %.9f s" % t_i)
+            rows.add(name, "gap at the impact equals the tolerance (mm)", abs(imp[0]["gap"] - tol) if imp else 1.0, 1e-6)
+            rows.add(name, "closing speed before the impact (m/s)", abs(imp[0]["vn_before"] + (vA + vB) * 1e-3) if imp else 1.0, 1e-9)
+            rows.add(name, "separating speed after the impact is e times it (m/s)",
+                     abs(imp[0]["vn_after"] - e * (vA + vB) * 1e-3) if imp else 1.0, 1e-9)
+            pre = [i for i, tt in enumerate(t) if tt < t_i - 1e-9]
+            post = [i for i, tt in enumerate(t) if tt > t_i + 1e-9]
+            rows.add(name, "grid samples on both sides of the impact", 0.0 if pre and len(post) >= 3 else 1.0, 0.0)
+            rows.add(name, "before: both plates at constant speed (mm)",
+                     max(max(abs(za[i] - (300.0 - vA * t[i])), abs(zb[i] - (100.0 + vB * t[i]))) for i in pre) if pre else 1.0, 1e-9)
+            zai, zbi = 300.0 - vA * t_i, 100.0 + vB * t_i
+            worst = max(max(abs(za[i] - (zai + uA2 * 1e3 * (t[i] - t_i))), abs(zb[i] - (zbi + uB2 * 1e3 * (t[i] - t_i)))) for i in post)
+            rows.add(name, "after: momentum and restitution speeds (mm)", worst, 1e-6,
+                     "truth uA' %.4f m/s, uB' %.4f m/s; plate A at the end %.4f mm" % (uA2, uB2, za[-1]))
+            rows.add(name, "the plates never cross: tolerance minus the smallest gap on the grid (mm)",
+                     max(0.0, tol - min(za[i] - zb[i] - h_mm for i in post)), 1e-6)
+            rows.add(name, "the plan is tight at a constant speed: no retries", float(res["contact"]["guard"]["retries"]), 0.0,
+                     "%d chunks" % res["contact"]["guard"]["chunks"])
+            contact_rows_common(rows, name, res, tol, e, False)
+        return Case(name, "contact/thin-plates", rig, study, check, step, study.TimeEnd, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_two_plates("two_thin_plates_head_on_coarse_step")
 
 
 def make_force(name, axis_deg, force, frame):

@@ -244,7 +244,57 @@ def probe_baumgarte_pulls_a_displaced_lock_back():
         App.closeDocument(doc.Name)
 
 
-PROBES = {"part_documents": probe_part_documents_unchanged, "restores_placements": probe_run_restores_placements,
+def _bounce_guard(patches=None, case="ball_bounce_e09_step01"):
+    """Run a coarse-step bounce case (output step 0.1 s) with ``patches`` (a dict of ``patched`` arguments, or None);
+    returns (failing rows, guard record, the exception if the run raised)."""
+    try:
+        with patched(**(patches or {})):
+            rows, _c, res = run_case(case, "single")
+        return failing_rows(rows), res["contact"]["guard"], None
+    except MO.MotionError as exc:
+        return [], {"chunks": 0, "retries": 0}, exc
+
+
+def probe_guard_plan_needs_no_retries():
+    """The guard's plan includes the acceleration term: a ball falling and bouncing at a coarse step is covered by the
+    planned chunks with no halving at all (an unplanned chunk that the check rejects counts as a retry)."""
+    bad, guard, exc = _bounce_guard()
+    problems = ["the run raised: %s" % exc] if exc else []
+    if bad:
+        problems.append("rows fail: %s" % [r["metric"] for r in bad][:3])
+    if guard["retries"] != 0:
+        problems.append("%d retries in a run whose plan should be tight" % guard["retries"])
+    if guard["chunks"] < 20:
+        problems.append("only %d chunks: the guard did not plan" % guard["chunks"])
+    return problems
+
+
+def _oversized_plan():
+    """Test hook, not a model of anything real: every planned chunk is made 8 times longer than the plan allows, so the
+    check after the chunk must reject it and the halving must bring it back."""
+    orig = MO._Sim._plan
+
+    def plan(self, guards, t, y, rhs):
+        h, items = orig(self, guards, t, y, rhs)
+        return h * 8.0, items
+    return plan
+
+
+def probe_guard_retries_recover():
+    """With the planned chunks forced 8 times too long (``_oversized_plan``), the chunk check rejects them, the retry
+    counter is above zero, and the halving still gives the closed-form bounce (the case's own rows)."""
+    with patched(MO._Sim, _plan=_oversized_plan()):
+        bad, guard, exc = _bounce_guard()
+    problems = ["the run raised: %s" % exc] if exc else []
+    if bad:
+        problems.append("rows fail after the retries: %s" % [r["metric"] for r in bad][:3])
+    if guard["retries"] < 20:
+        problems.append("only %d retries with chunks forced 8 times too long" % guard["retries"])
+    return problems
+
+
+PROBES = {"guard_plan_needs_no_retries": probe_guard_plan_needs_no_retries,
+          "guard_retries_recover": probe_guard_retries_recover, "part_documents": probe_part_documents_unchanged, "restores_placements": probe_run_restores_placements,
           "undo": probe_undo, "two_runs": probe_two_runs_identical,
           "overlap_refused": probe_overlapping_start_is_refused, "band_refused": probe_start_inside_the_band_is_refused,
           "baumgarte": probe_baumgarte_pulls_a_displaced_lock_back}
@@ -497,6 +547,41 @@ def _m_slider_sign_ignores_reference():
     return dict(_joint_sign=lambda typ, sgn: 1.0 if typ == "Slider" else sgn)
 
 
+def _m_speed_bound_part1_only():
+    def speed(self, model, q, v):
+        np = model.np
+        Rd, td, A, O = model.kin(q)
+        b, cs = self.b1, self.corners[0]
+        base, R = model.pose(b, Rd, td)
+        base = base * 1e-3
+        return max(float(np.linalg.norm(model.jac(b, R @ c + base, A, O)[0] @ v)) for c in cs) if b.chain else 0.0
+    return dict(Contact_speed=speed)
+
+
+def _m_allow_10x():
+    return dict(_allow=lambda el, gap: max(5.0 * el.t_min, 0.8 * (gap - el.tol) * 1e-3))
+
+
+def _m_chunk_check_never_fails():
+    return dict(_chunk_too_long=lambda dt, v0, v1, allow: False)
+
+
+def _m_accel_term_dropped():
+    return dict(_plan_accel=lambda a: 0.0)
+
+
+_PLAN_CHUNK = MO._plan_chunk
+
+
+def _m_constant_speed_chunk_30x():
+    return dict(_plan_chunk=lambda v0, a, allow: allow / (0.05 * v0) if a <= 1e-12 and v0 > 1e-12 else _PLAN_CHUNK(v0, a, allow))
+
+
+def _m_no_resettle_after_release():
+    orig = MO._Sim._settle
+    return dict(Sim__settle=lambda self, el, t, q, qd, mode: qd if mode == "release" else orig(self, el, t, q, qd, mode))
+
+
 MUTANTS = {
     "gravity_wrong_sign": (_m_gravity_sign, ["fall_vertical", "pend_30_L400"], []),
     "gravity_wrong_axis": (_m_gravity_axis, ["fall_vertical", "pend_30_L400"], []),
@@ -539,6 +624,12 @@ MUTANTS = {
     "capture_interval_rule_removed": (_m_interval_rule_removed, ["ball_pressed_captured_by_the_interval_rule"], []),
     "baumgarte_stabilisation_off": (_m_baumgarte_off, [], ["baumgarte"]),
     "slider_stop_ignores_which_part_moves": (_m_slider_sign_ignores_reference, ["stop_slider_ref1_e08"], []),
+    "guard_speed_bound_counts_part_1_only": (_m_speed_bound_part1_only, ["two_thin_plates_head_on_coarse_step"], []),
+    "guard_allows_ten_times_the_displacement": (_m_allow_10x, ["two_thin_plates_head_on_coarse_step"], []),
+    "guard_chunk_check_never_fails": (_m_chunk_check_never_fails, [], ["guard_retries_recover"]),
+    "guard_plan_drops_the_acceleration_term": (_m_accel_term_dropped, [], ["guard_plan_needs_no_retries"]),
+    "guard_constant_speed_chunk_30_times_too_long": (_m_constant_speed_chunk_30x, ["two_thin_plates_head_on_coarse_step"], []),
+    "released_pair_not_re_armed_inside_the_band": (_m_no_resettle_after_release, ["contact_released_in_band_returns_to_rest"], []),
 }
 
 
@@ -546,11 +637,13 @@ MUTANTS = {
 def mutated(name):
     spec = MUTANTS[name][0]()
     com = spec.pop("Model_com", None)
+    on_sim = {k[len("Sim_"):]: spec.pop(k) for k in [k for k in spec if k.startswith("Sim_")]}      # methods of _Sim and _Contact
+    on_contact = {k[len("Contact_"):]: spec.pop(k) for k in [k for k in spec if k.startswith("Contact_")]}
     saved = MO.Model._com
     try:
         if com is not None:
             MO.Model._com = com
-        with patched(**spec):
+        with patched(**spec), patched(MO._Sim, **on_sim), patched(MO._Contact, **on_contact):
             yield
     finally:
         MO.Model._com = saved
@@ -1026,6 +1119,14 @@ class TestMotion(unittest.TestCase):
             with self.assertRaises(MO.MotionError):
                 MO.add_contact(c.study, c.body, c.body, 0.5)
             self.assertEqual(doc.UndoCount, n2 + 1)                          # a refusal leaves no transaction
+            e_now, tol_now = ld.Restitution, ld.ContactTolerance
+            for bad in (dict(Restitution=1.5), dict(Restitution=-0.1), dict(Restitution=float("nan")),
+                        dict(ContactTolerance=0.0), dict(ContactTolerance=-1.0), dict(Restitution=0.5, ContactTolerance=-1.0)):
+                with self.assertRaises(MO.MotionError, msg="edit_load %s" % bad):
+                    MO.edit_load(ld, **bad)
+            self.assertEqual((ld.Restitution, ld.ContactTolerance, doc.UndoCount), (e_now, tol_now, n2 + 1))
+            MO.edit_load(ld, Restitution=1.0, ContactTolerance=0.01)             # the limits themselves are accepted
+            self.assertEqual((ld.Restitution, ld.ContactTolerance), (1.0, 0.01))
             # an out-of-range value edited in afterwards is refused when the study runs
             ld2 = [x for x in MO.loads(c.study) if x.Name == added.Name][0]
             ld2.Restitution = 2.0
@@ -1168,6 +1269,30 @@ class TestMotion(unittest.TestCase):
                     step, len(imp), guard["chunks"], guard["retries"], min(z)))
             finally:
                 App.closeDocument(doc.Name)
+
+    def test_guard_halving_below_the_floor_raises_a_clear_error_and_leaves_nothing_patched(self):
+        """The retry loop halves a rejected chunk until it would be shorter than ``_MIN_CHUNK``, then raises. A real run
+        reaches the floor only for a body far faster than the plate is thick, so this test makes the check fail
+        for every chunk (a patched ``_Sim._chunk_ok``): the honest content is the floor path, not the physics."""
+        n_calls = []
+
+        def never_ok(self, plan, t0, t1, y1):
+            n_calls.append(t1 - t0)
+            return False
+        with patched(MO._Sim, _chunk_ok=never_ok):
+            with self.assertRaises(MO.MotionError) as cm:
+                run_case("ball_bounce_e09_step01", "single")
+        self.assertIn("cannot keep a body from crossing", str(cm.exception))
+        self.assertNotIsInstance(cm.exception, MO.MotionRefused)
+        self.assertGreater(len(n_calls), 10)                         # it halved repeatedly, not once
+        self.assertTrue(all(b < a for a, b in zip(n_calls, n_calls[1:])))       # each retry is a shorter chunk
+        rows, _c, res = run_case("ball_bounce_e09_step01", "single")             # unpatched again
+        self.assertEqual(failing_rows(rows), [])
+        self.assertEqual(res["contact"]["guard"]["retries"], 0)
+
+    def test_guard_retries_are_counted_and_recover_the_closed_form(self):
+        self.assertEqual(probe_guard_retries_recover(), [])
+        self.assertEqual(probe_guard_plan_needs_no_retries(), [])
 
     # -- check 5
     def test_mutants_are_caught(self):
