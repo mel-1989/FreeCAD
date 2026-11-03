@@ -12,6 +12,7 @@ set(Sketcher_Scripts
     SketcherExample.py
     TestSketcherApp.py
     Profiles.py
+    SketcherDiagnosis.py
 )
 
 set(Sketcher_TestScripts
@@ -24,6 +25,9 @@ set(Sketcher_TestScripts
     SketcherTests/TestSketchCarbonCopyReverseMapping.FCStd
     SketcherTests/TestSketchInternalFaces.py
     SketcherTests/TestSketcherEllipse.py
+    SketcherTests/TestSketchDiagnosis.py
+    SketcherTests/SketchDiagnosisCorpus.py
+    SketcherTests/SketchBenchmark.py
 )
 
 if(BUILD_GUI)
