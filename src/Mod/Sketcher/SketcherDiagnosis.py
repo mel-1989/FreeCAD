@@ -47,8 +47,15 @@ with a Reiter hitting-set tree: each node removes a set of constraints, asks
 the solver whether the rest still conflicts, seeds a search from the solver's
 own conflict list (grown through shared geometry when the list alone is not
 yet a conflict) and shrinks it with a chunked deletion filter, which ends in
-a set from which no single member can be dropped.  Every returned set is
-re-verified (conflicting, and consistent without any one member).  The
+a set from which no single member can be dropped.  The solver's
+detection depends on the geometry it starts from and every successful solve
+moves the geometry, so every probe starts from the geometry the sketch was
+drawn with (it is put back after each successful solve).  Every returned set
+is then re-verified on brand-new copies of the user's sketch, one per subset
+tested up to 300 constraints (conflicting, and consistent without any one
+member); a set that fails is shrunk again or dropped, supersets of other sets
+are dropped, and a missing set is searched for so that the sets together still
+cover the sketch.  The
 number of sets and the run time are capped; ``complete`` says whether the
 enumeration finished.
 
@@ -108,8 +115,13 @@ Limits.  Detection is the solver's rank-based detection: infeasible but
 full-rank systems (a triangle with sides 3, 4 and 10) and solver failures
 without a conflict list are reported as ``solver_failed`` without conflict
 sets.  Conflict sets are minimal with respect to the solver's predicate, which
-is monotone in practice but not proven to be.  Fix ranking does not know what a
-designer wants.
+is monotone in practice but not proven to be.  Block constraints that the raw
+solver does not flag are reported as solved (faithful to the solver).  Because
+detection is rank-based it can depend on the drawn geometry (two lines drawn
+exactly horizontal, with a distance of 12 against a horizontal extent of 10,
+are flagged as a conflict; drawn slightly off they might not be): the sets are
+those of the sketch as drawn.  Fix ranking does not know what a designer
+wants.
 """
 
 import time
@@ -254,10 +266,21 @@ class _Probe:
         self.cand_set = set(self.candidates)
         self.state = {i: True for i in self.candidates}
         self.solves = 0
+        # The solver's conflict detection depends on the geometry it starts
+        # from, and every solve moves the geometry.  Each probe therefore
+        # starts from the geometry the sketch had when the probe was built.
+        self.start_geometry = list(sk.Geometry)
+        self.moved = False
 
     def status(self):
         self.solves += 1
-        return _Status(self.sk)
+        if self.moved:
+            self.sk.Geometry = self.start_geometry
+        st = _Status(self.sk)
+        # a solve that fails (conflict, solver failure, malformed) leaves the
+        # geometry alone; one that succeeds moves it
+        self.moved = st.code in (0, -2)
+        return st
 
     def activate_only(self, keep):
         """Activate exactly `keep` among the candidates (others inactive)."""
@@ -362,11 +385,66 @@ def _enumerate_conflict_sets(probe, max_sets, deadline):
     return found, complete
 
 
-def _verify_minimal(probe, members):
+_FRESH_COPY_LIMIT = 300
+
+
+class _FreshTester:
+    """The reference predicate for the final verification: does a subset of
+    the candidates conflict, asked from the geometry the user drew and with no
+    state left over from earlier solves?
+
+    Up to ``_FRESH_COPY_LIMIT`` constraints every test gets a brand-new copy
+    of the user's sketch.  On larger sketches a copy costs one full solve, so
+    one new copy serves all tests of a set and the drawn geometry is put back
+    before each test (the geometry is the only solver input that earlier
+    solves change)."""
+
+    def __init__(self, diagnoser):
+        self.d = diagnoser
+        self.per_test = diagnoser.n <= _FRESH_COPY_LIMIT
+        self.sk = None
+
+    def open_group(self):
+        """Start a group of tests that may share one copy (large sketches)."""
+        self.close_group()
+
+    def close_group(self):
+        if self.sk is not None:
+            _discard(self.sk)
+            self.sk = None
+
+    def conflicts(self, subset):
+        keep = set(subset)
+        sk = self.sk
+        fresh = sk is None or self.per_test
+        if fresh:
+            self.close_group()
+            sk = self.d._copy()
+            if not self.per_test:
+                self.sk = sk
+                self.geo = list(sk.Geometry)
+        else:
+            sk.Geometry = self.geo
+        try:
+            for i in self.d.probe.candidates:
+                sk.setActive(i, i in keep)
+            sk.solve()
+            return bool(sk.ConflictingConstraints)
+        finally:
+            if self.per_test:
+                _discard(sk)
+
+
+def _verify_minimal(tester, members):
+    """Conflicting, and consistent without any one member."""
     members = sorted(members)
-    if not probe.conflicts_on(members):
-        return False
-    return all(not probe.conflicts_on([x for x in members if x != m]) for m in members)
+    tester.open_group()
+    try:
+        if not tester.conflicts(members):
+            return False
+        return all(not tester.conflicts([x for x in members if x != m]) for m in members)
+    finally:
+        tester.close_group()
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +661,55 @@ class _Diagnoser:
         self.copies += 1
         return self.scratch.copy()
 
+    def _verified_sets(self, found):
+        """Re-verify every found set on fresh copies.  A set that fails is
+        shrunk again against the fresh predicate (or dropped if it does not
+        conflict fresh), supersets of other sets are dropped, and if anything
+        changed the sets are checked to cover the sketch: with one member of
+        each set removed no conflict may remain, else the missing set is
+        searched for.  Returns (sets, changed)."""
+        probe = self.probe
+        tester = _FreshTester(self)
+        fresh = tester.conflicts
+        out = []
+        changed = False
+        for members in found:
+            members = sorted(members)
+            if _verify_minimal(tester, members):
+                out.append(members)
+                continue
+            changed = True
+            tester.open_group()
+            if fresh(members):
+                out.append(sorted(_shrink(members, fresh)))
+            tester.close_group()
+        out = [m for m in out if not any(o != m and set(o) < set(m) for o in out)]
+        out = [list(m) for m in sorted({tuple(m) for m in out})]
+        self._covered = True
+        if changed:
+            for _ in range(self.max_sets):
+                hitting = set()
+                for m in sorted(out, key=len):
+                    if not (set(m) & hitting):
+                        hitting.add(max(m))
+                rest = [i for i in probe.candidates if i not in hitting]
+                tester.open_group()
+                if not fresh(rest):
+                    tester.close_group()
+                    break
+                if time.time() > self.deadline or len(out) >= self.max_sets:
+                    tester.close_group()
+                    self._covered = False
+                    break
+                new = sorted(_shrink(rest, fresh))
+                tester.close_group()
+                if new in out:
+                    self._covered = False
+                    break
+                out.append(new)
+            out.sort()
+        return out, changed
+
     def _drawing_errors(self, probe):
         """Relative error of every candidate at the drawn (not yet solved)
         geometry.  Must run before the first solve of the working copy."""
@@ -709,10 +836,9 @@ class _Diagnoser:
         if base.has_conflict:
             found, complete = _enumerate_conflict_sets(probe, self.max_sets, self.deadline)
             result["complete"] = complete
-            for members in found:
-                if not _verify_minimal(probe, members):
-                    result["complete"] = False
-                sets.append(sorted(members))
+            sets, changed = self._verified_sets(found)
+            if changed:
+                result["complete"] = result["complete"] and self._covered
         sets.sort()
 
         # Redundancy on the sketch with one hitting set of the conflicts removed.

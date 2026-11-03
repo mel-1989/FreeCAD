@@ -58,24 +58,46 @@ def _active_name():
 
 
 class _Check:
-    """Independent solver checks on a copy, not using SketcherDiagnosis internals."""
+    """Independent solver checks, not using SketcherDiagnosis internals.
 
-    def __init__(self, sketch):
+    Every subset is tested on a brand-new sketch, never on a copy that earlier
+    probes have already solved: the solver's conflict detection depends on the
+    geometry it starts from.  With ``builder`` the sketch is rebuilt from the
+    corpus builder in a new document; without, the untouched user sketch is
+    copied afresh."""
+
+    def __init__(self, sketch, builder=None):
         self.previous = _active_name()
-        self.doc, self.sk = _scratch_copy(sketch)
-        cons = self.sk.Constraints
+        self.builder = builder
+        self.source = sketch
+        self.doc = FreeCAD.newDocument("TestDiagnosisCheck", "TestDiagnosisCheck", True, True)
+        # one persistent copy for the tests that apply fixes to it; the subset
+        # checks never touch it
+        self.sk = self.doc.copyObject(sketch, True) if builder is None else None
+        cons = sketch.Constraints
         self.candidates = [
             i
             for i, c in enumerate(cons)
             if c.IsActive and c.Driving and c.Type != "InternalAlignment"
         ]
 
+    def _fresh(self):
+        if self.builder is not None:
+            sk = self.builder(self.doc)
+            sk.Document.recompute()
+            return sk
+        return self.doc.copyObject(self.source, True)
+
     def conflicts_with_only(self, members):
         keep = set(members)
-        for i in self.candidates:
-            self.sk.setActive(i, i in keep)
-        self.sk.solve()
-        return [i - 1 for i in self.sk.ConflictingConstraints]
+        sk = self._fresh()
+        try:
+            for i in self.candidates:
+                sk.setActive(i, i in keep)
+            sk.solve()
+            return [i - 1 for i in sk.ConflictingConstraints]
+        finally:
+            self.doc.removeObject(sk.Name)
 
     def close(self):
         _close(self.doc, self.previous)
@@ -250,6 +272,34 @@ class TestSketchDiagnosis(unittest.TestCase):
             checked += 1
         self.assertGreater(checked, 25)
         self.__class__.stats["minimal_sets"] = "%d sets in %d cases" % (sets_total, checked)
+
+    def testGeometryDependentConflictsAgainstFreshBruteForce(self):
+        """Every subset of the candidates is solved on a sketch rebuilt from the
+        corpus builder; the minimal conflicting subsets must equal the reported
+        sets exactly (case readers_* once returned [2, 4, 5] and [1, 3, 4, 5])."""
+        import itertools
+
+        names = ("readers_expression", "readers_plain", "readers_arcs")
+        for name in names:
+            case = [c for c in self.cases if c.name == name][0]
+            chk = _Check(case.sketch, case.builder)
+            try:
+                minimal = []
+                for k in range(1, len(chk.candidates) + 1):
+                    for sub in itertools.combinations(chk.candidates, k):
+                        fs = frozenset(sub)
+                        if any(m <= fs for m in minimal):
+                            continue
+                        if chk.conflicts_with_only(fs):
+                            minimal.append(fs)
+            finally:
+                chk.close()
+            brute = sorted(sorted(m) for m in minimal)
+            self.assertEqual(brute, case.truth["conflict_sets"], name)
+            r = self.results[name]
+            got = sorted(sorted(cs["members"]) for cs in r["conflict_sets"])
+            self.assertEqual(got, brute, name)
+            self.assertTrue(r["complete"], name)
 
     def testKnownConflictSetsAreExact(self):
         exact = 0

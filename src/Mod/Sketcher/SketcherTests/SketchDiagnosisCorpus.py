@@ -56,7 +56,7 @@ DEG = math.pi / 180.0
 
 
 class Case:
-    def __init__(self, name, cls, sketch, truth, doc=None, real=False, scale=None):
+    def __init__(self, name, cls, sketch, truth, doc=None, real=False, scale=None, builder=None):
         self.name = name
         self.cls = cls
         self.sketch = sketch
@@ -64,6 +64,9 @@ class Case:
         self.doc = doc
         self.real = real
         self.scale = scale
+        # optional ``builder(doc) -> sketch`` that rebuilds the sketch from
+        # scratch, for oracles that need fresh solver state for every probe
+        self.builder = builder
 
     def __repr__(self):
         return "<Case %s/%s>" % (self.cls, self.name)
@@ -669,6 +672,71 @@ def _conflicting(doc, out):
     add("overlap_with_bystanders", s, [[0, 2], [2, 4]], 2)
 
 
+# Conflicts whose detection depends on the drawn geometry: the same set of
+# constraints answers differently on a geometry the solver has already moved.
+# Truths are exact minimal conflict sets from a brute force over all subsets,
+# each subset solved on a brand-new sketch.
+
+
+ARCS_TRUTH = [[0, 1, 2]]
+
+
+def build_readers(doc, expression=True):
+    """Two horizontal lines l and m; DistanceX l = 10, DistanceX m = 20 (the
+    expression ``w * 2`` when ``expression``), Distance l = 12, Equal l m.
+    Constraints: 0 Horizontal l, 1 Horizontal m, 2 DistanceX l, 3 DistanceX m,
+    4 Distance l, 5 Equal.  Truth: {0,1,2,3,5} (10 and 20 on equal lines),
+    {0,1,3,4,5} (12 and 20 on equal lines) and {2,4}, which the solver flags
+    because the drawn line is exactly horizontal, so that a distance of 12
+    against a horizontal extent of 10 has a singular Jacobian there."""
+    s = _Sk(doc, "c_readers" if expression else "c_readers_plain")
+    l = s.line(0, 0, 10, 0)
+    m = s.line(0, 3, 10, 3)
+    s.c("Horizontal", l)
+    s.c("Horizontal", m)
+    s.c("DistanceX", l, 1, l, 2, 10.0, name="w")
+    s.c("DistanceX", m, 1, m, 2, 20.0, name="w2")
+    s.c("Distance", l, 12.0, name="len")
+    s.c("Equal", l, m)
+    if expression:
+        s.o.setExpression("Constraints.w2", "Constraints.w * 2")
+    return s.o
+
+
+def build_readers_arcs(doc):
+    """Two arcs with radii 5 and 4 made Equal, plus a coincident centre and a
+    tangency.  Constraints: 0 Radius a, 1 Radius b, 2 Equal, 3 Coincident,
+    4 Tangent.  Truth: {0,1,2} (5, 4 and equal radii); the tangency and the
+    coincidence are not part of any conflict."""
+    s = _Sk(doc, "c_readers_arcs")
+    a = s.arc(0, 0, 5, 0.2, 2.0)
+    b = s.arc(20, 0, 4, 0.2, 2.0)
+    s.c("Radius", a, 5.0)
+    s.c("Radius", b, 4.0)
+    s.c("Equal", a, b)
+    s.c("Coincident", a, 3, -1, 1)
+    s.c("Tangent", a, b)
+    return s.o
+
+
+def _geometry_dependent(doc, out):
+    for name, builder, sets in (
+        ("readers_expression", lambda d: build_readers(d, True), [[0, 1, 2, 3, 5], [0, 1, 3, 4, 5], [2, 4]]),
+        ("readers_plain", lambda d: build_readers(d, False), [[0, 1, 2, 3, 5], [0, 1, 3, 4, 5], [2, 4]]),
+        ("readers_arcs", build_readers_arcs, ARCS_TRUTH),
+    ):
+        out.append(
+            Case(
+                name,
+                "conflict",
+                builder(doc),
+                _truth(conflicting=True, conflict_sets=sets, culprit=None),
+                doc,
+                builder=builder,
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # D. Consistent but redundant
 # ---------------------------------------------------------------------------
@@ -1127,6 +1195,7 @@ def build_synthetic(doc):
     _fully_constrained(doc, out)
     _under_constrained(doc, out)
     _conflicting(doc, out)
+    _geometry_dependent(doc, out)
     _redundant(doc, out)
     _reference_construction(doc, out)
     _limits(doc, out)
