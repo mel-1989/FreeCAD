@@ -400,8 +400,9 @@ class Subscription:
 
     def execute(self, obj):
         info = classify(obj)
+        if info["state"] in (UNLOADED, FROZEN):
+            _restore_datum(obj)             # a datum is stored without its unbounded shape: rebuild it from the record
         if info["state"] == UNLOADED:
-            _restore_datum(obj)
             return True                     # keep the last shape: the stock execute would see no Support
         if info["state"] == BROKEN:
             _touch_dependents(obj)          # the features built on this subscriber must not stay Up-to-date
@@ -490,6 +491,8 @@ def classify(binder):
             kind, reason = _item_problem(item)
             if reason:
                 out["item_problem"] = reason
+            if _empty(binder.Shape):
+                out["reason"] = _no_geometry_reason(binder)
             return out
         kind, reason = _item_problem(item)
         if kind:
@@ -503,6 +506,8 @@ def classify(binder):
     if frozen:
         out["state"] = FROZEN
         out["skeleton_changed"] = None if not _document_open(binder, rec) else True
+        if _empty(binder.Shape):
+            out["reason"] = _no_geometry_reason(binder)
         return out
     if rec and not _document_open(binder, rec):
         what = "the skeleton document %r is not open" % (rec.get("file") or rec.get("doc"))
@@ -514,6 +519,12 @@ def classify(binder):
         return out
     out.update(state=BROKEN, reason="%s: the item no longer exists" % (rec.get("item") or "item"))
     return out
+
+
+def _no_geometry_reason(binder):
+    if "Datum" in binder.PropertiesList and binder.Datum:
+        return "frozen, but holds no geometry yet: it is restored by the next recompute of this document"
+    return "frozen, but holds no geometry (the core could not store it and it was never recorded): unfreeze it while the skeleton is open"
 
 
 def _empty(shape):
@@ -861,6 +872,8 @@ def reattach(doc):
                 o.touch()                       # restored without geometry (a datum): rebuild it in this recompute
         elif is_subscription(o):
             _ensure_proxy(o, Subscription)
+            if _empty(o.Shape):
+                _restore_datum(o)               # frozen or not: the core cannot store an unbounded datum shape
             it = _support_item(o)
             if it is not None and is_item(it):
                 _ensure_proxy(it, PublishedItem)

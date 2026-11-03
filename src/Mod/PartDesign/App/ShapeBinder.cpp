@@ -1021,6 +1021,21 @@ App::DocumentObjectExecReturn* SubShapeBinder::execute()
     return inherited::execute();
 }
 
+std::string SubShapeBinder::supportKey() const
+{
+    std::string key;
+    for (const auto& l : Support.getSubListValues()) {
+        if (l.getValue()) {
+            key += l.getValue()->getFullName();
+            for (const auto& sub : l.getSubValues()) {
+                key += "|" + sub;
+            }
+            key += ";";
+        }
+    }
+    return key;
+}
+
 void SubShapeBinder::onDocumentRestored()
 {
     if (_Version.getValue() < 2) {
@@ -1123,7 +1138,12 @@ void SubShapeBinder::onChanged(const App::Property* prop)
             setupCopyOnChange();
             // Frozen means "disable auto update": a link that is merely re-attached (an external document
             // loaded after this one) must not refresh a binder that already holds its frozen shape.
-            const bool keepFrozen = BindMode.getValue() == 1 && !Shape.getValue().IsNull();
+            const std::string key = supportKey();
+            const bool keepFrozen = BindMode.getValue() == 1 && !Shape.getValue().IsNull() && !key.empty()
+                && (boundKey.empty() || key == boundKey);
+            if (!key.empty()) {
+                boundKey = key;
+            }
             if (!Support.getSubListValues().empty() && !keepFrozen) {
                 update();
                 if (BindMode.getValue() == 2) {

@@ -1362,6 +1362,63 @@ def unloaded_datum_subscribers_keep_their_geometry():
     return P
 
 
+@case
+def frozen_datums_keep_their_geometry_through_save_and_reopen():
+    P = []
+    for order in ("subscriber first", "skeleton first", "subscriber only"):
+        with world(True) as w:
+            w.both("line", "plane", "point")
+            for k in ("line", "plane", "point"):
+                AS.freeze(w.binders[k])
+            want = {k: K.observe_shape(w.binders[k].Shape, k) for k in ("line", "plane", "point")}
+            w.save()
+            d = w.dir
+            for n in (w.doc.Name, w.sdoc.Name):
+                App.closeDocument(n)
+            if order == "skeleton first":
+                App.openDocument(os.path.join(d, "skeleton.FCStd"))
+            doc = App.openDocument(os.path.join(d, "subscriber.FCStd"))
+            if order == "subscriber only":
+                App.closeDocument("skeleton")
+            for k in ("line", "plane", "point"):
+                rec = AS.describe_subscription(doc.getObject("S_" + k))
+                if AS._empty(doc.getObject("S_" + k).Shape):
+                    chk(P, "no geometry" in (rec["reason"] or ""), "%s %s: frozen with no geometry and no word of it" % (order, k))
+            doc.recompute()
+            for k in ("line", "plane", "point"):
+                b = doc.getObject("S_" + k)
+                got = K.observe_shape(b.Shape, k) if not AS._empty(b.Shape) else None
+                chk(P, got is not None and K.same(got, want[k], 1e-6), "%s: frozen %s holds %s, held %s" % (order, k, got, want[k]))
+                chk(P, AS.describe_subscription(b)["state"] == "frozen", "%s %s state" % (order, k))
+            for n in list(App.listDocuments()):
+                App.closeDocument(n)
+    return P
+
+
+@case
+def stock_frozen_binder_retarget_updates_and_relink_does_not():
+    P = []
+    doc = App.newDocument("SBStock")
+    d = K.tmpdir()
+    try:
+        box = doc.addObject("Part::Box", "Box")
+        cyl = doc.addObject("Part::Cylinder", "Cyl")
+        cyl.Placement.Base = V(50, 0, 0)
+        body = doc.addObject("PartDesign::Body", "B")
+        f = body.newObject("PartDesign::SubShapeBinder", "F")
+        f.Support = [(box, ("",))]
+        doc.recompute()
+        f.BindMode = "Frozen"
+        f.Support = [(cyl, ("",))]                      # a deliberate retarget of a frozen binder
+        chk(P, f.Shape.BoundBox.XMin > 40, "a retargeted frozen binder kept the old shape: %s" % f.Shape.BoundBox)
+        # a relink on reopen (the other document loads after this one) must not refresh it: covered cross-document by
+        # freeze_survives_save_reopen and frozen_datums_keep_their_geometry_through_save_and_reopen
+    finally:
+        App.closeDocument("SBStock")
+        shutil.rmtree(d, ignore_errors=True)
+    return P
+
+
 # ------------------------------------------------------------------ mutants
 
 @contextlib.contextmanager
@@ -1695,6 +1752,24 @@ def _m_datum_not_recorded():
     return dict(_datum_record_of_shape=lambda shape: "")
 
 
+def _m_frozen_restore_skipped():
+    real = AS.reattach
+
+    def reattach(doc):
+        for o in doc.Objects:
+            if AS.is_item(o):
+                AS._ensure_proxy(o, AS.PublishedItem)
+            elif AS.is_subscription(o):
+                AS._ensure_proxy(o, AS.Subscription)
+    exe = AS.Subscription.execute
+
+    def execute(self, obj):
+        if AS.classify(obj)["state"] == AS.FROZEN:
+            return False
+        return exe(self, obj)
+    return dict(reattach=reattach, _proxy_execute=(AS.Subscription, "execute", execute))
+
+
 MUTANTS = {
     "subscriber_stores_raw_element": _m_raw_element,
     "broken_item_retargeted_to_first_of_type": _m_retarget_first_of_type,
@@ -1731,6 +1806,7 @@ MUTANTS = {
     "break_touches_containers": _m_containers_touched,
     "datum_geometry_not_recorded": _m_datum_not_recorded,
     "status_rebuilds_geometry": _m_status_restores,
+    "frozen_datum_not_restored": _m_frozen_restore_skipped,
 }
 
 
