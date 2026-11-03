@@ -40,7 +40,36 @@ Result. ``to_json(study)`` returns ``{"schema", "study", "mode", "integrator", "
 "applied"}], ...}`` with F1 entity IDs for parts, joints and loads; the series are lists of plain floats written
 with ``repr`` precision, so two runs of the same study are bit-identical and so is a save and reopen.
 
-Limits (slice 6a): contact is slice 6c; no initial velocity except ``Velocities`` (JSON ``{joint name: value}`` in
+Contact and joint stops (slice 6c). A ``Contact`` load makes one pair of parts collide; a pair without one never does.
+It carries ``Restitution`` (0 to 1) and ``ContactTolerance`` (mm, default 1e-3). The pair's real shapes are placed at the
+current pose and ``distToShape`` gives the gap and the closest points; contact is detected when the gap falls to the
+tolerance (a terminal ``solve_ivp`` event on ``gap - tolerance``, which changes sign, where the OCCT distance itself is
+clamped at 0 on overlap), so a pair never penetrates and rests at a gap of one tolerance. The contact normal ``u`` is
+the unit vector between the closest points (from ``Part1`` to ``Part2``; the outward face normal when the shapes
+already touch), ``Jn = u^T (J2 - J1)`` the Jacobian of the gap rate at those points, and Newton's restitution law
+becomes a joint-space impulse ``dqd = -(1 + e) (Jn qd) M^-1 Jn^T / (Jn M^-1 Jn^T)`` that is applied where the event
+fires. The integration restarts after each impulse, so the output grid stays ``t_k = k * step``. There is no
+friction. An enabled limit of a Revolute or Slider joint is a stop on the joint coordinate with the same impulse law
+and the study's ``LimitRestitution`` (default 0.5); ``AngleMin/Max`` (degrees) and ``LengthMin/Max`` (mm) are read as
+FreeCAD's assembly reads them, the angle of the second joint frame's x axis about the first frame's z axis and the
+signed distance along that z axis, so the coordinate ``q = 0`` of the study is mapped to the joint value the pose has
+when the study runs; a start outside a limit is refused naming the joint.
+
+Resting and capture. With ``e < 1`` the impacts come ever faster (infinitely many in finite time), so an impact whose
+normal speed afterwards is below ``CAPTURE_SPEED`` (0.05 m/s, rad/s for a revolute stop), or that follows the
+previous impact of the same pair by less than ``CAPTURE_INTERVAL`` (2 ms), makes the pair a locked unilateral
+constraint: the velocity is projected so ``Jn qd = 0`` and the motion is integrated with the constraint held by a
+Lagrange multiplier (acceleration level, with Baumgarte stabilisation ``BAUMGARTE`` = 20 per second; the contact point
+and normal are held at their values when the constraint was locked). The lock is refused when the multiplier is
+tensile in that state, and is released by a terminal event when the multiplier crosses zero; a pair that begins in
+contact at t = 0 goes through the same test. The rule leaves the first bounces alone: at the heights the corpus uses the
+third post-impact speed is several times the threshold. Limits of the model: one pair or stop is handled at a time (a
+second impact projects the velocity back onto the locked constraints, and simultaneous impacts are taken in turn), the
+solver steps at most one output step so a body cannot cross a thin one unseen, the contact point of a face-to-face
+pair is the first closest-point pair OCCT reports, and there is no friction. ``energy.conservative`` is false when any
+contact or stop has ``e < 1``.
+
+Limits (slice 6a, contact and stops now in 6c): no initial velocity except ``Velocities`` (JSON ``{joint name: value}`` in
 rad/s or mm/s); components must sit directly in the assembly (not in a sub-assembly); the joint frames must already
 be satisfied by the placements (the study refuses otherwise and says which joint); the energy it reports is
 kinetic plus gravity plus spring energy (forces, torques and dampers are not conservative and the report says so).
@@ -64,12 +93,19 @@ SCHEMA = "cadfork.assembly.motion/1"
 PROP_GROUP = "Motion"
 G0 = 9.80665
 _FLOAT_ENUM = ("Dynamic", "Kinematic")
-_KINDS = ("Gravity", "Force", "Torque", "Spring", "Damper")
+_KINDS = ("Gravity", "Force", "Torque", "Spring", "Damper", "Contact")    # append only: old files open
 _FRAMES = ("World", "Part")
 _MODES = ("Density", "Manual")
 _DRIVES = ("Angular", "Linear")
 _SUPPORTED = ("Fixed", "Revolute", "Slider")
 _FRAME_TOL = 1e-4        # mm: how well the joint frames must already be satisfied
+CONTACT_TOLERANCE = 1e-3  # mm: default gap at which a contact pair is detected
+LIMIT_RESTITUTION = 0.5   # default restitution of a joint stop (study property LimitRestitution)
+CAPTURE_SPEED = 0.05      # m/s (rad/s for a revolute stop): a post-impact normal speed below this locks the pair
+CAPTURE_INTERVAL = 2e-3   # s: an impact this soon after the previous one of the same pair locks it
+BAUMGARTE = 20.0         # 1/s: stabilisation of a locked constraint
+_GRAZE = 1e-9            # m/s: a normal speed closer to zero than this is not an approach
+_MAX_EVENTS = 20000      # impacts, locks and releases in one run
 
 
 class MotionError(Exception):
@@ -189,6 +225,9 @@ class MotionStudy(_Proxy):
         P("App::PropertyString", "DriveFormula", PROP_GROUP, "Kinematic mode: the motion formula in time (radians or mm)")
         P("App::PropertyFloat", "SolverTolerance", PROP_GROUP, "Kinematic mode: global error tolerance of the solver")
         P("App::PropertyString", "Result", PROP_GROUP, "The result of the last run (JSON)")
+        P("App::PropertyFloat", "LimitRestitution", PROP_GROUP,
+          "Restitution (0 to 1) of the stops at enabled joint limits of revolute and slider joints")
+        obj.LimitRestitution = LIMIT_RESTITUTION
         obj.TimeEnd = 1.0
         obj.TimeStep = 0.01
         obj.Rtol = 1e-12
@@ -200,11 +239,11 @@ class MotionStudy(_Proxy):
 class MotionLoad(_Proxy):
     def __init__(self, obj):
         P = obj.addProperty
-        P("App::PropertyEnumeration", "Kind", PROP_GROUP, "Gravity, Force, Torque, Spring or Damper")
+        P("App::PropertyEnumeration", "Kind", PROP_GROUP, "Gravity, Force, Torque, Spring, Damper or Contact")
         obj.Kind = list(_KINDS)
         obj.Kind = "Gravity"
         P("App::PropertyString", "Part1", PROP_GROUP, "Name of the part the load acts on (first end of a spring or damper)")
-        P("App::PropertyString", "Part2", PROP_GROUP, "Name of the second part of a spring or damper")
+        P("App::PropertyString", "Part2", PROP_GROUP, "Name of the second part of a spring, damper or contact")
         P("App::PropertyVector", "Point1", PROP_GROUP, "Point on Part1 in the part frame, mm")
         P("App::PropertyVector", "Point2", PROP_GROUP, "Point on Part2 in the part frame, mm")
         P("App::PropertyVector", "Value", PROP_GROUP, "Gravity in m/s^2, force in N or torque in N m")
@@ -214,6 +253,10 @@ class MotionLoad(_Proxy):
         P("App::PropertyFloat", "Stiffness", PROP_GROUP, "Spring stiffness in N/m")
         P("App::PropertyFloat", "Damping", PROP_GROUP, "Damper coefficient in N s/m")
         P("App::PropertyFloat", "FreeLength", PROP_GROUP, "Spring free length in mm")
+        P("App::PropertyFloat", "Restitution", PROP_GROUP, "Contact: coefficient of restitution, 0 (plastic) to 1 (elastic)")
+        P("App::PropertyFloat", "ContactTolerance", PROP_GROUP, "Contact: gap in mm at which the pair is in contact")
+        obj.Restitution = 0.5
+        obj.ContactTolerance = CONTACT_TOLERANCE
         obj.Proxy = self
 
 
@@ -338,7 +381,7 @@ def _assign(obj, props):
         elif k in ("Point1", "Point2", "Value", "Com"):
             v = App.Vector(*_qvec(v if isinstance(v, App.Vector) else App.Vector(*v)))
         elif k in ("Stiffness", "Damping", "FreeLength", "Density", "Mass", "TimeEnd", "TimeStep", "Rtol", "Atol",
-                   "SolverTolerance"):
+                   "SolverTolerance", "Restitution", "ContactTolerance", "LimitRestitution"):
             v = _q(v)
         elif k == "Inertia":
             v = [_q(x) for x in v]
@@ -364,6 +407,25 @@ def add_spring(study, part1, point1, part2, point2, stiffness, free_length, name
 
 def add_damper(study, part1, point1, part2, point2, damping, name="Damper"):
     return _new_load(study, name, "Damper", Part1=part1, Point1=point1, Part2=part2, Point2=point2, Damping=damping)
+
+
+def add_contact(study, part1, part2, restitution=0.5, tolerance=CONTACT_TOLERANCE, name="Contact"):
+    """Make ``part1`` and ``part2`` collide (one undo transaction). A pair without a Contact load never collides.
+    ``restitution`` is Newton's coefficient (0 to 1), ``tolerance`` the gap in mm at which the pair counts as in
+    contact. There is no friction."""
+    _check_contact_values(name, restitution, tolerance)
+    if _name_of(part1) == _name_of(part2):
+        raise MotionError("a contact needs two different parts, got %s twice" % _name_of(part1))
+    return _new_load(study, name, "Contact", Part1=part1, Part2=part2, Restitution=restitution,
+                     ContactTolerance=tolerance)
+
+
+def _check_contact_values(what, restitution, tolerance):
+    e, tol = float(restitution), float(tolerance)
+    if not math.isfinite(e) or not 0.0 <= e <= 1.0:
+        raise MotionError("%s: the restitution must be between 0 and 1, got %r" % (what, restitution))
+    if not math.isfinite(tol) or tol <= 0.0:
+        raise MotionError("%s: the contact tolerance must be a finite positive length in mm, got %r" % (what, tolerance))
 
 
 def edit_load(load, **props):
@@ -458,6 +520,17 @@ class _Joint:
         self.obj, self.kind, self.a0, self.o0 = obj, kind, a0, o0
         self.parent, self.child = parent, child
         self.dof = None
+
+
+def _lim_value(j, prop):
+    v = getattr(j, prop, 0.0)
+    return _q(getattr(v, "Value", v))
+
+
+def _q_bound(limit, value0, sgn):
+    """The bound on the joint coordinate (in the limit's unit) of a limit on the joint value: ``value = value0 + sgn * q``
+    and ``q = 0`` is the pose the study starts from."""
+    return sgn * (limit - value0)
 
 
 class _Body:
@@ -556,6 +629,7 @@ class Model:
         self.skipped = []
         self.static = []
         self.refusals = []
+        self.unilaterals = []       # contact pairs and joint stops, in a fixed order
         self._build_tree()
         self._masses()
         self._loads()
@@ -617,12 +691,6 @@ class Model:
                     used.add(j.Name)
                     continue
                 used.add(j.Name)
-                lim = [p for p in (("EnableAngleMin", "EnableAngleMax") if typ == "Revolute" else
-                                   ("EnableLengthMin", "EnableLengthMax") if typ == "Slider" else ())
-                       if getattr(j, p, False)]
-                if lim:
-                    reasons.append("joint %s has an enabled limit (%s); limits act as stops, which need the contact "
-                                   "model of slice 6c, so a dynamic study refuses them" % (j.Name, ", ".join(lim)))
                 if typ not in _SUPPORTED:
                     reasons.append("unsupported joint type %s (joint %s)" % (typ, j.Name))
                     seen[other.Name] = un
@@ -632,6 +700,7 @@ class Model:
                 parent = self.bodies[un]
                 child = self._body(other)
                 jt = self._joint(j, typ, parent, child, a, b, reasons)
+                self._stops_of(jt, j, typ, child, b, reasons)
                 child.parent = parent
                 child.joint = jt
                 self.all_joints.append(jt)
@@ -684,7 +753,47 @@ class Model:
             if np.linalg.norm(_cross(d, z1)) > tol:
                 reasons.append("joint %s (Slider) origins are off the axis by %.3g mm (solve first)"
                                % (j.Name, np.linalg.norm(_cross(d, z1)) * 1e3))
-        return _Joint(j, typ, z1 / np.linalg.norm(z1), o1, parent, child)
+        jt = _Joint(j, typ, z1 / np.linalg.norm(z1), o1, parent, child)
+        jt.sgn = 1.0 if child.name == b.Name else -1.0       # the coordinate moves Reference2's part (+1) or Reference1's (-1)
+        if typ == "Revolute":
+            x2 = R1.T @ R2[:, 0]                              # frame 2's x axis in frame 1, as FreeCAD reads the angle
+            jt.value0 = math.degrees(math.atan2(x2[1], x2[0]))
+        else:
+            jt.value0 = float(np.dot(z1 / np.linalg.norm(z1), o2 - o1)) * 1e3     # signed distance along z1, mm
+        return jt
+
+    def _stops_of(self, jt, j, typ, child, b, reasons):
+        """The stops of the enabled limits of a revolute or slider joint, as events on the joint coordinate."""
+        if typ == "Revolute":
+            names = ("EnableAngleMin", "EnableAngleMax", "AngleMin", "AngleMax")
+            unit, scale = "deg", math.pi / 180.0
+        elif typ == "Slider":
+            names = ("EnableLengthMin", "EnableLengthMax", "LengthMin", "LengthMax")
+            unit, scale = "mm", 1e-3
+        else:
+            return
+        en_lo, en_hi = bool(getattr(j, names[0], False)), bool(getattr(j, names[1], False))
+        if not (en_lo or en_hi):
+            return
+        lo, hi = _lim_value(j, names[2]), _lim_value(j, names[3])
+        if en_lo and en_hi and lo > hi:                        # FreeCAD swaps a reversed pair
+            lo, hi, en_lo, en_hi = hi, lo, en_hi, en_lo
+        e = _q(getattr(self.study, "LimitRestitution", LIMIT_RESTITUTION))
+        if not math.isfinite(e) or not 0.0 <= e <= 1.0:
+            raise MotionError("LimitRestitution must be between 0 and 1, got %r" % e)
+        v0 = jt.value0
+        if (en_lo and v0 < lo - 1e-9) or (en_hi and v0 > hi + 1e-9):
+            reasons.append("joint %s starts outside its limit (value %.6g %s, limits %s to %s %s): move it inside the "
+                           "range and solve first" % (j.Name, v0, unit, ("%.6g" % lo) if en_lo else "none",
+                                                      ("%.6g" % hi) if en_hi else "none", unit))
+            return
+        # value = value0 + sgn * q / scale; a lower limit on the value is a lower bound on q when sgn = +1, an upper one when -1
+        for enabled, val, side in ((en_lo, lo, "lower"), (en_hi, hi, "upper")):
+            if not enabled:
+                continue
+            qb = _q_bound(val, v0, jt.sgn) * scale
+            qside = side if jt.sgn > 0 else ("upper" if side == "lower" else "lower")
+            self.unilaterals.append(_Limit(jt, "%s.%s" % (j.Name, side), qside, qb, e))
 
     # -- masses
     def _masses(self):
@@ -739,12 +848,27 @@ class Model:
             ok, why = self._one_load(ld)
             self.applied.append({"name": ld.Name, "entity": _entity(ld), "kind": ld.Kind, "applied": ok,
                                  "reason": why})
-        self.conservative = not (self.forces or self.torques or self.dampers)
+        self.conservative = not (self.forces or self.torques or self.dampers) and all(
+            _contact_conservative(u.e) for u in self.unilaterals)
 
     def _direct_or_refuse(self, obj, what):
         if obj is not None and not is_direct(self.asm, obj):
             raise MotionRefused(["%s names %s, which is inside a sub-assembly; loads and masses can only be put on the "
                                  "parts of the assembly itself" % (what, obj.Name)])
+
+    def _one_contact(self, ld, b1):
+        doc = self.asm.Document
+        what = "the contact %s" % ld.Name
+        _check_contact_values(what, _q(ld.Restitution), _q(ld.ContactTolerance))
+        if ld.Part1 == ld.Part2:
+            raise MotionError("%s names %s twice" % (what, ld.Part1))
+        b2 = self._body_of(_lookup(doc, ld.Part2))
+        if b2 is None:
+            return False, "part %s is not in the live assembly" % (ld.Part2 or "(none)")
+        if not (b1.moving or b2.moving):
+            return False, "neither %s nor %s moves, the contact has no effect" % (ld.Part1, ld.Part2)
+        self.unilaterals.append(_Contact(self, ld, b1, b2))
+        return True, ""
 
     def _body_of(self, obj):
         """The body a load acts on, or None when that part is not in the live assembly (suppressed)."""
@@ -770,6 +894,8 @@ class Model:
         b1 = self._body_of(_lookup(doc, ld.Part1))
         if b1 is None:
             return False, "part %s is not in the live assembly" % (ld.Part1 or "(none)")
+        if kind == "Contact":
+            return self._one_contact(ld, b1)
         if kind in ("Force", "Torque") and not b1.moving:
             return False, "part %s does not move (grounded or fixed to ground), the load has no effect" % ld.Part1
         if kind in ("Spring", "Damper") and not b1.moving:
@@ -968,6 +1094,192 @@ class Model:
         base = Rd[b.name] @ b.base0 + td[b.name]
         return base * 1e3, R
 
+    # -- unilateral elements (contact pairs and joint stops), slice 6c
+    def locked_accel(self, q, qd, locks):
+        """Accelerations and Lagrange multipliers with the locked constraints held: ``M qdd = Q - h + Jc^T lam`` and
+        ``Jc qdd = -dJc/dt qd - 2 a Jc qd - a^2 (c - c0)`` (``lam`` > 0 pushes the pair apart)."""
+        np = self.np
+        n, k = self.n, len(locks)
+        M, h, Q = self.dynamics(q, qd)
+        Jc = np.zeros((k, n))
+        rhs2 = np.zeros(k)
+        for i, lk in enumerate(locks):
+            row, c = lk.el.frozen_row(self, q, lk)
+            Jc[i] = row
+            jdot = 0.0
+            if lk.el.kind == "contact" and np.any(qd):
+                eps = 1e-6
+                rp = lk.el.frozen_row(self, q + eps * qd, lk)[0]
+                rm = lk.el.frozen_row(self, q - eps * qd, lk)[0]
+                jdot = float(((rp - rm) / (2 * eps)) @ qd)
+            v = float(row @ qd)
+            rhs2[i] = -jdot - 2.0 * BAUMGARTE * v - BAUMGARTE ** 2 * (c - lk.c0)
+        K = np.zeros((n + k, n + k))
+        K[:n, :n] = M
+        K[:n, n:] = -Jc.T
+        K[n:, :n] = Jc
+        try:
+            sol = np.linalg.solve(K, np.concatenate([Q - h, rhs2]))
+        except np.linalg.LinAlgError:
+            raise MotionError("a locked contact or stop is redundant with another constraint (singular system)")
+        return sol[:n], sol[n:]
+
+    def rhs_locked(self, locks):
+        np = self.np
+        n = self.n
+
+        def f(t, y):
+            qdd, _lam = self.locked_accel(y[:n], y[n:], locks)
+            return np.concatenate([y[n:], qdd])
+        return f
+
+    def project(self, q, qd, locks):
+        """``qd`` with the normal velocities of the locked constraints removed (mass-weighted projection)."""
+        if not locks:
+            return qd
+        np = self.np
+        M = self.dynamics(q, qd)[0]
+        Jc = np.array([lk.el.frozen_row(self, q, lk)[0] for lk in locks])
+        MiJ = np.linalg.solve(M, Jc.T)
+        return qd - MiJ @ np.linalg.solve(Jc @ MiJ, Jc @ qd)
+
+
+class _Lock:
+    """A pair or stop held as a locked unilateral constraint: ``c0`` is the gap function when it was locked and ``data``
+    what the element froze then."""
+
+    def __init__(self, el, c0, data):
+        self.el, self.c0, self.data = el, c0, data
+
+
+class _Limit:
+    """A stop on a joint coordinate: the gap is the distance of the coordinate from its bound, on the allowed side."""
+    kind = "limit"
+    tol = 0.0
+
+    def __init__(self, joint, name, side, bound, e):
+        self.joint, self.name, self.side, self.bound, self.e = joint, name, side, bound, e
+        self.s = _stop_side(side)
+
+    def probe(self, model, q):
+        row = model.np.zeros(model.n)
+        row[self.joint.dof] = self.s
+        return self.s * (q[self.joint.dof] - self.bound), row, None
+
+    def frozen_row(self, model, q, lk):
+        gap, row, _ = self.probe(model, q)
+        return row, gap
+
+    def describe(self):
+        return {"name": self.name, "kind": "limit", "restitution": self.e, "tolerance": 0.0, "bound": self.bound,
+                "side": self.side, "joint": self.joint.obj.Name}
+
+
+class _Contact:
+    """Contact of two parts' real shapes: the gap and closest points come from OCCT's ``distToShape`` at the pose."""
+    kind = "contact"
+
+    def __init__(self, model, load, b1, b2):
+        self.b1, self.b2 = b1, b2
+        self.name = load.Name
+        self.e = _q(load.Restitution)
+        self.tol = _q(load.ContactTolerance)
+        self.load = load.Name
+        self.sh1, self.sh2 = _local_shape(b1.obj), _local_shape(b2.obj)
+
+    def _place(self, model, q):
+        Rd, td, A, O = model.kin(q)
+        for b, sh in ((self.b1, self.sh1), (self.b2, self.sh2)):
+            base, R = model.pose(b, Rd, td)
+            sh.Placement = App.Placement(App.Vector(*(float(v) for v in base)), App.Rotation(*_quat(R)))
+        return Rd, td, A, O
+
+    def probe(self, model, q):
+        np = model.np
+        Rd, td, A, O = self._place(model, q)
+        dist, pts, info = self.sh1.distToShape(self.sh2)
+        cands = []
+        for i, (p1, p2) in enumerate(pts if dist <= 1e-4 else pts[:1]):
+            x1 = np.array([p1.x, p1.y, p1.z]) * 1e-3
+            x2 = np.array([p2.x, p2.y, p2.z]) * 1e-3
+            us = [(x2 - x1) / np.linalg.norm(x2 - x1)] if dist > 1e-4 else self._touching_normals(np, info[i])
+            J1 = model.jac(self.b1, x1, A, O)[0]
+            J2 = model.jac(self.b2, x2, A, O)[0]
+            for u in us:
+                cands.append((u @ (J2 - J1), u, x1, x2))
+        # touching shapes have no direction between their closest points: of the candidate face normals take the one
+        # along which the bodies can move at all (the largest gap-rate row), the first on a tie
+        row, u, x1, x2 = max(cands, key=lambda c: float(np.linalg.norm(c[0]) + 0.0)) if len(cands) > 1 else cands[0]
+        data = {"u": u, "x01": Rd[self.b1.name].T @ (x1 - td[self.b1.name]),
+                "x02": Rd[self.b2.name].T @ (x2 - td[self.b2.name])}
+        return float(dist), row, data
+
+    def _touching_normals(self, np, inf):
+        """Unit normals from part 1 to part 2 for one pair of support elements of touching shapes: the outward normal of a
+        face of one of them, else the direction between the centres of mass."""
+        out = []
+        try:
+            t1, i1, a1, t2, i2, a2 = inf
+            if t1 == "Face":
+                n = self.sh1.Faces[i1].normalAt(*a1)
+                out.append(np.array([n.x, n.y, n.z]))
+            if t2 == "Face":
+                n = self.sh2.Faces[i2].normalAt(*a2)
+                out.append(-np.array([n.x, n.y, n.z]))
+        except Exception:                                   # noqa: BLE001 - fall back to the centres
+            out = []
+        if not out:
+            n = self.sh2.CenterOfMass - self.sh1.CenterOfMass
+            out.append(np.array([n.x, n.y, n.z]))
+        return [n / np.linalg.norm(n) for n in out]
+
+    def frozen_row(self, model, q, lk):
+        np = model.np
+        d = lk.data
+        Rd, td, A, O = model.kin(q)
+        x1 = Rd[self.b1.name] @ d["x01"] + td[self.b1.name]
+        x2 = Rd[self.b2.name] @ d["x02"] + td[self.b2.name]
+        J1 = model.jac(self.b1, x1, A, O)[0]
+        J2 = model.jac(self.b2, x2, A, O)[0]
+        return d["u"] @ (J2 - J1), float(d["u"] @ (x2 - x1))
+
+    def describe(self):
+        return {"name": self.name, "kind": "contact", "restitution": self.e, "tolerance": self.tol,
+                "parts": [self.b1.name, self.b2.name]}
+
+
+# the hooks below are single points the mutant matrix of the tests swaps out
+def _event_value(gap, tol):
+    return gap - tol
+
+
+def _ratio(e):
+    return e
+
+
+def _impulse_sign():
+    return -1.0
+
+
+def _should_capture(vn_after, since_last):
+    return vn_after < CAPTURE_SPEED or since_last < CAPTURE_INTERVAL
+
+
+def _lock_ok(lam):
+    return lam > 0.0
+
+
+def _release_value(lam):
+    return lam
+
+
+def _contact_conservative(e):
+    return e >= 1.0
+
+
+def _stop_side(side):
+    return 1.0 if side == "lower" else -1.0
+
 
 def _is_live(model, obj):
     return obj.Name in model.live
@@ -1102,6 +1414,160 @@ def _bad_constant(name):
     raise MotionError("%s is not a number" % name)
 
 
+class _Sim:
+    """Event-driven integration of a model with contacts and stops: segments of ``solve_ivp`` ended by terminal events
+    (a gap closing, a multiplier going tensile), an impulse or a lock or release at each, and a restart. The output
+    columns are those of the grid ``t_k = k * step`` whatever the events do in between."""
+
+    def __init__(self, model, grid, step, method, rtol, atol):
+        self.m, self.grid, self.step, self.method, self.rtol, self.atol = model, grid, step, method, rtol, atol
+        self.locks = []
+        self.events = []
+        self.last = {}
+
+    def note(self, t, el, what, **kw):
+        rec = {"t": float(t), "element": el.name, "what": what}
+        rec.update({k: float(v) for k, v in kw.items()})
+        self.events.append(rec)
+
+    def locked(self, el):
+        return any(lk.el is el for lk in self.locks)
+
+    def _try_lock(self, el, q, qd, data, t, why):
+        """Lock ``el`` when the multiplier is compressive in the projected state; returns the new velocity or None."""
+        np = self.m.np
+        lk = _Lock(el, 0.0, data)
+        lk.c0 = el.frozen_row(self.m, q, lk)[1]
+        trial = self.locks + [lk]
+        qd_p = self.m.project(q, qd, trial)
+        _qdd, lam = self.m.locked_accel(q, qd_p, trial)
+        if not all(_lock_ok(float(x)) for x in lam):
+            return None
+        self.locks.append(lk)
+        self.note(t, el, "capture", reason_start=1.0 if why == "start" else 0.0, lam=lam[-1])
+        return qd_p
+
+    def start(self, y):
+        """Pairs and stops already in contact at t = 0: an approach is an impact, a rest is a lock."""
+        m = self.m
+        n = m.n
+        q, qd = y[:n].copy(), y[n:].copy()
+        for el in m.unilaterals:
+            gap, row, data = el.probe(m, q)
+            if _event_value(gap, el.tol) > 0.0:
+                continue
+            vn = float(row @ qd)
+            if vn < -_GRAZE:
+                qd = self.impact(el, 0.0, q, qd, gap, row, data)
+            elif vn <= _GRAZE:
+                new = self._try_lock(el, q, qd, data, 0.0, "start")
+                if new is not None:
+                    qd = new
+        return np_concat(m.np, q, qd)
+
+    def impact(self, el, t, q, qd, gap, row, data):
+        m = self.m
+        np = m.np
+        vn = float(row @ qd)
+        if vn >= -_GRAZE:
+            return qd                                   # grazing or separating: nothing to resolve
+        M = m.dynamics(q, qd)[0]
+        Mj = np.linalg.solve(M, row)
+        den = float(row @ Mj)
+        if den <= 0.0:
+            return qd
+        qd_new = qd + _impulse_sign() * (1.0 + _ratio(el.e)) * vn * Mj / den
+        qd_new = m.project(q, qd_new, self.locks)
+        vn_after = float(row @ qd_new)
+        since = t - self.last.get(el.name, -math.inf)
+        self.last[el.name] = t
+        self.note(t, el, "impact", vn_before=vn, vn_after=vn_after, gap=gap)
+        if _should_capture(vn_after, since):
+            new = self._try_lock(el, q, qd, data, t, "impact")
+            if new is not None:
+                return new
+        return qd_new
+
+    def run(self):
+        m = self.m
+        np = m.np
+        from scipy.integrate import solve_ivp
+        n = m.n
+        grid = np.array(self.grid)
+        cols = [None] * len(grid)
+        y = self.start(np.concatenate([np.zeros(n), self._qd0]))
+        cols[0] = y.copy()
+        k0, t_cur = 1, 0.0
+        for _guard in range(_MAX_EVENTS):
+            if k0 >= len(grid):
+                break
+            evs, owners = [], []
+            for el in m.unilaterals:
+                lk = next((x for x in self.locks if x.el is el), None)
+                if lk is None:
+                    f = self._gap_event(el)
+                else:
+                    f = self._release_event(lk)
+                f.terminal, f.direction = True, -1
+                evs.append(f)
+                owners.append(el)
+            rhs = m.rhs_locked(list(self.locks)) if self.locks else m.rhs
+            sol = solve_ivp(rhs, (t_cur, grid[-1]), y, method=self.method, t_eval=grid[k0:], events=evs,
+                            rtol=self.rtol, atol=self.atol, max_step=self.step)
+            if sol.status < 0:
+                raise MotionError("the integrator failed: %s" % sol.message)
+            ys = np.asarray(sol.y)
+            got = len(sol.t)
+            for j in range(got):
+                cols[k0 + j] = ys[:, j].copy()
+            k0 += got
+            fired = [(float(te[0]), i) for i, te in enumerate(sol.t_events) if len(te)]
+            if sol.status == 0 or not fired:
+                break
+            te, i = min(fired)
+            ye = np.asarray(sol.y_events[i][0], dtype=float)
+            y = self._resolve(owners[i], te, ye)
+            t_cur = te
+        else:
+            raise MotionError("more than %d contact events in one run: the pair is chattering" % _MAX_EVENTS)
+        if k0 < len(grid) or any(c is None for c in cols):
+            raise MotionError("the integrator did not reach the end of the time span (%d of %d steps)" % (k0, len(grid)))
+        return np.array(cols).T
+
+    def _gap_event(self, el):
+        m = self.m
+
+        def f(t, y):
+            return _event_value(el.probe(m, y[:m.n])[0], el.tol)
+        return f
+
+    def _release_event(self, lk):
+        m = self.m
+        idx = next(i for i, x in enumerate(self.locks) if x is lk)
+        locks = list(self.locks)
+
+        def f(t, y):
+            return _release_value(float(m.locked_accel(y[:m.n], y[m.n:], locks)[1][idx]))
+        return f
+
+    def _resolve(self, el, t, y):
+        m = self.m
+        n = m.n
+        q, qd = y[:n].copy(), y[n:].copy()
+        lk = next((x for x in self.locks if x.el is el), None)
+        if lk is not None:
+            self.locks.remove(lk)
+            self.note(t, el, "release")
+            return y
+        gap, row, data = el.probe(m, q)
+        qd = self.impact(el, t, q, qd, gap, row, data)
+        return np_concat(m.np, q, qd)
+
+
+def np_concat(np, q, qd):
+    return np.concatenate([q, qd])
+
+
 def _run_dynamic(study, end=None, step=None):
     np = _np()
     try:
@@ -1129,7 +1595,12 @@ def _run_dynamic(study, end=None, step=None):
                 raise MotionError("Velocities[%r] must be a finite number, got %r" % (key, val))
             j = by_name[key]
             qd0[j.dof] = _q(val) * (1.0 if j.kind == "Revolute" else 1e-3)
-    if n:
+    sim = None
+    if n and model.unilaterals:
+        sim = _Sim(model, grid, step, str(study.Integrator), _q(study.Rtol), _q(study.Atol))
+        sim._qd0 = qd0
+        Y = sim.run()
+    elif n:
         sol = solve_ivp(model.rhs, (0.0, grid[-1]), np.concatenate([q0, qd0]), method=str(study.Integrator),
                         t_eval=np.array(grid), rtol=_q(study.Rtol), atol=_q(study.Atol))
         if not sol.success or sol.y.shape[1] != len(grid):
@@ -1171,6 +1642,9 @@ def _run_dynamic(study, end=None, step=None):
         "unreached_parts": sorted(model.unreached),
         "warnings": list(model.warnings),
     }
+    if sim is not None:
+        out["contact"] = {"events": sim.events, "elements": [u.describe() for u in model.unilaterals],
+                          "capture_speed": CAPTURE_SPEED, "capture_interval": CAPTURE_INTERVAL}
     return out
 
 
@@ -1299,8 +1773,13 @@ def inputs_fingerprint(study):
                                       for n in sorted(j.PropertiesList) if n not in _FP_JOINT_SKIP])
         for o in live_components(asm):
             parts.append([o.Name, _placement_digest(o.Placement), _shape_digest(o)])
-    data = [rec(study, _FP_STUDY)] + [rec(o, _FP_LOAD) for o in loads(study)] + [rec(o, _FP_MASS) for o in masses(study)] \
-        + [joints, parts]
+    # the 6c properties join the fingerprint only where they matter, so results of earlier studies keep their hash
+    stops = asm is not None and any(
+        getattr(j, p, False) for j in _joints_of(asm) if _is_joint(j)
+        for p in ("EnableAngleMin", "EnableAngleMax", "EnableLengthMin", "EnableLengthMax"))
+    data = [rec(study, _FP_STUDY + (("LimitRestitution",) if stops else ()))] \
+        + [rec(o, _FP_LOAD + (("Restitution", "ContactTolerance") if o.Kind == "Contact" else ())) for o in loads(study)] \
+        + [rec(o, _FP_MASS) for o in masses(study)] + [joints, parts]
     return hashlib.sha256(json.dumps(data).encode()).hexdigest()[:16]
 
 

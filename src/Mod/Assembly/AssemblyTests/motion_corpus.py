@@ -659,6 +659,406 @@ def make_falling_ball(name, gap_mm):
 make_falling_ball("falling_ball_on_plate", 400.0)
 
 
+# ------------------------------------------------------------------ contact (slice 6c)
+
+def contact_rows_common(rows, name, res, tol, e, expect_conservative):
+    """The energy flag and the penetration of the ball or block against the plate top (z = 0), measured from the
+    stored placements."""
+    flag = res["energy"]["conservative"]
+    rows.add(name, "energy flag is %s" % expect_conservative, 0.0 if flag == expect_conservative else 1.0, 0.0)
+
+
+def _events(res, what):
+    return [ev for ev in res["contact"]["events"] if ev["what"] == what]
+
+
+def bounce_truth(gap_mm, tol_mm, e, n):
+    """Closed form of a ball dropped from ``gap_mm`` (bottom to plate) that first meets the plate at a gap of ``tol_mm``:
+    time of impact ``n`` and the apex height (mm above the contact level) after impact ``n``."""
+    d = (gap_mm - tol_mm) * 1e-3
+    v1 = math.sqrt(2 * G * d)
+    t1 = math.sqrt(2 * d / G)
+    t_n = t1 + (2 * v1 / G) * sum(e ** k for k in range(1, n))
+    return t_n, e ** (2 * n) * d * 1e3
+
+
+def make_bounce(name, e, gap_mm=200.0, end=1.3, tol=None, kind="ball", rests=False, bounces=3):
+    """A steel ball (or a 1 kg cube, ``kind='block'``) dropped on the grounded plate with a contact of restitution
+    ``e``: impact times and apex heights ``e^(2n) h`` from the closed form, the gap the pair never goes below, the
+    energy flag; with ``rests`` the pair is also checked to lock and then not drift."""
+    def build(doc, mode, host=None):
+        r = 25.0
+        rig = Rig(doc, mode, host)
+        if kind == "ball":
+            body = rig.sph("Ball", r, P(V(0, 0, gap_mm + r), R()))
+            rig.slide("Rail", rig.G, body, (0, 0, gap_mm + r), (0, 0, -1))
+            half = r
+        else:
+            body = rig.box("Block", 50, 50, 50, P(V(0, 0, gap_mm), R()))
+            rig.slide("Rail", rig.G, body, (25, 25, gap_mm + 25), (0, 0, -1))
+            half = 0.0
+        rig.finish()
+        step = 0.004
+        study = new_study(rig, end, step)
+        if kind == "ball":
+            MO.set_mass(study, body, density=STEEL)
+        else:
+            MO.set_mass(study, body, density=BLOCK_RHO)
+        MO.add_gravity(study)
+        t_mm = MO.CONTACT_TOLERANCE if tol is None else tol
+        if tol is None:
+            MO.add_contact(study, body, rig.G, e)
+        else:
+            MO.add_contact(study, body, rig.G, e, tolerance=tol)
+        z_ref = half + t_mm                       # the body's reference z when the gap is exactly the tolerance
+
+        def check(res, rows):
+            t = res["t"]
+            z = [pl_of(d).Base.z for d in series(res, body.Name)]
+            imp = _events(res, "impact")
+            for n in range(1, bounces + 1):
+                t_n, h_n = bounce_truth(gap_mm, t_mm, e, n)
+                if n > len(imp):
+                    rows.add(name, "impact %d happens" % n, 1.0, 0.0)
+                    continue
+                rows.add(name, "impact %d time (s)" % n, abs(imp[n - 1]["t"] - t_n), 1e-6, "truth %.6f s" % t_n)
+            gap0 = imp[0]["gap"] if imp else float("nan")
+            rows.add(name, "gap at the first impact equals the tolerance (mm)", abs(gap0 - t_mm), 1e-6, "tolerance %g mm" % t_mm)
+            # apex heights after impacts 1..bounces, from the stored placements (parabolic refinement)
+            pk = peaks(t, z)
+            pk = [p for p in pk if p[1] - z_ref > 1e-3]
+            for n in range(1, bounces + 1):
+                t_n, h_n = bounce_truth(gap_mm, t_mm, e, n)
+                if n > len(pk):
+                    rows.add(name, "apex %d exists" % n, 1.0, 0.0)
+                    continue
+                got = pk[n - 1][1] - z_ref
+                rows.add(name, "apex %d height (relative to e^%d h)" % (n, 2 * n), abs(got - h_n) / h_n, 0.02,
+                         "truth %.4f mm, got %.4f mm" % (h_n, got))
+            gaps = [v - half for v in z]
+            pen = max(0.0, -min(gaps))
+            rows.add(name, "penetration (mm), never above the tolerance", pen, t_mm,
+                     "smallest gap on the grid %.6f mm, tolerance %g mm" % (min(gaps), t_mm))
+            contact_rows_common(rows, name, res, t_mm, e, e >= 1.0)
+            if e >= 1.0:
+                energy_rows(rows, name, res)
+            if rests:
+                caps = _events(res, "capture")
+                if not caps:
+                    rows.add(name, "the pair is captured", 1.0, 0.0)
+                else:
+                    tc = caps[0]["t"]
+                    rows.add(name, "capture comes after the bounces under test", 0.0 if tc > bounce_truth(gap_mm, t_mm, e, bounces)[0] else 1.0, 0.0)
+                    after = [(tt, zz) for tt, zz in zip(t, z) if tt > tc + 1e-9]
+                    drift = max(abs(zz - after[0][1]) / max(tt - after[0][0], 1e-12) for tt, zz in after[1:]) if len(after) > 1 else 0.0
+                    rows.add(name, "drift after capture (mm/s)", drift, 1e-6, "%d samples after t=%.4f s" % (len(after), tc))
+                    rows.add(name, "rests at the tolerance (mm)", abs(z[-1] - z_ref), 1e-6)
+        c = Case(name, "contact/bounce", rig, study, check, step, study.TimeEnd, "DOP853")
+        c.body, c.plate, c.gap = body, rig.G, gap_mm
+        c.impact_time = bounce_truth(gap_mm, t_mm, e, 1)[0]
+        return c
+    CASES[name] = build
+    return build
+
+
+make_bounce("ball_bounce_e09", 0.9, end=1.3)
+make_bounce("ball_bounce_e07", 0.7, end=1.1, tol=0.25)
+make_bounce("ball_bounce_e05", 0.5, end=1.2, rests=True)
+make_bounce("ball_elastic_e1", 1.0, gap_mm=100.0, end=1.2)
+make_bounce("block_dropped_rests_e03", 0.3, gap_mm=20.0, end=0.6, kind="block", rests=True, bounces=2)
+
+
+def make_block_on_plate(name, force_over_weight, e=0.5, end=1.0, step=0.01):
+    """A 1 kg cube placed touching the plate (no crossing event) with an upward force of ``force_over_weight`` times its
+    weight. Below 1 it rests (the pair starts locked and drifts below 1e-6 mm/s); above 1 the multiplier would be
+    tensile, so the pair stays free and the cube rises with a = F/m - g."""
+    def build(doc, mode, host=None):
+        rig = Rig(doc, mode, host)
+        blk = rig.box("Block", 50, 50, 50, P(V(0, 0, 0), R()))
+        rig.slide("Rail", rig.G, blk, (25, 25, 25), (0, 0, -1))
+        rig.finish()
+        study = new_study(rig, end, step)
+        MO.set_mass(study, blk, density=BLOCK_RHO)
+        MO.add_gravity(study)
+        MO.add_contact(study, blk, rig.G, e)
+        weight = 1.0 * G
+        if force_over_weight:
+            MO.add_force(study, blk, (25, 25, 25), (0.0, 0.0, force_over_weight * weight))
+
+        def check(res, rows):
+            t = res["t"]
+            z = [pl_of(d).Base.z for d in series(res, "Block")]
+            caps = _events(res, "capture")
+            if force_over_weight <= 1.0:
+                drift = max(abs(zz - z[0]) / tt for tt, zz in zip(t[1:], z[1:]))
+                rows.add(name, "drift of the resting block (mm/s)", drift, 1e-6)
+                rows.add(name, "locked at t = 0", 0.0 if len(caps) == 1 and caps[0]["t"] == 0.0 else 1.0, 0.0)
+                rows.add(name, "no impact", 0.0 if not _events(res, "impact") else 1.0, 0.0)
+                rows.add(name, "stays on the plate (mm)", abs(z[-1]), 1e-9)
+            else:
+                a = (force_over_weight - 1.0) * G
+                worst = max(abs(zz - 0.5 * a * tt * tt * 1e3) for tt, zz in zip(t, z))
+                rows.add(name, "rise z = a t^2 / 2 (mm, relative to the travel)", worst / (0.5 * a * t[-1] ** 2 * 1e3), 1e-6)
+                rows.add(name, "never locked", 0.0 if not caps else 1.0, 0.0)
+            contact_rows_common(rows, name, res, 0.0, e, False)
+        return Case(name, "contact/rest", rig, study, check, step, study.TimeEnd, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_block_on_plate("block_rests_on_plate", 0.0)
+make_block_on_plate("block_rests_with_half_weight_lift", 0.5)
+make_block_on_plate("block_lifted_by_force", 1.5, end=0.2, step=0.004)
+
+
+def make_release_by_spring(name):
+    """Release of a locked pair. Block A (1 kg) rests on the plate near its edge and hangs block B (1 kg, on a slider
+    from A, below the plate level) from a spring. B starts stretched and oscillates about its static stretch with the
+    pair locked, x(t) = x_eq + a cos(w t); the spring pulls A down while x > 0 and pushes it up once x < 0, and the
+    multiplier goes tensile when k x = -m_A g. After that the two blocks are free in the air and their centre of mass
+    follows z_cm + V (t - t_r) - g (t - t_r)^2 / 2."""
+    k, x0, L0 = 500.0, 70.0, 40.0                     # N/m, mm, mm
+    mA = mB = 1.0
+    x_eq = mB * G / k * 1e3                           # mm
+    a = x0 - x_eq
+    w = math.sqrt(k / mB)
+    cosw = -(x_eq + mA * G / k * 1e3) / a
+    t_r = math.acos(cosw) / w
+
+    def build(doc, mode, host=None):
+        rig = Rig(doc, mode, host)
+        A = rig.box("A", 50, 50, 50, P(V(150, 0, 0), R()))
+        B = rig.box("B", 50, 50, 50, P(V(150, 0, -160), R()))
+        rig.slide("Rail", rig.G, A, (175, 25, 25), (0, 0, -1))
+        rig.slide("RailB", A, B, (175, 25, -135), (0, 0, -1))
+        rig.finish()
+        step = 0.002
+        study = new_study(rig, t_r + 0.07, step)
+        MO.set_mass(study, A, density=BLOCK_RHO)
+        MO.set_mass(study, B, density=BLOCK_RHO)
+        MO.add_gravity(study)
+        MO.add_spring(study, A, rig.L(A, (175, 25, 0)), B, rig.L(B, (175, 25, -110)), k, L0)
+        MO.add_contact(study, A, rig.G, 0.5)
+
+        def check(res, rows):
+            t = res["t"]
+            zA = [pl_of(d).Base.z for d in series(res, "A")]
+            zB = [pl_of(d).Base.z for d in series(res, "B")]
+            rel = _events(res, "release")
+            rows.add(name, "release time (s)", abs(rel[0]["t"] - t_r) if rel else 1.0, 1e-6, "truth %.6f s" % t_r)
+            before = [i for i, tt in enumerate(t) if tt < t_r - 1e-9]
+            rows.add(name, "A stays on the plate until the release (mm)", max(abs(zA[i]) for i in before), 1e-9)
+
+            def zb(tt):
+                return -160.0 + (x0 - (x_eq + a * math.cos(w * tt)))
+            rows.add(name, "B oscillates about its static stretch (mm)", max(abs(zB[i] - zb(t[i])) for i in before), 1e-6)
+            v_b = a * 1e-3 * w * math.sin(w * t_r)               # m/s upward at the release
+            cm_r = 0.5 * (0.0 + zb(t_r))
+            V_cm = mB * v_b / (mA + mB)
+            worst = 0.0
+            after = [i for i, tt in enumerate(t) if tt > t_r + 1e-9]
+            for i in after:
+                dt = t[i] - t_r
+                truth = cm_r + (V_cm * dt - 0.5 * G * dt * dt) * 1e3
+                worst = max(worst, abs(0.5 * (zA[i] + zB[i]) - truth))
+            rows.add(name, "centre of mass in the air after the release (mm)", worst, 1e-6, "%d steps after t_r" % len(after))
+            rows.add(name, "A has left the plate (mm)", 0.0 if zA[-1] > 1.0 else 1.0, 0.0, "z_A = %.3f mm" % zA[-1])
+        return Case(name, "contact/release", rig, study, check, step, study.TimeEnd, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_release_by_spring("contact_released_by_spring")
+
+
+# joint stops: a point-mass pendulum (L = 400 mm, released at 60 degrees from the vertical, hand mass) with a revolute
+# limit of 0 to 0.05 rad in the joint's own convention (the verifier's case of slice 6a: the pendulum must stop there
+# and not swing to 1.047 rad), and a block on a slider with a length limit
+STOP_RANGE = 0.05                                    # rad
+
+
+def _t_up(L, theta0, qs):
+    """Time for the pendulum to go from rest at q = 0 (theta = theta0) to q = qs: the quadrature of the energy equation
+    (theta_dot^2 / 2 = (g / L)(cos theta - cos theta0)), after q = qs s^2 to remove the square-root singularity."""
+    from scipy.integrate import quad
+
+    def f(s):
+        q = qs * s * s
+        d = math.cos(theta0 - q) - math.cos(theta0)
+        if s < 1e-7:
+            return 2.0 / math.sqrt(2 * G / L * math.sin(theta0)) * math.sqrt(qs)
+        return 2 * qs * s / math.sqrt(2 * G / L * d)
+    return quad(f, 0.0, 1.0, epsabs=1e-13, epsrel=1e-13)[0]
+
+
+def make_stop_pendulum(name, e, variant="plain", end=0.8, step=0.001, study_e=None):
+    def build(doc, mode, host=None):
+        L_mm, th0 = 400.0, math.radians(60.0)
+        rig = Rig(doc, mode, host)
+        pivot, axis = (0.0, 0.0, 1000.0), (0, 1, 0)
+        bob = rig.box("Bob", 20, 20, 20, rot_about(P(V(0, 0, 1000), R()), pivot, axis, -60.0))
+        qs_deg = math.degrees(STOP_RANGE)
+        f1 = frame_at(pivot, axis)
+        if variant == "plain":
+            rig.joint("Hinge", "Revolute", rig.G, bob, f1, EnableAngleMin=True, AngleMin=0.0,
+                      EnableAngleMax=True, AngleMax=qs_deg)
+        elif variant == "ref2":          # the grounded part is Reference2: the coordinate runs against the joint value
+            rig.joint("Hinge", "Revolute", bob, rig.G, f1, EnableAngleMin=True, AngleMin=-qs_deg,
+                      EnableAngleMax=True, AngleMax=0.0)
+        else:                            # joint value 40 degrees at the start: q = 0 is not the joint's zero
+            rig.joint("Hinge", "Revolute", rig.G, bob, f1, f1.multiply(P(V(), R(V(0, 0, 1), 40.0))),
+                      EnableAngleMin=True, AngleMin=40.0, EnableAngleMax=True, AngleMax=40.0 + qs_deg)
+        rig.finish()
+        study = new_study(rig, end, step, LimitRestitution=e)
+        MO.set_mass(study, bob, mass=0.75, com=(0, 0, -L_mm), inertia=[0.0] * 6)
+        MO.add_gravity(study)
+        t_up = _t_up(L_mm * 1e-3, th0, STOP_RANGE)
+
+        def check(res, rows):
+            t = res["t"]
+            q = joint(res, "Hinge")["q"]
+            qd = joint(res, "Hinge")["qd"]
+            imp = _events(res, "impact")
+            hi = imp          # in the study's own q (zero at the start) the stop is at +0.05 rad whatever the joint's convention;
+            #                   the other stop is only grazed at rest, which is not an impact
+            rows.add(name, "never beyond the stop (rad)", max(0.0, max(q) - STOP_RANGE), 1e-9, "max q %.9f" % max(q))
+            rows.add(name, "not the unlimited swing (rad)", 0.0 if max(q) < 0.06 else 1.0, 0.0, "max q %.6f" % max(q))
+            rows.add(name, "first impact time (s)", abs(imp[0]["t"] - t_up) if imp else 1.0, 1e-6, "truth %.6f s" % t_up)
+            rows.add(name, "energy flag is %s" % (e >= 1.0), 0.0 if res["energy"]["conservative"] == (e >= 1.0) else 1.0, 0.0)
+            if e >= 1.0:
+                for n in range(2, 6):
+                    got = hi[n - 1]["t"] if len(hi) >= n else float("inf")
+                    rows.add(name, "impact %d time (s)" % n, abs(got - (2 * n - 1) * t_up), 1e-6, "period %.6f s" % (2 * t_up))
+                back = []
+                for n in range(1, 4):
+                    seg = [x for tt, x in zip(t, q) if (2 * n - 1) * t_up < tt < (2 * n + 1) * t_up]
+                    back.append(min(seg))
+                rows.add(name, "returns to the release angle (fraction of the range)", max(abs(b) for b in back) / STOP_RANGE, 2e-3)
+                energy_rows(rows, name, res)
+            elif e <= 0.0:
+                after = [i for i, tt in enumerate(t) if tt > imp[0]["t"] + 1e-9] if imp else []
+                rows.add(name, "stays at the stop (rad)", max(abs(q[i] - STOP_RANGE) for i in after), 1e-9, "%d steps" % len(after))
+                rows.add(name, "at rest at the stop (rad/s)", max(abs(qd[i]) for i in after), 1e-9)
+                rows.add(name, "locked by a capture", 0.0 if _events(res, "capture") else 1.0, 0.0)
+                rows.add(name, "one impact only", 0.0 if len(imp) == 1 else 1.0, 0.0)
+            else:
+                # restitution e: the speed after the first impact is e times the speed before it
+                vb, va = imp[0]["vn_before"], imp[0]["vn_after"]
+                rows.add(name, "speed after the impact over the speed before, minus e", abs(-va / vb - e), 1e-9)
+        c = Case(name, "contact/stop", rig, study, check, step, study.TimeEnd, "DOP853")
+        c.t_up = t_up
+        return c
+    CASES[name] = build
+    return build
+
+
+make_stop_pendulum("stop_pendulum_e1", 1.0, end=0.75)
+make_stop_pendulum("stop_pendulum_e0", 0.0, end=0.5)
+make_stop_pendulum("stop_pendulum_e06", 0.6, end=0.3)
+make_stop_pendulum("stop_pendulum_reference2_e1", 1.0, variant="ref2", end=0.75)
+make_stop_pendulum("stop_pendulum_offset_e1", 1.0, variant="offset", end=0.75)
+
+
+def make_stop_slider(name, e, h_mm=50.0, end=0.6, step=0.002):
+    """A 1 kg block on a vertical slider falls from rest to a length limit h below its start and bounces: the time of
+    the impact sqrt(2 h / g) and the height after it e^2 h."""
+    def build(doc, mode, host=None):
+        rig = Rig(doc, mode, host)
+        blk = rig.box("Block", 50, 50, 50, P(V(0, 0, 400), R()))
+        rig.joint("Rail", "Slider", rig.G, blk, frame_at((25, 25, 425), (0, 0, -1)),
+                  EnableLengthMax=True, LengthMax=h_mm)
+        rig.finish()
+        study = new_study(rig, end, step, LimitRestitution=e)
+        MO.set_mass(study, blk, density=BLOCK_RHO)
+        MO.add_gravity(study)
+        h = h_mm * 1e-3
+
+        def check(res, rows):
+            t = res["t"]
+            z = [pl_of(d).Base.z for d in series(res, "Block")]
+            imp = _events(res, "impact")
+            t1 = math.sqrt(2 * h / G)
+            rows.add(name, "impact time (s)", abs(imp[0]["t"] - t1) if imp else 1.0, 1e-6, "truth %.6f s" % t1)
+            rows.add(name, "never below the stop (mm)", max(0.0, (400.0 - h_mm) - min(z)), 1e-9)
+            pk = [p for p in peaks(t, z) if p[1] < 400.0 - 1e-6]
+            apex = pk[0][1] - (400.0 - h_mm) if pk else float("nan")
+            rows.add(name, "bounce height against e^2 h", abs(apex - e * e * h_mm) / (e * e * h_mm), 0.02,
+                     "truth %.4f mm, got %.4f mm" % (e * e * h_mm, apex))
+        return Case(name, "contact/stop", rig, study, check, step, study.TimeEnd, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_stop_slider("stop_slider_e08", 0.8)
+make_stop_slider("stop_slider_e05", 0.5, h_mm=80.0, end=0.5)
+
+
+def make_suppressed_contact(name):
+    """A ball falls toward a second plate (a part no joint touches) that a configuration suppresses: the pair has a
+    contact load, but a suppressed component takes none, so the ball falls through where the plate would have stopped it
+    (free fall to the end, no impact, the load listed as skipped)."""
+    def build(doc, mode, host=None):
+        import AssemblyConfiguration as AC
+        r = 25.0
+        rig = Rig(doc, mode, host)
+        ball = rig.sph("Ball", r, P(V(0, 0, 300 + r), R()))
+        rig.slide("Rail", rig.G, ball, (0, 0, 300 + r), (0, 0, -1))
+        shelf = rig.box("Shelf", 100, 100, 10, P(V(-50, -50, 150), R()))
+        rig.finish()
+        step, end = 0.004, 0.4
+        study = new_study(rig, end, step)
+        MO.set_mass(study, ball, density=STEEL)
+        MO.add_gravity(study)
+        MO.add_contact(study, ball, shelf, 0.8)
+        AC.create(rig.asm, "NoShelf", suppress=["Shelf"])
+        AC.activate(rig.asm, "NoShelf")
+
+        def check(res, rows):
+            worst = 0.0
+            for tt, d in zip(res["t"], series(res, "Ball")):
+                worst = max(worst, abs(pl_of(d).Base.z - (300 + r - 0.5 * G * tt * tt * 1e3)))
+            rows.add(name, "falls freely through the suppressed shelf (mm)", worst, 1e-6)
+            ld = [x for x in res["loads"] if x["kind"] == "Contact"]
+            rows.add(name, "the contact is listed as skipped", 0.0 if ld and not ld[0]["applied"] else 1.0, 0.0)
+            rows.add(name, "no impact", 0.0 if "contact" not in res or not _events(res, "impact") else 1.0, 0.0)
+        return Case(name, "interplay/suppressed", rig, study, check, step, end, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_suppressed_contact("suppressed_shelf_contact")
+
+
+def make_contact_pair_filter(name):
+    """Contact is opt-in per pair: a ball falls past a shelf it has no contact load with and bounces off the plate it has
+    one with (the shelf sits beside the rail, so it is in the ball's way only if the pair collided)."""
+    def build(doc, mode, host=None):
+        r = 25.0
+        rig = Rig(doc, mode, host)
+        ball = rig.sph("Ball", r, P(V(0, 0, 200 + r), R()))
+        rig.slide("Rail", rig.G, ball, (0, 0, 200 + r), (0, 0, -1))
+        shelf = rig.box("Shelf", 100, 100, 10, P(V(-50, -50, 100), R()))
+        rig.finish()
+        step, end = 0.004, 0.5
+        study = new_study(rig, end, step)
+        MO.set_mass(study, ball, density=STEEL)
+        MO.add_gravity(study)
+        MO.add_contact(study, ball, rig.G, 0.6)
+
+        def check(res, rows):
+            t_n, h_n = bounce_truth(200.0, MO.CONTACT_TOLERANCE, 0.6, 1)
+            imp = _events(res, "impact")
+            rows.add(name, "first impact is with the plate, after passing the shelf (s)", abs(imp[0]["t"] - t_n) if imp else 1.0, 1e-6)
+            rows.add(name, "the shelf is not hit", 0.0 if all(x["element"] == "Contact" for x in imp) else 1.0, 0.0)
+        return Case(name, "contact/pairs", rig, study, check, step, end, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_contact_pair_filter("contact_only_where_declared")
+
+
+
 def make_force(name, axis_deg, force, frame):
     def build(doc, mode, host=None):
         ax = V(math.cos(math.radians(axis_deg)), math.sin(math.radians(axis_deg)), 0)
