@@ -86,7 +86,9 @@ reports, and there is no friction. ``energy.conservative`` is false when any con
 
 Starts that are refused, naming the pair: parts that overlap at the start (their common volume is not zero), a pair
 that starts inside the tolerance band without touching (gap above 1e-4 mm and not above the tolerance: the pair would
-count as touching from the start), and a contact whose two parts never move.
+count as touching from the start), and a contact whose two parts never move. After a run every output step is checked:
+a contact pair that overlaps, or whose closest-point direction reverses between two steps (a body passed through its
+partner), makes the run fail with ``MotionError`` instead of storing a wrong result.
 
 Limits (slice 6a, contact and stops now in 6c): no initial velocity except ``Velocities`` (JSON ``{joint name: value}`` in
 rad/s or mm/s); components must sit directly in the assembly (not in a sub-assembly); the joint frames must already
@@ -1707,7 +1709,42 @@ class _Sim:
             t_cur = te
         if k0 < len(grid) or any(c is None for c in cols):
             raise MotionError("the integrator did not reach the end of the time span (%d of %d steps)" % (k0, len(grid)))
-        return np.array(cols).T
+        Y = np.array(cols).T
+        self._check_no_crossing(Y)
+        return Y
+
+    def _check_no_crossing(self, Y):
+        """After the run, at every output step: no contact pair overlaps, and no pair has changed sides between two
+        steps (the direction between its closest points reversed). Either means a body went into or through its
+        partner unseen, so the run is refused instead of stored."""
+        m = self.m
+        np = m.np
+        n = m.n
+        for el in m.unilaterals:
+            if el.kind != "contact":
+                continue
+            prev = None
+            for k in range(Y.shape[1]):
+                gap, _row, data = el.probe(m, Y[:n, k])
+                t = float(self.grid[k])
+                if gap <= 1e-4:
+                    try:
+                        common = el.sh1.common(el.sh2)
+                        vol = float(common.Volume) if not common.isNull() else 0.0
+                    except Exception:                       # noqa: BLE001 - the boolean can fail on odd shapes
+                        vol = 0.0
+                    if vol > _overlap_limit(min(abs(el.sh1.Volume), abs(el.sh2.Volume))):
+                        raise MotionError("contact %s: the parts %s and %s overlap at t = %.6g s (common volume %.4g "
+                                          "mm^3), so a body went into its partner between two checks; use a smaller "
+                                          "step" % (el.name, el.b1.name, el.b2.name, t, vol))
+                    prev = None
+                    continue
+                u = np.asarray(data["u"], dtype=float)
+                if prev is not None and float(prev @ u) < 0.0:
+                    raise MotionError("contact %s: the parts %s and %s changed sides between t = %.6g s and t = %.6g s, "
+                                      "so a body passed through its partner unseen; use a smaller step"
+                                      % (el.name, el.b1.name, el.b2.name, float(self.grid[k - 1]), t))
+                prev = u
 
     def _events(self):
         evs, owners = [], []

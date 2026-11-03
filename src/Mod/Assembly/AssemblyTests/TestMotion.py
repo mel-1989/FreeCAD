@@ -1290,6 +1290,26 @@ class TestMotion(unittest.TestCase):
         self.assertEqual(failing_rows(rows), [])
         self.assertEqual(res["contact"]["guard"]["retries"], 0)
 
+    def test_a_body_that_goes_into_or_through_its_partner_fails_the_run(self):
+        """The check after the run: an in-band release shorter than the solver's step (the coarse-step variant of
+        ``contact_released_in_band_returns_to_rest``) lets A sink into the plate, and with the guard switched off the
+        coarse-step ball passes through the plate between two output steps. Both runs fail with ``MotionError``, never
+        a stored result; the fine-step runs are untouched."""
+        name = "contact_released_in_band_coarse_step"
+        C.make_release_in_band(name, step=0.002)
+        try:
+            with self.assertRaises(MO.MotionError) as cm:
+                run_case(name, "single")
+            self.assertIn("overlap at t =", str(cm.exception))
+        finally:
+            C.CASES.pop(name, None)
+        with patched(_guard_enabled=lambda: False):
+            with self.assertRaises(MO.MotionError) as cm:
+                run_case("ball_bounce_e09_step01", "single")
+        self.assertRegex(str(cm.exception), "changed sides|overlap at t =")
+        rows, _c, _res = run_case("ball_bounce_e09_step01", "single")
+        self.assertEqual(failing_rows(rows), [])
+
     def test_guard_retries_are_counted_and_recover_the_closed_form(self):
         self.assertEqual(probe_guard_retries_recover(), [])
         self.assertEqual(probe_guard_plan_needs_no_retries(), [])
