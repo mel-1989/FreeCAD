@@ -562,12 +562,16 @@ def save_and_reopen_keeps_publication_and_states():
             App.closeDocument(n)
         doc = App.openDocument(os.path.join(d, "subscriber.FCStd"))
         after = _states(doc)
+        ln = doc.getObject("S_line")
+        chk(P, not AS._empty(ln.Shape) or after["S_line"][0] != "following", "a datum line with no geometry is reported following")
         chk(P, {k: v for k, v in before.items() if k != "S_line"} == {k: v for k, v in after.items() if k != "S_line"},
             "states changed across save and reopen: %s vs %s" % (before, after))
-        ln = doc.getObject("S_line")
-        chk(P, after["S_line"][0] == "stale" or not AS._empty(ln.Shape),
-            "a published datum line that loaded with a null shape is reported following")
         sk = App.getDocument("skeleton")
+        sk.recompute()                       # the core restores a datum line with a null shape; a plain recompute must rebuild it
+        doc.recompute()
+        chk(P, K.same(K.observe_shape(ln.Shape, "line"), K.truth("line")) and AS.describe_subscription(ln)["state"] == "following",
+            "the published datum line after a plain recompute: %s" % AS.describe_subscription(ln)["state"])
+        chk(P, _states(doc) == before, "states after reopen and a plain recompute: %s vs %s" % (_states(doc), before))
         pub_after = [(i["item"], i["published"]) for i in AS.status(sk.getObject("Skel"))["items"]]
         chk(P, pub_before == pub_after, "publication changed: %s vs %s" % (pub_before, pub_after))
         sk.getObject("Pad").Length = 25.0
@@ -1119,6 +1123,168 @@ def reopened_skeleton_is_stale_until_the_subscriber_recomputes():
     return P
 
 
+# ------------------------------------------------------------------ repair 2: identity, Save As, restore, cycles, cost, containers
+
+class _Imposter:
+    """An unrelated feature class whose object happens to share the property names of a published item."""
+    def __init__(self, obj):
+        obj.Proxy = self
+
+    def execute(self, obj):
+        obj.Status = "mine"
+
+
+@case
+def an_unrelated_feature_with_the_same_property_names_is_left_alone():
+    P = []
+    with world(False) as w:
+        w.both("face")
+        for cls in ("own proxy", "no proxy"):
+            o = w.sdoc.addObject("Part::FeaturePython", "Imposter_" + cls[0])
+            o.addProperty("App::PropertyXLinkSub", "Source", "X")
+            for n in ("ItemName", "Publication", "Kind", "Status", "SkeletonName"):
+                o.addProperty("App::PropertyString", n, "X")
+            o.addProperty("App::PropertyBool", "Published", "X")
+            o.addProperty("App::PropertyInteger", "SkeletonId", "X")
+            o.Published = True
+            o.Status = "mine"
+            if cls == "own proxy":
+                _Imposter(o)
+        w.sdoc.getObject("Pad").touch()
+        w.recompute()
+        a, b = w.sdoc.getObject("Imposter_o"), w.sdoc.getObject("Imposter_n")
+        chk(P, isinstance(a.Proxy, _Imposter), "the proxy of an unrelated feature was replaced by %s" % type(a.Proxy).__name__)
+        chk(P, "Invalid" not in a.State and a.Status == "mine", "the unrelated feature went %s / %s" % (a.State, a.Status))
+        chk(P, getattr(b, "Proxy", None) is None, "an unrelated feature without a proxy was given one")
+        chk(P, not AS.is_item(a) and not AS.is_item(b), "an unrelated feature is taken for an item")
+        chk(P, [i["item"] for i in AS.status(w.body)["items"]] == ["face"], "the publication lists unrelated objects")
+    return P
+
+
+@case
+def save_as_does_not_turn_a_deleted_item_into_unloaded():
+    P = []
+    for which in ("subscriber", "skeleton"):
+        with world(True) as w:
+            w.both("face")
+            w.save()
+            b = w.binders["face"]
+            d2 = K.tmpdir()
+            if which == "subscriber":
+                w.doc.saveAs(os.path.join(d2, "moved_sub.FCStd"))
+            else:
+                w.sdoc.saveAs(os.path.join(d2, "renamed_skel.FCStd"))
+            w.recompute()
+            chk(P, state(b) == "following", "%s saved as: %s" % (which, state(b)))
+            w.sdoc.removeObject(AS.find_item(w.body, "face").Name)
+            w.recompute()
+            chk(P, state(b) == "broken", "%s saved as, item deleted, skeleton open: %s" % (which, state(b)))
+            shutil.rmtree(d2, ignore_errors=True)
+    return P
+
+
+@case
+def skeleton_edited_while_the_subscriber_was_closed_follows_on_a_plain_recompute():
+    P = []
+    with world(True) as w:
+        w.both("face", "sketch", "plane")
+        w.save()
+        d = w.dir
+        for n in (w.doc.Name, w.sdoc.Name):
+            App.closeDocument(n)
+        sk = App.openDocument(os.path.join(d, "skeleton.FCStd"))
+        sk.getObject("Pad").Length = 22.0
+        sk.recompute()
+        sk.save()
+        App.closeDocument(sk.Name)
+        doc = App.openDocument(os.path.join(d, "subscriber.FCStd"))
+        doc.recompute()                                           # a plain recompute, no refresh()
+        for k in ("face", "sketch", "plane"):
+            b = doc.getObject("S_" + k)
+            chk(P, AS.describe_subscription(b)["state"] == "following", "%s after a plain recompute: %s" % (k, AS.describe_subscription(b)))
+            chk(P, K.same(K.observe_shape(b.Shape, k), K.truth(k, L=22.0)), "%s holds %s" % (k, K.observe_shape(b.Shape, k) if not AS._empty(b.Shape) else None))
+        for n in list(App.listDocuments()):
+            App.closeDocument(n)
+    return P
+
+
+@case
+def subscribing_from_an_upstream_holder_is_refused():
+    P = []
+    with world(False) as w:
+        w.publish("face")
+        try:
+            AS.subscribe(w.body, AS.find_item(w.body, "face"))
+            P.append("a skeleton subscribed to its own item")
+        except AS.SkeletonError as exc:
+            chk(P, "cycle" in str(exc), "message: %s" % exc)
+        b2 = K.build_skeleton(w.sdoc, "SkelB")
+        AS.publish(b2, "face", *K.target_of(b2, "face"))
+        AS.subscribe(b2, AS.find_item(w.body, "face"), object_name="B_from_A")
+        w.sdoc.recompute()
+        try:
+            AS.subscribe(w.body, AS.find_item(b2, "face"), object_name="A_from_B")
+            P.append("a mutual subscription (a cycle) was accepted")
+        except AS.SkeletonError:
+            pass
+        chk(P, w.sdoc.getObject("A_from_B") is None, "a refused subscribe left a binder")
+    return P
+
+
+@case
+def documents_without_skeleton_objects_cost_the_observer_nothing():
+    P = []
+    calls = []
+    real = AS.reattach
+    AS.reattach = lambda doc: calls.append(doc.Name) or real(doc)
+    plain = App.newDocument("PlainDoc")
+    try:
+        plain.addObject("Part::Box", "Box")
+        for _ in range(3):
+            plain.recompute()
+        chk(P, calls == [], "the observer prepared a document with no skeleton objects: %s" % calls)
+        chk(P, AS._observer.count.get("PlainDoc", 0) == 0, "candidate count %s" % AS._observer.count.get("PlainDoc"))
+        with world(False) as w:
+            w.both("face")
+            del calls[:]
+            w.recompute()
+            chk(P, calls != [], "the observer skipped a document that holds items")
+    finally:
+        AS.reattach = real
+        App.closeDocument("PlainDoc")
+    return P
+
+
+@case
+def skeleton_identity_label_and_containers():
+    P = []
+    with world(False) as w:
+        w.both("face")
+        item, b = AS.find_item(w.body, "face"), w.binders["face"]
+        w.body.Label = "Frame"
+        d = AS.describe_subscription(b)
+        chk(P, d["skeleton"] == "Frame", "the status shows the skeleton as %r after a relabel" % d["skeleton"])
+        # break the item; the container that merely holds the subscriber must not be left Touched
+        folder = w.sdoc.addObject("App::DocumentObjectGroup", "Folder")
+        folder.addObject(w.holder)
+        lnk = w.sdoc.addObject("App::Link", "Lnk")
+        lnk.LinkedObject = w.holder
+        other = w.holder.newObject("Sketcher::SketchObject", "Other")
+        w.recompute()
+        K.insert_vertical_fillet(w.sdoc)
+        w.recompute()
+        chk(P, state(b) == "broken", "state %s" % state(b))
+        for o in (w.holder, folder, lnk, other):
+            chk(P, "Touched" not in o.State, "%s was left Touched by a broken subscriber: %s" % (o.Name, o.State))
+        # the skeleton is deleted and a new body takes its name: the orphan item does not belong to it
+        name = w.body.Name
+        w.sdoc.removeObject(name)
+        nb = w.sdoc.addObject("PartDesign::Body", name)
+        chk(P, nb.Name == name and AS.items(nb, include_withdrawn=True) == [], "a new body that took the name inherited %s" % AS.items(nb, include_withdrawn=True))
+        chk(P, AS.skeleton_of(item) is None, "the orphan item is bound to the new body")
+    return P
+
+
 # ------------------------------------------------------------------ mutants
 
 @contextlib.contextmanager
@@ -1385,6 +1551,58 @@ def _m_never_stale():
     return dict(classify=classify)
 
 
+def _m_is_item_by_names():
+    def is_item(obj):
+        return obj.TypeId == "Part::FeaturePython" and all(p in obj.PropertiesList for p in ("Source", "ItemName", "Publication", "Published", "Status"))
+
+    def ensure(obj, cls):
+        cls.attach(obj)
+        return True
+    return dict(is_item=is_item, _ensure_proxy=ensure)
+
+
+def _m_document_by_path():
+    def open_(binder, rec):
+        if rec.get("same"):
+            return True
+        rel, here = rec.get("file"), binder.Document.FileName
+        want = AS._real(os.path.join(os.path.dirname(here), rel)) if rel and here else ""
+        return any(AS._real(d.FileName) == want for d in App.listDocuments().values() if d.FileName)
+    return dict(_document_open=open_)
+
+
+def _m_datum_not_rebuilt():
+    return dict(_datum_shape=lambda target: None)
+
+
+def _m_restore_touch_dropped():
+    real = AS.reattach
+
+    def reattach(doc):
+        for o in doc.Objects:
+            if AS.is_item(o):
+                AS._ensure_proxy(o, AS.PublishedItem)
+            elif AS.is_subscription(o):
+                AS._ensure_proxy(o, AS.Subscription)
+    return dict(reattach=reattach)
+
+
+def _m_cycle_allowed():
+    return dict(_refuse_cycle=lambda holder, item: None)
+
+
+def _m_observer_ungated():
+    return dict(_prepare=lambda doc: AS.reattach(doc))
+
+
+def _m_bound_by_name():
+    return dict(skeleton_of=lambda item: item.Document.getObject(item.SkeletonName))
+
+
+def _m_containers_touched():
+    return dict(_is_container=lambda o: False)
+
+
 MUTANTS = {
     "subscriber_stores_raw_element": _m_raw_element,
     "broken_item_retargeted_to_first_of_type": _m_retarget_first_of_type,
@@ -1411,6 +1629,14 @@ MUTANTS = {
     "document_open_matched_by_file_name": _m_document_open_by_basename,
     "empty_geometry_reported_following": _m_empty_is_following,
     "stale_reported_as_following": _m_never_stale,
+    "item_recognised_by_property_names": _m_is_item_by_names,
+    "skeleton_document_identified_by_path": _m_document_by_path,
+    "datum_without_shape_not_rebuilt": _m_datum_not_rebuilt,
+    "restore_does_not_touch_changed_subscribers": _m_restore_touch_dropped,
+    "subscribe_cycle_allowed": _m_cycle_allowed,
+    "observer_prepares_every_document": _m_observer_ungated,
+    "skeleton_bound_by_name_only": _m_bound_by_name,
+    "break_touches_containers": _m_containers_touched,
 }
 
 

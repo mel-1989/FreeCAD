@@ -36,6 +36,17 @@ may do. Five states (following, stale, frozen, broken, unloaded), always compute
 Every mutating call is one undo transaction. Cross-document links are the stock external links (stored relative to
 the subscriber's file); the subscriber's document must have been saved before it can hold one.
 
+Frames. The geometry of an item is expressed as the stock binder expresses it: an item is a copy of the element in the
+frame of the shape it was taken from (a Body's Shape includes the Body's Placement), and a subscriber's binder keeps that
+geometry at the skeleton's position in space whatever the placement of the part that holds it. For a skeleton that is an
+``App::Part`` with a Placement, the items are in the frame of the Body inside it, not in the Part's.
+
+Save As. A cross-document link is stored by FreeCAD relative to the subscriber's file. Saving either document under a
+different directory (or the subscriber under a new name) leaves the stored link pointing at the old place; this is the core's
+external-link behaviour and is not repaired here. The skeleton's document is recognised by its Uid, which Save As keeps, so
+a subscriber is still reported as ``unloaded`` or ``broken`` for the right reason, but it re-attaches only when the pair is
+opened from the files the link names.
+
 Limits (slice 3a): items live at the top of the skeleton's document, not inside a Body; a withdrawn item stays in
 the document, hidden from the publication, so that subscribers can name it and so that undo is exact; the
 element-level rescue is the one the core gives the link (no extra geometric matching is added here); a subscriber
@@ -150,6 +161,8 @@ class PublishedItem:
         obj.addProperty("App::PropertyString", "Publication", PROP_GROUP, "Publication the item belongs to")
         obj.addProperty("App::PropertyString", "Kind", PROP_GROUP,
                         "What is published: object, face, edge or vertex")
+        obj.addProperty("App::PropertyString", "SkeletonSchema", PROP_GROUP, "Marks this object as a published item")
+        obj.addProperty("App::PropertyInteger", "SkeletonId", PROP_GROUP, "ID of the skeleton part (a name can be reused)")
         obj.addProperty("App::PropertyString", "SkeletonName", PROP_GROUP,
                         "Name of the skeleton part that carries the item (a name, not a link: a link would make the item wait for the whole skeleton)")
         obj.addProperty("App::PropertyBool", "Published", PROP_GROUP,
@@ -158,6 +171,7 @@ class PublishedItem:
                         "ok, or why the item cannot be resolved (set by the last recompute)")
         obj.Published = True
         obj.Status = "ok"
+        obj.SkeletonSchema = SCHEMA
         obj.Proxy = self
 
     def execute(self, obj):
@@ -171,13 +185,24 @@ class PublishedItem:
         pass
 
 
+def _is_container(o):
+    """Groups, bodies, parts, assemblies and links hold or show other objects; they depend on a binder only by containing
+    it, so a break is not propagated into or through them."""
+    if o.TypeId in ("App::Link", "App::LinkElement", "PartDesign::Body", "App::Part"):
+        return True
+    try:
+        return o.hasExtension("App::GroupExtension") or o.hasExtension("App::GeoFeatureGroupExtension")
+    except Exception:
+        return False
+
+
 def _touch_dependents(obj):
-    """Mark everything downstream of ``obj`` (any document) as not up to date."""
+    """Mark the features downstream of ``obj`` (any document) as not up to date, stopping at containers."""
     try:
         todo, seen = list(obj.InList), set()
         while todo:
             o = todo.pop()
-            if (o.Document.Name, o.Name) in seen:
+            if (o.Document.Name, o.Name) in seen or _is_container(o):
                 continue
             seen.add((o.Document.Name, o.Name))
             o.touch()
@@ -211,6 +236,8 @@ def resolve_item(obj):
             _fail(obj, "the item publishes a whole object but its link names %r" % sub)
         shape = getattr(target, "Shape", None)
         if shape is None or shape.isNull():
+            shape = _datum_shape(target)        # the core restores a stored datum line with a null shape
+        if shape is None or shape.isNull():
             _fail(obj, "the published object %s has no shape" % target.Label)
         return shape.copy()
     kind = _KINDS_BY_VALUE.get(obj.Kind)
@@ -235,30 +262,68 @@ def _sub_shape(target, sub):
     return Part.getShape(target, sub, needSubElement=True)
 
 
+_ITEM_PROPS = {"Source": "App::PropertyXLinkSub", "ItemName": "App::PropertyString", "Publication": "App::PropertyString",
+               "Kind": "App::PropertyString", "Published": "App::PropertyBool", "Status": "App::PropertyString",
+               "SkeletonName": "App::PropertyString", "SkeletonId": "App::PropertyInteger",
+               "SkeletonSchema": "App::PropertyString"}
+
+
+def _datum_shape(target):
+    """The unbounded plane, line or point of a PartDesign datum, built from its Placement, for a datum that has no shape.
+    A datum line, plane or point gets its infinite shape once, in its constructor, and the core cannot store an infinite
+    BRep: a datum restored from a file has a null shape that no recompute rebuilds. Same geometry as the stock shape."""
+    import Part
+    kind = {"PartDesign::Line": Part.Line, "PartDesign::Plane": Part.Plane}.get(target.TypeId)
+    if target.TypeId == "PartDesign::Point":
+        sh = Part.Vertex(0, 0, 0)
+    elif kind is not None:
+        sh = kind().toShape()
+    else:
+        return None
+    sh.Placement = target.Placement
+    return sh
+
+
 def is_item(obj):
-    """By proxy, or by properties alone (the proxy is lost when stable FreeCAD re-saves a file)."""
-    if isinstance(getattr(obj, "Proxy", None), PublishedItem):
+    """A published item is recognised by its type, the types of its properties and the schema marker it was given,
+    never by property names alone (an unrelated feature that happens to share the names is not ours). The proxy is
+    not consulted: a file re-saved by stable FreeCAD keeps the properties and drops the proxy."""
+    if obj.TypeId != "Part::FeaturePython":
+        return False
+    props = obj.PropertiesList
+    try:
+        return all(p in props and obj.getTypeIdOfProperty(p) == t for p, t in _ITEM_PROPS.items()) \
+            and obj.SkeletonSchema == SCHEMA
+    except Exception:
+        return False
+
+
+def _ensure_proxy(obj, cls):
+    """Attach ``cls`` only to an object that has no proxy at all; a foreign proxy is never replaced."""
+    p = getattr(obj, "Proxy", None)
+    if p is None:
+        cls.attach(obj)
         return True
-    return obj.TypeId == "Part::FeaturePython" and all(
-        p in obj.PropertiesList for p in ("Source", "ItemName", "Publication", "Published", "Status"))
+    return isinstance(p, cls)
 
 
 def skeleton_of(item):
-    return item.Document.getObject(item.SkeletonName)
+    """The skeleton part of an item, bound by name and object ID: a new part that took a deleted skeleton's name is not it."""
+    o = item.Document.getObject(item.SkeletonName)
+    return o if o is not None and o.ID == item.SkeletonId else None
 
 
 def items(skeleton, publication=None, include_withdrawn=False):
     """The published items of a skeleton, in creation order."""
     out = []
     for o in skeleton.Document.Objects:
-        if not is_item(o) or o.SkeletonName != skeleton.Name:
+        if not is_item(o) or o.SkeletonName != skeleton.Name or o.SkeletonId != skeleton.ID:
             continue
         if not include_withdrawn and not o.Published:
             continue
         if publication is not None and o.Publication != publication:
             continue
-        if not isinstance(getattr(o, "Proxy", None), PublishedItem):
-            PublishedItem.attach(o)
+        _ensure_proxy(o, PublishedItem)
         out.append(o)
     return out
 
@@ -305,10 +370,14 @@ class Subscription:
 
 
 def is_subscription(obj):
-    if isinstance(getattr(obj, "Proxy", None), Subscription):
-        return True
-    return obj.TypeId == "PartDesign::SubShapeBinderPython" and "Subscription" in obj.PropertiesList \
-        and bool(obj.Subscription)
+    """A subscriber binder: right type, a Subscription record that carries our schema (never by the name alone)."""
+    if obj.TypeId != "PartDesign::SubShapeBinderPython" or "Subscription" not in obj.PropertiesList \
+            or "Basis" not in obj.PropertiesList:
+        return False
+    try:
+        return json.loads(obj.Subscription).get("schema") == SCHEMA
+    except (ValueError, AttributeError):
+        return False
 
 
 def _info(binder):
@@ -330,16 +399,18 @@ def _real(path):
 
 
 def _document_open(binder, rec):
-    """Is the skeleton's document open? Matched by the resolved full path of the link's target (the stored relative path
-    resolved against the subscriber's directory), never by a document's name: an unrelated document called "skeleton"
-    does not count."""
+    """Is the skeleton's document open? Identified by its Uid, which survives Save As and a reload (never by a name, which
+    an unrelated document can share); records without a Uid fall back to the resolved path of the link's target."""
     if rec.get("same"):
         return True
+    docs = [d for d in App.listDocuments().values()]
+    if rec.get("uid"):
+        return any(d.Uid == rec["uid"] for d in docs)
     rel, here = rec.get("file"), binder.Document.FileName
     if not rel or not here:
         return False
     want = _real(os.path.join(os.path.dirname(here), rel))
-    return any(_real(d.FileName) == want for d in App.listDocuments().values() if d.FileName)
+    return any(_real(d.FileName) == want for d in docs if d.FileName)
 
 
 def classify(binder):
@@ -354,8 +425,8 @@ def classify(binder):
     out = {"state": FOLLOWING, "reason": None, "_item": item, "skeleton_changed": None}
     frozen = binder.BindMode == "Frozen"
     if item is not None:
-        if is_item(item) and not isinstance(getattr(item, "Proxy", None), PublishedItem):
-            PublishedItem.attach(item)
+        if is_item(item):
+            _ensure_proxy(item, PublishedItem)
         digest = shape_digest(item.Shape)
         if frozen:
             out["state"] = FROZEN
@@ -368,7 +439,7 @@ def classify(binder):
         if kind:
             out.update(state=kind, reason="%s: %s" % (_item_label(item, rec), reason))
         elif (digest or "") != binder.Basis:
-            out.update(state=STALE, reason="%s: the item changed since this subscriber last followed it (recompute)"
+            out.update(state=STALE, reason="%s: the item changed since this subscriber last followed it (recompute this document)"
                        % _item_label(item, rec))
         elif _empty(binder.Shape):
             out.update(state=STALE, reason="%s: the subscriber holds no geometry (recompute)" % _item_label(item, rec))
@@ -499,6 +570,7 @@ def publish(skeleton, name, target, sub="", publication=DEFAULT_PUBLICATION):
         item.Publication = str(publication)
         item.Kind = kind
         item.SkeletonName = skeleton.Name
+        item.SkeletonId = skeleton.ID
         item.Source = (target, [sub] if sub else [])
         item.Label = "%s.%s" % (skeleton.Label, name)
         doc.recompute([item])
@@ -538,6 +610,7 @@ def subscribe(holder, item, label=None, object_name="Subscription"):
     if not item.Published:
         raise SkeletonError("%s was withdrawn from its publication" % item.ItemName)
     doc = holder.Document
+    _refuse_cycle(holder, item)
     if item.Document != doc:
         if not doc.FileName:
             raise SkeletonError("save the subscriber's document before subscribing to an item of another document")
@@ -553,6 +626,28 @@ def subscribe(holder, item, label=None, object_name="Subscription"):
     return describe_subscription(b)
 
 
+def _closure(obj):
+    seen, todo = set(), [obj]
+    while todo:
+        o = todo.pop()
+        key = (o.Document.Name, o.Name)
+        if key not in seen:
+            seen.add(key)
+            todo += list(o.OutList)
+    return seen
+
+
+def _refuse_cycle(holder, item):
+    """A subscriber whose holder is upstream of the item would make the two wait for each other for ever."""
+    up = _closure(item)
+    todo = [holder]
+    while todo:
+        o = todo.pop()
+        if (o.Document.Name, o.Name) in up:
+            raise SkeletonError("%s is upstream of %s: subscribing would make a dependency cycle" % (o.Label, item.ItemName))
+        todo += list(getattr(o, "Group", []) or [])
+
+
 def _record_of(item, holder_doc=None):
     """What a subscriber remembers about its item. The file is a path relative to the subscriber's own file (no machine path)."""
     d = item.Document
@@ -560,8 +655,8 @@ def _record_of(item, holder_doc=None):
     rel = ""
     if not same and d.FileName and holder_doc.FileName:
         rel = os.path.relpath(_real(d.FileName), os.path.dirname(_real(holder_doc.FileName)))
-    return {"item": item.ItemName, "publication": item.Publication, "skeleton": skeleton_of(item).Label,
-            "doc": d.Name, "file": rel, "same": same}
+    return {"schema": SCHEMA, "item": item.ItemName, "publication": item.Publication, "skeleton": skeleton_of(item).Label,
+            "doc": d.Name, "uid": d.Uid, "file": rel, "same": same}
 
 
 def unsubscribe(binder):
@@ -594,13 +689,12 @@ def _set_mode(binder, mode, title):
 def _need_subscription(binder):
     if not is_subscription(binder):
         raise SkeletonError("%s is not a skeleton subscription" % binder.Label)
-    if not isinstance(getattr(binder, "Proxy", None), Subscription):
-        Subscription.attach(binder)
+    _ensure_proxy(binder, Subscription)
 
 
 def describe_subscription(binder):
-    if not isinstance(getattr(binder, "Proxy", None), Subscription) and is_subscription(binder):
-        Subscription.attach(binder)
+    if is_subscription(binder):
+        _ensure_proxy(binder, Subscription)
     info = classify(binder)
     item = info["_item"]
     rec = _info(binder)
@@ -608,7 +702,8 @@ def describe_subscription(binder):
            "document": binder.Document.Name, "state": info["state"], "reason": info["reason"],
            "item": item.ItemName if item is not None else rec.get("item"),
            "publication": item.Publication if item is not None else rec.get("publication"),
-           "skeleton": rec.get("skeleton"), "skeleton_document": rec.get("doc"),
+           "skeleton": (skeleton_of(item).Label if item is not None and skeleton_of(item) is not None else rec.get("skeleton")),
+           "skeleton_document": rec.get("doc"),
            "item_entity": _entity(item) if item is not None else None,
            "frozen": binder.BindMode == "Frozen", "skeleton_changed": info["skeleton_changed"],
            "shape_digest": shape_digest(binder.Shape)}
@@ -694,36 +789,69 @@ def signature(doc):
 # ------------------------------------------------------------------ proxies lost in a re-save by stable FreeCAD
 
 def reattach(doc):
-    """Give the items and subscribers of a document (and the items its subscribers name, in other documents) their proxy
-    back. A file re-saved by a FreeCAD without this module keeps every property but drops the Python proxies; without
-    them an item would never recompute and its subscribers would follow stale geometry."""
+    """Make a document ready for a recompute: give its items and subscribers their proxy back (a file re-saved by a
+    FreeCAD without this module keeps every property but drops the Python proxies), touch a datum or item that was
+    restored without geometry, and touch a subscriber whose item changed since it last followed it (the skeleton was
+    edited while the subscriber's document was closed), so that this very recompute brings them up to date."""
     for o in doc.Objects:
-        if is_item(o) and not isinstance(getattr(o, "Proxy", None), PublishedItem):
-            PublishedItem.attach(o)
+        if is_item(o):
+            _ensure_proxy(o, PublishedItem)
+            if _empty(o.Shape):
+                o.touch()                       # restored without geometry (a datum): rebuild it in this recompute
         elif is_subscription(o):
-            if not isinstance(getattr(o, "Proxy", None), Subscription):
-                Subscription.attach(o)
+            _ensure_proxy(o, Subscription)
             it = _support_item(o)
-            if it is not None and is_item(it) and not isinstance(getattr(it, "Proxy", None), PublishedItem):
-                PublishedItem.attach(it)
+            if it is not None and is_item(it):
+                _ensure_proxy(it, PublishedItem)
+                if o.BindMode != "Frozen" and _item_problem(it)[0] is None \
+                        and (shape_digest(it.Shape) or "") != o.Basis:
+                    o.touch()
+
+
+_CANDIDATES = ("Part::FeaturePython", "PartDesign::SubShapeBinderPython")
 
 
 class _Observer:
+    """Counts the objects that could be items or subscribers per document, so that a recompute of any other document costs
+    one dictionary lookup."""
+
+    def __init__(self):
+        self.count = {}
+
+    def scan(self):
+        for d in App.listDocuments().values():
+            self.count[d.Name] = sum(1 for o in d.Objects if o.TypeId in _CANDIDATES)
+
+    def slotCreatedObject(self, obj):
+        if obj.TypeId in _CANDIDATES:
+            self.count[obj.Document.Name] = self.count.get(obj.Document.Name, 0) + 1
+
+    def slotDeletedDocument(self, doc):
+        self.count.pop(doc.Name, None)
+
     def slotBeforeRecomputeDocument(self, doc):
-        try:
-            reattach(doc)
-        except Exception as exc:  # never let this break a recompute
-            App.Console.PrintWarning("AssemblySkeleton: re-attaching proxies failed: %s\n" % exc)
+        _prepare(doc)
+
+
+def _prepare(doc):
+    if not _observer.count.get(doc.Name):
+        return
+    try:
+        reattach(doc)
+    except Exception as exc:  # never let this break a recompute
+        App.Console.PrintWarning("AssemblySkeleton: preparing %s for a recompute failed: %s\n" % (doc.Name, exc))
 
 
 _observer = None
 
 
 def install_observer():
-    """Idempotent; Init.py calls it at start-up, so every recompute of every document re-attaches lost proxies first."""
+    """Idempotent; Init.py calls it at start-up, so every recompute of a document that holds items or subscribers
+    prepares it first."""
     global _observer
     if _observer is None:
         _observer = _Observer()
+        _observer.scan()
         App.addDocumentObserver(_observer)
 
 
