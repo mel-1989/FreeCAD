@@ -803,6 +803,9 @@ def reattach(doc):
             it = _support_item(o)
             if it is not None and is_item(it):
                 _ensure_proxy(it, PublishedItem)
+                if _empty(it.Shape) and it.Document != doc:
+                    it.touch()                  # restored without geometry in a document that is not recomputing now
+                    it.recompute()
                 if o.BindMode != "Frozen" and _item_problem(it)[0] is None \
                         and (shape_digest(it.Shape) or "") != o.Basis:
                     o.touch()
