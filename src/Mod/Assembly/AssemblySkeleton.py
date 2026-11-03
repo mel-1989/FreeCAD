@@ -288,19 +288,29 @@ def _datum_shape(target):
     return _datum_from(target.TypeId, target.Placement)
 
 
-def _datum_record(item):
-    """What a subscriber must remember to rebuild a datum's geometry: the datum's type and Placement, or None."""
-    src = item.Source
-    if item.Kind != "object" or not src or src[0] is None or src[0].TypeId not in (
-            "PartDesign::Line", "PartDesign::Plane", "PartDesign::Point"):
-        return None
-    p = src[0].Placement
-    return json.dumps({"type": src[0].TypeId, "base": list(p.Base), "q": list(p.Rotation.Q)})
+_DATUM_TYPES = ("PartDesign::Line", "PartDesign::Plane", "PartDesign::Point")
+
+
+def _datum_record_of_shape(shape):
+    """A finite description of an unbounded datum shape exactly as a subscriber's binder holds it (the holder's placement
+    and any rotation included): the line's point and direction, the plane's position and axis, or the point."""
+    if shape is None or shape.isNull():
+        return ""
+    if shape.Faces and shape.BoundBox.DiagonalLength > 1e50:
+        s = shape.Faces[0].Surface
+        return json.dumps({"k": "plane", "p": list(s.Position), "a": list(s.Axis)})
+    if shape.Edges and shape.BoundBox.DiagonalLength > 1e50:
+        c = shape.Edges[0].Curve
+        return json.dumps({"k": "line", "p": list(c.Location), "a": list(c.Direction)})
+    if shape.Vertexes and not shape.Edges:
+        v = shape.Vertexes[0].Point
+        return json.dumps({"k": "point", "p": [v.x, v.y, v.z]})
+    return ""
 
 
 def _restore_datum(binder):
     """Give an unloaded datum subscriber its geometry back when the stock binder loaded it null (the core cannot store an
-    infinite shape). Returns True if the binder now holds geometry."""
+    infinite shape), from the record of what the binder itself last held. Returns True if the binder now holds geometry."""
     if not _empty(binder.Shape):
         return True
     rec = binder.Datum if "Datum" in binder.PropertiesList else ""
@@ -308,9 +318,13 @@ def _restore_datum(binder):
         return False
     import Part
     d = json.loads(rec)
-    sh = _datum_from(d["type"], App.Placement(App.Vector(*d["base"]), App.Rotation(*d["q"])))
-    if sh is None:
-        return False
+    p = App.Vector(*d["p"])
+    if d["k"] == "line":
+        sh = Part.Line(p, p + App.Vector(*d["a"])).toShape()
+    elif d["k"] == "plane":
+        sh = Part.Plane(p, App.Vector(*d["a"])).toShape()
+    else:
+        sh = Part.Vertex(p.x, p.y, p.z)
     binder.Shape = Part.Compound([sh])
     return True
 
@@ -397,13 +411,18 @@ class Subscription:
             digest = shape_digest(item.Shape) or ""
             if obj.Basis != digest:
                 obj.Basis = digest
-            rec = _datum_record(item) or ""
-            if "Datum" in obj.PropertiesList and obj.Datum != rec:
-                obj.Datum = rec
         return False                        # let the stock binder do the (un)update
 
     def onChanged(self, obj, prop):
-        pass
+        """Remember an unbounded datum shape the binder has just received, as the binder holds it."""
+        if prop != "Shape" or "Datum" not in obj.PropertiesList:
+            return
+        try:
+            rec = _datum_record_of_shape(obj.Shape)
+            if rec and obj.Datum != rec:
+                obj.Datum = rec
+        except Exception:
+            pass
 
 
 def is_subscription(obj):
@@ -487,7 +506,9 @@ def classify(binder):
         return out
     if rec and not _document_open(binder, rec):
         what = "the skeleton document %r is not open" % (rec.get("file") or rec.get("doc"))
-        if not _restore_datum(binder):
+        if _empty(binder.Shape) and (binder.Datum if "Datum" in binder.PropertiesList else ""):
+            what += "; its geometry is restored by the next recompute of this document"
+        elif _empty(binder.Shape):
             what += "; this subscriber holds no geometry (the core cannot store it and it was never recorded): open the skeleton"
         out.update(state=UNLOADED, reason=what)
         return out

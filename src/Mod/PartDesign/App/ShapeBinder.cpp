@@ -998,7 +998,8 @@ void SubShapeBinder::update(SubShapeBinder::UpdateOption options)
 
 void SubShapeBinder::slotRecomputedObject(const App::DocumentObject& Obj)
 {
-    if (Context.getValue() == &Obj && !this->testStatus(App::ObjectStatus::Recompute2)) {
+    // Frozen: disable auto update, also when the context (the part holding the binder) is recomputed.
+    if (Context.getValue() == &Obj && BindMode.getValue() != 1 && !this->testStatus(App::ObjectStatus::Recompute2)) {
         try {
             update();
         }
@@ -1120,7 +1121,10 @@ void SubShapeBinder::onChanged(const App::Property* prop)
             collapseGeoChildren();
             clearCopiedObjects();
             setupCopyOnChange();
-            if (!Support.getSubListValues().empty()) {
+            // Frozen means "disable auto update": a link that is merely re-attached (an external document
+            // loaded after this one) must not refresh a binder that already holds its frozen shape.
+            const bool keepFrozen = BindMode.getValue() == 1 && !Shape.getValue().IsNull();
+            if (!Support.getSubListValues().empty() && !keepFrozen) {
                 update();
                 if (BindMode.getValue() == 2) {
                     Support.setValue(nullptr);

@@ -483,33 +483,87 @@ case(_freeze_case(True))
 
 @case
 def freeze_survives_save_reopen():
+    """Frozen, the skeleton edited, both saved, the subscriber reopened first (the skeleton loads after it and re-attaches
+    the link): the frozen shape must not move."""
+    P = []
+    for edit_closed in (False, True):
+        with world(True) as w:
+            w.both("face", "plane")
+            AS.freeze(w.binders["face"])
+            AS.freeze(w.binders["plane"])
+            h0 = {k: digest(w.binders[k]) for k in ("face", "plane")}
+            d = w.dir
+            if not edit_closed:
+                w.set_length(17.0)
+            w.save()
+            for n in (w.doc.Name, w.sdoc.Name):
+                App.closeDocument(n)
+            if edit_closed:
+                sk = App.openDocument(os.path.join(d, "skeleton.FCStd"))
+                sk.getObject("Pad").Length = 17.0
+                sk.recompute()
+                sk.save()
+                App.closeDocument(sk.Name)
+            doc = App.openDocument(os.path.join(d, "subscriber.FCStd"))
+            for k in ("face", "plane"):
+                b2 = doc.getObject("S_" + k)
+                chk(P, b2 is not None and digest(b2) == h0[k] and K.same(K.observe_shape(b2.Shape, k), K.truth(k)),
+                    "%s: the frozen shape changed on reopen (edited while closed: %s)" % (k, edit_closed))
+                rec = AS.describe_subscription(b2)
+                chk(P, rec["state"] == "frozen" and (rec["skeleton_changed"] is True or k == "plane"),
+                    "%s reopened status %s" % (k, rec["state"]))
+            doc.recompute()
+            chk(P, digest(doc.getObject("S_face")) == h0["face"], "the frozen face moved on a recompute")
+            AS.unfreeze(doc.getObject("S_face"))
+            chk(P, K.same(K.observe_shape(doc.getObject("S_face").Shape, "face"), K.truth("face", L=17.0)), "unfreeze after reopen")
+            for n in list(App.listDocuments()):
+                App.closeDocument(n)
+    return P
+
+
+@case
+def unloaded_datum_in_a_placed_rotated_holder_keeps_the_binders_geometry():
     P = []
     with world(True) as w:
-        w.both("face")
-        b = w.binders["face"]
-        AS.freeze(b)
-        h0 = digest(b)
+        w.holder.Placement = App.Placement(V(0, 50, 0), App.Rotation(V(0, 0, 1), 45))
+        w.both("line", "plane", "point")
+        w.recompute()
+        want = {k: K.observe_shape(w.binders[k].Shape, k) for k in ("line", "plane", "point")}
         w.save()
         d = w.dir
         for n in (w.doc.Name, w.sdoc.Name):
             App.closeDocument(n)
         doc = App.openDocument(os.path.join(d, "subscriber.FCStd"))
-        b2 = doc.getObject("S_face")
-        chk(P, b2 is not None and digest(b2) == h0 and K.same(K.observe_shape(b2.Shape, "face"), K.truth("face")),
-            "frozen shape changed across save and reopen")
-        rec = AS.describe_subscription(b2)
-        chk(P, rec["state"] == "frozen" and rec["skeleton_changed"] is False, "reopened status %s" % rec)
-        sk = App.getDocument("skeleton")
-        sk.getObject("Pad").Length = 30.0
-        sk.recompute()
-        doc.recompute()
-        chk(P, digest(b2) == h0 and AS.describe_subscription(b2)["skeleton_changed"] is True,
-            "frozen after reopen: %s" % AS.describe_subscription(b2))
-        AS.unfreeze(b2)
-        chk(P, K.same(K.observe_shape(b2.Shape, "face"), K.truth("face", L=30.0)), "unfreeze after reopen")
-        for n in ("subscriber", "skeleton"):
-            if n in App.listDocuments():
-                App.closeDocument(n)
+        App.closeDocument("skeleton")
+        for k in ("line", "plane", "point"):
+            b = doc.getObject("S_" + k)
+            chk(P, AS.describe_subscription(b)["state"] == "unloaded", "%s state" % k)
+            AS.refresh(doc)
+            got = K.observe_shape(b.Shape, k) if not AS._empty(b.Shape) else None
+            chk(P, got is not None and K.same(got, want[k], 1e-6), "%s unloaded holds %s, the binder held %s" % (k, got, want[k]))
+        for n in list(App.listDocuments()):
+            App.closeDocument(n)
+    return P
+
+
+@case
+def status_is_read_only():
+    P = []
+    with world(True) as w:
+        w.both("line")
+        w.save()
+        d = w.dir
+        for n in (w.doc.Name, w.sdoc.Name):
+            App.closeDocument(n)
+        doc = App.openDocument(os.path.join(d, "subscriber.FCStd"))
+        App.closeDocument("skeleton")
+        b = doc.getObject("S_line")
+        before = (AS._empty(b.Shape), list(b.State))
+        AS.status(doc)
+        AS.describe_subscription(b)
+        chk(P, (AS._empty(b.Shape), list(b.State)) == before, "status changed the binder: %s -> %s" % (before, (AS._empty(b.Shape), b.State)))
+        for n in list(App.listDocuments()):
+            App.closeDocument(n)
     return P
 
 
@@ -1296,6 +1350,7 @@ def unloaded_datum_subscribers_keep_their_geometry():
             App.closeDocument(n)
         doc = App.openDocument(os.path.join(d, "subscriber.FCStd"))
         App.closeDocument("skeleton")
+        doc.recompute()                      # the geometry is restored when the subscriber's document recomputes, not by a status call
         for k in ("line", "plane", "point", "face"):
             b = doc.getObject("S_" + k)
             rec = AS.describe_subscription(b)
@@ -1625,8 +1680,19 @@ def _m_containers_touched():
     return dict(_is_container=lambda o: False)
 
 
+def _m_status_restores():
+    real = AS.classify
+
+    def classify(binder):
+        r = real(binder)
+        if r["state"] == AS.UNLOADED:
+            AS._restore_datum(binder)
+        return r
+    return dict(classify=classify)
+
+
 def _m_datum_not_recorded():
-    return dict(_datum_record=lambda item: None)
+    return dict(_datum_record_of_shape=lambda shape: "")
 
 
 MUTANTS = {
@@ -1664,6 +1730,7 @@ MUTANTS = {
     "skeleton_bound_by_name_only": _m_bound_by_name,
     "break_touches_containers": _m_containers_touched,
     "datum_geometry_not_recorded": _m_datum_not_recorded,
+    "status_rebuilds_geometry": _m_status_restores,
 }
 
 
