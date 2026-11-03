@@ -49,7 +49,7 @@ import FreeCAD
 import Part
 import Sketcher
 
-_here = os.path.dirname(os.path.abspath(sys.argv[0] if sys.argv and sys.argv[0] else __file__))
+_here = os.path.dirname(os.path.abspath(__file__))
 for _p in (_here, os.path.dirname(_here), os.path.join(FreeCAD.getHomePath(), "Mod", "Sketcher")):
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
@@ -174,10 +174,12 @@ def _count_flips(base, now):
 
 
 def _scenario_triangle(doc):
+    """Base pinned at the origin, one side of length 3, the third side free:
+    the apex is free on a circle and is dragged below the base line and back."""
     s = Corpus._Sk(doc, "d_triangle")
     a = s.line(0, 0, 3, 0)
-    b = s.line(3, 0, 1.5, 3.5)
-    c = s.line(1.5, 3.5, 0, 0)
+    b = s.line(3, 0, 1.5, 2.6)
+    c = s.line(1.5, 2.6, 0, 0)
     s.c("Coincident", a, 2, b, 1)
     s.c("Coincident", b, 2, c, 1)
     s.c("Coincident", c, 2, a, 1)
@@ -186,10 +188,8 @@ def _scenario_triangle(doc):
     s.c("Horizontal", a)
     s.c("Distance", a, 3.0)
     s.c("Distance", c, 3.0)
-    s.c("Distance", b, 3.0)
-    # drag the apex through the base line and back
-    path = [(1.5, 3.5 - 0.35 * i) for i in range(0, 11)] + [(1.5, -0.1 * i - 0.2) for i in range(0, 13)]
-    path += [(1.5, 3.5 - 0.2 * i - 0.1) for i in range(0, 0)]
+    path = [(3.0 * math.cos(math.radians(60 - 10 * i)), 3.0 * math.sin(math.radians(60 - 10 * i))) for i in range(0, 16)]
+    path += [(3.0 * math.cos(math.radians(-90 + 10 * i)), 3.0 * math.sin(math.radians(-90 + 10 * i))) for i in range(0, 16)]
     spec = {"loops": [[(a, 1), (b, 1), (c, 1)]]}
     return s.o, (b, 2), path, spec
 
@@ -213,6 +213,30 @@ def _scenario_fourbar(doc):
     s.c("Distance", cp, 5.0)
     s.c("Distance", rk, 4.5)
     path = [(2.0 * math.cos(math.radians(a)), 2.0 * math.sin(math.radians(a))) for a in range(60, 421, 10)]
+    spec = {"loops": [[(g, 1), (g, 2), (cp, 2), (cp, 1)]]}
+    return s.o, (cr, 2), path, spec
+
+
+def _scenario_fourbar_rocker(doc):
+    """A four-bar that cannot turn fully (lengths 6, 3, 4, 4): the crank is
+    dragged past its dead point."""
+    s = Corpus._Sk(doc, "d_fourbar2")
+    g = s.line(0, 0, 6, 0)
+    cr = s.line(0, 0, 1.5, 2.6)
+    cp = s.line(1.5, 2.6, 4.5, 2.9)
+    rk = s.line(4.5, 2.9, 6, 0)
+    s.c("Coincident", g, 1, cr, 1)
+    s.c("Coincident", cr, 2, cp, 1)
+    s.c("Coincident", cp, 2, rk, 1)
+    s.c("Coincident", rk, 2, g, 2)
+    s.c("DistanceX", -1, 1, g, 1, 0.0)
+    s.c("DistanceY", -1, 1, g, 1, 0.0)
+    s.c("Horizontal", g)
+    s.c("Distance", g, 6.0)
+    s.c("Distance", cr, 3.0)
+    s.c("Distance", cp, 4.0)
+    s.c("Distance", rk, 4.0)
+    path = [(3.0 * math.cos(math.radians(a)), 3.0 * math.sin(math.radians(a))) for a in range(60, -181, -8)]
     spec = {"loops": [[(g, 1), (g, 2), (cp, 2), (cp, 1)]]}
     return s.o, (cr, 2), path, spec
 
@@ -276,18 +300,25 @@ def _scenario_rectangle(doc):
 
 
 def _scenario_chain(doc):
+    """Eight chained rectangles; the last one loses its two dimensions and its
+    top-right corner is dragged across the opposite corner."""
     sk, info = Corpus.build_scale(doc, "d_chain", 96)
-    # free the DistanceX/Y of the last rectangle's right side so a corner can move
     n = sk.GeometryCount // 4
     last = (n - 1) * 4
+    unit = (n - 1) * 12
+    sk.delConstraint(unit + 9)  # DistanceY of the right side
+    sk.delConstraint(unit + 8)  # DistanceX of the bottom side
+    sk.solve()
     loops = [[(r * 4, 1), (r * 4 + 1, 1), (r * 4 + 2, 1), (r * 4 + 3, 1)] for r in range(n)]
-    path = [(12.0 * (n - 1) + 10.0 - 0.9 * i, 5.0 - 0.45 * i) for i in range(0, 20)]
+    x0 = 12.0 * (n - 1)
+    path = [(x0 + 10.0 - 1.1 * i, 5.0 - 0.6 * i) for i in range(0, 20)]
     return sk, (last + 1, 2), path, {"loops": loops}
 
 
 SCENARIOS = [
     ("triangle_apex_through_base", _scenario_triangle),
     ("fourbar_crank_turn", _scenario_fourbar),
+    ("fourbar_rocker_past_dead_point", _scenario_fourbar_rocker),
     ("slot_centre_through_centre", _scenario_slot),
     ("tangent_chain_small_circle", _scenario_tangent_chain),
     ("rectangle_corner_through_corner", _scenario_rectangle),
@@ -300,7 +331,9 @@ def run_drag(name, builder):
     try:
         sk, (geo, pos), path, spec = builder(doc)
         code = sk.solve()
+        dof0 = sk.DoF
         base = _invariants(sk, spec)
+        max_gap = 0.0
         times, failures = [], 0
         flips = {"arc": 0, "tangent": 0, "loop": 0}
         flipped_steps = 0
@@ -314,6 +347,8 @@ def run_drag(name, builder):
             times.append(time.perf_counter() - t0)
             if rc not in (0, None):
                 failures += 1
+            px, py = _pt(sk, geo, pos)
+            max_gap = max(max_gap, math.hypot(px - x, py - y))
             now = _invariants(sk, spec)
             step = _count_flips(last, now)
             if any(step.values()):
@@ -321,9 +356,16 @@ def run_drag(name, builder):
             for k in flips:
                 flips[k] += step[k]
             last = now
+        fx, fy = _pt(sk, geo, pos)
+        tx, ty = path[-1]
         return {
             "name": name,
+            "initial_dof": dof0,
             "initial_solve_code": code,
+            "final_point": [fx, fy],
+            "final_target": [tx, ty],
+            "final_distance_to_target": math.hypot(fx - tx, fy - ty),
+            "max_distance_to_target": max_gap,
             "steps": len(path),
             "move_failures": failures,
             "flip_events": flips,
@@ -352,7 +394,8 @@ def main(out_path=None):
         "scale": [],
         "drags": [],
     }
-    for case in cases:
+    skip_cases = os.environ.get("SKETCH_BENCH_ONLY") == "drags"
+    for case in ([] if skip_cases else cases):
         row = bench_case(case)
         (report["scale"] if case.cls in ("scale", "scale_planted") else report["cases"]).append(row)
         print(
@@ -371,7 +414,7 @@ def main(out_path=None):
     for name, builder in SCENARIOS:
         row = run_drag(name, builder)
         report["drags"].append(row)
-        print("drag %-34s %s" % (name, json.dumps({k: row[k] for k in ("steps", "move_failures", "flip_events", "move_median_s")})))
+        print("drag %-34s %s" % (name, json.dumps({k: row[k] for k in ("initial_dof", "steps", "move_failures", "flip_events", "max_distance_to_target", "move_median_s")})))
     with open(out_path, "w") as fh:
         json.dump(report, fh, indent=1)
     print("wrote", out_path)
@@ -382,6 +425,7 @@ def main(out_path=None):
         FreeCAD.setActiveDocument(previous)
 
 
-if __name__ == "__main__":
+# FreeCADCmd runs a script under its file name rather than "__main__".
+if __name__ in ("__main__", os.path.splitext(os.path.basename(__file__))[0]):
     if os.environ.get("SKETCH_BENCH_NO_RUN") != "1":
         main()

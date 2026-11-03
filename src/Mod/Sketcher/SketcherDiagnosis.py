@@ -60,16 +60,29 @@ removal is the newest one (highest index) whose removal keeps the DOF and
 moves no solved point by more than 1e-9.
 
 Fixes.  For every minimal conflict set the module proposes, per member, to
-delete it, to make it non-driving (datum constraints only) and to change its
-datum to the value the rest of the set forces (datum constraints without an
-expression only).  Each candidate is applied to a fresh throwaway copy
-through the same code that ``apply_fix`` uses on the real sketch, the copy is
-re-solved, and the fix is offered only if the set is gone, no new conflict
-and no new redundancy appeared and the solver accepts it.  If a delete or
-non-driving fix leaves a redundant constraint behind, the removal of that
-redundant constraint is appended to the fix (a multi-operation fix) and the
-whole thing is tested again.  The reported ``dof_after`` is the DOF measured
-on that copy.
+delete it and, for datum constraints, to make it non-driving; a change of
+the datum to the value the rest of the set forces is generated too.  Delete
+and non-driving candidates are first tested on the working copy by
+deactivating the constraint (to the solver an inactive, a deleted and a
+reference constraint are the same) and re-solving.  The fix is offered only
+if its own set is gone, no new conflict and no new redundancy appeared and the
+solver accepts it.  On sketches up to 300 constraints every offered fix is
+then applied for real (``delConstraint`` / ``setDriving``, the code that
+``apply_fix`` runs on the real sketch) to a fresh copy and re-solved, and the
+fix is dropped if that disagrees with the trial; on larger sketches the
+combined ``plan`` of all top-ranked fixes is the part applied to a fresh copy.
+``applied_to_fresh_copy`` says which.  If a delete or non-driving fix leaves a
+redundant constraint behind, the removal of that redundant constraint is
+appended to the fix (a multi-operation fix) and the whole thing is tested
+again; redundancy that was already there (``redundancy_members``) is not
+counted as caused by the fix.  The reported ``dof_after`` is the DOF measured
+on the copy.
+
+A change-datum fix cannot be a clean fix: a conflict the solver detects is a
+rank deficiency, a new datum value cannot remove it, and FreeCAD's
+``setDatum`` rejects the result as redundant.  Such candidates are tested the
+same way and listed under ``alternatives`` only if the solver accepts them
+(it never did on the corpus).
 
 Ranking rule (documented because it is a heuristic).  Fixes of one conflict
 set are sorted by, in order:
@@ -82,6 +95,14 @@ set are sorted by, in order:
    with the drawing is the likeliest mistake;
 4. the kind of change: change datum, then make non-driving, then delete;
 5. the newest constraint (highest index).
+
+The working copy.  The sketch is rebuilt in the scratch document from the
+serialised ``Geometry``, ``ExternalGeo`` and ``Constraints`` properties plus
+its expressions (read-only on the user's sketch).  Links to other objects are
+not followed, so the copy needs neither the support nor the referenced
+objects; expressions that point at other objects are not re-bound, and the
+copy is solved but never recomputed, so datum values are those already
+evaluated in the user's sketch.
 
 Limits.  Detection is the solver's rank-based detection: infeasible but
 full-rank systems (a triangle with sides 3, 4 and 10) and solver failures

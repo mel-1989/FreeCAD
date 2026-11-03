@@ -328,8 +328,15 @@ class TestSketchDiagnosis(unittest.TestCase):
                             for i in list(chk.sk.RedundantConstraints)
                             + list(chk.sk.PartiallyRedundantConstraints)
                         }
+                        broken = (
+                            ok
+                            and not left
+                            and not red
+                            and "Invalid" in chk.sk.State
+                        )
                         if (
                             not ok
+                            or broken
                             or left - unresolved
                             or red - set(r["redundancy_members"])
                             or chk.sk.DoF != fx["dof_after"]
@@ -451,6 +458,13 @@ class TestSketchDiagnosis(unittest.TestCase):
                 for m in cs["members"]:
                     self.assertNotIn(m, case.truth["reference"], case.name)
                     self.assertNotIn(m, case.truth["inactive"], case.name)
+
+    def testNonConflictingReferenceCasesHaveNoSets(self):
+        for case in self.by_class("reference"):
+            if not case.truth["conflicting"]:
+                r = self.results[case.name]
+                self.assertEqual(r["conflict_sets"], [], case.name)
+                self.assertEqual(r["status"], "solved", case.name)
 
     def testSolverLimitsAreReportedHonestly(self):
         for case in self.by_class("limit"):
