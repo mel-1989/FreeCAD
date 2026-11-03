@@ -188,8 +188,66 @@ def probe_two_runs_identical():
     return problems
 
 
+def ball_over_plate(doc, gap_mm, e=0.7, end=0.02, step=0.002, v_up=None):
+    """A steel ball ``gap_mm`` above the grounded plate (negative: sunk into it) with a contact and gravity."""
+    rig = C.Rig(doc, "single")
+    ball = rig.sph("Ball", 25.0, C.P(C.V(0, 0, gap_mm + 25.0), C.R()))
+    rig.slide("Rail", rig.G, ball, (0, 0, gap_mm + 25.0), (0, 0, -1))
+    rig.finish()
+    study = C.new_study(rig, end, step)
+    MO.set_mass(study, ball, density=C.STEEL)
+    MO.add_gravity(study)
+    MO.add_contact(study, ball, rig.G, e)
+    return rig, study, ball
+
+
+def _run_is_refused(gap_mm):
+    doc = App.newDocument("MotionStartRefusal")
+    try:
+        _rig, study, _ball = ball_over_plate(doc, gap_mm)
+        try:
+            MO.run(study)
+        except MO.MotionRefused:
+            return True
+        return False
+    finally:
+        App.closeDocument(doc.Name)
+
+
+def probe_overlapping_start_is_refused():
+    return [] if _run_is_refused(-10.0) else ["a ball sunk 10 mm into the plate was accepted"]
+
+
+def probe_start_inside_the_band_is_refused():
+    return [] if _run_is_refused(0.0005) else ["a ball 0.0005 mm above the plate with a 0.001 mm tolerance was accepted"]
+
+
+def probe_baumgarte_pulls_a_displaced_lock_back():
+    """A locked contact displaced 1e-5 m into the partner at rest must be pushed back with an acceleration of
+    a^2 * 1e-5 = 4e-3 m/s^2 along the gap (the documented stabilisation, a = 20 per second, written out here)."""
+    doc = App.newDocument("MotionBaumgarte")
+    try:
+        c = C.CASES["block_rests_on_plate"](doc, "single", None)
+        model = MO.Model(c.study)
+        el = model.unilaterals[0]
+        q0 = model.np.zeros(model.n)
+        _gap, _row, data = el.probe(model, q0)
+        lk = MO._Lock(el, 0.0, data)
+        lk.c0 = el.frozen_row(model, q0, lk)[1]
+        q = q0.copy()
+        q[0] = 1e-5                                    # down the rail, into the plate
+        qdd, _lam = model.locked_accel(q, model.np.zeros(model.n), [lk])
+        row = el.frozen_row(model, q, lk)[0]
+        got = float(row @ qdd)
+        return [] if abs(got - 400.0 * 1e-5) < 1e-6 else ["gap acceleration %.6g, expected 4e-3" % got]
+    finally:
+        App.closeDocument(doc.Name)
+
+
 PROBES = {"part_documents": probe_part_documents_unchanged, "restores_placements": probe_run_restores_placements,
-          "undo": probe_undo, "two_runs": probe_two_runs_identical}
+          "undo": probe_undo, "two_runs": probe_two_runs_identical,
+          "overlap_refused": probe_overlapping_start_is_refused, "band_refused": probe_start_inside_the_band_is_refused,
+          "baumgarte": probe_baumgarte_pulls_a_displaced_lock_back}
 
 
 def save_reopen_problems(name="spring_mass_k200", mode="single"):
@@ -411,6 +469,34 @@ def _m_energy_flag_true():
     return dict(_contact_conservative=lambda e: True)
 
 
+def _m_guard_removed():
+    return dict(_guard_enabled=lambda: False)
+
+
+def _m_no_release_on_separation():
+    return dict(_separation_value=lambda gap, tol: 1.0)
+
+
+def _m_no_overlap_refusal():
+    return dict(_overlap_limit=lambda small: float("inf"))
+
+
+def _m_in_band_stays_armed():
+    return dict(_unarmed_in_band=lambda: False)
+
+
+def _m_interval_rule_removed():
+    return dict(_should_capture=lambda vn_after, since: vn_after < MO.CAPTURE_SPEED)
+
+
+def _m_baumgarte_off():
+    return dict(BAUMGARTE=0.0)
+
+
+def _m_slider_sign_ignores_reference():
+    return dict(_joint_sign=lambda typ, sgn: 1.0 if typ == "Slider" else sgn)
+
+
 MUTANTS = {
     "gravity_wrong_sign": (_m_gravity_sign, ["fall_vertical", "pend_30_L400"], []),
     "gravity_wrong_axis": (_m_gravity_axis, ["fall_vertical", "pend_30_L400"], []),
@@ -446,6 +532,13 @@ MUTANTS = {
     "limit_ignores_which_part_the_coordinate_moves": (_m_limit_ignores_child, ["stop_pendulum_reference2_e1"], []),
     "suppressed_components_contact_still_applied": (_m_suppressed_load_applied, ["suppressed_shelf_contact"], []),
     "energy_flag_left_true_with_restitution_below_one": (_m_energy_flag_true, ["ball_bounce_e05", "stop_pendulum_e06"], []),
+    "tunnelling_guard_removed": (_m_guard_removed, ["ball_bounce_e09_step005", "ball_bounce_e09_step01"], []),
+    "locked_contact_not_released_on_separation": (_m_no_release_on_separation, ["block_slides_off_the_plate_edge"], []),
+    "overlap_refusal_removed": (_m_no_overlap_refusal, [], ["overlap_refused"]),
+    "pair_inside_the_band_stays_armed": (_m_in_band_stays_armed, ["ball_touching_start_up_apex_below_tolerance"], []),
+    "capture_interval_rule_removed": (_m_interval_rule_removed, ["ball_pressed_captured_by_the_interval_rule"], []),
+    "baumgarte_stabilisation_off": (_m_baumgarte_off, [], ["baumgarte"]),
+    "slider_stop_ignores_which_part_moves": (_m_slider_sign_ignores_reference, ["stop_slider_ref1_e08"], []),
 }
 
 
@@ -988,6 +1081,93 @@ class TestMotion(unittest.TestCase):
                 [round(e["vn_after"], 4) for e in imps[:3]], MO.CAPTURE_SPEED, len(before), caps[0]["t"]))
         finally:
             App.closeDocument(doc.Name)
+
+    # -- run 050 repair
+    def test_contact_starts_and_misuse_are_refused_clearly(self):
+        for pname in ("overlap_refused", "band_refused", "baumgarte"):
+            self.assertEqual(PROBES[pname](), [], pname)
+        doc = App.newDocument("MotionStartMsg")
+        try:
+            _rig, study, _ball = ball_over_plate(doc, -10.0)
+            with self.assertRaises(MO.MotionRefused) as cm:
+                MO.run(study)
+            msg = str(cm.exception)
+            for word in ("Contact", "Ball", "G", "overlap"):
+                self.assertIn(word, msg)
+            rig2_doc = App.newDocument("MotionBandMsg")
+            try:
+                _r, st2, _b = ball_over_plate(rig2_doc, 0.0005)
+                with self.assertRaises(MO.MotionRefused) as cm2:
+                    MO.run(st2)
+                self.assertIn("inside the contact tolerance", str(cm2.exception))
+                self.assertIn("Ball", str(cm2.exception))
+            finally:
+                App.closeDocument(rig2_doc.Name)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_a_contact_between_parts_that_never_move_is_refused(self):
+        doc = App.newDocument("MotionStatic")
+        try:
+            rig, study, ball = ball_over_plate(doc, 100.0)
+            shelf = rig.box("Shelf", 50, 50, 10, C.P(C.V(300, 300, 50), C.R()))
+            C.cc.ground(rig.jg, shelf)
+            rig.finish()
+            n0 = doc.UndoCount
+            with self.assertRaises(MO.MotionError) as cm:
+                MO.add_contact(study, shelf, rig.G, 0.5)
+            self.assertIn("Shelf", str(cm.exception))
+            self.assertEqual(doc.UndoCount, n0)
+            # a pair that is static without being grounded itself (fixed to ground) is refused when the study runs
+            wall = rig.box("Wall", 20, 20, 20, C.P(C.V(-300, -300, 0), C.R()))
+            rig.fixed("Weld", rig.G, wall, (-300, -300, 0))
+            rig.finish()
+            MO.add_contact(study, wall, rig.G, 0.5, name="Static")
+            with self.assertRaises(MO.MotionRefused) as cm:
+                MO.run(study)
+            self.assertIn("Wall", str(cm.exception))
+            self.assertIn("never act", str(cm.exception))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_limit_restitution_is_checked_even_without_a_limit_and_the_range_is_quoted_as_entered(self):
+        doc = App.newDocument("MotionLimitE")
+        try:
+            _rig, study, _ball = ball_over_plate(doc, 100.0)
+            study.LimitRestitution = 2.0
+            with self.assertRaises(MO.MotionError) as cm:
+                MO.run(study)
+            self.assertIn("LimitRestitution", str(cm.exception))
+        finally:
+            App.closeDocument(doc.Name)
+        doc = App.newDocument("MotionLimitRange")
+        try:
+            c = C.CASES["stop_slider_e08"](doc, "single", None)
+            rail = doc.getObject("Rail")
+            rail.EnableLengthMin, rail.LengthMin, rail.LengthMax = True, 60.0, 10.0           # reversed: FreeCAD swaps
+            with self.assertRaises(MO.MotionRefused) as cm:
+                MO.run(c.study)
+            self.assertIn("60 to 10", str(cm.exception))
+            self.assertIn("swapped", str(cm.exception))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_the_tunnelling_guard_reports_chunks_and_never_lets_the_ball_through_at_coarse_steps(self):
+        for step in (0.05, 0.1, 0.3):
+            doc = App.newDocument("MotionCoarse")
+            try:
+                _rig, study, ball = ball_over_plate(doc, 200.0, e=0.9, end=1.2, step=step)
+                res = MO.run(study)
+                z = [C.pl_of(d).Base.z for d in C.series(res, "Ball")]
+                self.assertGreaterEqual(min(z), 25.0 + MO.CONTACT_TOLERANCE - 1e-9, "step %g" % step)
+                guard = res["contact"]["guard"]
+                self.assertGreater(guard["chunks"], 10)
+                imp = [e for e in res["contact"]["events"] if e["what"] == "impact"]
+                self.assertGreaterEqual(len(imp), 3, "step %g" % step)
+                print("\n  coarse step %g s: %d impacts, %d chunks, %d retries, lowest ball z %.6f mm" % (
+                    step, len(imp), guard["chunks"], guard["retries"], min(z)))
+            finally:
+                App.closeDocument(doc.Name)
 
     # -- check 5
     def test_mutants_are_caught(self):

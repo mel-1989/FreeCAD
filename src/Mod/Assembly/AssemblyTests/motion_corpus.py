@@ -23,6 +23,7 @@ own group) and ``link`` (``App::Link`` components whose sources are outside the 
 for ``xdoc``, in another document).
 """
 
+import json
 import math
 
 import FreeCAD as App
@@ -682,7 +683,7 @@ def bounce_truth(gap_mm, tol_mm, e, n):
     return t_n, e ** (2 * n) * d * 1e3
 
 
-def make_bounce(name, e, gap_mm=200.0, end=1.3, tol=None, kind="ball", rests=False, bounces=3):
+def make_bounce(name, e, gap_mm=200.0, end=1.3, tol=None, kind="ball", rests=False, bounces=3, step=0.004, apex=True):
     """A steel ball (or a 1 kg cube, ``kind='block'``) dropped on the grounded plate with a contact of restitution
     ``e``: impact times and apex heights ``e^(2n) h`` from the closed form, the gap the pair never goes below, the
     energy flag; with ``rests`` the pair is also checked to lock and then not drift."""
@@ -698,7 +699,6 @@ def make_bounce(name, e, gap_mm=200.0, end=1.3, tol=None, kind="ball", rests=Fal
             rig.slide("Rail", rig.G, body, (25, 25, gap_mm + 25), (0, 0, -1))
             half = 0.0
         rig.finish()
-        step = 0.004
         study = new_study(rig, end, step)
         if kind == "ball":
             MO.set_mass(study, body, density=STEEL)
@@ -727,7 +727,7 @@ def make_bounce(name, e, gap_mm=200.0, end=1.3, tol=None, kind="ball", rests=Fal
             # apex heights after impacts 1..bounces, from the stored placements (parabolic refinement)
             pk = peaks(t, z)
             pk = [p for p in pk if p[1] - z_ref > 1e-3]
-            for n in range(1, bounces + 1):
+            for n in range(1, bounces + 1 if apex else 1):
                 t_n, h_n = bounce_truth(gap_mm, t_mm, e, n)
                 if n > len(pk):
                     rows.add(name, "apex %d exists" % n, 1.0, 0.0)
@@ -765,6 +765,12 @@ make_bounce("ball_bounce_e09", 0.9, end=1.3)
 make_bounce("ball_bounce_e07", 0.7, end=1.1, tol=0.25)
 make_bounce("ball_bounce_e05", 0.5, end=1.2, rests=True)
 make_bounce("ball_elastic_e1", 1.0, gap_mm=100.0, end=1.2)
+# run-050 repair: the same drop at output steps that are a quarter to a half of the time of fall (0.05 s and 0.1 s). The
+# solver steps of the old guard (one output step) carried the ball clean through the plate; the impacts must be the
+# fine-step ones. The apex of a 0.36 s bounce is not resolved by samples 0.1 s apart, so only the impacts and the
+# penetration are checked
+make_bounce("ball_bounce_e09_step005", 0.9, end=1.3, step=0.05, apex=False)
+make_bounce("ball_bounce_e09_step01", 0.9, end=1.3, step=0.1, apex=False)
 make_bounce("block_dropped_rests_e03", 0.3, gap_mm=20.0, end=0.6, kind="block", rests=True, bounces=2)
 
 
@@ -959,14 +965,18 @@ make_stop_pendulum("stop_pendulum_reference2_e1", 1.0, variant="ref2", end=0.75)
 make_stop_pendulum("stop_pendulum_offset_e1", 1.0, variant="offset", end=0.75)
 
 
-def make_stop_slider(name, e, h_mm=50.0, end=0.6, step=0.002):
+def make_stop_slider(name, e, h_mm=50.0, end=0.6, step=0.002, ref1=False):
     """A 1 kg block on a vertical slider falls from rest to a length limit h below its start and bounces: the time of
     the impact sqrt(2 h / g) and the height after it e^2 h."""
     def build(doc, mode, host=None):
         rig = Rig(doc, mode, host)
         blk = rig.box("Block", 50, 50, 50, P(V(0, 0, 400), R()))
-        rig.joint("Rail", "Slider", rig.G, blk, frame_at((25, 25, 425), (0, 0, -1)),
-                  EnableLengthMax=True, LengthMax=h_mm)
+        if ref1:        # the moving block is Reference1: the joint value runs against the coordinate, the limit is a minimum
+            rig.joint("Rail", "Slider", blk, rig.G, frame_at((25, 25, 425), (0, 0, -1)),
+                      EnableLengthMin=True, LengthMin=-h_mm)
+        else:
+            rig.joint("Rail", "Slider", rig.G, blk, frame_at((25, 25, 425), (0, 0, -1)),
+                      EnableLengthMax=True, LengthMax=h_mm)
         rig.finish()
         study = new_study(rig, end, step, LimitRestitution=e)
         MO.set_mass(study, blk, density=BLOCK_RHO)
@@ -991,6 +1001,7 @@ def make_stop_slider(name, e, h_mm=50.0, end=0.6, step=0.002):
 
 make_stop_slider("stop_slider_e08", 0.8)
 make_stop_slider("stop_slider_e05", 0.5, h_mm=80.0, end=0.5)
+make_stop_slider("stop_slider_ref1_e08", 0.8, ref1=True)           # run-050 repair: the slider stop with Reference1 moving
 
 
 def make_suppressed_contact(name):
@@ -1057,6 +1068,151 @@ def make_contact_pair_filter(name):
 
 make_contact_pair_filter("contact_only_where_declared")
 
+
+
+# ------------------------------------------------------------------ run-050 repair cases
+
+def make_slide_off_edge(name, vx=1000.0, x0=100.0, e=0.5, end=0.5, step=0.005):
+    """A 1 kg cube rests on the plate (edge at x = 200 mm) on a 2-DOF carriage (an x slider, then a z slider) and is given
+    vx in x. The cube starts touching (gap 0), so the lock holds z = 0 while it slides on the plate; once its left edge passes
+    the plate edge the parts separate and the cube falls freely. The release comes when the real distance exceeds twice
+    the tolerance, which for a cube resting at gap 0 is when its left-bottom edge is 2 tolerances beyond the plate corner,
+    so t_release = t_leave + 2 tol / vx; from there z = -g (t - t_release)^2 / 2."""
+    t_leave = (200.0 - x0) / vx
+    tol = MO.CONTACT_TOLERANCE
+    t_rel = t_leave + 2.0 * tol / vx
+
+    def build(doc, mode, host=None):
+        rig = Rig(doc, mode, host)
+        car = rig.box("Carriage", 10, 10, 10, P(V(x0 + 20, 20, 100), R()))
+        blk = rig.box("Block", 50, 50, 50, P(V(x0, 0, 0), R()))
+        rig.slide("SlideX", rig.G, car, (x0 + 25, 25, 105), (1, 0, 0))
+        rig.slide("SlideZ", car, blk, (x0 + 25, 25, 25), (0, 0, -1))
+        rig.finish()
+        study = new_study(rig, end, step)
+        MO.set_mass(study, blk, density=BLOCK_RHO)
+        MO.set_mass(study, car, mass=1e-3, com=(5, 5, 5), inertia=[0.0] * 6)
+        MO.add_gravity(study)
+        MO.add_contact(study, blk, rig.G, e)
+        study.Velocities = json.dumps({"SlideX": vx})
+
+        def check(res, rows):
+            t = res["t"]
+            pl = [pl_of(d).Base for d in series(res, "Block")]
+            rel = _events(res, "release")
+            rows.add(name, "the pair is locked at t = 0", 0.0 if _events(res, "capture") and _events(res, "capture")[0]["t"] == 0.0 else 1.0, 0.0)
+            rows.add(name, "released by separation, once", 0.0 if len(rel) == 1 and rel[0].get("separated") == 1.0 else 1.0, 0.0)
+            rows.add(name, "release time (s)", abs(rel[0]["t"] - t_rel) if rel else 1.0, 1e-8, "truth %.9f s (edge passes at %.4f s)" % (t_rel, t_leave))
+            on = [i for i, tt in enumerate(t) if tt < t_leave - 1e-9]
+            rows.add(name, "x follows vx t and the cube stays at the tolerance until the edge (mm)",
+                     max(max(abs(pl[i].x - (x0 + vx * t[i])), abs(pl[i].z)) for i in on), 1e-9)
+            off = [i for i, tt in enumerate(t) if tt > t_rel + 1e-9]
+            worst = max(abs(pl[i].z - (-0.5 * G * 1e3 * (t[i] - t_rel) ** 2)) for i in off)
+            rows.add(name, "free fall after leaving the edge (relative to the fall)", worst / (0.5 * G * 1e3 * (t[-1] - t_rel) ** 2),
+                     1e-6, "%d steps after the release; z at the end %.3f mm" % (len(off), pl[-1].z))
+            rows.add(name, "x keeps its speed in the air (mm)", max(abs(pl[i].x - (x0 + vx * t[i])) for i in off), 1e-6)
+        return Case(name, "contact/release", rig, study, check, step, study.TimeEnd, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_slide_off_edge("block_slides_off_the_plate_edge")
+
+
+def make_touching_start_up(name, v_mm_s, e=0.7):
+    """A ball touching the plate (gap 0) is thrown up at ``v_mm_s``. Apex below the tolerance (v^2 / 2 g < 1e-3 mm): the
+    pair stays inside its band, so its gap never changes sign; it must turn round and be captured at t = v / g with the
+    apex gap v^2 / 2 g. Above the tolerance: it leaves the band, falls back and meets the plate at the gap of one
+    tolerance at t = (v + sqrt(v^2 - 2 g tol)) / g, and is captured there (the bounce is slower than the capture speed)."""
+    tol = MO.CONTACT_TOLERANCE
+
+    def build(doc, mode, host=None):
+        r = 25.0
+        rig = Rig(doc, mode, host)
+        ball = rig.sph("Ball", r, P(V(0, 0, r), R()))
+        rig.slide("Rail", rig.G, ball, (0, 0, r), (0, 0, -1))
+        rig.finish()
+        step, end = 0.002, 0.04
+        study = new_study(rig, end, step)
+        MO.set_mass(study, ball, density=STEEL)
+        MO.add_gravity(study)
+        MO.add_contact(study, ball, rig.G, e)
+        study.Velocities = json.dumps({"Rail": -v_mm_s})
+        v = v_mm_s * 1e-3
+        apex_mm = v * v / (2 * G) * 1e3
+
+        def check(res, rows):
+            z = [pl_of(d).Base.z - r for d in series(res, "Ball")]
+            caps = _events(res, "capture")
+            imp = _events(res, "impact")
+            if apex_mm < tol:
+                rows.add(name, "captured at the turn-around, no impact", 0.0 if len(caps) == 1 and not imp else 1.0, 0.0)
+                rows.add(name, "capture time v / g (s)", abs(caps[0]["t"] - v / G) if caps else 1.0, 1e-9, "truth %.9f s" % (v / G))
+                rows.add(name, "rests at the apex gap (mm)", abs(z[-1] - apex_mm), 1e-9, "truth %.6g mm" % apex_mm)
+                rows.add(name, "never falls through (mm)", max(0.0, -min(z)), 1e-9)
+            else:
+                t1 = (v + math.sqrt(v * v - 2 * G * tol * 1e-3)) / G
+                rows.add(name, "first impact time (s)", abs(imp[0]["t"] - t1) if imp else 1.0, 1e-9, "truth %.9f s" % t1)
+                rows.add(name, "gap at the impact equals the tolerance (mm)", abs(imp[0]["gap"] - tol) if imp else 1.0, 1e-6)
+                rows.add(name, "captured at that impact", 0.0 if caps and imp and abs(caps[0]["t"] - imp[0]["t"]) < 1e-12 else 1.0, 0.0)
+                rows.add(name, "never below the plate (mm)", max(0.0, -min(z)), 1e-9)
+            contact_rows_common(rows, name, res, tol, e, False)
+        return Case(name, "contact/band", rig, study, check, step, study.TimeEnd, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_touching_start_up("ball_touching_start_up_apex_below_tolerance", 4.0)
+make_touching_start_up("ball_touching_start_up_apex_above_tolerance", 10.0)
+
+
+def make_pressed_ball(name, e=0.9, h_mm=5.0, accel=100.0, end=0.4, step=0.004):
+    """A steel ball falls ``h_mm`` onto the plate while a constant downward force makes the acceleration ``accel`` m/s^2.
+    The speed after impact k is s_k (s_1 = e v_1, s_(k+1) = e sqrt(s_k^2 ...) = e s_k, the flight starting and ending at the
+    gap of one tolerance), the flight after it lasts 2 s_k / accel. The pair is captured at the first impact whose
+    post-impact speed is below 0.05 m/s or that follows the previous one by less than 2 ms; here the interval rule fires
+    first, with the speed still above 0.05 m/s."""
+    tol_m = MO.CONTACT_TOLERANCE * 1e-3
+    m_ball = STEEL * 4.0 / 3.0 * math.pi * 0.025 ** 3
+    d = h_mm * 1e-3 - tol_m
+    v1 = math.sqrt(2 * accel * d)
+    s, t, imps = e * v1, math.sqrt(2 * d / accel), []
+    t_k, s_k = [t], [s]                                       # impact 1: its time and the speed after it
+    for _k in range(2, 80):
+        t += 2 * s / accel
+        s *= e
+        t_k.append(t)
+        s_k.append(s)
+    n_cap = next(k for k in range(2, 80) if s_k[k - 1] < 0.05 or 2 * s_k[k - 2] / accel < 2e-3)
+    by_speed = next(k for k in range(1, 80) if s_k[k - 1] < 0.05)
+
+    def build(doc, mode, host=None):
+        r = 25.0
+        rig = Rig(doc, mode, host)
+        ball = rig.sph("Ball", r, P(V(0, 0, h_mm + r), R()))
+        rig.slide("Rail", rig.G, ball, (0, 0, h_mm + r), (0, 0, -1))
+        rig.finish()
+        study = new_study(rig, end, step)
+        MO.set_mass(study, ball, density=STEEL)
+        MO.add_gravity(study)
+        MO.add_force(study, ball, (0.0, 0.0, 0.0), (0.0, 0.0, -(accel - G) * m_ball))
+        MO.add_contact(study, ball, rig.G, e)
+
+        def check(res, rows):
+            imp = _events(res, "impact")
+            caps = _events(res, "capture")
+            rows.add(name, "impact times 1 to 6 (s)", max(abs(imp[k]["t"] - t_k[k]) for k in range(6)) if len(imp) >= 6 else 1.0, 1e-6)
+            rows.add(name, "captured at impact %d (the interval rule; by speed it would be %d)" % (n_cap, by_speed),
+                     0.0 if len(caps) == 1 and len(imp) == n_cap else 1.0, 0.0, "%d impacts, %d captures" % (len(imp), len(caps)))
+            rows.add(name, "capture time (s)", abs(caps[0]["t"] - t_k[n_cap - 1]) if caps else 1.0, 1e-6, "truth %.6f s" % t_k[n_cap - 1])
+            rows.add(name, "the speed after the capturing impact is above the capture speed",
+                     0.0 if imp and imp[-1]["vn_after"] > 0.05 else 1.0, 0.0)
+        return Case(name, "contact/capture", rig, study, check, step, study.TimeEnd, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_pressed_ball("ball_pressed_captured_by_the_interval_rule")
 
 
 def make_force(name, axis_deg, force, frame):

@@ -836,11 +836,12 @@ class Model:
                               unit, "; FreeCAD reads a reversed pair as swapped" if swapped else ""))
             return
         # value = value0 + sgn * q / scale; a lower limit on the value is a lower bound on q when sgn = +1, an upper one when -1
+        sgn = _joint_sign(typ, jt.sgn)
         for enabled, val, side in ((en_lo, lo, "lower"), (en_hi, hi, "upper")):
             if not enabled:
                 continue
-            qb = _q_bound(val, v0, jt.sgn) * scale
-            qside = side if jt.sgn > 0 else ("upper" if side == "lower" else "lower")
+            qb = _q_bound(val, v0, sgn) * scale
+            qside = side if sgn > 0 else ("upper" if side == "lower" else "lower")
             self.unilaterals.append(_Limit(jt, "%s.%s" % (j.Name, side), qside, qb, e))
 
     # -- masses
@@ -1273,7 +1274,7 @@ class _Contact:
                 model.warnings.append("the contact %s: the overlap test at the start failed (%s)" % (self.name, exc))
                 return
             small = min(abs(self.sh1.Volume), abs(self.sh2.Volume))
-            if vol > max(1e-9 * small, 1e-12):
+            if vol > _overlap_limit(small):
                 raise MotionRefused(["contact %s: the parts %s and %s overlap at the start (common volume %.4g mm^3); "
                                      "move them apart and solve first" % (self.name, self.b1.name, self.b2.name, vol)])
         elif gap <= self.tol * (1.0 + 1e-9):
@@ -1362,6 +1363,19 @@ def _should_capture(vn_after, since_last):
 
 def _guard_enabled():
     return True
+
+
+def _unarmed_in_band():
+    return True
+
+
+def _joint_sign(typ, sgn):
+    return sgn
+
+
+def _overlap_limit(small):
+    """Common volume (mm^3) above which two parts count as overlapping."""
+    return max(1e-9 * small, 1e-12)
 
 
 def _separation_value(gap, tol):
@@ -1581,7 +1595,7 @@ class _Sim:
                 new = self._try_lock(el, q, qd, data, t, "start")
                 if new is not None:
                     qd = new
-        if el.kind == "contact" and not self.locked(el):
+        if el.kind == "contact" and not self.locked(el) and _unarmed_in_band():
             self.armed[el.name] = False
         return qd
 
