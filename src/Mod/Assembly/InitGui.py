@@ -115,6 +115,7 @@ class AssemblyWorkbench(Workbench):
             "Assembly_AddMotionTorque",
             "Assembly_AddMotionSpring",
             "Assembly_AddMotionDamper",
+            "Assembly_AddMotionContact",
         ]
 
         cmdListMenuOnly = [

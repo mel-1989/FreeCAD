@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""G06 slice 6a: motion studies with gravity, forces, springs and dampers (API and closed-form corpus, no GUI).
+"""G06 slices 6a and 6c: motion studies with gravity, forces, springs, dampers, contact and joint stops (API and
+closed-form corpus, no GUI).
 
 The corpus (``motion_corpus``) runs every case in a single-document assembly and through ``App::Link`` parts and
 compares the stored result with the closed form; the other tests cover the model and round trip (save and reopen,
@@ -13,6 +14,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from collections import Counter
 
@@ -28,6 +30,7 @@ V = App.Vector
 P = App.Placement
 R = App.Rotation
 MODES = ("single", "link")
+CONTACT = [n for n in C.CASES if n.startswith(("ball_", "block_", "stop_", "contact_", "suppressed_shelf"))]
 KINEMATIC = [n for n, f in C.CASES.items() if "slider_crank" in n or "four_bar" in n or "gears" in n
              or "belt" in n or "rack_pinion" in n]
 
@@ -185,8 +188,116 @@ def probe_two_runs_identical():
     return problems
 
 
-PROBES = {"part_documents": probe_part_documents_unchanged, "restores_placements": probe_run_restores_placements,
-          "undo": probe_undo, "two_runs": probe_two_runs_identical}
+def ball_over_plate(doc, gap_mm, e=0.7, end=0.02, step=0.002, v_up=None):
+    """A steel ball ``gap_mm`` above the grounded plate (negative: sunk into it) with a contact and gravity."""
+    rig = C.Rig(doc, "single")
+    ball = rig.sph("Ball", 25.0, C.P(C.V(0, 0, gap_mm + 25.0), C.R()))
+    rig.slide("Rail", rig.G, ball, (0, 0, gap_mm + 25.0), (0, 0, -1))
+    rig.finish()
+    study = C.new_study(rig, end, step)
+    MO.set_mass(study, ball, density=C.STEEL)
+    MO.add_gravity(study)
+    MO.add_contact(study, ball, rig.G, e)
+    return rig, study, ball
+
+
+def _run_is_refused(gap_mm):
+    doc = App.newDocument("MotionStartRefusal")
+    try:
+        _rig, study, _ball = ball_over_plate(doc, gap_mm)
+        try:
+            MO.run(study)
+        except MO.MotionRefused:
+            return True
+        return False
+    finally:
+        App.closeDocument(doc.Name)
+
+
+def probe_overlapping_start_is_refused():
+    return [] if _run_is_refused(-10.0) else ["a ball sunk 10 mm into the plate was accepted"]
+
+
+def probe_start_inside_the_band_is_refused():
+    return [] if _run_is_refused(0.0005) else ["a ball 0.0005 mm above the plate with a 0.001 mm tolerance was accepted"]
+
+
+def probe_baumgarte_pulls_a_displaced_lock_back():
+    """A locked contact displaced 1e-5 m into the partner at rest must be pushed back with an acceleration of
+    a^2 * 1e-5 = 4e-3 m/s^2 along the gap (the documented stabilisation, a = 20 per second, written out here)."""
+    doc = App.newDocument("MotionBaumgarte")
+    try:
+        c = C.CASES["block_rests_on_plate"](doc, "single", None)
+        model = MO.Model(c.study)
+        el = model.unilaterals[0]
+        q0 = model.np.zeros(model.n)
+        _gap, _row, data = el.probe(model, q0)
+        lk = MO._Lock(el, 0.0, data)
+        lk.c0 = el.frozen_row(model, q0, lk)[1]
+        q = q0.copy()
+        q[0] = 1e-5                                    # down the rail, into the plate
+        qdd, _lam = model.locked_accel(q, model.np.zeros(model.n), [lk])
+        row = el.frozen_row(model, q, lk)[0]
+        got = float(row @ qdd)
+        return [] if abs(got - 400.0 * 1e-5) < 1e-6 else ["gap acceleration %.6g, expected 4e-3" % got]
+    finally:
+        App.closeDocument(doc.Name)
+
+
+def _bounce_guard(patches=None, case="ball_bounce_e09_step01"):
+    """Run a coarse-step bounce case (output step 0.1 s) with ``patches`` (a dict of ``patched`` arguments, or None);
+    returns (failing rows, guard record, the exception if the run raised)."""
+    try:
+        with patched(**(patches or {})):
+            rows, _c, res = run_case(case, "single")
+        return failing_rows(rows), res["contact"]["guard"], None
+    except MO.MotionError as exc:
+        return [], {"chunks": 0, "retries": 0}, exc
+
+
+def probe_guard_plan_needs_no_retries():
+    """The guard's plan includes the acceleration term: a ball falling and bouncing at a coarse step is covered by the
+    planned chunks with no halving at all (an unplanned chunk that the check rejects counts as a retry)."""
+    bad, guard, exc = _bounce_guard()
+    problems = ["the run raised: %s" % exc] if exc else []
+    if bad:
+        problems.append("rows fail: %s" % [r["metric"] for r in bad][:3])
+    if guard["retries"] != 0:
+        problems.append("%d retries in a run whose plan should be tight" % guard["retries"])
+    if guard["chunks"] < 20:
+        problems.append("only %d chunks: the guard did not plan" % guard["chunks"])
+    return problems
+
+
+def _oversized_plan():
+    """Test hook, not a model of anything real: every planned chunk is made 8 times longer than the plan allows, so the
+    check after the chunk must reject it and the halving must bring it back."""
+    orig = MO._Sim._plan
+
+    def plan(self, guards, t, y, rhs):
+        h, items = orig(self, guards, t, y, rhs)
+        return h * 8.0, items
+    return plan
+
+
+def probe_guard_retries_recover():
+    """With the planned chunks forced 8 times too long (``_oversized_plan``), the chunk check rejects them, the retry
+    counter is above zero, and the halving still gives the closed-form bounce (the case's own rows)."""
+    with patched(MO._Sim, _plan=_oversized_plan()):
+        bad, guard, exc = _bounce_guard()
+    problems = ["the run raised: %s" % exc] if exc else []
+    if bad:
+        problems.append("rows fail after the retries: %s" % [r["metric"] for r in bad][:3])
+    if guard["retries"] < 20:
+        problems.append("only %d retries with chunks forced 8 times too long" % guard["retries"])
+    return problems
+
+
+PROBES = {"guard_plan_needs_no_retries": probe_guard_plan_needs_no_retries,
+          "guard_retries_recover": probe_guard_retries_recover, "part_documents": probe_part_documents_unchanged, "restores_placements": probe_run_restores_placements,
+          "undo": probe_undo, "two_runs": probe_two_runs_identical,
+          "overlap_refused": probe_overlapping_start_is_refused, "band_refused": probe_start_inside_the_band_is_refused,
+          "baumgarte": probe_baumgarte_pulls_a_displaced_lock_back}
 
 
 def save_reopen_problems(name="spring_mass_k200", mode="single"):
@@ -360,6 +471,117 @@ def _m_com_at_origin():
     return dict(Model_com=lambda self, com: 0.0 * com)
 
 
+def _m_restitution_twice():
+    return dict(_ratio=lambda e: e * e)
+
+
+def _m_restitution_ignored():
+    return dict(_ratio=lambda e: 1.0)
+
+
+def _m_impulse_sign():
+    return dict(_impulse_sign=lambda: 1.0)
+
+
+def _m_tolerance_ignored():
+    return dict(_event_value=lambda gap, tol: gap, _MAX_EVENTS=300)      # without the margin the pair chatters
+
+
+def _m_capture_everything():
+    return dict(CAPTURE_SPEED=1e6)
+
+
+def _m_release_never():
+    return dict(_release_value=lambda lam: 1.0)
+
+
+def _m_release_at_once():
+    return dict(_release_value=lambda lam: 0.0, _MAX_EVENTS=300)
+
+
+def _m_lock_when_tensile():
+    return dict(_lock_ok=lambda lam: True)
+
+
+def _m_stop_wrong_side():
+    return dict(_stop_side=lambda side: -1.0 if side == "lower" else 1.0)
+
+
+def _m_limit_absolute():
+    return dict(_q_bound=lambda limit, value0, sgn: sgn * limit)
+
+
+def _m_limit_ignores_child():
+    return dict(_q_bound=lambda limit, value0, sgn: limit - value0)
+
+
+def _m_energy_flag_true():
+    return dict(_contact_conservative=lambda e: True)
+
+
+def _m_guard_removed():
+    return dict(_guard_enabled=lambda: False)
+
+
+def _m_no_release_on_separation():
+    return dict(_separation_value=lambda gap, tol: 1.0)
+
+
+def _m_no_overlap_refusal():
+    return dict(_overlap_limit=lambda small: float("inf"))
+
+
+def _m_in_band_stays_armed():
+    return dict(_unarmed_in_band=lambda: False)
+
+
+def _m_interval_rule_removed():
+    return dict(_should_capture=lambda vn_after, since: vn_after < MO.CAPTURE_SPEED)
+
+
+def _m_baumgarte_off():
+    return dict(BAUMGARTE=0.0)
+
+
+def _m_slider_sign_ignores_reference():
+    return dict(_joint_sign=lambda typ, sgn: 1.0 if typ == "Slider" else sgn)
+
+
+def _m_speed_bound_part1_only():
+    def speed(self, model, q, v):
+        np = model.np
+        Rd, td, A, O = model.kin(q)
+        b, cs = self.b1, self.corners[0]
+        base, R = model.pose(b, Rd, td)
+        base = base * 1e-3
+        return max(float(np.linalg.norm(model.jac(b, R @ c + base, A, O)[0] @ v)) for c in cs) if b.chain else 0.0
+    return dict(Contact_speed=speed)
+
+
+def _m_allow_10x():
+    return dict(_allow=lambda el, gap: max(5.0 * el.t_min, 0.8 * (gap - el.tol) * 1e-3))
+
+
+def _m_chunk_check_never_fails():
+    return dict(_chunk_too_long=lambda dt, v0, v1, allow: False)
+
+
+def _m_accel_term_dropped():
+    return dict(_plan_accel=lambda a: 0.0)
+
+
+_PLAN_CHUNK = MO._plan_chunk
+
+
+def _m_constant_speed_chunk_30x():
+    return dict(_plan_chunk=lambda v0, a, allow: allow / (0.05 * v0) if a <= 1e-12 and v0 > 1e-12 else _PLAN_CHUNK(v0, a, allow))
+
+
+def _m_no_resettle_after_release():
+    orig = MO._Sim._settle
+    return dict(Sim__settle=lambda self, el, t, q, qd, mode: qd if mode == "release" else orig(self, el, t, q, qd, mode))
+
+
 MUTANTS = {
     "gravity_wrong_sign": (_m_gravity_sign, ["fall_vertical", "pend_30_L400"], []),
     "gravity_wrong_axis": (_m_gravity_axis, ["fall_vertical", "pend_30_L400"], []),
@@ -382,6 +604,32 @@ MUTANTS = {
     "torque_sign_flipped": (_m_torque_sign, ["arm_bead_torque_world", "arm_bead_torque_part"], []),
     "inertia_not_rotated_by_the_placement": (_m_inertia_unrotated, ["compound_rod_rotated_part"], []),
     "centre_of_mass_at_the_part_origin": (_m_com_at_origin, ["compound_rod_end", "compound_rod_quarter"], []),
+    "restitution_applied_twice": (_m_restitution_twice, ["ball_bounce_e07", "stop_pendulum_e06"], []),
+    "restitution_ignored_always_elastic": (_m_restitution_ignored, ["ball_bounce_e05", "ball_bounce_e09", "stop_slider_e05"], []),
+    "impulse_on_the_wrong_sign_of_the_normal": (_m_impulse_sign, ["ball_bounce_e07", "stop_slider_e08"], []),
+    "contact_tolerance_ignored_penetration_grows": (_m_tolerance_ignored, ["ball_bounce_e07", "ball_bounce_e05"], []),
+    "capture_threshold_so_high_it_captures_the_first_bounce": (_m_capture_everything, ["ball_bounce_e09", "ball_bounce_e05"], []),
+    "release_never_happens": (_m_release_never, ["contact_released_by_spring"], []),
+    "release_happens_at_once": (_m_release_at_once, ["block_rests_on_plate"], []),
+    "lock_even_when_the_multiplier_is_tensile": (_m_lock_when_tensile, ["block_lifted_by_force"], []),
+    "limit_stop_on_the_wrong_side": (_m_stop_wrong_side, ["stop_pendulum_e1", "stop_slider_e08"], []),
+    "limit_mapped_from_the_absolute_value": (_m_limit_absolute, ["stop_pendulum_offset_e1"], []),
+    "limit_ignores_which_part_the_coordinate_moves": (_m_limit_ignores_child, ["stop_pendulum_reference2_e1"], []),
+    "suppressed_components_contact_still_applied": (_m_suppressed_load_applied, ["suppressed_shelf_contact"], []),
+    "energy_flag_left_true_with_restitution_below_one": (_m_energy_flag_true, ["ball_bounce_e05", "stop_pendulum_e06"], []),
+    "tunnelling_guard_removed": (_m_guard_removed, ["ball_bounce_e09_step005", "ball_bounce_e09_step01"], []),
+    "locked_contact_not_released_on_separation": (_m_no_release_on_separation, ["block_slides_off_the_plate_edge"], []),
+    "overlap_refusal_removed": (_m_no_overlap_refusal, [], ["overlap_refused"]),
+    "pair_inside_the_band_stays_armed": (_m_in_band_stays_armed, ["ball_touching_start_up_apex_below_tolerance"], []),
+    "capture_interval_rule_removed": (_m_interval_rule_removed, ["ball_pressed_captured_by_the_interval_rule"], []),
+    "baumgarte_stabilisation_off": (_m_baumgarte_off, [], ["baumgarte"]),
+    "slider_stop_ignores_which_part_moves": (_m_slider_sign_ignores_reference, ["stop_slider_ref1_e08"], []),
+    "guard_speed_bound_counts_part_1_only": (_m_speed_bound_part1_only, ["two_thin_plates_head_on_coarse_step"], []),
+    "guard_allows_ten_times_the_displacement": (_m_allow_10x, ["two_thin_plates_head_on_coarse_step"], []),
+    "guard_chunk_check_never_fails": (_m_chunk_check_never_fails, [], ["guard_retries_recover"]),
+    "guard_plan_drops_the_acceleration_term": (_m_accel_term_dropped, [], ["guard_plan_needs_no_retries"]),
+    "guard_constant_speed_chunk_30_times_too_long": (_m_constant_speed_chunk_30x, ["two_thin_plates_head_on_coarse_step"], []),
+    "released_pair_not_re_armed_inside_the_band": (_m_no_resettle_after_release, ["contact_released_in_band_returns_to_rest"], []),
 }
 
 
@@ -389,11 +637,13 @@ MUTANTS = {
 def mutated(name):
     spec = MUTANTS[name][0]()
     com = spec.pop("Model_com", None)
+    on_sim = {k[len("Sim_"):]: spec.pop(k) for k in [k for k in spec if k.startswith("Sim_")]}      # methods of _Sim and _Contact
+    on_contact = {k[len("Contact_"):]: spec.pop(k) for k in [k for k in spec if k.startswith("Contact_")]}
     saved = MO.Model._com
     try:
         if com is not None:
             MO.Model._com = com
-        with patched(**spec):
+        with patched(**spec), patched(MO._Sim, **on_sim), patched(MO._Contact, **on_contact):
             yield
     finally:
         MO.Model._com = saved
@@ -433,18 +683,28 @@ class TestMotion(unittest.TestCase):
     def test_accuracy_all_cases(self):
         rows = C.Rows()
         table = {}
+        wall = {}
         for name in C.CASES:
             for mode in MODES:
                 with self.subTest(case=name, mode=mode):
+                    t0 = time.time()
                     try:
                         r, c, _res = run_case(name, mode)
                     except Exception:
                         import traceback
                         self.fail("%s/%s crashed: %s" % (name, mode, traceback.format_exc()))
+                    wall[(name, mode)] = time.time() - t0
                     rows.extend(r)
                     table[name] = (c.klass, c.integrator, c.step, c.end)
                     bad = failing_rows(r)
                     self.assertEqual(bad, [], "%s/%s" % (name, mode))
+        print("\n  contact and stop cases (wall seconds single / link, penetration against the tolerance):")
+        for name in CONTACT:
+            pen = [r for r in rows if r["case"] == name and r["metric"].startswith("penetration")]
+            print("    %-34s %5.1f / %5.1f s   %s" % (name, wall.get((name, "single"), 0.0), wall.get((name, "link"), 0.0),
+                                                      pen[0]["info"] if pen else ""))
+            for mode in MODES:
+                self.assertLess(wall.get((name, mode), 0.0), 60.0, "%s/%s took over a minute" % (name, mode))
         print("\n  %d cases x %d modes, %d checks, worst margin below:" % (len(table), len(MODES), len(rows)))
         worst = {}
         for r in rows:
@@ -563,9 +823,11 @@ class TestMotion(unittest.TestCase):
             self.addCleanup(lambda d=doc: App.closeDocument(d.Name) if d.Name in App.listDocuments() else None)
             return doc, C.CASES[name](doc, "single", None)
 
-        # joint limits are refused in a dynamic study
+        # a joint whose start is outside an enabled limit is refused, naming the joint (slice 6c lifted the 6a refusal
+        # of limits themselves)
         doc, c = fresh()
         doc.getObject("Hinge").EnableAngleMin = True
+        doc.getObject("Hinge").AngleMin = 10.0
         with self.assertRaises(MO.MotionRefused) as cm:
             MO.run(c.study)
         self.assertIn("Hinge", str(cm.exception))
@@ -806,6 +1068,251 @@ class TestMotion(unittest.TestCase):
             self.assertEqual(AS.describe_subscription(binder)["state"], before_state)
         finally:
             w.close()
+
+    # -- slice 6c
+    def test_first_collision_on_a_contact_case_is_at_or_before_the_first_impact(self):
+        doc = App.newDocument("MotionContactHit")
+        try:
+            c = C.CASES["ball_bounce_e07"](doc, "single", None)
+            res = MO.run(c.study)
+            first = [e for e in res["contact"]["events"] if e["what"] == "impact"][0]["t"]
+            # the stored frames never overlap the plate, so ask for pairs closer than the distance the ball covers in a step
+            hit = MO.first_collision(c.study, c.body, c.plate, classes=("interfering", "touching", "close"),
+                                     clearance=12.0)
+            self.assertIsNotNone(hit)
+            print("\n  contact case: first impact at t=%.5f s, first_collision (12 mm clearance) at step %d, t=%.5f s (%s)" % (
+                first, hit["step"], hit["time"], hit["class"]))
+            self.assertLessEqual(hit["time"], first + 1e-12)
+            self.assertGreaterEqual(hit["time"], first - 2 * c.study.TimeStep)
+            self.assertTrue(c.body.Placement.isSame(c.body.Placement, 0.0))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_contact_is_an_editable_removable_load_in_one_transaction_each(self):
+        doc = App.newDocument("MotionContactEdit")
+        try:
+            c = C.CASES["ball_bounce_e07"](doc, "single", None)
+            res = MO.run(c.study)
+            ld = [x for x in MO.loads(c.study) if x.Kind == "Contact"][0]
+            self.assertEqual(MO.stale_reason(c.study, res), "")
+            n0 = doc.UndoCount
+            s0 = MO.signature(doc)
+            MO.edit_load(ld, Restitution=0.4)
+            self.assertEqual(doc.UndoCount, n0 + 1)
+            self.assertNotEqual(MO.stale_reason(c.study, res), "")          # the restitution is part of the inputs
+            doc.undo()
+            self.assertEqual(MO.signature(doc), s0)
+            doc.redo()
+            n1 = doc.UndoCount
+            MO.remove_load(ld)
+            self.assertEqual(doc.UndoCount, n1 + 1)
+            doc.undo()
+            self.assertEqual(sorted(MO.signature(doc)), sorted(s0))
+            n2 = doc.UndoCount
+            added = MO.add_contact(c.study, c.body, c.plate, 0.25, tolerance=0.01, name="Second")
+            self.assertEqual(doc.UndoCount, n2 + 1)
+            self.assertEqual((added.Restitution, added.ContactTolerance), (0.25, 0.01))
+            for bad in (dict(restitution=1.5), dict(restitution=-0.1), dict(restitution=float("nan")),
+                        dict(restitution=0.5, tolerance=0.0), dict(restitution=0.5, tolerance=-1.0)):
+                with self.assertRaises(MO.MotionError, msg=str(bad)):
+                    MO.add_contact(c.study, c.body, c.plate, **bad)
+            with self.assertRaises(MO.MotionError):
+                MO.add_contact(c.study, c.body, c.body, 0.5)
+            self.assertEqual(doc.UndoCount, n2 + 1)                          # a refusal leaves no transaction
+            e_now, tol_now = ld.Restitution, ld.ContactTolerance
+            for bad in (dict(Restitution=1.5), dict(Restitution=-0.1), dict(Restitution=float("nan")),
+                        dict(ContactTolerance=0.0), dict(ContactTolerance=-1.0), dict(Restitution=0.5, ContactTolerance=-1.0)):
+                with self.assertRaises(MO.MotionError, msg="edit_load %s" % bad):
+                    MO.edit_load(ld, **bad)
+            self.assertEqual((ld.Restitution, ld.ContactTolerance, doc.UndoCount), (e_now, tol_now, n2 + 1))
+            MO.edit_load(ld, Restitution=1.0, ContactTolerance=0.01)             # the limits themselves are accepted
+            self.assertEqual((ld.Restitution, ld.ContactTolerance), (1.0, 0.01))
+            # an out-of-range value edited in afterwards is refused when the study runs
+            ld2 = [x for x in MO.loads(c.study) if x.Name == added.Name][0]
+            ld2.Restitution = 2.0
+            with self.assertRaises(MO.MotionError):
+                MO.run(c.study)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_contact_study_survives_save_and_reopen(self):
+        self.assertEqual(save_reopen_problems("ball_bounce_e07"), [])
+        self.assertEqual(save_reopen_problems("stop_pendulum_offset_e1", "link"), [])
+
+    def test_studies_without_contact_or_stops_carry_no_contact_record(self):
+        for name in ("pend_30_L400", "falling_ball_on_plate"):
+            doc = App.newDocument("MotionNoContact")
+            try:
+                c = C.CASES[name](doc, "single", None)
+                res = MO.run(c.study)
+                self.assertNotIn("contact", res)
+            finally:
+                App.closeDocument(doc.Name)
+
+    def test_stops_need_the_start_inside_the_range(self):
+        doc = App.newDocument("MotionStopStart")
+        try:
+            c = C.CASES["stop_slider_e08"](doc, "single", None)
+            rail = doc.getObject("Rail")
+            rail.EnableLengthMin = True
+            rail.LengthMin = 5.0                      # the block starts at distance 0 along the slider
+            with self.assertRaises(MO.MotionRefused) as cm:
+                MO.run(c.study)
+            self.assertIn("Rail", str(cm.exception))
+            rail.LengthMin = 0.0                      # exactly at a limit is inside
+            MO.run(c.study)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_the_capture_rule_leaves_the_first_three_bounces_alone(self):
+        doc = App.newDocument("MotionCapture")
+        try:
+            c = C.CASES["ball_bounce_e05"](doc, "single", None)
+            res = MO.run(c.study)
+            ev = res["contact"]["events"]
+            caps = [e for e in ev if e["what"] == "capture"]
+            imps = [e for e in ev if e["what"] == "impact"]
+            self.assertEqual(len(caps), 1)
+            before = [e for e in imps if e["t"] < caps[0]["t"]]
+            self.assertGreaterEqual(len(before), 4)
+            # the post-impact speeds of impacts 1 to 3 are well above the capture speed
+            for e in imps[:3]:
+                self.assertGreater(e["vn_after"], 3 * MO.CAPTURE_SPEED)
+            print("\n  capture: speeds after impacts 1..3 %s m/s against the capture speed %g m/s; locked at impact %d, t=%.4f s" % (
+                [round(e["vn_after"], 4) for e in imps[:3]], MO.CAPTURE_SPEED, len(before), caps[0]["t"]))
+        finally:
+            App.closeDocument(doc.Name)
+
+    # -- run 050 repair
+    def test_contact_starts_and_misuse_are_refused_clearly(self):
+        for pname in ("overlap_refused", "band_refused", "baumgarte"):
+            self.assertEqual(PROBES[pname](), [], pname)
+        doc = App.newDocument("MotionStartMsg")
+        try:
+            _rig, study, _ball = ball_over_plate(doc, -10.0)
+            with self.assertRaises(MO.MotionRefused) as cm:
+                MO.run(study)
+            msg = str(cm.exception)
+            for word in ("Contact", "Ball", "G", "overlap"):
+                self.assertIn(word, msg)
+            rig2_doc = App.newDocument("MotionBandMsg")
+            try:
+                _r, st2, _b = ball_over_plate(rig2_doc, 0.0005)
+                with self.assertRaises(MO.MotionRefused) as cm2:
+                    MO.run(st2)
+                self.assertIn("inside the contact tolerance", str(cm2.exception))
+                self.assertIn("Ball", str(cm2.exception))
+            finally:
+                App.closeDocument(rig2_doc.Name)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_a_contact_between_parts_that_never_move_is_refused(self):
+        doc = App.newDocument("MotionStatic")
+        try:
+            rig, study, ball = ball_over_plate(doc, 100.0)
+            shelf = rig.box("Shelf", 50, 50, 10, C.P(C.V(300, 300, 50), C.R()))
+            C.cc.ground(rig.jg, shelf)
+            rig.finish()
+            n0 = doc.UndoCount
+            with self.assertRaises(MO.MotionError) as cm:
+                MO.add_contact(study, shelf, rig.G, 0.5)
+            self.assertIn("Shelf", str(cm.exception))
+            self.assertEqual(doc.UndoCount, n0)
+            # a pair that is static without being grounded itself (fixed to ground) is refused when the study runs
+            wall = rig.box("Wall", 20, 20, 20, C.P(C.V(-300, -300, 0), C.R()))
+            rig.fixed("Weld", rig.G, wall, (-300, -300, 0))
+            rig.finish()
+            MO.add_contact(study, wall, rig.G, 0.5, name="Static")
+            with self.assertRaises(MO.MotionRefused) as cm:
+                MO.run(study)
+            self.assertIn("Wall", str(cm.exception))
+            self.assertIn("never act", str(cm.exception))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_limit_restitution_is_checked_even_without_a_limit_and_the_range_is_quoted_as_entered(self):
+        doc = App.newDocument("MotionLimitE")
+        try:
+            _rig, study, _ball = ball_over_plate(doc, 100.0)
+            study.LimitRestitution = 2.0
+            with self.assertRaises(MO.MotionError) as cm:
+                MO.run(study)
+            self.assertIn("LimitRestitution", str(cm.exception))
+        finally:
+            App.closeDocument(doc.Name)
+        doc = App.newDocument("MotionLimitRange")
+        try:
+            c = C.CASES["stop_slider_e08"](doc, "single", None)
+            rail = doc.getObject("Rail")
+            rail.EnableLengthMin, rail.LengthMin, rail.LengthMax = True, 60.0, 10.0           # reversed: FreeCAD swaps
+            with self.assertRaises(MO.MotionRefused) as cm:
+                MO.run(c.study)
+            self.assertIn("60 to 10", str(cm.exception))
+            self.assertIn("swapped", str(cm.exception))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_the_tunnelling_guard_reports_chunks_and_never_lets_the_ball_through_at_coarse_steps(self):
+        for step in (0.05, 0.1, 0.3):
+            doc = App.newDocument("MotionCoarse")
+            try:
+                _rig, study, ball = ball_over_plate(doc, 200.0, e=0.9, end=1.2, step=step)
+                res = MO.run(study)
+                z = [C.pl_of(d).Base.z for d in C.series(res, "Ball")]
+                self.assertGreaterEqual(min(z), 25.0 + MO.CONTACT_TOLERANCE - 1e-9, "step %g" % step)
+                guard = res["contact"]["guard"]
+                self.assertGreater(guard["chunks"], 10)
+                imp = [e for e in res["contact"]["events"] if e["what"] == "impact"]
+                self.assertGreaterEqual(len(imp), 3, "step %g" % step)
+                print("\n  coarse step %g s: %d impacts, %d chunks, %d retries, lowest ball z %.6f mm" % (
+                    step, len(imp), guard["chunks"], guard["retries"], min(z)))
+            finally:
+                App.closeDocument(doc.Name)
+
+    def test_guard_halving_below_the_floor_raises_a_clear_error_and_leaves_nothing_patched(self):
+        """The retry loop halves a rejected chunk until it would be shorter than ``_MIN_CHUNK``, then raises. A real run
+        reaches the floor only for a body far faster than the plate is thick, so this test makes the check fail
+        for every chunk (a patched ``_Sim._chunk_ok``): the honest content is the floor path, not the physics."""
+        n_calls = []
+
+        def never_ok(self, plan, t0, t1, y1):
+            n_calls.append(t1 - t0)
+            return False
+        with patched(MO._Sim, _chunk_ok=never_ok):
+            with self.assertRaises(MO.MotionError) as cm:
+                run_case("ball_bounce_e09_step01", "single")
+        self.assertIn("cannot keep a body from crossing", str(cm.exception))
+        self.assertNotIsInstance(cm.exception, MO.MotionRefused)
+        self.assertGreater(len(n_calls), 10)                         # it halved repeatedly, not once
+        self.assertTrue(all(b < a for a, b in zip(n_calls, n_calls[1:])))       # each retry is a shorter chunk
+        rows, _c, res = run_case("ball_bounce_e09_step01", "single")             # unpatched again
+        self.assertEqual(failing_rows(rows), [])
+        self.assertEqual(res["contact"]["guard"]["retries"], 0)
+
+    def test_a_body_that_goes_into_or_through_its_partner_fails_the_run(self):
+        """The check after the run: an in-band release shorter than the solver's step (the coarse-step variant of
+        ``contact_released_in_band_returns_to_rest``) lets A sink into the plate, and with the guard switched off the
+        coarse-step ball passes through the plate between two output steps. Both runs fail with ``MotionError``, never
+        a stored result; the fine-step runs are untouched."""
+        name = "contact_released_in_band_coarse_step"
+        C.make_release_in_band(name, step=0.002)
+        try:
+            with self.assertRaises(MO.MotionError) as cm:
+                run_case(name, "single")
+            self.assertIn("overlap at t =", str(cm.exception))
+        finally:
+            C.CASES.pop(name, None)
+        with patched(_guard_enabled=lambda: False):
+            with self.assertRaises(MO.MotionError) as cm:
+                run_case("ball_bounce_e09_step01", "single")
+        self.assertRegex(str(cm.exception), "changed sides|overlap at t =")
+        rows, _c, _res = run_case("ball_bounce_e09_step01", "single")
+        self.assertEqual(failing_rows(rows), [])
+
+    def test_guard_retries_are_counted_and_recover_the_closed_form(self):
+        self.assertEqual(probe_guard_retries_recover(), [])
+        self.assertEqual(probe_guard_plan_needs_no_retries(), [])
 
     # -- check 5
     def test_mutants_are_caught(self):

@@ -166,6 +166,25 @@ class PlotWidget(QtWidgets.QWidget):
 # ----------------------------------------------------------------- the panel
 
 _current = None                 # the open panel, until it is accepted, rejected or its document is closed
+_HOLDS = {}                     # document Uid -> panels that hold its recovery snapshots (a counter, so holds nest)
+
+
+def hold_recovery(doc, on):
+    """Hold (``on``) or release the document's recovery snapshots. ``Document.holdRecoverySnapshots`` is a flag; the
+    count of panels holding it lives here, so a second hold on the same document cannot be undone by the first
+    release (carried from run 049)."""
+    name = doc.Uid            # not the name: a closed document leaves its count behind, and the name is reused
+    n = _HOLDS.get(name, 0)
+    if on:
+        _HOLDS[name] = n + 1
+        if n == 0:
+            doc.holdRecoverySnapshots(True)
+    elif n > 0:
+        if n == 1:
+            del _HOLDS[name]
+            doc.holdRecoverySnapshots(False)
+        else:
+            _HOLDS[name] = n - 1
 
 
 def panel_open():
@@ -365,6 +384,8 @@ class TaskMotionStudy:
             return "%s, (%g, %g, %g) N·m" % (ld.Part1, *tuple(ld.Value))
         if k == "Spring":
             return "%s to %s, %g N/m, free length %g mm" % (ld.Part1, ld.Part2, ld.Stiffness, ld.FreeLength)
+        if k == "Contact":
+            return "%s and %s, restitution %g, tolerance %g mm" % (ld.Part1, ld.Part2, ld.Restitution, ld.ContactTolerance)
         return "%s to %s, %g N·s/m" % (ld.Part1, ld.Part2, ld.Damping)
 
     @staticmethod
@@ -508,7 +529,7 @@ class TaskMotionStudy:
             g = self._gdoc()
             self._was_modified = None if g is None else bool(g.Modified)
             self._saved = MO._save_placements(self.asm)
-            self.doc.holdRecoverySnapshots(True)     # a recovery write cannot swap the display placements out (no save signals)
+            hold_recovery(self.doc, True)     # a recovery write cannot swap the display placements out (no save signals)
 
     def show_frame(self, k):
         """Show frame ``k`` of the result in the 3D view: placements are set for display only (no undo step, the
@@ -612,7 +633,7 @@ class TaskMotionStudy:
                 self._saved = None
                 self._was_modified = None
                 if App.listDocuments().get(self.document_name) is not None:
-                    self.doc.holdRecoverySnapshots(False)
+                    hold_recovery(self.doc, False)
 
     # ---- task dialog protocol
 

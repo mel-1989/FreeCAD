@@ -3,7 +3,8 @@
 
 Assembly_CreateMotionStudy makes a dynamic analysis (a ``MotionStudy``, see ``AssemblyMotion``) in the active or selected
 assembly and opens its panel; Assembly_EditMotionStudy opens the panel on the selected analysis; Assembly_AddMotionGravity,
-Assembly_AddMotionForce, Assembly_AddMotionTorque, Assembly_AddMotionSpring and Assembly_AddMotionDamper add a load to it.
+Assembly_AddMotionForce, Assembly_AddMotionTorque, Assembly_AddMotionSpring, Assembly_AddMotionDamper and (slice 6c)
+Assembly_AddMotionContact add a load to it.
 
 Wording. The study object is a "dynamic analysis" in every label, and the commands read "Create dynamic analysis", "Add
 gravity", "Add force" and so on. "Motion Study" is the name of a feature in a commercial CAD product, so the labels use this
@@ -424,6 +425,38 @@ class CommandAddMotionDamper(_AddLoad):
             MO.add_damper(study, a.comp, tuple(a.local), b.comp, tuple(b.local), v["c"])
 
 
+class CommandAddMotionContact(_AddLoad):
+    need = 2
+    icon = "Assembly_AddMotionContact.svg"
+    menu = QT_TRANSLATE_NOOP("Assembly_AddMotionContact", "Add contact")
+    tip = QT_TRANSLATE_NOOP(
+        "Assembly_AddMotionContact",
+        "<p>Makes two parts collide in the dynamic analysis: select one component of each. Parts without a contact between them "
+        "pass through each other. The coefficient of restitution (0 for no bounce, 1 for a perfectly elastic one) is asked; the "
+        "contact has no friction.</p>")
+    status = QT_TRANSLATE_NOOP("Assembly_AddMotionContact", "Add a contact between two parts")
+
+    def picks_ok(self, asm):
+        """Two different parts, not both grounded (a contact between two parts that never move can never act)."""
+        if not super().picks_ok(asm):
+            return False
+        study = target_study(asm)
+        comps = [c for c, *_ in picked_components(asm)]
+        return study is None or MO.grounded_pair(study, comps[0], comps[1]) is None
+
+    def add(self, study, picks):
+        a, b = picks
+        v = ask_values(Gui.getMainWindow(), translate("Assembly", "Add contact"),
+                       [("e", translate("Assembly", "Restitution"), 0.5, ""),
+                        ("tol", translate("Assembly", "Contact tolerance"), MO.CONTACT_TOLERANCE, "mm")])
+        if v is None:
+            return
+        try:
+            MO.add_contact(study, a.comp, b.comp, v["e"], tolerance=v["tol"])
+        except MO.MotionError as exc:
+            report(Gui.getMainWindow(), str(exc))
+
+
 COMMANDS = {
     "Assembly_CreateMotionStudy": CommandCreateMotionStudy,
     "Assembly_EditMotionStudy": CommandEditMotionStudy,
@@ -432,6 +465,7 @@ COMMANDS = {
     "Assembly_AddMotionTorque": CommandAddMotionTorque,
     "Assembly_AddMotionSpring": CommandAddMotionSpring,
     "Assembly_AddMotionDamper": CommandAddMotionDamper,
+    "Assembly_AddMotionContact": CommandAddMotionContact,
 }
 for _name, _cls in COMMANDS.items():
     Gui.addCommand(_name, _cls())
