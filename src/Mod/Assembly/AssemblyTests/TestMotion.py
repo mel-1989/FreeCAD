@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""G06 slice 6a: motion studies with gravity, forces, springs and dampers (API and closed-form corpus, no GUI).
+"""G06 slices 6a and 6c: motion studies with gravity, forces, springs, dampers, contact and joint stops (API and
+closed-form corpus, no GUI).
 
 The corpus (``motion_corpus``) runs every case in a single-document assembly and through ``App::Link`` parts and
 compares the stored result with the closed form; the other tests cover the model and round trip (save and reopen,
@@ -13,6 +14,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from collections import Counter
 
@@ -28,6 +30,7 @@ V = App.Vector
 P = App.Placement
 R = App.Rotation
 MODES = ("single", "link")
+CONTACT = [n for n in C.CASES if n.startswith(("ball_", "block_", "stop_", "contact_", "suppressed_shelf"))]
 KINEMATIC = [n for n, f in C.CASES.items() if "slider_crank" in n or "four_bar" in n or "gears" in n
              or "belt" in n or "rack_pinion" in n]
 
@@ -360,6 +363,54 @@ def _m_com_at_origin():
     return dict(Model_com=lambda self, com: 0.0 * com)
 
 
+def _m_restitution_twice():
+    return dict(_ratio=lambda e: e * e)
+
+
+def _m_restitution_ignored():
+    return dict(_ratio=lambda e: 1.0)
+
+
+def _m_impulse_sign():
+    return dict(_impulse_sign=lambda: 1.0)
+
+
+def _m_tolerance_ignored():
+    return dict(_event_value=lambda gap, tol: gap, _MAX_EVENTS=300)      # without the margin the pair chatters
+
+
+def _m_capture_everything():
+    return dict(CAPTURE_SPEED=1e6)
+
+
+def _m_release_never():
+    return dict(_release_value=lambda lam: 1.0)
+
+
+def _m_release_at_once():
+    return dict(_release_value=lambda lam: 0.0, _MAX_EVENTS=300)
+
+
+def _m_lock_when_tensile():
+    return dict(_lock_ok=lambda lam: True)
+
+
+def _m_stop_wrong_side():
+    return dict(_stop_side=lambda side: -1.0 if side == "lower" else 1.0)
+
+
+def _m_limit_absolute():
+    return dict(_q_bound=lambda limit, value0, sgn: sgn * limit)
+
+
+def _m_limit_ignores_child():
+    return dict(_q_bound=lambda limit, value0, sgn: limit - value0)
+
+
+def _m_energy_flag_true():
+    return dict(_contact_conservative=lambda e: True)
+
+
 MUTANTS = {
     "gravity_wrong_sign": (_m_gravity_sign, ["fall_vertical", "pend_30_L400"], []),
     "gravity_wrong_axis": (_m_gravity_axis, ["fall_vertical", "pend_30_L400"], []),
@@ -382,6 +433,19 @@ MUTANTS = {
     "torque_sign_flipped": (_m_torque_sign, ["arm_bead_torque_world", "arm_bead_torque_part"], []),
     "inertia_not_rotated_by_the_placement": (_m_inertia_unrotated, ["compound_rod_rotated_part"], []),
     "centre_of_mass_at_the_part_origin": (_m_com_at_origin, ["compound_rod_end", "compound_rod_quarter"], []),
+    "restitution_applied_twice": (_m_restitution_twice, ["ball_bounce_e07", "stop_pendulum_e06"], []),
+    "restitution_ignored_always_elastic": (_m_restitution_ignored, ["ball_bounce_e05", "ball_bounce_e09", "stop_slider_e05"], []),
+    "impulse_on_the_wrong_sign_of_the_normal": (_m_impulse_sign, ["ball_bounce_e07", "stop_slider_e08"], []),
+    "contact_tolerance_ignored_penetration_grows": (_m_tolerance_ignored, ["ball_bounce_e07", "ball_bounce_e05"], []),
+    "capture_threshold_so_high_it_captures_the_first_bounce": (_m_capture_everything, ["ball_bounce_e09", "ball_bounce_e05"], []),
+    "release_never_happens": (_m_release_never, ["contact_released_by_spring"], []),
+    "release_happens_at_once": (_m_release_at_once, ["block_rests_on_plate"], []),
+    "lock_even_when_the_multiplier_is_tensile": (_m_lock_when_tensile, ["block_lifted_by_force"], []),
+    "limit_stop_on_the_wrong_side": (_m_stop_wrong_side, ["stop_pendulum_e1", "stop_slider_e08"], []),
+    "limit_mapped_from_the_absolute_value": (_m_limit_absolute, ["stop_pendulum_offset_e1"], []),
+    "limit_ignores_which_part_the_coordinate_moves": (_m_limit_ignores_child, ["stop_pendulum_reference2_e1"], []),
+    "suppressed_components_contact_still_applied": (_m_suppressed_load_applied, ["suppressed_shelf_contact"], []),
+    "energy_flag_left_true_with_restitution_below_one": (_m_energy_flag_true, ["ball_bounce_e05", "stop_pendulum_e06"], []),
 }
 
 
@@ -433,18 +497,28 @@ class TestMotion(unittest.TestCase):
     def test_accuracy_all_cases(self):
         rows = C.Rows()
         table = {}
+        wall = {}
         for name in C.CASES:
             for mode in MODES:
                 with self.subTest(case=name, mode=mode):
+                    t0 = time.time()
                     try:
                         r, c, _res = run_case(name, mode)
                     except Exception:
                         import traceback
                         self.fail("%s/%s crashed: %s" % (name, mode, traceback.format_exc()))
+                    wall[(name, mode)] = time.time() - t0
                     rows.extend(r)
                     table[name] = (c.klass, c.integrator, c.step, c.end)
                     bad = failing_rows(r)
                     self.assertEqual(bad, [], "%s/%s" % (name, mode))
+        print("\n  contact and stop cases (wall seconds single / link, penetration against the tolerance):")
+        for name in CONTACT:
+            pen = [r for r in rows if r["case"] == name and r["metric"].startswith("penetration")]
+            print("    %-34s %5.1f / %5.1f s   %s" % (name, wall.get((name, "single"), 0.0), wall.get((name, "link"), 0.0),
+                                                      pen[0]["info"] if pen else ""))
+            for mode in MODES:
+                self.assertLess(wall.get((name, mode), 0.0), 60.0, "%s/%s took over a minute" % (name, mode))
         print("\n  %d cases x %d modes, %d checks, worst margin below:" % (len(table), len(MODES), len(rows)))
         worst = {}
         for r in rows:
@@ -563,9 +637,11 @@ class TestMotion(unittest.TestCase):
             self.addCleanup(lambda d=doc: App.closeDocument(d.Name) if d.Name in App.listDocuments() else None)
             return doc, C.CASES[name](doc, "single", None)
 
-        # joint limits are refused in a dynamic study
+        # a joint whose start is outside an enabled limit is refused, naming the joint (slice 6c lifted the 6a refusal
+        # of limits themselves)
         doc, c = fresh()
         doc.getObject("Hinge").EnableAngleMin = True
+        doc.getObject("Hinge").AngleMin = 10.0
         with self.assertRaises(MO.MotionRefused) as cm:
             MO.run(c.study)
         self.assertIn("Hinge", str(cm.exception))
@@ -806,6 +882,112 @@ class TestMotion(unittest.TestCase):
             self.assertEqual(AS.describe_subscription(binder)["state"], before_state)
         finally:
             w.close()
+
+    # -- slice 6c
+    def test_first_collision_on_a_contact_case_is_at_or_before_the_first_impact(self):
+        doc = App.newDocument("MotionContactHit")
+        try:
+            c = C.CASES["ball_bounce_e07"](doc, "single", None)
+            res = MO.run(c.study)
+            first = [e for e in res["contact"]["events"] if e["what"] == "impact"][0]["t"]
+            # the stored frames never overlap the plate, so ask for pairs closer than the distance the ball covers in a step
+            hit = MO.first_collision(c.study, c.body, c.plate, classes=("interfering", "touching", "close"),
+                                     clearance=12.0)
+            self.assertIsNotNone(hit)
+            print("\n  contact case: first impact at t=%.5f s, first_collision (12 mm clearance) at step %d, t=%.5f s (%s)" % (
+                first, hit["step"], hit["time"], hit["class"]))
+            self.assertLessEqual(hit["time"], first + 1e-12)
+            self.assertGreaterEqual(hit["time"], first - 2 * c.study.TimeStep)
+            self.assertTrue(c.body.Placement.isSame(c.body.Placement, 0.0))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_contact_is_an_editable_removable_load_in_one_transaction_each(self):
+        doc = App.newDocument("MotionContactEdit")
+        try:
+            c = C.CASES["ball_bounce_e07"](doc, "single", None)
+            res = MO.run(c.study)
+            ld = [x for x in MO.loads(c.study) if x.Kind == "Contact"][0]
+            self.assertEqual(MO.stale_reason(c.study, res), "")
+            n0 = doc.UndoCount
+            s0 = MO.signature(doc)
+            MO.edit_load(ld, Restitution=0.4)
+            self.assertEqual(doc.UndoCount, n0 + 1)
+            self.assertNotEqual(MO.stale_reason(c.study, res), "")          # the restitution is part of the inputs
+            doc.undo()
+            self.assertEqual(MO.signature(doc), s0)
+            doc.redo()
+            n1 = doc.UndoCount
+            MO.remove_load(ld)
+            self.assertEqual(doc.UndoCount, n1 + 1)
+            doc.undo()
+            self.assertEqual(sorted(MO.signature(doc)), sorted(s0))
+            n2 = doc.UndoCount
+            added = MO.add_contact(c.study, c.body, c.plate, 0.25, tolerance=0.01, name="Second")
+            self.assertEqual(doc.UndoCount, n2 + 1)
+            self.assertEqual((added.Restitution, added.ContactTolerance), (0.25, 0.01))
+            for bad in (dict(restitution=1.5), dict(restitution=-0.1), dict(restitution=float("nan")),
+                        dict(restitution=0.5, tolerance=0.0), dict(restitution=0.5, tolerance=-1.0)):
+                with self.assertRaises(MO.MotionError, msg=str(bad)):
+                    MO.add_contact(c.study, c.body, c.plate, **bad)
+            with self.assertRaises(MO.MotionError):
+                MO.add_contact(c.study, c.body, c.body, 0.5)
+            self.assertEqual(doc.UndoCount, n2 + 1)                          # a refusal leaves no transaction
+            # an out-of-range value edited in afterwards is refused when the study runs
+            ld2 = [x for x in MO.loads(c.study) if x.Name == added.Name][0]
+            ld2.Restitution = 2.0
+            with self.assertRaises(MO.MotionError):
+                MO.run(c.study)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_contact_study_survives_save_and_reopen(self):
+        self.assertEqual(save_reopen_problems("ball_bounce_e07"), [])
+        self.assertEqual(save_reopen_problems("stop_pendulum_offset_e1", "link"), [])
+
+    def test_studies_without_contact_or_stops_carry_no_contact_record(self):
+        for name in ("pend_30_L400", "falling_ball_on_plate"):
+            doc = App.newDocument("MotionNoContact")
+            try:
+                c = C.CASES[name](doc, "single", None)
+                res = MO.run(c.study)
+                self.assertNotIn("contact", res)
+            finally:
+                App.closeDocument(doc.Name)
+
+    def test_stops_need_the_start_inside_the_range(self):
+        doc = App.newDocument("MotionStopStart")
+        try:
+            c = C.CASES["stop_slider_e08"](doc, "single", None)
+            rail = doc.getObject("Rail")
+            rail.EnableLengthMin = True
+            rail.LengthMin = 5.0                      # the block starts at distance 0 along the slider
+            with self.assertRaises(MO.MotionRefused) as cm:
+                MO.run(c.study)
+            self.assertIn("Rail", str(cm.exception))
+            rail.LengthMin = 0.0                      # exactly at a limit is inside
+            MO.run(c.study)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_the_capture_rule_leaves_the_first_three_bounces_alone(self):
+        doc = App.newDocument("MotionCapture")
+        try:
+            c = C.CASES["ball_bounce_e05"](doc, "single", None)
+            res = MO.run(c.study)
+            ev = res["contact"]["events"]
+            caps = [e for e in ev if e["what"] == "capture"]
+            imps = [e for e in ev if e["what"] == "impact"]
+            self.assertEqual(len(caps), 1)
+            before = [e for e in imps if e["t"] < caps[0]["t"]]
+            self.assertGreaterEqual(len(before), 4)
+            # the post-impact speeds of impacts 1 to 3 are well above the capture speed
+            for e in imps[:3]:
+                self.assertGreater(e["vn_after"], 3 * MO.CAPTURE_SPEED)
+            print("\n  capture: speeds after impacts 1..3 %s m/s against the capture speed %g m/s; locked at impact %d, t=%.4f s" % (
+                [round(e["vn_after"], 4) for e in imps[:3]], MO.CAPTURE_SPEED, len(before), caps[0]["t"]))
+        finally:
+            App.closeDocument(doc.Name)
 
     # -- check 5
     def test_mutants_are_caught(self):

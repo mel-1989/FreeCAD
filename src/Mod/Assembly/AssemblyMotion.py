@@ -1712,7 +1712,7 @@ _FP_MASS = ("Component", "Mode", "Density", "Mass", "Com", "Inertia")
 _FP_JOINT_SKIP = ("Label", "Label2", "Visibility", "Proxy", "ExpressionEngine", "Shape", "Placement")
 
 
-def _fp_value(v):
+def _fp_value(v, snap=False):
     """A property value as the fingerprint keeps it: floats at the 14 digits a file keeps (as every input of a run is
     read), vectors, placements and lists of them likewise, links by object name and sub-element names."""
     if isinstance(v, float):
@@ -1722,11 +1722,13 @@ def _fp_value(v):
     if isinstance(v, App.Units.Quantity):
         return [_q(v.Value), str(v.Unit)]
     if isinstance(v, App.Placement):
-        return [_qvec(v.Base)] + [_q(x) for x in v.Rotation.Q]
+        # FreeCAD normalises a quaternion when it reads one back, which turns an exact 0 into 1e-16; ``snap`` (studies
+        # with a contact or a stop, from slice 6c on) drops those, earlier studies keep the hash they were stored with
+        return [_qvec(v.Base)] + [_q(x) if not snap or abs(x) > 1e-12 else 0.0 for x in v.Rotation.Q]
     if hasattr(v, "Name") and hasattr(v, "TypeId"):
         return v.Name
     if isinstance(v, (list, tuple)):
-        return [_fp_value(x) for x in v]
+        return [_fp_value(x, snap) for x in v]
     if v is None or isinstance(v, (bool, int, str)):
         return v
     return repr(v)
@@ -1762,21 +1764,23 @@ def inputs_fingerprint(study):
     assembly's joints, and each part's shape digest and initial placement. A result carries the value it was computed
     with, so a later edit shows up as a difference."""
     def rec(o, names):
-        return [o.Name] + [repr(_fp_value(getattr(o, n, None))) for n in names]
+        return [o.Name] + [repr(_fp_value(getattr(o, n, None), snap)) for n in names]
 
     asm = assembly_of(study)
     joints = []
     parts = []
-    if asm is not None:
-        for j in _joints_of(asm):
-            joints.append([j.Name] + [repr(_fp_value(getattr(j, n, None)))
-                                      for n in sorted(j.PropertiesList) if n not in _FP_JOINT_SKIP])
-        for o in live_components(asm):
-            parts.append([o.Name, _placement_digest(o.Placement), _shape_digest(o)])
-    # the 6c properties join the fingerprint only where they matter, so results of earlier studies keep their hash
+    # the 6c properties and the quaternion snap join the fingerprint only where they matter, so the results of earlier
+    # studies keep the hash they were stored with
     stops = asm is not None and any(
         getattr(j, p, False) for j in _joints_of(asm) if _is_joint(j)
         for p in ("EnableAngleMin", "EnableAngleMax", "EnableLengthMin", "EnableLengthMax"))
+    snap = stops or any(o.Kind == "Contact" for o in loads(study))
+    if asm is not None:
+        for j in _joints_of(asm):
+            joints.append([j.Name] + [repr(_fp_value(getattr(j, n, None), snap))
+                                      for n in sorted(j.PropertiesList) if n not in _FP_JOINT_SKIP])
+        for o in live_components(asm):
+            parts.append([o.Name, _placement_digest(o.Placement), _shape_digest(o)])
     data = [rec(study, _FP_STUDY + (("LimitRestitution",) if stops else ()))] \
         + [rec(o, _FP_LOAD + (("Restitution", "ContactTolerance") if o.Kind == "Contact" else ())) for o in loads(study)] \
         + [rec(o, _FP_MASS) for o in masses(study)] + [joints, parts]
