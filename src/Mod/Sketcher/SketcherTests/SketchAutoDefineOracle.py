@@ -38,8 +38,6 @@ perturbed through the public sketch API only.
 
 import math
 
-import FreeCAD
-
 TOL = 1e-6
 DIR_TOL = 1e-7
 DATUMS = ("Distance", "DistanceX", "DistanceY", "Radius", "Diameter", "Angle", "Weight")

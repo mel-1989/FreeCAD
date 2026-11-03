@@ -292,8 +292,6 @@ def _plate_holes(b, rng):
     r = rng.uniform(2.1, 4.9)
     hx, hy = rng.uniform(9, 17), rng.uniform(8, 14)
     dx, dy = rng.uniform(20, w - 2 * hx - 3), rng.uniform(12, h - 2 * hy - 2)
-    u0, v0 = b.pt(ids[0], 1)
-    o = b.rot
     # hole centres in the local frame of the rectangle
     lx0, ly0 = _local(b, ids[0])
     c = [b.circle(lx0 + hx + i * dx, ly0 + hy + j * dy, r) for j in range(2) for i in range(2)]
@@ -544,11 +542,6 @@ def _stepped_bracket(b, rng):
         w.append(w[-1] + rng.uniform(8, 18))
         hts.append(hts[-1] + rng.uniform(7, 15))
     # staircase: bottom edge to the right, steps up, back along the top-left
-    pts = [(0.0, 0.0), (w[-1], 0.0)]
-    for k in range(n_steps, -1, -1):
-        pass
-    xs = [w[-1]] + [w[k] for k in range(n_steps - 1, -1, -1)]
-    ys = [0.0] + [hts[k] for k in range(n_steps)]
     pts = [(0.0, 0.0)]
     pts.append((w[-1], 0.0))
     prev = (w[-1], 0.0)
@@ -575,7 +568,7 @@ def _stepped_bracket(b, rng):
     hr = rng.uniform(1.4, 3.3)
     hx, hy = pts[0][0] + 5.5 + rng.uniform(0, 2), pts[0][1] + 4.5 + rng.uniform(0, 2)
     lx, ly = _local(b, ids[0])
-    hole = b.circle(lx + 5.5 + (hx - pts[0][0] - 5.5), ly + 4.5 + (hy - pts[0][1] - 4.5), hr)
+    hole = b.circle(lx + (hx - pts[0][0]), ly + (hy - pts[0][1]), hr)
     b.c("Diameter", hole, 2 * hr)
     b.c("Distance", hole, 3, ids[0], _pl(b, hole, ids[0]))
     b.c("Distance", hole, 3, ids[-1], _pl(b, hole, ids[-1]))
@@ -741,6 +734,34 @@ def scale_sketch(doc, n_geometry, name=None, seed=1):
             geo.append(Part.LineSegment(V(a[0], a[1], 0), V(b[0], b[1], 0)))
         geo.append(Part.Circle(V(cx + w * rng.uniform(0.3, 0.7), cy + h * rng.uniform(0.3, 0.7), 0), V(0, 0, 1), r))
     o.addGeometry(geo, False)
+    return o
+
+
+def mixed_sketch(doc, n_geometry, name=None):
+    """A geometry-only sketch of about `n_geometry` elements made from the
+    geometry of generated parts (plates, slots, polygons, rounded rectangles,
+    brackets, flanges, arches, ...) laid out on a grid, with their
+    construction flags.  Harder than ``scale_sketch``: tangent arcs, holes on
+    lines, symmetric pairs.  Parts with exposed internal geometry (ellipse,
+    B-spline) are left out because their alignment constraints do not travel
+    with the bare geometry."""
+    names = [f for f in FAMILIES if f not in ("ellipse_plate", "bspline")]
+    o = doc.addObject("Sketcher::SketchObject", name or "Mixed%d" % n_geometry)
+    geo, flags, k = [], [], 0
+    while len(geo) < n_geometry:
+        src = build_generated(doc, names[k % len(names)], bool(k % 2), 100 + k)
+        dx, dy = (k % 6) * 220.0, (k // 6) * 220.0
+        for i, g in enumerate(src.Geometry):
+            g = g.copy()
+            g.translate(V(dx, dy, 0))
+            geo.append(g)
+            flags.append(bool(src.getConstruction(i)))
+        doc.removeObject(src.Name)
+        k += 1
+    o.addGeometry(geo, False)
+    for i, flag in enumerate(flags):
+        if flag:
+            o.setConstruction(i, True)
     return o
 
 

@@ -92,7 +92,6 @@ behave differently from its serialised copy (slice 1's known LOW), so
 import math
 import time
 
-import FreeCAD
 import Sketcher
 
 from SketcherDiagnosis import (
@@ -290,7 +289,7 @@ def _clusters(items):
     return [sorted(g) for g in groups.values() if len(g) > 1]
 
 
-def _detect(model, existing, sk_has_origin=True):
+def _detect(model, existing):
     """Relation candidates by phase.  Each entry is a constraint spec (the
     arguments of ``Sketcher.Constraint``)."""
     geos = {m.i: m for m in model}
@@ -892,14 +891,14 @@ class _Build:
         )
 
     def add_chunk(self, specs):
-        """Add `specs` together, then drop everything the solver flags (a
-        conflict first, then redundancy, then partial redundancy) until the
-        rest is clean, and try the dropped ones again one by one, each
-        against what was accepted.  The solver lists only some members of a
-        redundant group and may blame earlier constraints, so one round can
-        drop more than necessary; the one-by-one pass puts back every
-        constraint that is independent after all.  What is accepted must pass
-        the same test as a single trial; otherwise the chunk is bisected."""
+        """Add `specs` together, then drop the newest constraint the solver
+        flags (a conflict first, then redundancy, then partial redundancy) and
+        solve again, until the rest is clean.  One at a time keeps one member
+        of every redundant group.  The solver sometimes blames only earlier
+        constraints; then the newest of the batch goes, which may be an
+        independent one, and every constraint dropped that way is tried again
+        on its own afterwards.  What is accepted must pass the same test as a
+        single trial; otherwise the chunk is bisected."""
         if not specs:
             return
         if time.time() > self.deadline:
@@ -909,7 +908,7 @@ class _Build:
             self.sk.Geometry = self.start
             self.dirty = False
         live = list(specs)
-        dropped = []
+        uncertain = []
         failed = False
         try:
             self.sk.addConstraint([_make(s) for s in specs])
@@ -919,12 +918,12 @@ class _Build:
                 flagged = st.conflicts + st.redundant + st.partial
                 if not flagged:
                     break
-                picks = sorted({i for i in flagged if i >= n0})
-                if not picks:  # the solver blamed earlier ones: take the newest of the batch
-                    picks = [len(self.sk.Constraints) - 1]
-                self.sk.delConstraints(picks, False, True)
-                for i in reversed(picks):
-                    dropped.append(live.pop(i - n0))
+                fresh = [i for i in flagged if i >= n0]
+                pick = max(fresh) if fresh else len(self.sk.Constraints) - 1
+                self.sk.delConstraints([pick], False, True)
+                dropped = live.pop(pick - n0)
+                if not fresh:
+                    uncertain.append(dropped)
                 st = _Status(self.sk)
                 self.solves += 1
                 if time.time() > self.deadline:
@@ -945,11 +944,9 @@ class _Build:
                 self.add_chunk_safe(specs[:mid])
                 self.add_chunk_safe(specs[mid:])
             return
-        if len(specs) > 1:
-            gone = {id(x) for x in dropped}
-            for d in specs:
-                if id(d) in gone and self.dof > 0:
-                    self.add_chunk_safe([d])
+        for d in uncertain:
+            if self.dof > 0:
+                self.add_chunk_safe([d])
 
     def add_chunk_safe(self, specs):
         """Bisection fallback: all-or-nothing trials."""
@@ -966,30 +963,65 @@ class _Build:
         for i in range(0, len(specs), _MAX_BATCH):
             self.add_chunk(specs[i : i + _MAX_BATCH])
 
+    def free_geometry(self):
+        """Ids of the geometry that still has a free parameter, from the
+        solver's own list; None when the solver does not say."""
+        try:
+            if self.dirty:
+                self.sk.Geometry = self.start
+                self.dirty = False
+            self.sk.solve()
+            free = {g for g, _ in self.sk.getGeometryWithDependentParameters()}
+        except Exception:
+            return None
+        return free or None
+
+    @staticmethod
+    def _targets(spec):
+        t = spec[0]
+        if t in ("DistanceX", "DistanceY"):
+            return {spec[1]} | ({spec[3]} if len(spec) == 6 else set())
+        return {spec[1]}
+
     def add_dimensions(self, specs):
+        """Try the proposals in order, a chunk of at most `dof` at a time.
+        Only proposals on geometry that still has a free parameter are
+        tried; what the solver rejects is redundant for good (constraints are
+        only ever added), so it is not tried again.  What the axis predictor
+        skipped is tried last, in case the prediction was wrong."""
+        pending = list(specs)
         deferred = []
-        pos = 0
-        while pos < len(specs) and self.dof > 0:
-            size = max(1, min(_MAX_BATCH, self.dof))
-            ax = self.axes.copy()
-            chunk = []
-            while pos < len(specs) and len(chunk) < size:
-                sp = specs[pos]
-                pos += 1
-                if ax.redundant(sp):
-                    deferred.append(sp)
-                    continue
-                ax.add(sp)
-                chunk.append(sp)
-            self.add_chunk(chunk)
-        pos = 0
-        while pos < len(deferred) and self.dof > 0:
-            size = max(1, min(_MAX_BATCH, self.dof))
-            self.add_chunk(deferred[pos : pos + size])
-            pos += size
+        for use_predictor in (True, False):
+            if not use_predictor:
+                pending, deferred = deferred, []
+            while pending and self.dof > 0:
+                size = max(1, min(_MAX_BATCH, self.dof))
+                free = self.free_geometry()
+                ax = self.axes.copy()
+                chunk, rest = [], []
+                for k, sp in enumerate(pending):
+                    if len(chunk) >= size:
+                        rest.extend(pending[k:])
+                        break
+                    if free is not None and not (self._targets(sp) & free):
+                        continue  # nothing free on it: redundant
+                    if use_predictor and ax.redundant(sp):
+                        deferred.append(sp)
+                        continue
+                    if use_predictor:
+                        ax.add(sp)
+                    chunk.append(sp)
+                pending = rest
+                if not chunk:
+                    break
+                self.add_chunk(chunk)
 
 
-def _build_scheme(scratch, model, existing, scheme, deadline):
+def _build_scheme(scratch, model, existing, scheme, deadline, cache=None):
+    """Build one candidate.  `cache` maps a relation order to the relations
+    that an earlier scheme with that order accepted; they are added in one
+    batch instead of being searched for again (the first trial must pass the
+    same test as any other, otherwise the search runs normally)."""
     b = _Build(scratch, deadline)
     if not b.usable:
         return b, "input"
@@ -1003,11 +1035,16 @@ def _build_scheme(scratch, model, existing, scheme, deadline):
     order = ["coincident", "symmetric", "onobject", "hv", "tangent", "parallel", "equal", "symmetric_axes"]
     if scheme == "symmetric":
         order = ["coincident", "symmetric", "symmetric_axes", "onobject", "hv", "tangent", "parallel", "equal"]
+    key = tuple(order)
     try:
-        for phase in order:
-            if b.dof == 0:
-                break
-            b.add_relations(rel[phase])
+        seeded = cache is not None and key in cache and cache[key] and b.try_add(cache[key])
+        if not seeded:
+            for phase in order:
+                if b.dof == 0:
+                    break
+                b.add_relations(rel[phase])
+        if cache is not None and key not in cache:
+            cache[key] = [sp for sp in b.specs if not _is_datum(sp)]
         if b.dof > 0:
             dims = _dimension_proposals(model, b.specs, scheme)
             b.add_dimensions(dims)
@@ -1021,8 +1058,19 @@ def _candidate_key(specs):
 
 
 def _verify(scratch, specs, batches, keep):
-    """Apply to a brand-new copy and re-solve.  Returns the measured facts
-    or None when the hard bar is not met."""
+    """Apply to a brand-new copy and re-solve, first in one batch and, if that
+    does not pass, in the batches the builder used.  Returns the facts
+    measured, including the batches that passed, or None when the hard bar is
+    not met."""
+    for trial in ([len(specs)], list(batches)) if len(batches) > 1 else (list(batches),):
+        facts = _verify_once(scratch, specs, trial, keep)
+        if facts is not None:
+            facts["batches"] = trial
+            return facts
+    return None
+
+
+def _verify_once(scratch, specs, batches, keep):
     fresh = scratch.copy()
     try:
         start = list(fresh.Geometry)
@@ -1063,7 +1111,7 @@ def _describe(scheme, specs, batches, facts):
         "constraints": cons,
         "relations": sum(1 for s in specs if not _is_datum(s)),
         "dimensions": sum(1 for s in specs if _is_datum(s)),
-        "batches": list(batches),
+        "batches": list(facts["batches"]),
         "dof_after": facts["dof"],
         "max_move": facts["max_move"],
         "verified": True,
@@ -1122,10 +1170,11 @@ def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0)
         finally:
             _discard(base)
         seen = set()
+        cache = {}
         for scheme in names:
             if len(result["candidates"]) >= max_candidates:
                 break
-            b, why = _build_scheme(scratch, model, existing, scheme, deadline)
+            b, why = _build_scheme(scratch, model, existing, scheme, deadline, cache)
             try:
                 if why == "input":
                     continue
@@ -1170,7 +1219,8 @@ def apply_candidate(sketch, candidate):
         st = _apply_batches(sketch, specs, batches, start)
         ok = _clean(st) and st.dof == 0 and _max_move(sig0, _geometry_signature(sketch)) <= MOVE_TOLERANCE
     except Exception as exc:
-        sketch.delConstraints(list(range(n0, len(sketch.Constraints))), False, True) if len(sketch.Constraints) > n0 else None
+        if len(sketch.Constraints) > n0:
+            sketch.delConstraints(list(range(n0, len(sketch.Constraints))), False, True)
         sketch.Geometry = start
         raise AutoDefineError("the candidate could not be applied: %s" % exc)
     if not ok:

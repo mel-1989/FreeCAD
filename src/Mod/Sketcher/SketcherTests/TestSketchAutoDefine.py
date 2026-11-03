@@ -398,12 +398,12 @@ class TestSketchAutoDefine(unittest.TestCase):
             self.doc.removeObject(other.Name)
 
     def testConstructionGeometryIsNotDimensionedWhenARelationWillDo(self):
-        # a construction diagonal across a rectangle: its end points are the corners
+        # a construction diagonal, drawn first, across a rectangle: its end points are the corners
         sk = _bare(
             self.doc,
             "Diagonal",
-            [_line((0, 0), (20, 0)), _line((20, 0), (20, 10)), _line((20, 10), (0, 10)), _line((0, 10), (0, 0)), _line((0, 0), (20, 10))],
-            construction=[4],
+            [_line((0, 0), (20, 10)), _line((0, 0), (20, 0)), _line((20, 0), (20, 10)), _line((20, 10), (0, 10)), _line((0, 10), (0, 0))],
+            construction=[0],
         )
         try:
             res, problems = _checked(self.doc, sk)
@@ -411,9 +411,50 @@ class TestSketchAutoDefine(unittest.TestCase):
             self.assertTrue(res["candidates"])
             for cand in res["candidates"]:
                 for c in cand["constraints"]:
-                    self.assertFalse(c["role"] == "dimension" and c["args"][0] == 4, c["text"])
+                    self.assertFalse(c["role"] == "dimension" and c["args"][0] == 0, c["text"])
         finally:
             self.doc.removeObject(sk.Name)
+
+    def testCandidatesThatFailVerificationAreNeverOffered(self):
+        stripped, _ = Corpus.strip(self.doc, self.generated[0].sketch, "all")
+        real = AD._build_scheme
+
+        def make(tamper):
+            def fake(*args):
+                b, why = real(*args)
+                tamper(b)
+                return b, why
+
+            return fake
+
+        def under_defined(b):  # one dimension short: DOF 1 on the fresh copy, claimed 0
+            k = max(i for i, sp in enumerate(b.specs) if sp[0] in ("DistanceX", "DistanceY", "Distance", "Diameter", "Radius"))
+            b.specs = b.specs[:k] + b.specs[k + 1 :]
+            b.batches, b.dof = [len(b.specs)], 0
+
+        def displaced(b):
+            k = next(i for i, sp in enumerate(b.specs) if sp[0] in ("DistanceX", "DistanceY", "Distance") and len(sp) > 3 or sp[0] == "Distance")
+            sp = list(b.specs[k])
+            sp[-1] = sp[-1] + 1.0
+            b.specs[k] = tuple(sp)
+
+        def doubled(b):
+            k = next(i for i, sp in enumerate(b.specs) if sp[0] == "Diameter")
+            sp = list(b.specs[k])
+            sp[-1] = sp[-1] * 1.5
+            b.specs.append(tuple(sp))
+            b.batches.append(1)
+
+        try:
+            for tamper in (under_defined, displaced, doubled):
+                AD._build_scheme = make(tamper)
+                res = AD.propose(stripped, prefer="baseline", max_candidates=1)
+                self.assertEqual(res["candidates"], [], tamper.__name__)
+                self.assertEqual(res["status"], "cannot_close")
+                self.assertTrue(any("verification" in u["reason"] for u in res["unclosed"]), tamper.__name__)
+        finally:
+            AD._build_scheme = real
+            self.doc.removeObject(stripped.Name)
 
     # -- check 7: schemes -----------------------------------------------------------------------
     def testSchemesGiveDistinctVerifiedCandidates(self):
@@ -533,6 +574,29 @@ class TestSketchAutoDefine(unittest.TestCase):
                         self.assertNotEqual((c["args"][0], c["args"][2]), (6, 5))
                     if c["type"] == "Equal":
                         self.assertNotEqual(sorted(c["args"]), [0, 2])
+        finally:
+            self.doc.removeObject(sk.Name)
+
+    def testNoRelationIsClaimedThatWouldDisplacePoints(self):
+        gap = 5e-5
+        sk = _bare(
+            self.doc,
+            "Displacing",
+            [
+                _line((0, 0), (10, 0)),
+                _line((10 + gap, 0), (10, 10)),
+                _circle((30, 10), 3.0),
+                _circle((50, 10), 3.0 + gap),
+                _line((60, 0), (70, 0)),
+                _line((60, gap), (70, 10)),
+            ],
+        )
+        try:
+            res, problems = _checked(self.doc, sk)
+            self.assertEqual(problems, [])
+            self.assertTrue(res["candidates"])
+            self.assertNotIn((0, 1), _pairs(res, "Coincident"))
+            self.assertNotIn((2, 3), _pairs(res, "Equal"))
         finally:
             self.doc.removeObject(sk.Name)
 
