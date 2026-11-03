@@ -185,6 +185,11 @@ def selected_part():
     return None
 
 
+def any_published_item():
+    """True as soon as one open document holds a published item (cheap enough for a command's IsActive)."""
+    return any(AS.is_item(o) and o.Published for doc in App.listDocuments().values() for o in doc.Objects)
+
+
 def published_items():
     """Every published item (not withdrawn) of every open document."""
     out = []

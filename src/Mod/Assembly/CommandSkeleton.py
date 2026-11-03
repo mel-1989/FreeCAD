@@ -94,9 +94,9 @@ class CommandSubscribeSkeleton:
     def IsActive(self):
         if App.ActiveDocument is None or Gui.Control.activeDialog():
             return False
-        from SkeletonPanel import published_items, selected_part
+        from SkeletonPanel import any_published_item, selected_part
 
-        return selected_part() is not None and bool(published_items())
+        return selected_part() is not None and any_published_item()
 
     def Activated(self):
         from SkeletonPanel import selected_items, selected_part

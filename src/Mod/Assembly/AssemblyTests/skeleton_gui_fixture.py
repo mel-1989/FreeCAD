@@ -69,12 +69,13 @@ def scene_doc(name, case=None):
 
 
 def scene_panel(rig):
-    """The panel a harness scene shows: opened on the skeleton, with one rename staged so the Change column shows. Nothing is shown yet."""
+    """The panel a harness scene shows: opened on ``PartB`` (a part with a following, a frozen-to-be and a broken subscription), with one
+    freeze staged so the Change column shows and the broken subscription selected so its reason shows. Nothing is shown yet."""
     from SkeletonPanel import TaskSkeleton
 
-    panel = TaskSkeleton(rig.skel)
-    panel.rename("Top_Plate_Face", "Top_Face")
-    panel.select_item("Edge_Y")
+    panel = TaskSkeleton(rig.parts["PartB"])
+    panel.freeze(rig.binder("PartB", "Profile").Name)
+    panel.select_subscription(rig.binder("PartB", "Spare").Name)
     return panel
 
 
