@@ -1018,14 +1018,10 @@ class TestMotionRepairs(unittest.TestCase):
             blk.Placement = App.Placement(blk.Placement.Base + V(30, 0, 0), blk.Placement.Rotation)
             with self.assertRaises(MO.MotionError):
                 MO.derived_series(e.study, MO.result(e.study))
-            p = e.panel()
-            self.assertTrue(p.series_error, "no error although the block was moved")
-            qs = p.quantities()
-            self.assertTrue(qs and all(q.startswith("position:") for q in qs), qs)
-            for q in qs:
-                p.choose(q)
-                t, y, _info = MO.series_of(e.study, p.result, q)
-                self.assertEqual(list(p.plot.y), y)
+            p = e.panel()                       # the move makes the stored result stale, so it is not shown at all
+            self.assertIsNone(p.result)
+            self.assertIn("edited", p.stale)
+            self.assertEqual(p.quantities(), [])
             e.finish(False)
 
     def test_ok_after_a_part_was_deleted_does_not_store_a_result_naming_it(self):
@@ -1071,6 +1067,180 @@ class TestMotionRepairs(unittest.TestCase):
             with self.assertRaises(MO.MotionRefused) as cm:
                 MO.compute(e.study)
             self.assertNotIn("motion", str(cm.exception).lower())
+
+
+    # ---- run 049 repair 2
+
+    def test_recovery_writes_never_carry_display_placements(self):
+        d = tempfile.mkdtemp()
+        try:
+            with env("damped", "single", None, d) as e:
+                p0 = F.placements(e.asm)
+                p = e.panel()
+                p.run()
+                self.assertTrue(e.doc.canWriteRecoverySnapshot())
+                p.show_frame(60)
+                shown = F.placements(e.asm)
+                self.assertNotEqual(shown, p0)
+                self.assertFalse(e.doc.canWriteRecoverySnapshot(), "a recovery write is possible while a frame is shown")
+                with self.assertRaises(Exception):
+                    App.writeRecoverySnapshotToTransientDir(e.doc)
+                self.assertEqual(F.placements(e.asm), shown)         # the refusal left the display alone
+                # a save while the hold is on: the save guard stops the display, writes, shows the frame again
+                e.doc.saveAs(os.path.join(d, "s.FCStd"))
+                for _ in range(20):
+                    pump()
+                self.assertFalse(e.doc.canWriteRecoverySnapshot(), "the hold was lost after a save")
+                # after the display ends the snapshot is written and holds the pre-run placements
+                p.stop()
+                self.assertTrue(e.doc.canWriteRecoverySnapshot())
+                self.assertTrue(App.writeRecoverySnapshotToTransientDir(e.doc))
+                files = [os.path.join(r, x) for r, _ds, fs in os.walk(e.doc.TransientDir) for x in fs if x.endswith(".fcstd")]
+                self.assertEqual(len(files), 1, files)
+                g = os.path.join(d, "rec.FCStd")
+                shutil.copy(files[0], g)
+                d2 = App.openDocument(g)
+                try:
+                    asm = [o for o in d2.Objects if o.isDerivedFrom("Assembly::AssemblyObject")][0]
+                    self.assertEqual(F.placements(asm), p0)
+                finally:
+                    App.closeDocument(d2.Name)
+                    activate(e.doc)
+                # every way the display ends releases the hold
+                e.finish()
+                for how in ("reject", "accept", "close"):
+                    p = e.panel()
+                    p.run()
+                    p.show_frame(30)
+                    self.assertFalse(e.doc.canWriteRecoverySnapshot(), how)
+                    if how == "close":
+                        Gui.Control.closeDialog()
+                    else:
+                        getattr(p, how)()
+                    e.finish()
+                    self.assertTrue(e.doc.canWriteRecoverySnapshot(), how)
+                    self.assertEqual(F.placements(e.asm), p0, how)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_recovery_hold_adds_no_undo_step_and_leaves_modified_alone(self):
+        with env("damped") as e:
+            u, r, m = e.doc.UndoCount, e.doc.RedoCount, e.gdoc.Modified
+            p = e.panel()
+            p.run()
+            p.show_frame(40)
+            p.play()
+            pump()
+            e.finish()
+            self.assertEqual((e.doc.UndoCount, e.doc.RedoCount, e.gdoc.Modified), (u, r, m))
+            self.assertTrue(e.doc.canWriteRecoverySnapshot())
+
+    def stored_run(self, e):
+        p = e.panel()
+        p.run()
+        e.finish(True)
+        self.assertTrue(e.study.Result)
+        self.assertEqual(MO.stale_reason(e.study, MO.result(e.study)), "")
+
+    def reopen(self, e, d, name="ro.FCStd"):
+        sname, f = e.study.Name, os.path.join(d, name)
+        e.doc.saveAs(f)
+        for n in list(App.listDocuments()):
+            App.closeDocument(n)
+        d2 = App.openDocument(f)
+        activate(d2)
+        asm = [o for o in d2.Objects if o.isDerivedFrom("Assembly::AssemblyObject")][0]
+        return d2, [o for o in asm.Group if o.Name == sname][0]
+
+    def test_a_joint_shape_or_initial_placement_edit_makes_the_result_stale(self):
+        def edit_joint(e):
+            j = e.doc.getObject("Rail")
+            j.Distance = float(j.Distance.Value) + 7.0
+
+        def edit_shape(e):
+            b = e.rig.parts["Block"]
+            b.Length = b.Length * 1.5
+
+        def move_part(e):
+            b = e.rig.parts["Block"]
+            b.Placement = App.Placement(b.Placement.Base + V(0, 0, 3.0), b.Placement.Rotation)
+
+        # a moved part is not recomputed: the solver would put it back where its joints hold it, and a run reads the placement
+        for label, edit, recompute in (("joint distance", edit_joint, True), ("block size", edit_shape, True),
+                                       ("initial placement", move_part, False)):
+            with env("damped") as e:
+                self.stored_run(e)
+                e.doc.openTransaction("edit")
+                edit(e)
+                e.doc.commitTransaction()
+                if recompute:
+                    e.doc.recompute()
+                why = MO.stale_reason(e.study, MO.result(e.study))
+                self.assertNotEqual(why, "", label + " left the old result current")
+                p = e.panel()
+                self.assertIsNone(p.result, label)
+                self.assertTrue(p.stale, label)
+                e.finish()
+                # undo brings the old result back as current
+                e.doc.undo()
+                if recompute:
+                    e.doc.recompute()
+                self.assertEqual(MO.stale_reason(e.study, MO.result(e.study)), "", label + " after undo")
+                e.doc.redo()
+                if recompute:
+                    e.doc.recompute()
+                self.assertNotEqual(MO.stale_reason(e.study, MO.result(e.study)), "", label + " after redo")
+
+    def test_the_result_stays_current_through_save_reopen_recompute_and_unrelated_edits(self):
+        for kind in ("damped", "pendulum", "spring", "force"):
+            d = tempfile.mkdtemp()
+            try:
+                with env(kind, "single", None, d) as e:
+                    self.stored_run(e)
+                    cur = lambda st: MO.stale_reason(st, MO.result(st))      # noqa: E731
+                    e.doc.recompute()
+                    self.assertEqual(cur(e.study), "", kind + " recompute")
+                    e.doc.openTransaction("u")
+                    list(e.rig.parts.values())[1].Label = "Renamed"
+                    e.doc.commitTransaction()
+                    self.assertEqual(cur(e.study), "", kind + " unrelated edit")
+                    e.doc.undo()
+                    e.doc.redo()
+                    self.assertEqual(cur(e.study), "", kind + " undo redo")
+                    d2, st = self.reopen(e, d)
+                    self.assertEqual(cur(st), "", kind + " reopen")
+                    d2.recompute()
+                    self.assertEqual(cur(st), "", kind + " reopen recompute")
+                    sname = st.Name
+                    d2.saveAs(os.path.join(d, "ro2.FCStd"))
+                    for n in list(App.listDocuments()):
+                        App.closeDocument(n)
+                    d3 = App.openDocument(os.path.join(d, "ro2.FCStd"))
+                    asm = [o for o in d3.Objects if o.isDerivedFrom("Assembly::AssemblyObject")][0]
+                    st3 = [o for o in asm.Group if o.Name == sname][0]
+                    self.assertEqual(cur(st3), "", kind + " second reopen")
+                    for n in list(App.listDocuments()):
+                        App.closeDocument(n)
+            finally:
+                shutil.rmtree(d, ignore_errors=True)
+
+    def test_unquantised_settings_do_not_flip_stale_after_a_reopen(self):
+        d = tempfile.mkdtemp()
+        try:
+            with env("damped", "single", None, d) as e:
+                e.doc.openTransaction("raw")
+                e.study.Rtol = 1e-8 / 3                 # as the property editor assigns it: 17 digits
+                e.study.Atol = 1e-10 / 7
+                MO.masses(e.study)[0].Density = 7850.0 / 7
+                sp = [x for x in MO.loads(e.study) if x.Kind == "Spring"][0]
+                sp.Stiffness = 400.0 / 3
+                sp.Point1 = V(0, 25 / 3, 25)
+                e.doc.commitTransaction()
+                self.stored_run(e)
+                d2, st = self.reopen(e, d)
+                self.assertEqual(MO.stale_reason(st, MO.result(st)), "")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

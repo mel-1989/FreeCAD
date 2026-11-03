@@ -115,7 +115,7 @@ def _q(x):
     """A number as the file keeps it. FreeCAD writes properties with 14 significant digits, so a value read back
     after a save differs from the one that was in memory in its last bits; everything the model reads goes through
     here so that a run before the save and a run after the reopen see the same inputs."""
-    return float("%.14g" % float(x))
+    return float("%.14g" % float("%.16f" % float(x)))   # floats are written with 16 decimals: a small value (1e-8/3) loses digits
 
 
 def _vec(v):
@@ -1235,13 +1235,72 @@ _FP_LOAD = ("Kind", "Part1", "Part2", "Point1", "Point2", "Value", "Frame", "Sti
 _FP_MASS = ("Component", "Mode", "Density", "Mass", "Com", "Inertia")
 
 
+_FP_JOINT_SKIP = ("Label", "Label2", "Visibility", "Proxy", "ExpressionEngine", "Shape", "Placement")
+
+
+def _fp_value(v):
+    """A property value as the fingerprint keeps it: floats at the 14 digits a file keeps (as every input of a run is
+    read), vectors, placements and lists of them likewise, links by object name and sub-element names."""
+    if isinstance(v, float):
+        return _q(v)
+    if isinstance(v, App.Vector):
+        return _qvec(v)
+    if isinstance(v, App.Units.Quantity):
+        return [_q(v.Value), str(v.Unit)]
+    if isinstance(v, App.Placement):
+        return [_qvec(v.Base)] + [_q(x) for x in v.Rotation.Q]
+    if hasattr(v, "Name") and hasattr(v, "TypeId"):
+        return v.Name
+    if isinstance(v, (list, tuple)):
+        return [_fp_value(x) for x in v]
+    if v is None or isinstance(v, (bool, int, str)):
+        return v
+    return repr(v)
+
+
+def _digits(x, n=9):
+    """``x`` to ``n`` significant digits: values derived from a shape are recomputed from the stored BREP after a reopen
+    and differ from the in-memory ones in their last bits, which 14 digits would not absorb."""
+    return float("%.*g" % (n, float(x)))
+
+
+def _shape_digest(obj):
+    """Volume, centre of mass and inertia of a part's shape, the last two scaled by the part's own size and rounded to 8
+    digits: a product of inertia that is mathematically zero comes out of OCCT as noise that a reopened file moves."""
+    try:
+        shp = _local_shape(obj)
+        m, com, vol = shp.MatrixOfInertia, shp.CenterOfMass, float(shp.Volume)
+        size = abs(vol) ** (1.0 / 3.0) or 1.0
+        norm = lambda x, k: round(float(x) / k, 8) + 0.0                      # noqa: E731
+        return [_digits(vol)] + [norm(c, size) for c in (com.x, com.y, com.z)] + [
+            norm(x, max(abs(vol), 1e-300) * size * size) for x in (m.A11, m.A22, m.A33, m.A12, m.A13, m.A23)]
+    except Exception:                           # noqa: BLE001 - a part with no usable shape is the same each time
+        return None
+
+
+def _placement_digest(pl):
+    """A placement at a nanometre and a nano-radian: the solver moves a part by noise far below that on each recompute."""
+    return [round(float(x), 6) + 0.0 for x in pl.Base] + [round(float(x), 9) + 0.0 for x in pl.Rotation.Q]
+
+
 def inputs_fingerprint(study):
-    """A hash of everything a run reads from the study except the span and the step: its settings, loads and masses.
-    A result carries the value it was computed with, so a later edit shows up as a difference."""
+    """A hash of everything a run reads except the span and the step: the study's settings, its loads and masses, the
+    assembly's joints, and each part's shape digest and initial placement. A result carries the value it was computed
+    with, so a later edit shows up as a difference."""
     def rec(o, names):
-        return [o.Name] + [repr(tuple(v) if hasattr(v, "__iter__") and not isinstance(v, str) else v)
-                           for v in (getattr(o, n, None) for n in names)]
-    data = [rec(study, _FP_STUDY)] + [rec(o, _FP_LOAD) for o in loads(study)] + [rec(o, _FP_MASS) for o in masses(study)]
+        return [o.Name] + [repr(_fp_value(getattr(o, n, None))) for n in names]
+
+    asm = assembly_of(study)
+    joints = []
+    parts = []
+    if asm is not None:
+        for j in _joints_of(asm):
+            joints.append([j.Name] + [repr(_fp_value(getattr(j, n, None)))
+                                      for n in sorted(j.PropertiesList) if n not in _FP_JOINT_SKIP])
+        for o in live_components(asm):
+            parts.append([o.Name, _placement_digest(o.Placement), _shape_digest(o)])
+    data = [rec(study, _FP_STUDY)] + [rec(o, _FP_LOAD) for o in loads(study)] + [rec(o, _FP_MASS) for o in masses(study)] \
+        + [joints, parts]
     return hashlib.sha256(json.dumps(data).encode()).hexdigest()[:16]
 
 

@@ -113,6 +113,14 @@ class Document(PropertyContainer):
         """
         ...
 
+    def holdRecoverySnapshots(self, hold: bool, /) -> None:
+        """
+        While held, canWriteRecoverySnapshot() is False and recovery writes are refused, so
+        display-only values put into the document are never written to a recovery snapshot.
+        Releasing the hold lets a deferred autosave run.
+        """
+        ...
+
     def canWriteRecoverySnapshot(self) -> bool:
         """
         Return whether the document is in an App-side state that allows writing

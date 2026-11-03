@@ -508,6 +508,7 @@ class TaskMotionStudy:
             g = self._gdoc()
             self._was_modified = None if g is None else bool(g.Modified)
             self._saved = MO._save_placements(self.asm)
+            self.doc.holdRecoverySnapshots(True)     # a recovery write cannot swap the display placements out (no save signals)
 
     def show_frame(self, k):
         """Show frame ``k`` of the result in the 3D view: placements are set for display only (no undo step, the
@@ -606,6 +607,8 @@ class TaskMotionStudy:
                 self._restore_modified_flag()
             self._saved = None
             self._was_modified = None
+            if App.listDocuments().get(self.document_name) is not None:
+                self.doc.holdRecoverySnapshots(False)
 
     # ---- task dialog protocol
 
