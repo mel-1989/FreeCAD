@@ -33,6 +33,7 @@ set(Sketcher_TestScripts
     SketcherTests/SketchAutoDefineCorpus.py
     SketcherTests/SketchAutoDefineOracle.py
     SketcherTests/SketchAutoDefineRun.py
+    SketcherTests/SketchAutoDefineMutants.py
 )
 
 if(BUILD_GUI)

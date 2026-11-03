@@ -647,6 +647,342 @@ class TestSketchAutoDefine(unittest.TestCase):
         finally:
             self.doc.removeObject(stripped.Name)
 
+    # -- negative path -------------------------------------------------------------------------------
+    def testNegativePathReportsHonestly(self):
+        cases = Corpus.negative_cases(self.doc)
+        self.assertEqual({c.status for c in cases}, {"cannot_close", "input_inconsistent", "already_defined"})
+        for case in cases:
+            try:
+                before = _signature(case.sketch)
+                res = AD.propose(case.sketch)
+                self.assertEqual(res["status"], case.status, case.name)
+                self.assertEqual(res["candidates"], [], case.name)
+                text = " | ".join(u["reason"] for u in res["unclosed"])
+                for word in case.words:
+                    self.assertIn(word, text, case.name)
+                if case.status == "cannot_close":
+                    self.assertTrue(res["unclosed"], case.name)
+                    self.assertTrue(all(u["remaining_dof"] > 0 and u["reason"] for u in res["unclosed"]), case.name)
+                json.dumps(res)
+                self.assertEqual(_signature(case.sketch), before, case.name)
+            finally:
+                self.doc.removeObject(case.sketch.Name)
+
+    def testStoredGeometryThatDisagreesNeedsSolvingFirst(self):
+        sk = next(c for c in Corpus.negative_cases(self.doc) if c.name == "neg_stale_geometry").sketch
+        try:
+            self.assertEqual(AD.propose(sk)["status"], "input_inconsistent")
+            sk.solve()
+            res, problems = _checked(self.doc, sk)
+            self.assertEqual(problems, [])
+            self.assertEqual(res["status"], "ok")
+            self.assertTrue(res["candidates"])
+        finally:
+            self.doc.removeObject(sk.Name)
+
+    def testBadArgumentsRaise(self):
+        sk = self.generated[0].sketch
+        for bad in (0, -1, True, 2.5, "3", None):
+            with self.assertRaises(AD.AutoDefineError, msg=repr(bad)):
+                AD.propose(sk, max_candidates=bad)
+        with self.assertRaises(AD.AutoDefineError):
+            AD.propose(self.doc)
+
+    # -- console ----------------------------------------------------------------------------------------
+    @staticmethod
+    def _console():
+        return {(o, k): FreeCAD.Console.GetStatus(o, k) for o in FreeCAD.Console.GetObservers() for k in ("Wrn", "Notification")}
+
+    def _console_on(self):
+        """Switch the warning and notification categories on for the test (an
+        earlier test, or a defect, may have left them off) and restore what
+        was there afterwards."""
+        saved = self._console()
+        if not saved:
+            self.skipTest("the console has no registered observer")
+        for (o, k) in saved:
+            FreeCAD.Console.SetStatus(o, k, True)
+
+        def restore():
+            for (o, k), v in saved.items():
+                FreeCAD.Console.SetStatus(o, k, bool(v))
+
+        self.addCleanup(restore)
+
+    @staticmethod
+    def _captured(fn):
+        """Everything fn writes to file descriptors 1 and 2."""
+        import tempfile
+
+        with tempfile.TemporaryFile() as f:
+            saved = os.dup(1), os.dup(2)
+            os.dup2(f.fileno(), 1)
+            os.dup2(f.fileno(), 2)
+            try:
+                fn()
+            finally:
+                os.dup2(saved[0], 1)
+                os.dup2(saved[1], 2)
+                os.close(saved[0])
+                os.close(saved[1])
+            f.seek(0)
+            return f.read().decode("utf-8", "replace")
+
+    def testSolverWarningsAboutTheScratchCopyAreSilenced(self):
+        import contextlib
+
+        stripped, _ = Corpus.strip(self.doc, self.generated[4].sketch, "all")  # a slot plate: the solver names the scratch copy
+        real = AD._quiet
+        try:
+            self._console_on()
+            before = self._console()
+
+            @contextlib.contextmanager
+            def loud():
+                yield
+
+            AD._quiet = loud
+            noisy = self._captured(lambda: AD.propose(stripped))
+            AD._quiet = real
+            if "partially redundant" not in noisy:
+                self.skipTest("this solver build prints no partial-redundancy warning for the fixture")
+            quiet = self._captured(lambda: AD.propose(stripped))
+            self.assertNotIn("partially redundant", quiet)
+            self.assertNotIn("Copy", quiet)
+            self.assertEqual(self._console(), before)
+        finally:
+            AD._quiet = real
+            self.doc.removeObject(stripped.Name)
+
+    def testConsoleCategoriesAreRestoredAfterReturnAndAfterRaise(self):
+        stripped, _ = Corpus.strip(self.doc, self.generated[4].sketch, "all")
+        real = AD._verify
+        try:
+            self._console_on()
+            before = self._console()
+            inside = []
+
+            def spy(*a, **k):
+                inside.append(self._console())
+                return real(*a, **k)
+
+            AD._verify = spy
+            AD.propose(stripped)
+            self.assertTrue(inside)
+            self.assertFalse(any(any(v for v in snap.values()) for snap in inside))
+            self.assertEqual(self._console(), before)
+
+            def boom(*a, **k):
+                raise RuntimeError("planted")
+
+            AD._verify = boom
+            with self.assertRaises(RuntimeError):
+                AD.propose(stripped)
+            self.assertEqual(self._console(), before)
+        finally:
+            AD._verify = real
+            self.doc.removeObject(stripped.Name)
+
+    # -- apply_candidate and the verification, one defect at a time -----------------------------------------
+    def _first_candidate(self):
+        stripped, _ = Corpus.strip(self.doc, self.generated[0].sketch, "all")
+        res = AD.propose(stripped, prefer="baseline", max_candidates=1)
+        return stripped, res["candidates"][0]
+
+    def _apply_rejected(self, stripped, cand):
+        target = Corpus.clone(self.doc, stripped, "Target")
+        try:
+            before = _signature(target)
+            with self.assertRaises(AD.AutoDefineError):
+                AD.apply_candidate(target, cand)
+            after = _signature(target)
+            self.assertEqual(after["constraints"], before["constraints"])
+            self.assertEqual(after["geometry"], before["geometry"])
+        finally:
+            self.doc.removeObject(target.Name)
+
+    def testApplyRefusesACandidateThatLeavesFreedom(self):
+        stripped, cand = self._first_candidate()
+        try:
+            short = dict(cand)
+            k = max(i for i, c in enumerate(cand["constraints"]) if c["role"] == "dimension")
+            short["constraints"] = cand["constraints"][:k] + cand["constraints"][k + 1 :]
+            short["batches"] = [len(short["constraints"])]
+            self._apply_rejected(stripped, short)  # clean, DOF 1: only the DOF test refuses it
+        finally:
+            self.doc.removeObject(stripped.Name)
+
+    def testApplyRefusesACandidateThatMovesTheGeometry(self):
+        stripped, cand = self._first_candidate()
+        try:
+            moved = json.loads(json.dumps(cand))
+            c = next(c for c in moved["constraints"] if c["type"] in ("Distance", "DistanceX", "DistanceY"))
+            c["args"][-1] += 1.0  # still DOF 0 and conflict free, but every point after it moves
+            self._apply_rejected(stripped, moved)
+        finally:
+            self.doc.removeObject(stripped.Name)
+
+    def testApplyTriesAgainWhenTheSolverDoesNotRepeat(self):
+        stripped, cand = self._first_candidate()
+        target = Corpus.clone(self.doc, stripped, "Target")
+        real = AD._apply_batches
+        calls = []
+
+        def flaky(sk, specs, batches, start):
+            calls.append(1)
+            st = real(sk, specs, batches, start)
+            if len(calls) == 1:
+                sk.addConstraint(Sketcher.Constraint("Distance", 0, 1.0))  # first attempt: a conflict
+                st = AD._Status(sk)
+            return st
+
+        try:
+            AD._apply_batches = flaky
+            AD.apply_candidate(target, cand)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(target.DoF, 0)
+            calls.clear()
+            target2 = Corpus.clone(self.doc, stripped, "Target2")
+            AD._apply_batches = lambda *a: (calls.append(1), AD._Status(a[0]))[1]  # never applies anything: DOF stays > 0
+            with self.assertRaises(AD.AutoDefineError):
+                AD.apply_candidate(target2, cand)
+            self.assertEqual(len(calls), AD.APPLY_ATTEMPTS)
+            self.doc.removeObject(target2.Name)
+        finally:
+            AD._apply_batches = real
+            self.doc.removeObject(target.Name)
+            self.doc.removeObject(stripped.Name)
+
+    def testVerificationRefusesACandidateThatChangesAnExistingConstraint(self):
+        stripped, _ = Corpus.strip(self.doc, self.generated[0].sketch, "partial", 0.5, 7)
+        real = AD._apply_batches
+
+        def renames(sk, specs, batches, start):
+            st = real(sk, specs, batches, start)
+            sk.renameConstraint(0, "Renamed")  # an existing constraint changed by the application
+            return st
+
+        try:
+            self.assertTrue(AD.propose(stripped, prefer="baseline", max_candidates=1)["candidates"])
+            AD._apply_batches = renames
+            res = AD.propose(stripped, prefer="baseline", max_candidates=1)
+            self.assertEqual(res["candidates"], [])
+            self.assertTrue(any("verification" in u["reason"] for u in res["unclosed"]))
+        finally:
+            AD._apply_batches = real
+            self.doc.removeObject(stripped.Name)
+
+    def testVerificationChecksKeepAgainstTheExistingRows(self):
+        from SketcherDiagnosis import _Scratch
+
+        stripped, _ = Corpus.strip(self.doc, self.generated[0].sketch, "partial", 0.5, 7)
+        n = len(stripped.Constraints)
+        res = AD.propose(stripped, prefer="baseline", max_candidates=1)
+        cand = res["candidates"][0]
+        specs = [tuple([c["type"]] + list(c["args"])) for c in cand["constraints"]]
+        scratch = _Scratch(stripped)
+        try:
+            self.assertIsNotNone(AD._verify_once(scratch, specs, cand["batches"], [0, n - 1]))
+            self.assertIsNone(AD._verify_once(scratch, specs, cand["batches"], [n + 3]))  # beyond the existing rows
+        finally:
+            scratch.close()
+            self.doc.removeObject(stripped.Name)
+
+    def testVerificationSolvesTheCopyAgainAndTheSecondSolveMustAgree(self):
+        from SketcherDiagnosis import _Scratch
+
+        stripped, cand = self._first_candidate()
+        specs = [tuple([c["type"]] + list(c["args"])) for c in cand["constraints"]]
+        scratch = _Scratch(stripped)
+        real = AD._Status
+        calls = []
+
+        def second_disagrees(sk):
+            st = real(sk)
+            calls.append(1)
+            if len(calls) == 2:  # the verification's own re-solve of the finished copy
+                st.dof = 1
+            return st
+
+        try:
+            self.assertIsNotNone(AD._verify_once(scratch, specs, [len(specs)], []))
+            AD._Status = second_disagrees
+            self.assertIsNone(AD._verify_once(scratch, specs, [len(specs)], []))
+        finally:
+            AD._Status = real
+            scratch.close()
+            self.doc.removeObject(stripped.Name)
+
+    def testUnstableCandidatesAreNotOffered(self):
+        stripped, _ = Corpus.strip(self.doc, self.generated[0].sketch, "all")
+        real = AD._verify_once
+        calls = []
+
+        def every_other(*a):
+            calls.append(1)
+            return None if len(calls) % 2 == 0 else real(*a)
+
+        try:
+            res = AD.propose(stripped, prefer="baseline", max_candidates=1)
+            self.assertEqual(res["candidates"][0]["verification_runs"], 1 + AD.STABILITY_RUNS)
+            AD._verify_once = every_other
+            res = AD.propose(stripped, prefer="baseline", max_candidates=1)
+            self.assertEqual(res["candidates"], [])
+            self.assertTrue(any("verification" in u["reason"] for u in res["unclosed"]))
+        finally:
+            AD._verify_once = real
+            self.doc.removeObject(stripped.Name)
+
+    # -- relations that only some sketches need ----------------------------------------------------------------
+    def _polygon(self, name, pts):
+        sk = self.doc.addObject("Sketcher::SketchObject", name)
+        n = len(pts)
+        sk.addGeometry([_line(pts[i], pts[(i + 1) % n]) for i in range(n)], False)
+        for i in range(n):
+            sk.addConstraint(Sketcher.Constraint("Coincident", i, 2, (i + 1) % n, 1))
+        sk.solve()
+        return sk
+
+    def testRotatedRectangleGetsPerpendicularAndParallelNotLocks(self):
+        a = math.radians(30)
+        rot = lambda x, y: (x * math.cos(a) - y * math.sin(a) + 3, x * math.sin(a) + y * math.cos(a) + 2)
+        sk = self._polygon("RotatedRect", [rot(0, 0), rot(20, 0), rot(20, 10), rot(0, 10)])
+        try:
+            res, problems = _checked(self.doc, sk)
+            self.assertEqual(problems, [])
+            self.assertTrue(res["candidates"])
+            first = {c["type"] for c in res["candidates"][0]["constraints"]}
+            self.assertIn("Perpendicular", first)
+            self.assertIn("Parallel", first)
+            self.assertEqual(res["candidates"][0]["dimensions"], 5)  # size 2, angle, position 2
+        finally:
+            self.doc.removeObject(sk.Name)
+
+    def testMirroredTrapezoidGetsSymmetry(self):
+        sk = self._polygon("Trapezoid", [(-10, 0), (10, 0), (6, 8), (-6, 8)])
+        try:
+            res, problems = _checked(self.doc, sk, prefer="symmetric")
+            self.assertEqual(problems, [])
+            sym = res["candidates"][0]
+            self.assertEqual(sym["scheme"], "symmetric")
+            self.assertIn("Symmetric", {c["type"] for c in sym["constraints"]})
+            others = [c for c in res["candidates"] if c["scheme"] != "symmetric"]
+            self.assertTrue(all(sym["dimensions"] <= o["dimensions"] for o in others))
+        finally:
+            self.doc.removeObject(sk.Name)
+
+    def testNearlyAxisParallelLineIsDimensionedByItsExtent(self):
+        # a line 0.16 degrees off horizontal whose length would have a mirror solution 0.02 mm away
+        sk = _bare(self.doc, "NearAxis", [_line((4, 14.01), (7.5, 14.0))])
+        try:
+            res, problems = _checked(self.doc, sk)
+            self.assertEqual(problems, [])
+            kinds = [c["type"] for c in res["candidates"][0]["constraints"]]
+            self.assertNotIn("Distance", kinds)
+            self.assertIn("DistanceX", kinds)
+        finally:
+            self.doc.removeObject(sk.Name)
+
     # -- check 10: licence and housekeeping ---------------------------------------------------------
     def testNewFilesCarrySPDXAndNoMachinePaths(self):
         here = os.path.dirname(os.path.abspath(__file__))

@@ -803,6 +803,72 @@ def slice1_cases(doc):
     return [Case("s1_" + c.name, "slice1", c.sketch, doc) for c in cases]
 
 
+class Negative:
+    """A sketch that `propose` must not produce a candidate for.  `status` is
+    the expected result status and `words` the words the reason must contain
+    (empty for statuses that carry none)."""
+
+    def __init__(self, name, sketch, status, words=()):
+        self.name = name
+        self.sketch = sketch
+        self.status = status
+        self.words = tuple(words)
+
+
+def negative_cases(doc):
+    """Sketches on the negative path: ``cannot_close`` (curves the generator
+    cannot dimension, each with the kind it must name), ``input_inconsistent``
+    (a conflict, a redundancy, stored geometry that disagrees with its
+    constraints) and ``already_defined``."""
+
+    def make(name, geometry, construction=()):
+        sk = doc.addObject("Sketcher::SketchObject", name)
+        sk.addGeometry(geometry, False)
+        sk.solve()
+        return sk
+
+    out = []
+    ell = Part.Ellipse(V(20, 0, 0), 6, 3)
+    out.append(Negative("neg_ellipse", make("NegEllipse", [ell]), "cannot_close", ("ellipse", "exposeInternalGeometry")))
+    arc = Part.ArcOfEllipse(Part.Ellipse(V(0, 0, 0), 6, 3), 0.2, 2.0)
+    out.append(Negative("neg_ellipse_arc", make("NegEllipseArc", [arc]), "cannot_close", ("ellipse arc", "exposeInternalGeometry")))
+    hyp = Part.ArcOfHyperbola(Part.Hyperbola(V(0, 0, 0), 3, 2), -1, 1)
+    out.append(Negative("neg_hyperbola", make("NegHyperbola", [hyp]), "cannot_close", ("hyperbola arc",)))
+    par = Part.ArcOfParabola(Part.Parabola(), -2, 2)
+    out.append(Negative("neg_parabola", make("NegParabola", [par]), "cannot_close", ("parabola arc",)))
+    cur = Part.BSplineCurve()
+    cur.buildFromPoles([V(0, 0, 0), V(5, 4, 0), V(11, -3, 0), V(17, 2, 0)], False, 3)
+    out.append(Negative("neg_bspline", make("NegSpline", [cur]), "cannot_close", ("B-spline", "poles")))
+
+    clash = make("NegConflict", [Part.LineSegment(V(0, 0, 0), V(10, 0, 0))])
+    clash.addConstraint(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 10.0))
+    clash.addConstraint(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 12.0))
+    out.append(Negative("neg_conflict", clash, "input_inconsistent", ("conflict",)))
+
+    twice = make("NegRedundant", [Part.LineSegment(V(0, 0, 0), V(10, 0, 0))])
+    twice.addConstraint(Sketcher.Constraint("Horizontal", 0))
+    twice.addConstraint(Sketcher.Constraint("DistanceY", 0, 1, 0, 2, 0.0))
+    twice.solve()
+    out.append(Negative("neg_redundant", twice, "input_inconsistent", ("redundan",)))
+
+    stale = make("NegStale", [Part.LineSegment(V(0, 0, 0), V(10, 0, 0))])
+    stale.addConstraint(Sketcher.Constraint("Horizontal", 0))
+    stale.addConstraint(Sketcher.Constraint("Coincident", 0, 1, -1, 1))
+    stale.Geometry = [Part.LineSegment(V(0, 0, 0), V(10, 1, 0))]  # stored geometry disagrees with Horizontal
+    out.append(Negative("neg_stale_geometry", stale, "input_inconsistent", ("solve the sketch first",)))
+
+    done = make("NegDone", [Part.LineSegment(V(0, 0, 0), V(10, 0, 0))])
+    for c in (
+        Sketcher.Constraint("Coincident", 0, 1, -1, 1),
+        Sketcher.Constraint("Horizontal", 0),
+        Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 10.0),
+    ):
+        done.addConstraint(c)
+    done.solve()
+    out.append(Negative("neg_already_defined", done, "already_defined"))
+    return out
+
+
 _REAL_TABLE = """
 examples/BIMExample.FCStd Sketch
 examples/BIMExample.FCStd Sketch001

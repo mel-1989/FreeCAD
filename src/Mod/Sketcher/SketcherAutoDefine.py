@@ -74,6 +74,27 @@ solves have moved.  A candidate that fails is dropped, never offered.  A
 scheme that cannot reach DOF 0 is reported in ``unclosed`` with the DOF that
 is left; no candidate is made up for it.
 
+Stability.  PlaneGCS is not repeatable on a few ill-conditioned systems (the
+same constraints on the same geometry solved in about half the tries in one
+process and every time in the next), so a candidate must pass the fresh-copy
+verification `STABILITY_RUNS` more times, and ``apply_candidate`` tries up to
+`APPLY_ATTEMPTS` times before giving up.  A line within about 1.7 degrees of an
+axis is dimensioned by its extent along that axis, not by its length: with the
+other end placed by other constraints a length has a mirror solution only
+twice the small extent away, and the solver can land on it after an edit and
+back.  While ``propose`` runs, the console's warning and notification
+categories are switched off (the solver would name the scratch sketch "Copy"
+for every partly redundant trial constraint) and put back in ``finally``.
+
+Sketches it will not close, and why: a plain ellipse or ellipse arc whose
+internal geometry is not exposed (its centre and axes have nothing to
+dimension; the reason says to expose it), hyperbola and parabola arcs, and
+B-splines without exposed poles; the reason names the geometry id and kind.
+Stored geometry that does not satisfy the sketch's own constraints is
+reported as ``input_inconsistent`` with the advice to solve the sketch first
+(it is not solved on the copy: ``apply_candidate`` holds the stored geometry
+fixed, so a candidate verified against moved geometry could not be applied).
+
 Existing constraints are never removed or changed (``keep`` lists indices
 whose presence and value are verified on top of that).  Reference constraints
 and construction geometry stay as they are; external geometry and expressions
@@ -89,9 +110,11 @@ behave differently from its serialised copy (slice 1's known LOW), so
 ``apply_candidate`` checks the result on the real sketch too and rolls back.
 """
 
+import contextlib
 import math
 import time
 
+import FreeCAD
 import Sketcher
 
 from SketcherDiagnosis import (
@@ -107,6 +130,10 @@ __all__ = ["propose", "apply_candidate", "AutoDefineError", "SCHEMES"]
 LENGTH_TOLERANCE = 1e-7
 ANGLE_TOLERANCE = 1e-8
 MOVE_TOLERANCE = 1e-6
+APPLY_ATTEMPTS = 3
+STABILITY_RUNS = 3  # extra fresh-copy passes a candidate must survive
+STABILITY_BUDGET = 0.3  # seconds; slower sketches are verified once
+NEAR_AXIS = 0.03  # a line within about 1.7 degrees of an axis is dimensioned by its extent
 SCHEMES = ("baseline", "chain", "symmetric")
 _MAX_BATCH = 400
 _DATUM_TYPES = {"Distance", "DistanceX", "DistanceY", "Radius", "Diameter", "Angle", "Weight"}
@@ -139,7 +166,7 @@ class _Timeout(Exception):
 class _Geo:
     """One geometry element reduced to what relation detection needs."""
 
-    __slots__ = ("i", "kind", "construction", "pts", "c", "r", "a", "d", "length", "internal")
+    __slots__ = ("i", "kind", "construction", "pts", "c", "r", "a", "d", "length", "internal", "tid")
 
     def __init__(self, i, kind, construction):
         self.i = i
@@ -200,6 +227,7 @@ def _model(sk):
         else:
             m = _Geo(i, "other", construction)
         m.internal = i in internal
+        m.tid = t
         out.append(m)
     return out
 
@@ -601,6 +629,15 @@ def _dimension_proposals(model, accepted, scheme):
                         out.append(_signed("DistanceX", m.i, 1, m.i, 2, x2 - x1))
                     elif abs(x2 - x1) <= LENGTH_TOLERANCE:
                         out.append(_signed("DistanceY", m.i, 1, m.i, 2, y2 - y1))
+                    elif min(abs(x2 - x1), abs(y2 - y1)) < NEAR_AXIS * m.length:
+                        # A length on a line this close to an axis has a mirror solution only
+                        # 2*|small extent| away, and the solver can land on it after an edit
+                        # and back.  The dominant extent is well conditioned; the angle
+                        # proposal fixes the direction.
+                        if abs(x2 - x1) >= abs(y2 - y1):
+                            out.append(_signed("DistanceX", m.i, 1, m.i, 2, x2 - x1))
+                        else:
+                            out.append(_signed("DistanceY", m.i, 1, m.i, 2, y2 - y1))
                     else:
                         out.append(("Distance", m.i, m.length))
         return out
@@ -795,6 +832,15 @@ def _spec_of(c):
             return (t, c.First, c.FirstPos, 0.0)
         return (t, c.First, c.FirstPos, c.Second, c.SecondPos, 0.0)
     return None
+
+
+def _equal_specs(existing):
+    """Existing Equal constraints in the form `_dimension_proposals` reads, so
+    that it does not propose a size for the second of two lines (or arcs) the
+    sketch already makes equal: next to a near-axis extent such a size is not
+    exactly redundant, the solver counts it as independent, and the pair is
+    ill conditioned."""
+    return [("Equal", c.First, c.Second) for c in existing if c.Type == "Equal" and c.Driving and c.IsActive]
 
 
 # ---------------------------------------------------------------------------
@@ -1046,7 +1092,7 @@ def _build_scheme(scratch, model, existing, scheme, deadline, cache=None):
         if cache is not None and key not in cache:
             cache[key] = [sp for sp in b.specs if not _is_datum(sp)]
         if b.dof > 0:
-            dims = _dimension_proposals(model, b.specs, scheme)
+            dims = _dimension_proposals(model, _equal_specs(existing) + b.specs, scheme)
             b.add_dimensions(dims)
     except _Timeout:
         return b, "time"
@@ -1059,14 +1105,26 @@ def _candidate_key(specs):
 
 def _verify(scratch, specs, batches, keep):
     """Apply to a brand-new copy and re-solve, first in one batch and, if that
-    does not pass, in the batches the builder used.  Returns the facts
-    measured, including the batches that passed, or None when the hard bar is
-    not met."""
+    does not pass, in the batches the builder used.  A plan that passes is
+    applied to `STABILITY_RUNS` further fresh copies: PlaneGCS gives different
+    answers from run to run on a few ill-conditioned systems (the same
+    constraints on the same geometry solved 15 times out of 30 in one process
+    and 30 out of 30 in the next), and a candidate that passes once but not
+    always must not be offered.  The repeats are skipped when one pass took
+    longer than `STABILITY_BUDGET` seconds (large sketches).  Returns the
+    facts measured, including the batches that passed, or None when the hard
+    bar is not met."""
     for trial in ([len(specs)], list(batches)) if len(batches) > 1 else (list(batches),):
+        t0 = time.time()
         facts = _verify_once(scratch, specs, trial, keep)
-        if facts is not None:
-            facts["batches"] = trial
-            return facts
+        if facts is None:
+            continue
+        repeats = STABILITY_RUNS if time.time() - t0 <= STABILITY_BUDGET else 0
+        if any(_verify_once(scratch, specs, trial, keep) is None for _ in range(repeats)):
+            continue
+        facts["batches"] = trial
+        facts["runs"] = 1 + repeats
+        return facts
     return None
 
 
@@ -1113,6 +1171,7 @@ def _describe(scheme, specs, batches, facts):
         "dimensions": sum(1 for s in specs if _is_datum(s)),
         "batches": list(facts["batches"]),
         "dof_after": facts["dof"],
+        "verification_runs": facts["runs"],
         "max_move": facts["max_move"],
         "verified": True,
     }
@@ -1131,6 +1190,56 @@ def _schemes(prefer, max_candidates):
     return names
 
 
+_UNSUPPORTED = {
+    "ellipse": "ellipse: its centre and axes can be dimensioned only through its internal geometry, which this sketch has not exposed (expose it with exposeInternalGeometry on the ellipse, then call propose again)",
+    "ellipse_arc": "ellipse arc: its centre and axes can be dimensioned only through its internal geometry, which this sketch has not exposed (expose it with exposeInternalGeometry on the arc, then call propose again)",
+    "bspline": "B-spline: its poles are not exposed as points, so nothing can dimension its shape (expose its control points or use another curve)",
+    "other": "hyperbola, parabola or other curve: no relation or dimension of the supported kinds fixes its shape",
+}
+_UNSUPPORTED_ID = {"Part::GeomArcOfHyperbola": "hyperbola arc", "Part::GeomArcOfParabola": "parabola arc"}
+
+
+def _unclosed_reason(b, model):
+    """Why the DOF the builder could not remove is left: the geometry kinds
+    that still have a free parameter and that the generator cannot dimension,
+    each with the geometry id, or the generic statement when it is something
+    else."""
+    free = b.free_geometry()
+    parts = []
+    if free:
+        for m in model:
+            if m.i in free and m.kind in _UNSUPPORTED:
+                what = _UNSUPPORTED_ID.get(m.tid)
+                text = _UNSUPPORTED[m.kind]
+                if what:
+                    text = "%s: no relation or dimension of the supported kinds fixes its shape" % what
+                parts.append("geometry %d is an %s" % (m.i, text) if text[0] in "aeiou" else "geometry %d is a %s" % (m.i, text))
+    if parts:
+        return "no relation or dimension of the supported kinds fixes the rest; " + "; ".join(parts)
+    return "no relation or dimension of the supported kinds fixes the rest"
+
+
+@contextlib.contextmanager
+def _quiet():
+    """Silence the console's warning and notification categories while the
+    scratch copies are solved: the solver reports every partly redundant
+    trial constraint by naming the scratch sketch ("Copy"), which the user
+    never made.  The categories of every registered observer are put back in
+    ``finally``, so nothing changes after ``propose`` returns or raises."""
+    saved = []
+    try:
+        for name in FreeCAD.Console.GetObservers():
+            for kind in ("Wrn", "Notification"):
+                was = FreeCAD.Console.GetStatus(name, kind)
+                if was:
+                    saved.append((name, kind))
+                    FreeCAD.Console.SetStatus(name, kind, False)
+        yield
+    finally:
+        for name, kind in saved:
+            FreeCAD.Console.SetStatus(name, kind, True)
+
+
 def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0):
     """Propose constraint sets that make `sketch` fully defined.
 
@@ -1144,16 +1253,25 @@ def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0)
     of names tried first (``baseline``, ``chain``, ``symmetric``)."""
     if getattr(sketch, "TypeId", None) != "Sketcher::SketchObject":
         raise AutoDefineError("propose() needs a Sketcher::SketchObject")
+    if isinstance(max_candidates, bool) or not isinstance(max_candidates, int) or max_candidates < 1:
+        raise AutoDefineError("max_candidates must be a whole number of at least 1")
     names = _schemes(prefer, max_candidates)
     keep = sorted(set(keep or ()))
     ncons = len(sketch.Constraints)
     if any((not isinstance(k, int)) or k < 0 or k >= ncons for k in keep):
         raise AutoDefineError("keep refers to a constraint that does not exist")
+    with _quiet():
+        return _propose(sketch, names, keep, max_candidates, time_budget)
+
+
+def _propose(sketch, names, keep, max_candidates, time_budget):
     deadline = time.time() + time_budget
     scratch = _Scratch(sketch)
     try:
         probe = scratch.copy()
+        stored = _geometry_signature(probe)
         st = _Status(probe)
+        drift = _max_move(stored, _geometry_signature(probe))
         _discard(probe)
         result = {"dof": st.dof, "status": "ok", "candidates": [], "unclosed": []}
         if not _clean(st):
@@ -1162,6 +1280,19 @@ def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0)
             return result
         if st.dof == 0:
             result["status"] = "already_defined"
+            return result
+        if drift > MOVE_TOLERANCE:
+            # Not solved on the copy first: a candidate would be verified against
+            # geometry the user's sketch does not hold, and ``apply_candidate``
+            # holds the stored geometry fixed.
+            result["status"] = "input_inconsistent"
+            result["unclosed"].append(
+                {
+                    "scheme": None,
+                    "remaining_dof": st.dof,
+                    "reason": "the stored geometry does not satisfy the sketch's own constraints (solving moves it by %.3g mm): solve the sketch first, then call propose again" % drift,
+                }
+            )
             return result
         base = scratch.copy()
         try:
@@ -1183,7 +1314,7 @@ def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0)
                         {
                             "scheme": scheme,
                             "remaining_dof": b.dof,
-                            "reason": "time budget exhausted" if why == "time" else "no relation or dimension of the supported kinds fixes the rest",
+                            "reason": "time budget exhausted" if why == "time" else _unclosed_reason(b, model),
                         }
                     )
                     continue
@@ -1208,23 +1339,30 @@ def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0)
 def apply_candidate(sketch, candidate):
     """Apply a candidate returned by ``propose`` to the real sketch.  The
     result is checked on the real sketch; if it is not clean with DOF 0 the
-    constraints are removed again, the drawn geometry is put back and
-    ``AutoDefineError`` is raised.  Returns the solver status as a dict."""
+    constraints are removed again and the drawn geometry is put back.  The
+    solver is not repeatable on a few ill-conditioned systems, so a result
+    that is not clean is tried up to `APPLY_ATTEMPTS` times before
+    ``AutoDefineError`` is raised (and the sketch is left as it was).
+    Returns the solver status as a dict."""
     specs = [tuple([c["type"]] + list(c["args"])) for c in candidate["constraints"]]
     batches = candidate.get("batches") or [len(specs)]
     n0 = len(sketch.Constraints)
     start = list(sketch.Geometry)
     sig0 = _geometry_signature(sketch)
-    try:
-        st = _apply_batches(sketch, specs, batches, start)
-        ok = _clean(st) and st.dof == 0 and _max_move(sig0, _geometry_signature(sketch)) <= MOVE_TOLERANCE
-    except Exception as exc:
+
+    def roll_back():
         if len(sketch.Constraints) > n0:
             sketch.delConstraints(list(range(n0, len(sketch.Constraints))), False, True)
         sketch.Geometry = start
-        raise AutoDefineError("the candidate could not be applied: %s" % exc)
-    if not ok:
-        sketch.delConstraints(list(range(n0, len(sketch.Constraints))), False, True)
-        sketch.Geometry = start
-        raise AutoDefineError("the candidate did not solve cleanly on this sketch; it was rolled back")
-    return {"dof": st.dof, "added": len(specs)}
+
+    for _ in range(APPLY_ATTEMPTS):
+        try:
+            st = _apply_batches(sketch, specs, batches, start)
+            ok = _clean(st) and st.dof == 0 and _max_move(sig0, _geometry_signature(sketch)) <= MOVE_TOLERANCE
+        except Exception as exc:
+            roll_back()
+            raise AutoDefineError("the candidate could not be applied: %s" % exc)
+        if ok:
+            return {"dof": st.dof, "added": len(specs)}
+        roll_back()
+    raise AutoDefineError("the candidate did not solve cleanly on this sketch; it was rolled back")

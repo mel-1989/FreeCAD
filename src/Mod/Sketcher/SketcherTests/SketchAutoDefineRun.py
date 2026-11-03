@@ -135,6 +135,20 @@ def evaluate(doc, case, level, fraction=0.5, seed=0, edit=True, max_candidates=3
     return rec
 
 
+def evaluate_negative(doc, neg):
+    """Run `propose` on a sketch that must not get a candidate and compare the
+    result with the status and the reason words the corpus expects."""
+    res = AD.propose(neg.sketch)
+    text = " | ".join(u["reason"] for u in res["unclosed"])
+    problems = []
+    if res["status"] != neg.status:
+        problems.append("status %s, expected %s" % (res["status"], neg.status))
+    if res["candidates"]:
+        problems.append("%d candidates offered" % len(res["candidates"]))
+    problems += ["reason lacks %r" % w for w in neg.words if w not in text]
+    return {"case": neg.name, "expected": neg.status, "status": res["status"], "candidates": len(res["candidates"]), "reason": text, "problems": problems}
+
+
 def _datums_of(sk):
     return O._driving_datums(sk)
 
@@ -167,10 +181,12 @@ def main():
     t0 = time.time()
     cases = Corpus.generated(doc, variants=variants) + Corpus.slice1_cases(doc)
     cache = {}
+    real_run, real_missing = 0, []
     if real:
-        rc, missing = Corpus.real_cases(cache)
+        rc, real_missing = Corpus.real_cases(cache)
         cases += rc
-        print("real sketches: %d opened, %d missing %s" % (len(rc), len(missing), missing))
+        real_run = len(rc)
+        print("real sketches: %d opened, %d missing %s" % (real_run, len(real_missing), real_missing))
     print("cases: %d (built in %.1f s)" % (len(cases), time.time() - t0), flush=True)
     for n, case in enumerate(cases):
         levels = [("dims", 0.0, 0), ("all", 0.0, 0)]
@@ -184,10 +200,23 @@ def main():
         if n % 25 == 0:
             print("  %d/%d  %.0f s" % (n, len(cases), time.time() - t0), flush=True)
         json.dump(recs, open(out_path, "w"))
-    json.dump({"records": recs, "summary": summarize(recs), "seconds": time.time() - t0}, open(out_path, "w"))
+    negative = [evaluate_negative(doc, n) for n in Corpus.negative_cases(doc)]
+    print("negative cases: %d, %d with problems" % (len(negative), sum(1 for n in negative if n["problems"])))
+    json.dump(
+        {
+            "records": recs,
+            "summary": summarize(recs),
+            "seconds": time.time() - t0,
+            "real_sketches": real_run,
+            "real_frozen": len(Corpus.REAL_SKETCHES),
+            "real_missing": real_missing,
+            "negative": negative,
+        },
+        open(out_path, "w"),
+    )
     for k, v in summarize(recs).items():
         print(k, v)
 
 
-if os.environ.get("AUTODEFINE_OUT") and os.path.basename(sys.argv[0] if sys.argv else "").startswith("SketchAutoDefineRun"):
+if os.environ.get("AUTODEFINE_OUT") and __name__ in ("__main__", "SketchAutoDefineRun"):  # FreeCADCmd names a script run from the command line after its file
     main()
