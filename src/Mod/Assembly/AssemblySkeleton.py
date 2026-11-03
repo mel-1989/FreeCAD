@@ -599,14 +599,57 @@ def _kind_of(target, sub):
     raise SkeletonError("%r is not a face, edge or vertex name" % sub)
 
 
+def item_label(skeleton, name):
+    """The label an item of ``skeleton`` called ``name`` gets (the object's label, which FreeCAD makes unique in a document)."""
+    return "%s.%s" % (skeleton.Label, name)
+
+
 def _check_name(skeleton, name, own=None):
+    """The stripped name, or SkeletonError: refuses an empty or whitespace-only name, control characters, a name the
+    publication already has, and a name whose label (``Skeleton.name``) another object of the document already carries,
+    which FreeCAD would answer by silently renaming the new label. A withdrawn item of the same skeleton does not count: it
+    is relabelled (``_free_label``) when the name is used again."""
     name = str(name).strip()
     if not name:
         raise SkeletonError("an item needs a name")
+    if any(ord(c) < 32 or ord(c) == 127 for c in name):
+        raise SkeletonError("an item name cannot contain control characters")
     for o in items(skeleton):
         if o is not own and o.ItemName == name:
             raise SkeletonError("%s already publishes an item named %r" % (skeleton.Label, name))
+    label = item_label(skeleton, name)
+    for o in skeleton.Document.Objects:
+        if o is not own and o.Label == label and not _is_withdrawn_of(o, skeleton):
+            raise SkeletonError("the name %r is taken: %s already has the label %r, which FreeCAD would change"
+                                % (name, o.Name, label))
     return name
+
+
+def _is_withdrawn_of(o, skeleton):
+    return is_item(o) and not o.Published and o.SkeletonName == skeleton.Name and o.SkeletonId == skeleton.ID
+
+
+def _free_label(skeleton, name):
+    """Give the label ``Skeleton.name`` to the item about to be made: a withdrawn item of that name is relabelled (inside the
+    caller's transaction), so the new label is exactly the one asked for and never a FreeCAD-suffixed one."""
+    label = item_label(skeleton, name)
+    for o in skeleton.Document.Objects:
+        if o.Label == label and _is_withdrawn_of(o, skeleton):
+            o.Label = "%s (withdrawn)" % label
+
+
+def default_name(skeleton, target, sub=""):
+    """A name proposed for publishing ``sub`` of ``target`` (``Pad_Face3``, or ``Sketch`` for a whole sketch or datum), made
+    unique in the publication by a numeric suffix when needed; always accepted by ``_check_name``."""
+    base = "%s_%s" % (target.Name, sub.split(".")[-1]) if sub else target.Name
+    name, n = base, 1
+    while True:
+        try:
+            _check_name(skeleton, name)
+            return name
+        except SkeletonError:
+            n += 1
+            name = "%s_%d" % (base, n)
 
 
 def describe_item(item):
@@ -636,6 +679,7 @@ def publish(skeleton, name, target, sub="", publication=DEFAULT_PUBLICATION):
     kind = _kind_of(target, sub)
     name = _check_name(skeleton, name)
     with _transaction(doc, "Publish " + name):
+        _free_label(skeleton, name)
         item = doc.addObject("Part::FeaturePython", "Published")
         PublishedItem(item)
         item.ItemName = name
@@ -667,6 +711,8 @@ def rename(skeleton, name, new_name):
     new_name = _check_name(skeleton, new_name, own=item)
     doc = skeleton.Document
     with _transaction(doc, "Rename item " + name):
+        if new_name != item.ItemName:
+            _free_label(skeleton, new_name)
         item.ItemName = new_name
         item.Label = "%s.%s" % (skeleton.Label, new_name)
     return describe_item(item)

@@ -787,6 +787,52 @@ def mutating_calls_are_one_undo_transaction():
 
 
 @case
+def names_are_checked_before_anything_is_made():
+    """Slice 3b: a name FreeCAD would suffix, a blank name or a control character is refused up front; the proposed default is accepted."""
+    P = []
+    with world() as w:
+        tgt, sub = K.target_of(w.body, "face")
+        AS.publish(w.body, "face", tgt, sub)
+        AS.unpublish(w.body, "face")                      # the withdrawn item keeps its label
+        clash = w.sdoc.addObject("Part::Feature", "Other")
+        clash.Label = AS.item_label(w.body, "mine")       # an unrelated object that already has the label an item would get
+        n0 = len(w.sdoc.Objects)
+        for what, name in (("blank", "  "), ("empty", ""), ("tab", "a\tb"), ("newline", "a\nb"),
+                           ("label taken by another object", "mine")):
+            try:
+                AS.publish(w.body, name, tgt, sub)
+                P.append("%s name was accepted" % what)
+            except AS.SkeletonError:
+                pass
+        chk(P, len(w.sdoc.Objects) == n0, "a refused name left objects behind")
+        d1 = AS.default_name(w.body, tgt, sub)
+        chk(P, d1 == "%s_%s" % (tgt.Name, sub), "default name for an element is %r" % d1)
+        chk(P, AS.default_name(w.body, w.sdoc.getObject("Sketch")) == "Sketch", "default name for a sketch")
+        AS.publish(w.body, d1, tgt, sub)
+        d2 = AS.default_name(w.body, tgt, sub)
+        chk(P, d2 != d1, "a default name repeats an existing one: %r" % d2)
+        try:
+            AS.publish(w.body, d2, tgt, sub)
+        except AS.SkeletonError as exc:
+            P.append("the proposed default %r was refused: %s" % (d2, exc))
+        item = AS.find_item(w.body, d1)
+        AS.rename(w.body, d1, "face")                    # onto the name of the withdrawn item: allowed, with a clean label
+        chk(P, item.Label == AS.item_label(w.body, "face"), "a rename onto a withdrawn name got the label %r" % item.Label)
+        AS.rename(w.body, "face", d1)
+        AS.publish(w.body, "face", tgt, sub)             # and so is publishing the name again
+        again = AS.find_item(w.body, "face")
+        chk(P, again.Label == AS.item_label(w.body, "face"), "a republished name got the label %r" % again.Label)
+        try:
+            AS.rename(w.body, d1, "mine")
+            P.append("a rename onto a label another object holds was accepted")
+        except AS.SkeletonError:
+            pass
+        chk(P, item.ItemName == d1, "a refused rename changed the item")
+        chk(P, AS.rename(w.body, d1, d1 + " ")["item"] == d1, "a rename to its own name (with a space) was refused")
+    return P
+
+
+@case
 def refusals_and_messages():
     P = []
     with world(True) as w:
