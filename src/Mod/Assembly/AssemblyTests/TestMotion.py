@@ -344,6 +344,18 @@ def _m_no_rotational_inertia():
     return dict(_inertia_world=lambda Rd, I0: 0.0 * I0)
 
 
+def _m_slider_coriolis():
+    return dict(_coriolis=lambda w_p, a, qdj: 0.0 * a)
+
+
+def _m_torque_sign():
+    return dict(_torque_world=lambda Rd, R0, T, local: -(Rd @ (R0 @ T) if local else T))
+
+
+def _m_inertia_unrotated():
+    return dict(_inertia_to_world=lambda R0, inertia: inertia)
+
+
 def _m_com_at_origin():
     return dict(Model_com=lambda self, com: 0.0 * com)
 
@@ -356,7 +368,7 @@ MUTANTS = {
     "damping_applied_as_stiffness": (_m_damper_stiffness, ["damped_under_z010", "damped_critical"], []),
     "damper_sign_flipped": (_m_damper_sign, ["damped_under_z010", "damped_over_z2"], []),
     "mass_from_volume_without_density": (_m_no_density, ["compound_rod_end", "compound_disc_rim"], []),
-    "inertia_about_the_wrong_point": (_m_inertia_origin, ["compound_rod_end", "compound_disc_rim"], []),
+    "inertia_about_the_wrong_point": (_m_inertia_origin, ["compound_rod_end", "compound_rod_rotated_part"], []),
     "time_step_doubled_silently": (_m_step_doubled, ["fall_vertical", "pend_30_L400"], []),
     "energy_not_computed": (_m_no_energy, ["pend_30_L400", "spring_mass_k200"], []),
     "suppressed_components_load_still_applied": (
@@ -366,6 +378,9 @@ MUTANTS = {
     "velocity_products_dropped": (_m_bias_dropped, ["pend_120_L500", "double_pendulum_large"], []),
     "force_frame_ignored": (_m_force_frame, ["force_in_part_frame"], []),
     "rotational_inertia_ignored": (_m_no_rotational_inertia, ["compound_rod_end"], []),
+    "slider_coriolis_term_dropped": (_m_slider_coriolis, ["arm_bead_free", "arm_bead_torque_world"], []),
+    "torque_sign_flipped": (_m_torque_sign, ["arm_bead_torque_world", "arm_bead_torque_part"], []),
+    "inertia_not_rotated_by_the_placement": (_m_inertia_unrotated, ["compound_rod_rotated_part"], []),
     "centre_of_mass_at_the_part_origin": (_m_com_at_origin, ["compound_rod_end", "compound_rod_quarter"], []),
 }
 
@@ -542,6 +557,78 @@ class TestMotion(unittest.TestCase):
         finally:
             App.closeDocument(doc.Name)
 
+    def test_misuse_is_refused_clearly(self):
+        def fresh(name="pend_30_L400"):
+            doc = App.newDocument("MotionMisuse")
+            self.addCleanup(lambda d=doc: App.closeDocument(d.Name) if d.Name in App.listDocuments() else None)
+            return doc, C.CASES[name](doc, "single", None)
+
+        # joint limits are refused in a dynamic study
+        doc, c = fresh()
+        doc.getObject("Hinge").EnableAngleMin = True
+        with self.assertRaises(MO.MotionRefused) as cm:
+            MO.run(c.study)
+        self.assertIn("Hinge", str(cm.exception))
+        self.assertIn("limit", str(cm.exception))
+        # velocities
+        doc, c = fresh()
+        for text in ('{"Nope": 1}', "{bad", '{"Hinge": NaN}', "[1]", '{"Hinge": "x"}'):
+            c.study.Velocities = text
+            with self.assertRaises(MO.MotionError, msg=text):
+                MO.run(c.study)
+        # masses
+        doc, c = fresh()
+        part = c.rig.parts["Bob"]
+        for kw in (dict(density=-1.0), dict(density=0.0), dict(mass=0.0, com=(0, 0, 0)), dict(mass=-1.0),
+                   dict(mass=1.0, inertia=[1, 1, 1, 0, 0]), dict(mass=1.0, inertia=[-1, 1, 1, 0, 0, 0]),
+                   dict(mass=1.0, inertia=[1, 1, 1, 2, 0, 0]), dict(mass=float("nan"))):
+            with self.assertRaises(MO.MotionError, msg=str(kw)):
+                MO.set_mass(c.study, part, **kw)
+        m = MO.masses(c.study)[0]
+        m.Mode = "Manual"
+        m.Mass = 0.0
+        with self.assertRaises(MO.MotionError):
+            MO.run(c.study)
+        # the time grid
+        for end, step in ((1.0, 0.3), (0.1, 0.5), (1.0, 0.0), (1.0, -1.0), (float("nan"), 0.1), (1.0, float("nan"))):
+            doc, c = fresh()
+            c.study.TimeEnd, c.study.TimeStep = end, step
+            with self.assertRaises(MO.MotionError, msg=str((end, step))):
+                MO.run(c.study)
+        # a floating part with a mass is refused; a force on a grounded part is reported as not applied
+        doc, c = fresh()
+        free = c.rig.asm.newObject("Part::Box", "Free")
+        MO.set_mass(c.study, free, density=1000.0)
+        with self.assertRaises(MO.MotionRefused) as cm:
+            MO.run(c.study)
+        self.assertIn("Free", str(cm.exception))
+        doc, c = fresh()
+        f = MO.add_force(c.study, c.rig.G, (0, 0, 0), (1, 0, 0))
+        res = MO.run(c.study)
+        rec = [x for x in res["loads"] if x["entity"] == MO._entity(f)][0]
+        self.assertFalse(rec["applied"])
+        self.assertIn("does not move", rec["reason"])
+        # a mass whose part was deleted is reported
+        doc, c = fresh()
+        ghost = c.rig.asm.newObject("Part::Box", "Ghost")
+        MO.set_mass(c.study, ghost, density=1000.0)
+        doc.removeObject("Ghost")
+        res = MO.run(c.study)
+        self.assertTrue(any("Ghost" in w for w in res["warnings"]))
+
+    def test_energy_bar_catches_a_small_loss(self):
+        doc = App.newDocument("MotionEnergy")
+        try:
+            c = C.CASES["pend_30_L400"](doc, "single", None)
+            MO.add_damper(c.study, c.rig.G, c.rig.L(c.rig.G, (0, 0, 0)), c.rig.parts["Bob"], (0, 0, -400), 0.001)
+            res = MO.run(c.study)
+            rows = C.Rows()
+            c.check(res, rows)
+            self.assertTrue(any(r["metric"] == "energy drift" and not r["ok"] for r in rows),
+                            [(r["metric"], r["error"]) for r in rows])
+        finally:
+            App.closeDocument(doc.Name)
+
     # -- check 4
     def test_falling_ball_first_collision_within_one_step(self):
         doc = App.newDocument("MotionBall")
@@ -644,13 +731,10 @@ class TestMotion(unittest.TestCase):
                             rows, _c, _r = run_case(name, "single")
                             if failing_rows(rows):
                                 failing.append(name)
-                        except Exception:
-                            failing.append(name)
+                        except MO.MotionError:
+                            failing.append(name + "(refused)")      # a clear refusal is a justified failure
                     for pname in probes:
-                        try:
-                            if PROBES[pname]():
-                                failing.append("probe:" + pname)
-                        except Exception:
+                        if PROBES[pname]():
                             failing.append("probe:" + pname)
                 table.append((mname, failing))
                 self.assertTrue(failing, "mutant %s survived" % mname)

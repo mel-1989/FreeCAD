@@ -372,6 +372,12 @@ def set_mass(study, part, density=None, mass=None, com=None, inertia=None, name=
     ``inertia`` = Ixx, Iyy, Izz, Ixy, Ixz, Iyz in kg mm^2). Replaces the part's existing mass object."""
     if (density is None) == (mass is None):
         raise MotionError("give either a density or a mass")
+    what = "the mass of %s" % _name_of(part)
+    if density is not None:
+        _check_scalar(density, what + " (density)")
+    else:
+        _check_scalar(mass, what + " (mass)")
+        _check_inertia(list(inertia or [0.0] * 6), _np(), what)
     doc = study.Document
     with _transaction(doc, "Set motion mass"):
         old = [m for m in masses(study) if m.Component == _name_of(part)]
@@ -471,14 +477,40 @@ def _local_shape(obj):
     return shp
 
 
+def _check_inertia(i, np, what):
+    """Six finite components, positive semi-definite (a point mass has zero inertia)."""
+    if len(i) != 6 or not all(math.isfinite(float(x)) for x in i):
+        raise MotionError("%s: the inertia needs exactly 6 finite numbers (Ixx, Iyy, Izz, Ixy, Ixz, Iyz), got %r"
+                          % (what, list(i)))
+    Ixx, Iyy, Izz, Ixy, Ixz, Iyz = (float(x) for x in i)
+    M = np.array([[Ixx, Ixy, Ixz], [Ixy, Iyy, Iyz], [Ixz, Iyz, Izz]])
+    ev = np.linalg.eigvalsh(M)
+    if ev[0] < -1e-9 * max(1.0, abs(ev[-1])):
+        raise MotionError("%s: the inertia tensor is not positive semi-definite (eigenvalue %.6g)" % (what, ev[0]))
+
+
+def _check_scalar(x, what, positive=True):
+    x = float(x)
+    if not math.isfinite(x) or (positive and x <= 0.0):
+        raise MotionError("%s must be a finite positive number, got %r" % (what, x))
+    return x
+
+
+def _inertia_to_world(R0, inertia):
+    return R0 @ inertia @ R0.T
+
+
 def _mass_of(body, mass_obj, np):
     """mass (kg), COM in the part frame (m) and inertia about the COM in the part frame (kg m^2)."""
     if mass_obj.Mode == "Manual":
-        m = _q(mass_obj.Mass)
+        what = "the mass of %s" % body.name
+        m = _check_scalar(_q(mass_obj.Mass), what + " (Mass)")
         c = np.array(_mmvec(mass_obj.Com)) * 1e-3
-        i = list(mass_obj.Inertia) + [0.0] * 6
-        Ixx, Iyy, Izz, Ixy, Ixz, Iyz = (_q(x) * 1e-6 for x in i[:6])
+        i = list(mass_obj.Inertia)
+        _check_inertia(i, np, what)
+        Ixx, Iyy, Izz, Ixy, Ixz, Iyz = (_q(x) * 1e-6 for x in i)
         return m, c, np.array([[Ixx, Ixy, Ixz], [Ixy, Iyy, Iyz], [Ixz, Iyz, Izz]])
+    _check_scalar(_density_of(mass_obj), "the density of %s" % body.name)
     shp = _local_shape(body.obj)
     vol = float(shp.Volume)
     if vol <= 0:
@@ -564,6 +596,12 @@ class Model:
                     used.add(j.Name)
                     continue
                 used.add(j.Name)
+                lim = [p for p in (("EnableAngleMin", "EnableAngleMax") if typ == "Revolute" else
+                                   ("EnableLengthMin", "EnableLengthMax") if typ == "Slider" else ())
+                       if getattr(j, p, False)]
+                if lim:
+                    reasons.append("joint %s has an enabled limit (%s); limits act as stops, which need the contact "
+                                   "model of slice 6c, so a dynamic study refuses them" % (j.Name, ", ".join(lim)))
                 if typ not in _SUPPORTED:
                     reasons.append("unsupported joint type %s (joint %s)" % (typ, j.Name))
                     seen[other.Name] = un
@@ -644,8 +682,23 @@ class Model:
             mass, com, inertia = _mass_of(b, m, np)
             b.mass = float(mass)
             b.com0 = b.R0 @ self._com(com) + b.base0
-            b.I0 = b.R0 @ inertia @ b.R0.T
+            b.I0 = _inertia_to_world(b.R0, inertia)
         self.masses = by
+        self.warnings = []
+        for name in sorted(by):
+            if name not in self.bodies:
+                obj = self.asm.Document.getObject(name)
+                if obj is None:
+                    self.warnings.append("the mass object for %s names a part that no longer exists" % name)
+                elif name in self.live:
+                    raise MotionRefused(["part %s has a mass but no joint chain to a grounded part: it would float "
+                                         "in place, so the study is refused" % name])
+                else:
+                    self.warnings.append("the mass of %s is skipped: the part is suppressed" % name)
+        if not any(b.moving for b in self.order):
+            self.warnings.append("no part moves: the mechanism has no free joint")
+        for w in self.warnings:
+            App.Console.PrintWarning("AssemblyMotion: %s\n" % w)
 
     def _com(self, com):
         return com
@@ -684,6 +737,12 @@ class Model:
         b1 = self._body_of(_lookup(doc, ld.Part1))
         if b1 is None:
             return False, "part %s is not in the live assembly" % (ld.Part1 or "(none)")
+        if kind in ("Force", "Torque") and not b1.moving:
+            return False, "part %s does not move (grounded or fixed to ground), the load has no effect" % ld.Part1
+        if kind in ("Spring", "Damper") and not b1.moving:
+            b2c = self._body_of(_lookup(doc, ld.Part2))
+            if b2c is not None and not b2c.moving:
+                return False, "neither %s nor %s moves, the load has no effect" % (ld.Part1, ld.Part2)
         if kind in ("Force", "Torque"):
             val = np.array(_qvec(ld.Value))
             if kind == "Force":
@@ -789,7 +848,7 @@ class Model:
                 qdj = qd[j.dof]
                 w, al = w_p, al_p
                 vc = vo + a * qdj + _cross(w, r)
-                ac = ao + _cross(al, r) + _cross(w, _cross(w, r)) + 2.0 * _cross(w_p, a * qdj)
+                ac = ao + _cross(al, r) + _cross(w, _cross(w, r)) + _coriolis(w_p, a, qdj)
             else:
                 w, al = w_p, al_p
                 vc = vo + _cross(w, r)
@@ -811,7 +870,7 @@ class Model:
         for (b, T, local) in self.torques:
             if not b.moving:
                 continue
-            Tw = _force_world(Rd[b.name], b.R0, T, local)
+            Tw = _torque_world(Rd[b.name], b.R0, T, local)
             _, Jw = self.jac(b, zero, A, O)
             Q += Jw.T @ Tw
         if self.springs or self.dampers:
@@ -863,7 +922,11 @@ class Model:
         n = self.n
         q, qd = y[:n], y[n:]
         M, h, Q = self.dynamics(q, qd)
-        qdd = np.linalg.solve(M, Q - h)
+        try:
+            qdd = np.linalg.solve(M, Q - h)
+        except np.linalg.LinAlgError:
+            raise MotionError("the mass matrix is singular: a moving part has zero mass or inertia along a free "
+                              "joint (give it a positive mass or inertia)")
         return np.concatenate([qd, qdd])
 
     def pose(self, b, Rd, td):
@@ -889,6 +952,14 @@ def _damper_force(c, vr):
 
 def _route_damper(model, b1, x1, b2, x2, c):
     model.dampers.append((b1, x1, b2, x2, c))
+
+
+def _coriolis(w_p, a, qdj):
+    return 2.0 * _cross(w_p, a * qdj)
+
+
+def _torque_world(Rd, R0, T, local):
+    return Rd @ (R0 @ T) if local else T
 
 
 def _scale_bias(h):
@@ -961,9 +1032,14 @@ def _quat(R):
 def _grid(study):
     step = _q(study.TimeStep)
     end = _q(study.TimeEnd)
-    if step <= 0 or end <= 0:
-        raise MotionError("the time span and the step must be positive")
-    n = int(round(end / step))
+    if not (math.isfinite(step) and math.isfinite(end)) or step <= 0 or end <= 0:
+        raise MotionError("the time span and the step must be finite and positive (TimeEnd=%r, TimeStep=%r)"
+                          % (end, step))
+    ratio = end / step
+    n = int(round(ratio))
+    if n < 1 or abs(ratio - n) > 1e-9 * max(1.0, ratio):
+        raise MotionError("the time span %g s is not a whole number of steps of %g s (%.12g steps); the output grid "
+                          "is k * step and the end point is not silently dropped" % (end, step, ratio))
     return step, [k * step for k in range(n + 1)]
 
 
@@ -987,19 +1063,37 @@ def _loads_report(model):
     return model.applied
 
 
+def _bad_constant(name):
+    raise MotionError("%s is not a number" % name)
+
+
 def _run_dynamic(study):
     np = _np()
-    from scipy.integrate import solve_ivp
+    try:
+        from scipy.integrate import solve_ivp
+    except ImportError:
+        raise MotionError("the dynamic mode needs SciPy (scipy.integrate), which this FreeCAD does not provide")
     model = Model(study)
     step, grid = _grid(study)
     n = model.n
     q0 = np.zeros(n)
     qd0 = np.zeros(n)
     if study.Velocities.strip():
-        vel = json.loads(study.Velocities)
-        for j in model.joints:
-            if j.obj.Name in vel:
-                qd0[j.dof] = _q(vel[j.obj.Name]) * (1.0 if j.kind == "Revolute" else 1e-3)
+        try:
+            vel = json.loads(study.Velocities, parse_constant=_bad_constant)
+        except (ValueError, MotionError) as exc:
+            raise MotionError("Velocities is not valid JSON of finite numbers: %s" % exc)
+        if not isinstance(vel, dict):
+            raise MotionError("Velocities must be a JSON object {joint name: value}")
+        by_name = {j.obj.Name: j for j in model.joints}
+        for key, val in vel.items():
+            if key not in by_name:
+                raise MotionError("Velocities names %r, which is not a free joint of the mechanism (free joints: %s)"
+                                  % (key, ", ".join(sorted(by_name)) or "none"))
+            if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(val):
+                raise MotionError("Velocities[%r] must be a finite number, got %r" % (key, val))
+            j = by_name[key]
+            qd0[j.dof] = _q(val) * (1.0 if j.kind == "Revolute" else 1e-3)
     if n:
         sol = solve_ivp(model.rhs, (0.0, grid[-1]), np.concatenate([q0, qd0]), method=str(study.Integrator),
                         t_eval=np.array(grid), rtol=_q(study.Rtol), atol=_q(study.Atol))
@@ -1040,6 +1134,7 @@ def _run_dynamic(study):
         "loads": _loads_report(model),
         "static_parts": sorted(set(b.name for b in model.bodies.values() if not b.moving)),
         "unreached_parts": sorted(model.unreached),
+        "warnings": list(model.warnings),
     }
     return out
 
@@ -1095,7 +1190,7 @@ def _run_kinematic(study):
         "units": {"length": "mm", "time": "s", "angle": "rad"},
         "parts": [{"name": o.Name, "entity": _entity(o), "placements": series[o.Name]} for o in moving],
         "joints": [], "energy": {"kinetic": [], "gravity": [], "spring": [], "total": [], "conservative": False},
-        "loads": [], "static_parts": [], "unreached_parts": [],
+        "loads": [], "static_parts": [], "unreached_parts": [], "warnings": [],
     }
 
 

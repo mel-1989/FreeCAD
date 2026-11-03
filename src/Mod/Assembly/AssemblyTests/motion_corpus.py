@@ -149,6 +149,7 @@ class Rig:
 
 
 def new_study(rig, end, step, mode="Dynamic", **kw):
+    end = max(1, round(end / step)) * step           # the span is a whole number of steps
     return MO.create_study(rig.asm, mode=mode, time_end=end, step=step, **kw)
 
 
@@ -185,7 +186,7 @@ def upcrossings(t, y, level):
 def period_of(t, y, level):
     c = upcrossings(t, y, level)
     if len(c) < 3:
-        return None, len(c)
+        return float("nan"), len(c)
     return (c[-1] - c[0]) / (len(c) - 1), len(c) - 1
 
 
@@ -217,17 +218,19 @@ def wrap(a):
 
 
 def energy_rows(rows, name, res, scale_truth=None, bar=1e-3):
-    """Total energy within ``bar`` of its start (relative to max(|E0|, max kinetic)); the kinetic maximum must
-    also match the analytic swing energy when the case gives one (so a missing energy cannot pass)."""
+    """Total energy within ``bar`` of its start, relative to the swing energy max(max kinetic, max potential minus
+    min potential) so a 0.1% loss of the energy that is exchanged fails; the kinetic maximum must also match the
+    analytic swing energy when the case gives one (so a missing energy cannot pass)."""
     e = res["energy"]
     tot = e["total"]
     ke = e["kinetic"]
-    scale = max(abs(tot[0]), max(ke))
+    pot = [a + b for a, b in zip(e["gravity"], e["spring"])]
+    scale = max(max(ke), max(pot) - min(pot))
     if scale <= 0:
         rows.add(name, "energy scale", 1.0, 0.0, "no energy reported")
         return
     drift = max(abs(x - tot[0]) for x in tot) / scale
-    rows.add(name, "energy drift", drift, bar, "max |E-E0| / max(|E0|, max KE)")
+    rows.add(name, "energy drift", drift, bar, "max |E-E0| / swing energy max(max KE, PE range)")
     if scale_truth is not None:
         rows.add(name, "max kinetic energy", abs(max(ke) - scale_truth) / scale_truth, 0.01,
                  "against the analytic swing energy")
@@ -372,6 +375,91 @@ def make_welded_rod(name, theta0):
 
 
 make_welded_rod("compound_rod_welded", 5.0)
+
+
+def make_rotated_rod(name, theta0):
+    """The compound rod again, but the box is built with its long side along local y and placed turned by 90 degrees
+    about x, so the inertia tensor in the part frame differs from the one in the world frame and the centre of
+    mass is off the part origin. The truth is the same as for ``compound_rod_end``."""
+    def build(doc, mode, host=None):
+        rig = Rig(doc, mode, host)
+        pivot = (0.0, 0.0, 1000.0)
+        base = P(V(-10, 10, 400), R(V(1, 0, 0), 90))
+        part = rig.box("Rod", 20, 600, 20, rot_about(base, pivot, (0, 1, 0), -theta0))
+        rig.rev("Hinge", rig.G, part, pivot, (0, 1, 0))
+        rig.finish()
+        m = STEEL * 20 * 600 * 20 * 1e-9
+        d = 0.3
+        I_piv = m * (0.02 ** 2 + 0.6 ** 2) / 12 + m * d * d
+        th0 = math.radians(theta0)
+        T_true = 4 * ellipk(math.sin(th0 / 2) ** 2) / math.sqrt(m * G * d / I_piv)
+        study = new_study(rig, 10.2 * T_true, 0.002)
+        MO.set_mass(study, part, density=STEEL)
+        MO.add_gravity(study)
+
+        def check(res, rows):
+            q = joint(res, "Hinge")["q"]
+            T, n = period_of(res["t"], q, th0)
+            rows.add(name, "period", abs(T - T_true) / T_true, 1e-3, "%d periods, part frame turned by 90 deg" % n)
+            energy_rows(rows, name, res, m * G * d * (1 - math.cos(th0)))
+        return Case(name, "dynamics/compound pendulum", rig, study, check, 0.002, study.TimeEnd, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_rotated_rod("compound_rod_rotated_part", 5.0)
+
+
+def make_arm_bead(name, torque, frame, spin=3.0):
+    """A 2 kg arm spinning on a revolute hinge with a 1 kg bead on a slider along it (Coriolis and centrifugal
+    coupling), no gravity. Truth: the Lagrangian of (theta, r), integrated here with SciPy at 1e-13, written from
+    the equations  (Ip + m r^2) theta'' = tau - 2 m r r' theta'  and  r'' = r theta'^2  with Ip = 2 + 2 * 0.2^2."""
+    def build(doc, mode, host=None):
+        rig = Rig(doc, mode, host)
+        arm = rig.box("Arm", 400, 20, 20, P(V(0, -10, 40), R()))
+        bead = rig.box("Bead", 20, 20, 20, P(V(100, -10, 40), R()))
+        rig.rev("Hinge", rig.G, arm, (0, 0, 50), (0, 0, 1))
+        rig.slide("Rail", arm, bead, (110, 0, 50), (1, 0, 0))
+        rig.finish()
+        step, end = 0.01, 3.0
+        study = new_study(rig, end, step)
+        MO.set_mass(study, arm, mass=2.0, com=(200, 10, 10), inertia=[0, 0, 2.0e6, 0, 0, 0])
+        MO.set_mass(study, bead, mass=1.0, com=(10, 10, 10), inertia=[0.0] * 6)
+        study.Velocities = '{"Hinge": %r}' % spin
+        if torque:
+            MO.add_torque(study, arm, (0, 0, torque), frame=frame)
+
+        def check(res, rows):
+            from scipy.integrate import solve_ivp
+            Ip, m, r0 = 2.0 + 2.0 * 0.2 ** 2, 1.0, 0.11
+
+            def f(t, y):
+                th, r, w, rd = y
+                return [w, rd, (torque - 2 * m * r * rd * w) / (Ip + m * r * r), r * w * w]
+            ts = [k * step for k in range(int(round(end / step)) + 1)]
+            Y = solve_ivp(f, (0, end), [0.0, r0, spin, 0.0], t_eval=ts, rtol=1e-13, atol=1e-13, method="DOP853").y
+            th = joint(res, "Hinge")["q"]
+            rr = joint(res, "Rail")["q"]
+            span_th = max(abs(v) for v in Y[0])
+            span_r = max(abs(v - r0) for v in Y[1])
+            rows.add(name, "arm angle (relative to its travel)", max(abs(a - b) for a, b in zip(th, Y[0])) / span_th,
+                     1e-6, "travel %.4g rad" % span_th)
+            rows.add(name, "bead along the arm (relative to its travel)",
+                     max(abs(a - (b - r0)) for a, b in zip(rr, Y[1])) / span_r, 1e-6, "travel %.4g m" % span_r)
+            worst = 0.0
+            for k, d in enumerate(series(res, "Bead")):
+                com = pl_of(d).multVec(V(10, 10, 10))
+                truth = V(1e3 * Y[1][k] * math.cos(Y[0][k]), 1e3 * Y[1][k] * math.sin(Y[0][k]), 50)
+                worst = max(worst, (com - truth).Length)
+            rows.add(name, "bead position (mm)", worst, 1e-6)
+        return Case(name, "dynamics/coupled", rig, study, check, step, end, "DOP853")
+    CASES[name] = build
+    return build
+
+
+make_arm_bead("arm_bead_free", 0.0, "World")
+make_arm_bead("arm_bead_torque_world", 1.5, "World")
+make_arm_bead("arm_bead_torque_part", 1.5, "Part")
 
 
 # ------------------------------------------------------------------ spring and mass, damped
