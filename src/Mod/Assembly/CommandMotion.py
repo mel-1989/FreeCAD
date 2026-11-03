@@ -324,6 +324,12 @@ class _AddLoad(_Command):
         study = target_study(asm)
         if study is None or not self.picks_ok(asm):
             return
+        inner = [c.Name for c, *_ in picked_components(asm) if not MO.is_direct(asm, c)]
+        if inner:
+            report(Gui.getMainWindow(), translate(
+                "Assembly", "%s is inside a sub-assembly. A dynamic analysis takes loads only on the parts of the assembly "
+                "itself; pick a part of this assembly instead.") % ", ".join(sorted(set(inner))))
+            return
         self.add(study, points(asm))
 
 

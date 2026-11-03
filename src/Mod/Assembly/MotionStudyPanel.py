@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Task panel of a dynamic analysis (cad-fork G06 slice 6b). Imported only with the GUI up.
 
-The panel is opened on one motion study (``AssemblyMotion``). It shows
+The panel is opened on one dynamic analysis (``AssemblyMotion``). It shows
 
 - the time span and the output step (a span that is not a whole number of steps is refused with a message in the panel,
   exactly as the API refuses it);
@@ -187,6 +187,29 @@ def _number(text):
     return v if math.isfinite(v) else None
 
 
+class _SaveGuard:
+    """Document observer: while a frame is shown, the placements in the document are display placements. A save, save as or
+    save a copy of the assembly's document must write the pre-run placements, so playback stops and the placements are put
+    back just before the document is written, and the frame is shown again once the save is over."""
+
+    def __init__(self, panel):
+        self.panel = panel
+        self.frame = None
+
+    def slotStartSaveDocument(self, doc, filename):
+        p = self.panel
+        if p.done or doc.Name != p.document_name or p._saved is None:
+            return
+        self.frame = p.frame
+        p.stop()
+
+    def slotFinishSaveDocument(self, doc, filename):
+        p, k = self.panel, self.frame
+        self.frame = None
+        if k is not None and not p.done and doc.Name == p.document_name:
+            QtCore.QTimer.singleShot(0, lambda: (not p.done) and p.result is not None and p.show_frame(k))
+
+
 class TaskMotionStudy:
     """The dynamic-analysis panel of ``study``."""
 
@@ -200,6 +223,11 @@ class TaskMotionStudy:
         self.asm = MO.assembly_of(study)
         self.done = False
         self.result = MO.result(study)           # the stored result, or the one this panel computed (staged)
+        self.stale = ""                          # why the stored result is not shown (it no longer matches the study)
+        if self.result is not None:
+            self.stale = MO.stale_reason(study, self.result)
+            if self.stale:
+                self.result = None
         self.fresh = False                       # True when self.result was computed by this panel and not stored yet
         self.run_key = None                      # (end, step) the staged result was computed for
         self.derived = {}
@@ -213,6 +241,11 @@ class TaskMotionStudy:
         self._busy = False
         self._build()
         self._load_result_views()
+        if self.stale:
+            self._say(translate("Assembly", "The stored result is out of date and is not shown: %s. Run the analysis again; "
+                                "OK removes it.") % self.stale)
+        self._observer = _SaveGuard(self)
+        App.addDocumentObserver(self._observer)
         global _current
         _current = self
 
@@ -577,6 +610,13 @@ class TaskMotionStudy:
     # ---- task dialog protocol
 
     def _release(self):
+        obs = getattr(self, "_observer", None)
+        if obs is not None:
+            self._observer = None
+            try:
+                App.removeDocumentObserver(obs)
+            except Exception:                   # noqa: BLE001
+                pass
         global _current
         if _current is self:
             _current = None
@@ -607,12 +647,25 @@ class TaskMotionStudy:
             return False                        # the refusal is shown in the panel; OK does nothing until it is fixed
         self.stop()
         keep = self.result if self.fresh and self.run_key == (MO._q(vals[0]), MO._q(vals[1])) else None
+        dropped = ""
+        if keep is not None:
+            gone = [p["name"] for p in keep["parts"] if self.doc.getObject(p["name"]) is None]
+            if gone:
+                keep = None
+                dropped = translate("Assembly", "The result was not stored: it names parts that no longer exist (%s).") \
+                    % ", ".join(gone)
         try:
-            MO.apply_study(self.study, vals[0], vals[1], keep)
+            rep = MO.apply_study_report(self.study, vals[0], vals[1], keep)
         except MO.MotionError as exc:
             report_problems(self.form, str(exc))
             self._say(str(exc))
             return False
+        if rep["cleared"]:
+            dropped = (dropped + " " if dropped else "") + translate(
+                "Assembly", "The stored result was removed because %s.") % rep["cleared"]
+        if dropped:
+            self._say(dropped)
+            report_problems(self.form, dropped)
         self._release()
         return True
 

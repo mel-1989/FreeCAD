@@ -710,6 +710,11 @@ class TestMotion(unittest.TestCase):
                 MO.series_of(study, res, "force:Nope")
             # apply_study: one transaction for the span, the step and the result; nothing when nothing differs
             u0 = doc.UndoCount
+            self.assertTrue(study.Result, "the run above left a result, computed for another span")
+            rep = MO.apply_study_report(study, 1.0, 0.01, None)       # which the stored result no longer matches: cleared
+            self.assertTrue(rep["changed"] and rep["cleared"])
+            self.assertEqual((doc.UndoCount, study.Result), (u0 + 1, ""))
+            u0 = doc.UndoCount
             self.assertFalse(MO.apply_study(study, 1.0, 0.01, None))
             self.assertEqual(doc.UndoCount, u0)
             self.assertTrue(MO.apply_study(study, 0.5, 0.01, MO.compute(study, 0.5, 0.01)))

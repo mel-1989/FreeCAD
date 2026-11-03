@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Motion studies (G06 slice 6a): loads, masses and an integrator for an assembly's joints, a JSON-returning API.
 
-A *motion study* is an ``App::FeaturePython`` object inside the assembly. It holds the time span, the output step
+A *dynamic analysis* is an ``App::FeaturePython`` object inside the assembly. It holds the time span, the output step
 and the integrator settings, and a group of *loads* and *masses* (one object each, all stock property types), and it
 stores the result of a run as a time series of every moving part's placement. It sits beside the kinematic
 *Simulation* (driven joints, video export), which keeps working unchanged; nothing here touches that object.
@@ -52,6 +52,7 @@ workbench's existing solver.
 """
 
 import contextlib
+import hashlib
 import json
 import math
 
@@ -80,7 +81,7 @@ class MotionRefused(MotionError):
 
     def __init__(self, reasons):
         self.reasons = list(reasons)
-        super().__init__("motion study refused: " + "; ".join(self.reasons))
+        super().__init__("dynamic analysis refused: " + "; ".join(self.reasons))
 
 
 # ------------------------------------------------------------------ small helpers
@@ -298,7 +299,7 @@ def assembly_of(study):
 def create_study(assembly, name="MotionStudy", mode="Dynamic", time_end=1.0, step=0.01, **props):
     """A new study in the assembly (one undo transaction)."""
     doc = assembly.Document
-    with _transaction(doc, "Create motion study"):
+    with _transaction(doc, "Create dynamic analysis"):
         study = assembly.newObject("App::FeaturePython", name)
         MotionStudy(study)
         study.Mode = mode
@@ -309,7 +310,7 @@ def create_study(assembly, name="MotionStudy", mode="Dynamic", time_end=1.0, ste
 
 def _new_load(study, name, kind, **props):
     doc = study.Document
-    with _transaction(doc, "Add motion load"):
+    with _transaction(doc, "Add dynamic analysis load"):
         o = study.newObject("App::FeaturePython", name)
         MotionLoad(o)
         o.Kind = kind
@@ -367,13 +368,13 @@ def add_damper(study, part1, point1, part2, point2, damping, name="Damper"):
 
 def edit_load(load, **props):
     """Change properties of a load (one undo transaction)."""
-    with _transaction(load.Document, "Edit motion load"):
+    with _transaction(load.Document, "Edit dynamic analysis load"):
         _assign(load, props)
     return load
 
 
 def remove_load(load):
-    with _transaction(load.Document, "Remove motion load"):
+    with _transaction(load.Document, "Remove dynamic analysis load"):
         load.Document.removeObject(load.Name)
 
 
@@ -389,7 +390,7 @@ def set_mass(study, part, density=None, mass=None, com=None, inertia=None, name=
         _check_scalar(mass, what + " (mass)")
         _check_inertia(list(inertia or [0.0] * 6), _np(), what)
     doc = study.Document
-    with _transaction(doc, "Set motion mass"):
+    with _transaction(doc, "Set dynamic analysis mass"):
         old = [m for m in masses(study) if m.Component == _name_of(part)]
         o = old[0] if old else None
         if o is None:
@@ -405,7 +406,7 @@ def set_mass(study, part, density=None, mass=None, com=None, inertia=None, name=
 
 
 def remove_mass(mass):
-    with _transaction(mass.Document, "Remove motion mass"):
+    with _transaction(mass.Document, "Remove dynamic analysis mass"):
         mass.Document.removeObject(mass.Name)
 
 
@@ -419,6 +420,16 @@ def live_components(assembly):
     """Components the solver sees: in the group of the assembly (or a container) and not suppressed."""
     import AssemblyConfiguration as ac
     return [o for o in ac._components(assembly) if not _suppressed_element(o)]
+
+
+def is_direct(assembly, obj):
+    """True when ``obj`` is a component of ``assembly`` itself and not of a sub-assembly (or another container with a
+    placement of its own) inside it. The dynamic analysis places loads and masses in the frame of the assembly's own parts;
+    a part inside a sub-assembly sits in that sub-assembly's frame, which this solver does not carry."""
+    if obj is None:
+        return False
+    parent = obj.getParentGeoFeatureGroup()
+    return parent is None or parent.Name == assembly.Name
 
 
 def _joints_of(assembly):
@@ -682,6 +693,7 @@ class Model:
         for m in masses(self.study):
             if not m.Component:
                 continue
+            self._direct_or_refuse(self.asm.Document.getObject(m.Component), "the mass %s" % m.Name)
             by[m.Component] = m
         for b in self.order:
             if not b.moving:
@@ -729,6 +741,11 @@ class Model:
                                  "reason": why})
         self.conservative = not (self.forces or self.torques or self.dampers)
 
+    def _direct_or_refuse(self, obj, what):
+        if obj is not None and not is_direct(self.asm, obj):
+            raise MotionRefused(["%s names %s, which is inside a sub-assembly; loads and masses can only be put on the "
+                                 "parts of the assembly itself" % (what, obj.Name)])
+
     def _body_of(self, obj):
         """The body a load acts on, or None when that part is not in the live assembly (suppressed)."""
         if obj is None:
@@ -748,6 +765,8 @@ class Model:
             self.g = self.g + _gravity_vector(ld, np)
             return True, ""
         doc = self.asm.Document
+        for nm in (ld.Part1,) + ((ld.Part2,) if kind in ("Spring", "Damper") else ()):
+            self._direct_or_refuse(_lookup(doc, nm), "the load %s" % ld.Name)
         b1 = self._body_of(_lookup(doc, ld.Part1))
         if b1 is None:
             return False, "part %s is not in the live assembly" % (ld.Part1 or "(none)")
@@ -1210,8 +1229,45 @@ def _run_kinematic(study, end=None, step=None):
     }
 
 
+_FP_STUDY = ("Mode", "Integrator", "Rtol", "Atol", "Velocities", "DriveJoint", "DriveType", "DriveFormula",
+             "SolverTolerance")
+_FP_LOAD = ("Kind", "Part1", "Part2", "Point1", "Point2", "Value", "Frame", "Stiffness", "Damping", "FreeLength")
+_FP_MASS = ("Component", "Mode", "Density", "Mass", "Com", "Inertia")
+
+
+def inputs_fingerprint(study):
+    """A hash of everything a run reads from the study except the span and the step: its settings, loads and masses.
+    A result carries the value it was computed with, so a later edit shows up as a difference."""
+    def rec(o, names):
+        return [o.Name] + [repr(tuple(v) if hasattr(v, "__iter__") and not isinstance(v, str) else v)
+                           for v in (getattr(o, n, None) for n in names)]
+    data = [rec(study, _FP_STUDY)] + [rec(o, _FP_LOAD) for o in loads(study)] + [rec(o, _FP_MASS) for o in masses(study)]
+    return hashlib.sha256(json.dumps(data).encode()).hexdigest()[:16]
+
+
+def stale_reason(study, res, end=None, step=None):
+    """Why ``res`` is not the result of the study as it is now (``end`` and ``step`` override the study's span and step),
+    or "" when it is current: the span or the step differs, the loads, masses or settings were edited since the run, or a
+    part the result names no longer exists."""
+    if res is None:
+        return ""
+    end = _q(study.TimeEnd if end is None else end)
+    step = _q(study.TimeStep if step is None else step)
+    if abs(res["step"] - step) > 1e-12 * max(1.0, step) or abs(res["t"][-1] - end) > 1e-9 * max(1.0, end):
+        return "it was computed for a span of %g s and a step of %g s, the analysis now has %g s and %g s" % (
+            res["t"][-1], res["step"], end, step)
+    if "inputs" in res and res["inputs"] != inputs_fingerprint(study):
+        return "the loads, masses or settings were edited after it was computed"
+    gone = [p["name"] for p in res["parts"] if study.Document.getObject(p["name"]) is None]
+    if gone:
+        return "it names parts that no longer exist (%s)" % ", ".join(gone)
+    return ""
+
+
 def _compute(study, end=None, step=None):
-    return _run_kinematic(study, end, step) if study.Mode == "Kinematic" else _run_dynamic(study, end, step)
+    res = _run_kinematic(study, end, step) if study.Mode == "Kinematic" else _run_dynamic(study, end, step)
+    res["inputs"] = inputs_fingerprint(study)
+    return res
 
 
 def compute(study, time_end=None, step=None):
@@ -1239,7 +1295,7 @@ def run(study, keep_frame=None):
     doc = asm.Document
     saved = _save_placements(asm)
     try:
-        with _transaction(doc, "Run motion study"):
+        with _transaction(doc, "Run dynamic analysis"):
             res = _compute(study)
             _write_series(study, result_text(res))
     finally:
@@ -1270,7 +1326,7 @@ def apply_frame(study, k):
     doc = asm.Document
     if not 0 <= k < len(res["t"]):
         raise MotionError("no step %s in a result of %d steps" % (k, len(res["t"])))
-    with _transaction(doc, "Show motion frame"):
+    with _transaction(doc, "Show dynamic analysis frame"):
         for p in res["parts"]:
             o = doc.getObject(p["name"])
             if o is None:
@@ -1318,25 +1374,42 @@ def check_grid(end, step):
     return st, len(grid) - 1
 
 
-def apply_study(study, time_end=None, step=None, result=None, title="Edit motion study"):
+def apply_study(study, time_end=None, step=None, result=None, title="Edit dynamic analysis"):
     """Set the span and the step and store ``result`` (a dict from ``compute``) as one undo transaction. None leaves
-    a value alone; nothing is opened when nothing differs from what the study holds."""
+    a value alone; nothing is opened when nothing differs from what the study holds. A ``result`` that does not match the
+    span and step being set, or that names a part that no longer exists, is refused. A stored result that the new span or
+    step makes stale is cleared in the same transaction (``cleared`` in the return value of ``apply_study_report``)."""
+    return apply_study_report(study, time_end, step, result, title)["changed"]
+
+
+def apply_study_report(study, time_end=None, step=None, result=None, title="Edit dynamic analysis"):
+    """``apply_study``, returning ``{"changed": bool, "cleared": reason or ""}``."""
     edits = {}
     if time_end is not None and _q(time_end) != _q(study.TimeEnd):
         edits["TimeEnd"] = time_end
     if step is not None and _q(step) != _q(study.TimeStep):
         edits["TimeStep"] = step
+    end2, step2 = edits.get("TimeEnd", study.TimeEnd), edits.get("TimeStep", study.TimeStep)
+    check_grid(end2, step2)
     text = None if result is None else result_text(result)
+    if result is not None:
+        why = stale_reason(study, result, end2, step2)
+        if why:
+            raise MotionError("the result cannot be stored: " + why)
+    cleared = ""
+    if result is None and study.Result:
+        cleared = stale_reason(study, json.loads(study.Result), end2, step2)
+        if cleared:
+            text = ""
     if text is not None and text == study.Result:
         text = None
     if not edits and text is None:
-        return False
-    check_grid(edits.get("TimeEnd", study.TimeEnd), edits.get("TimeStep", study.TimeStep))
+        return {"changed": False, "cleared": cleared}
     with _transaction(study.Document, title):
         _assign(study, edits)
         if text is not None:
             _write_series(study, text)
-    return True
+    return {"changed": True, "cleared": cleared}
 
 
 # ------------------------------------------------------------------ plotted quantities
@@ -1389,6 +1462,14 @@ def derived_series(study, res):
     (the panel restores them before it calls this); nothing is written."""
     if res["mode"] != "Dynamic":
         return {}
+    doc = study.Document
+    for p in res["parts"]:
+        o = doc.getObject(p["name"])
+        f0 = p["placements"][0]
+        if o is None or not o.Placement.isSame(
+                App.Placement(App.Vector(*f0["base"]), App.Rotation(*f0["rotation"])), 1e-6):
+            raise MotionError("the part %s is not where it was when the result was computed, so velocities and forces "
+                              "cannot be derived from it; run the analysis again" % p["name"])
     model = Model(study)
     np = model.np
     doc = model.asm.Document

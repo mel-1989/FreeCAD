@@ -510,13 +510,13 @@ def _mut_run_writes_document():
 
 
 def _mut_ok_two_transactions():
-    orig = MO.apply_study
+    orig = MO.apply_study_report
 
     def two(study, time_end=None, step=None, result=None, title="x"):
         a = orig(study, time_end, step, None)
         b = orig(study, None, None, result)
-        return a or b
-    return patched(MO, "apply_study", two)
+        return {"changed": a["changed"] or b["changed"], "cleared": a["cleared"]}
+    return patched(MO, "apply_study_report", two)
 
 
 def _mut_wrong_frame():
@@ -867,6 +867,210 @@ class TestMotionCommands(unittest.TestCase):
         self.assertAlmostEqual((picks[0].local - V(0, 25, 25)).Length, 0.0, places=6)
         self.select(("Assembly", ""))                                     # the assembly itself is no pick
         self.assertEqual(CM.picked_components(e.asm), [])
+
+
+class TestMotionRepairs(unittest.TestCase):
+    """Run 049 repair 1: the verifier's findings, one test each."""
+
+    @staticmethod
+    def sub_rig(e):
+        for ld in list(MO.loads(e.study)):
+            e.doc.removeObject(ld.Name)
+        sub = e.asm.newObject("Assembly::AssemblyObject", "Sub")
+        inner = sub.newObject("Part::Box", "Inner")
+        inner.Length = inner.Width = inner.Height = 10
+        sub.Placement = App.Placement(V(100, 0, 0), App.Rotation())
+        e.doc.recompute()
+        return inner
+
+    def test_save_while_a_frame_is_shown_writes_the_pre_run_placements(self):
+        d = tempfile.mkdtemp()
+        try:
+            with env("damped", "single", None, d) as e:
+                p0 = F.placements(e.asm)
+                p = e.panel()
+                p.run()
+                for how in ("saveAs", "save", "saveCopy"):
+                    p.show_frame(60)
+                    shown = F.placements(e.asm)
+                    self.assertNotEqual(shown, p0)
+                    f = os.path.join(d, how + ".FCStd")
+                    if how == "saveAs":
+                        e.doc.saveAs(f)
+                    elif how == "save":
+                        e.doc.save()
+                    else:
+                        e.doc.saveCopy(f)
+                    pump()
+                    if how == "save":
+                        f = e.doc.FileName
+                    g = os.path.join(d, "read_" + how + ".FCStd")         # the saved file, opened apart from the live document
+                    shutil.copy(f, g)
+                    d2 = App.openDocument(g)
+                    try:
+                        asm = [o for o in d2.Objects if o.isDerivedFrom("Assembly::AssemblyObject")][0]
+                        self.assertEqual(F.placements(asm), p0, how + " wrote display placements")
+                    finally:
+                        App.closeDocument(d2.Name)
+                    # the frame is back in the view afterwards
+                    for _ in range(20):
+                        pump()
+                    self.assertEqual(F.placements(e.asm), shown, how + " did not show the frame again")
+                e.finish()
+                self.assertEqual(F.placements(e.asm), p0)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_loads_and_masses_inside_a_sub_assembly_are_refused(self):
+        with env("damped", "link") as e:
+            inner = self.sub_rig(e)
+            blk = e.rig.parts["Block"]
+            MO.add_spring(e.study, blk, V(0, 0, 0), inner, V(0, 0, 0), 100.0, 50.0)
+            with self.assertRaises(MO.MotionRefused) as cm:
+                MO.compute(e.study)
+            self.assertIn("sub-assembly", str(cm.exception))
+            self.assertTrue(str(cm.exception).startswith("dynamic analysis refused"), str(cm.exception))
+            with self.assertRaises(MO.MotionRefused):
+                MO.run(e.study)
+            self.assertEqual(e.study.Result, "")
+        with env("damped", "link") as e:
+            inner = self.sub_rig(e)
+            MO.set_mass(e.study, inner, density=7800.0)
+            with self.assertRaises(MO.MotionRefused):
+                MO.compute(e.study)
+        with env("damped", "link") as e:                    # the command refuses the pick with a message
+            self.sub_rig(e)
+            Gui.activateWorkbench("AssemblyWorkbench")
+            Gui.Selection.clearSelection()
+            for sub in ("Block.Vertex1", "Sub.Inner.Vertex1"):
+                Gui.Selection.addSelection(e.doc.Name, "Assembly", sub)
+            n = len(MO.loads(e.study))
+            u = e.doc.UndoCount
+            e.prompts.values = [{"k": 100.0, "l0": 50.0}]
+            Gui.runCommand("Assembly_AddMotionSpring")
+            self.assertEqual(len(MO.loads(e.study)), n)
+            self.assertEqual(e.doc.UndoCount, u)
+            self.assertTrue(e.prompts.reported and "sub-assembly" in e.prompts.reported[-1], e.prompts.reported)
+            Gui.Selection.clearSelection()
+
+    def test_ok_clears_a_result_that_no_longer_matches_the_span_and_step(self):
+        with env("damped") as e:
+            p = e.panel()
+            p.run()
+            e.finish(True)
+            self.assertTrue(e.study.Result)
+            u = e.doc.UndoCount
+            p = e.panel()
+            p.span.setText(repr(MO._q(e.study.TimeStep) * (round(e.study.TimeEnd / e.study.TimeStep) // 2)))
+            e.finish(True)
+            self.assertEqual(e.doc.UndoCount, u + 1, "one transaction")
+            self.assertEqual(e.study.Result, "", "a result for the old span was kept")
+            self.assertTrue(e.prompts.reported and "removed" in e.prompts.reported[-1], e.prompts.reported)
+        with env("damped") as e:                            # the step edited, no run at the new value
+            p = e.panel()
+            p.run()
+            e.finish(True)
+            p = e.panel()
+            p.step.setText(repr(MO._q(e.study.TimeStep) * 1.5))
+            e.finish(True)
+            self.assertEqual(e.study.Result, "")
+        with env("damped") as e:                            # a panel opening on a stale stored result does not show it
+            p = e.panel()
+            p.run()
+            e.finish(True)
+            e.doc.openTransaction("edit")
+            e.study.TimeEnd = e.study.TimeStep * (round(e.study.TimeEnd / e.study.TimeStep) // 2)
+            e.doc.commitTransaction()
+            p = e.panel()
+            self.assertIsNone(p.result)
+            self.assertTrue(p.stale and p.message.isVisible() or p.message.text())
+            self.assertEqual(p.quantities(), [])
+            self.assertFalse(p.play_button.isEnabled())
+            self.assertEqual(p.plot.t, [])
+            e.finish(False)
+            self.assertTrue(e.study.Result, "Cancel changes nothing")
+        with env("damped") as e:                            # loads edited since the run
+            p = e.panel()
+            p.run()
+            e.finish(True)
+            ld = [x for x in MO.loads(e.study) if x.Kind == "Spring"][0]
+            MO.edit_load(ld, Stiffness=ld.Stiffness * 2)
+            p = e.panel()
+            self.assertIsNone(p.result)
+            self.assertIn("edited", p.stale)
+            e.finish(True)
+            self.assertEqual(e.study.Result, "")
+        with env("damped") as e:                            # an unchanged study keeps its result
+            p = e.panel()
+            p.run()
+            e.finish(True)
+            p = e.panel()
+            self.assertIsNotNone(p.result)
+            e.finish(True)
+            self.assertTrue(e.study.Result)
+
+    def test_velocity_and_force_do_not_depend_on_the_live_placements(self):
+        with env("spring") as e:
+            p = e.panel()
+            p.run()
+            e.finish(True)
+            blk = e.rig.parts["Block"]
+            blk.Placement = App.Placement(blk.Placement.Base + V(30, 0, 0), blk.Placement.Rotation)
+            with self.assertRaises(MO.MotionError):
+                MO.derived_series(e.study, MO.result(e.study))
+            p = e.panel()
+            self.assertTrue(p.series_error, "no error although the block was moved")
+            qs = p.quantities()
+            self.assertTrue(qs and all(q.startswith("position:") for q in qs), qs)
+            for q in qs:
+                p.choose(q)
+                t, y, _info = MO.series_of(e.study, p.result, q)
+                self.assertEqual(list(p.plot.y), y)
+            e.finish(False)
+
+    def test_ok_after_a_part_was_deleted_does_not_store_a_result_naming_it(self):
+        with env("damped") as e:
+            p = e.panel()
+            p.run()
+            e.doc.removeObject(e.rig.parts["Block"].Name)
+            r = p.accept()
+            self.assertTrue(r)
+            self.assertEqual(e.study.Result, "")
+            self.assertTrue(e.prompts.reported and "no longer exist" in e.prompts.reported[-1], e.prompts.reported)
+            if Gui.Control.activeDialog():
+                Gui.Control.closeDialog()
+        with env("damped") as e:                            # the API refuses as well
+            p = e.panel()
+            p.run()
+            res = p.result
+            e.finish(False)
+            e.doc.removeObject(e.rig.parts["Block"].Name)
+            with self.assertRaises(MO.MotionError):
+                MO.apply_study(e.study, None, None, res)
+
+    def test_user_visible_strings_say_dynamic_analysis(self):
+        with env("damped") as e:
+            study = MO.create_study(e.asm, "Study2", time_end=0.1, step=0.01)
+            MO.add_gravity(study)
+            MO.set_mass(study, e.rig.parts["Block"], density=1000.0)
+            MO.edit_load(MO.loads(study)[0], Value=(0, 0, -5.0))
+            MO.run(e.rig.study)
+            MO.apply_frame(e.rig.study, 1)
+            MO.remove_load(MO.loads(study)[0])
+            MO.remove_mass(MO.masses(study)[0])
+            p = e.panel()
+            p.span.setText(repr(MO._q(e.study.TimeStep) * (round(e.study.TimeEnd / e.study.TimeStep) // 2)))
+            e.finish(True)
+            names = list(e.doc.UndoNames)
+            self.assertGreaterEqual(len(names), 8, names)
+            for n in names:
+                self.assertNotIn("motion", n.lower(), n)
+                self.assertIn("dynamic analysis", n.lower(), n)
+            inner = self.sub_rig(e)
+            MO.add_spring(e.study, e.rig.parts["Block"], V(0, 0, 0), inner, V(0, 0, 0), 100.0, 50.0)
+            with self.assertRaises(MO.MotionRefused) as cm:
+                MO.compute(e.study)
+            self.assertNotIn("motion", str(cm.exception).lower())
 
 
 if __name__ == "__main__":
