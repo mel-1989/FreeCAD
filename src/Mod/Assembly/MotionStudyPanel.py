@@ -602,13 +602,17 @@ class TaskMotionStudy:
             self.play_button.blockSignals(False)
             self.play_button.setText(translate("Assembly", "Play"))
         if self._saved is not None:
-            if self._gdoc() is not None:
-                MO._restore_placements(self.asm, self._saved)
-                self._restore_modified_flag()
-            self._saved = None
-            self._was_modified = None
-            if App.listDocuments().get(self.document_name) is not None:
-                self.doc.holdRecoverySnapshots(False)
+            try:
+                if self._gdoc() is not None:
+                    MO._restore_placements(self.asm, self._saved)
+                    self._restore_modified_flag()
+            finally:
+                # Release the recovery hold even if restoring raised, so
+                # autosave is never left off for the document.
+                self._saved = None
+                self._was_modified = None
+                if App.listDocuments().get(self.document_name) is not None:
+                    self.doc.holdRecoverySnapshots(False)
 
     # ---- task dialog protocol
 
