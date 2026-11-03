@@ -18,6 +18,12 @@ the document no longer allows (an unrelated edit made while the panel was open r
 rest still go through. Cancel, closing the panel and closing the document discard the staged list and touch no document.
 Go to only changes the selection and, for another document, which document is active.
 
+Identity. A staged action names its objects by document ``Uid`` and object ``ID`` (never by a name, which another document or
+object can take over), and a staged publish also by the element's mapped name and geometric fingerprint (never by an index
+name, which an undo renumbers). OK re-checks each one; an action whose object is gone or is now another one, or whose element
+no longer exists or has changed, is reported and skipped. One panel is open at a time: a module-level registry covers the
+time a Go to another document hides it (task dialogs belong to a document, so ``Gui.Control.activeDialog()`` is then false).
+
 Names are checked when they are staged (``AssemblySkeleton._check_name``, plus the names already staged), so a refused
 name is never staged. The questions the panel asks (a name, a confirmation, an item to subscribe to, the list of
 problems after OK) are module-level functions (``ask_name``, ``confirm``, ``ask_item``, ``report_problems``) that tests
@@ -29,6 +35,8 @@ Selection. ``resolve_selection`` reads the selection with the sub-names unresolv
 Behaviour sources: the slice 3a API; Qt widget documentation; FreeCAD's task dialog, selection and document observer
 interfaces. Wording and layout are this project's own.
 """
+
+import itertools
 
 import FreeCAD as App
 import FreeCADGui as Gui
@@ -234,6 +242,38 @@ class _Observer:
         self._hit(doc)
 
 
+_current = None                 # the open panel, until it is accepted, rejected or its document is closed
+_op_ids = itertools.count(1)
+
+
+def panel_open():
+    """True while a Skeleton panel is open, also while a Go to another document has hidden it."""
+    return _current is not None and not _current.done
+
+
+def _ident(obj):
+    """The identity of an object that survives renames of the document and reuse of object names."""
+    return {"uid": obj.Document.Uid, "id": obj.ID, "name": obj.Name, "doc": obj.Document.Name}
+
+
+def _resolve(ident):
+    """The object ``ident`` names, or None when its document is closed or the name now belongs to another object."""
+    doc = next((d for d in App.listDocuments().values() if d.Uid == ident["uid"]), None)
+    obj = doc.getObject(ident["name"]) if doc is not None else None
+    return obj if obj is not None and obj.ID == ident["id"] else None
+
+
+def _element_name_and_key(target, sub):
+    """(mapped name or None, geometric fingerprint) of element ``sub`` (an index name) of ``target``'s shape."""
+    shape = target.Shape
+    mapped = ""
+    try:
+        mapped = shape.getElementMappedName(sub)
+    except Exception:  # noqa: BLE001
+        pass
+    return (mapped if mapped and mapped != sub else None), AS.shape_digest(shape.getElement(sub))
+
+
 # --------------------------------------------------------------------- panel
 
 ROLE_KEY = QtCore.Qt.UserRole
@@ -244,12 +284,15 @@ class TaskSkeleton:
     """The skeleton panel of ``part``."""
 
     def __init__(self, part):
-        if Gui.Control.activeDialog():   # before anything touches a document
+        if Gui.Control.activeDialog() or panel_open():   # before anything touches a document
             raise RuntimeError("another task dialog is already open")
+        global _current
+        _current = self
         self.part = part
         self.doc = part.Document
         self.document_name = self.doc.Name
         self.part_name = part.Name
+        self.part_id = part.ID
         self.ops = []               # staged actions, oldest first: dicts with an "op" key
         self.problems = []          # what the last OK could not do
         self.done = False
@@ -347,7 +390,7 @@ class TaskSkeleton:
         if self.document_name not in App.listDocuments():
             return False
         part = App.getDocument(self.document_name).getObject(self.part_name)
-        return part is not None
+        return part is not None and part.ID == self.part_id
 
     def _sub_row(self, binder, pending=""):
         d = AS.describe_subscription(binder)
@@ -357,6 +400,7 @@ class TaskSkeleton:
         else:
             text = state
         return {"kind": "sub", "object": binder.Name, "document": binder.Document.Name, "label": binder.Label,
+                "ident": _ident(binder), "op_id": None,
                 "item": d["item"], "skeleton": d["skeleton"], "state": state, "state_text": text,
                 "reason": d["reason"], "frozen": d["frozen"], "skeleton_changed": d["skeleton_changed"],
                 "pending": pending, "item_problem": d.get("item_problem")}
@@ -398,15 +442,15 @@ class TaskSkeleton:
                     for s in row["subs"]:
                         s["pending"] = translate("Assembly", "will break")
             elif kind == "subscribe":
-                item = _find_object(op["item"])
-                subs.append({"kind": "sub", "object": None, "document": self.document_name,
+                item = _resolve(op["item"])
+                subs.append({"kind": "sub", "object": None, "document": self.document_name, "op_id": op["op_id"],
+                             "ident": None,
                              "label": op["label"], "item": op["label"], "skeleton": op["skeleton"], "state": "new",
                              "state_text": translate("Assembly", "new"), "reason": None, "frozen": False,
                              "skeleton_changed": None, "pending": translate("Assembly", "subscribe"),
                              "item_problem": None, "staged": True, "item_object": item})
             else:
-                row = next((s for s in subs + [c for r in items for c in r["subs"]] if s["object"] == op["binder"]
-                            and s["document"] == op["document"]), None)
+                row = next((s for s in subs + [c for r in items for c in r["subs"]] if s["ident"] == op["binder"]), None)
                 if row is None:
                     continue
                 if kind == "unsubscribe":
@@ -436,6 +480,8 @@ class TaskSkeleton:
                 self.refresh()
             except Exception:  # noqa: BLE001  (the document is going away)
                 pass
+        elif not self.done:
+            self._release()                      # the document is closed: the panel is gone with it
 
     def refresh(self):
         keep_item, keep_sub = self.selected_item_name(), self.selected_subscription_key()
@@ -470,7 +516,7 @@ class TaskSkeleton:
         for s in m["subs"]:
             name = s["label"] + ("" if s["item"] in (None, s["label"]) else " (%s)" % s["item"])
             it = QtWidgets.QTreeWidgetItem([name, s["state_text"], s["pending"]])
-            it.setData(0, ROLE_KEY, ("sub", s["document"], s["object"]) if s["object"] else ("staged", s["label"]))
+            it.setData(0, ROLE_KEY, ("sub", s["document"], s["object"]) if s["object"] else ("staged", s["op_id"]))
             it.setData(0, ROLE_ROW, s)
             if s["reason"]:
                 it.setToolTip(1, s["reason"])
@@ -507,7 +553,7 @@ class TaskSkeleton:
     def selected_subscription_key(self):
         row = self._row(self.subs_tree) or self._row(self.items_tree)
         if row and row["kind"] == "sub":
-            return (row["document"], row["object"] if row["object"] else row["label"])
+            return (row["document"], row["object"] if row["object"] else row["op_id"])
         return None
 
     def select_item(self, name):
@@ -525,8 +571,8 @@ class TaskSkeleton:
         for i in range(self.subs_tree.topLevelItemCount()):
             it = self.subs_tree.topLevelItem(i)
             row = it.data(0, ROLE_ROW)
-            if row and row["kind"] == "sub" and key in (row["object"], row["label"]) \
-                    and (document is None or document == row["document"]):
+            if row and row["kind"] == "sub" and (key in (row["object"], row["label"]) or (
+                    row["op_id"] is not None and key == row["op_id"])) and (document is None or document == row["document"]):
                 self.subs_tree.setCurrentItem(it)
                 return True
         return False
@@ -600,13 +646,21 @@ class TaskSkeleton:
         return True
 
     def _names_taken(self, skip=None):
-        return {r["name"] for r in self.model()["items"] if r["name"] != skip}
+        return {r["name"] for r in self.model()["items"] if r["name"] != skip and not r["withdrawn"]}
 
     def check_name(self, name, own=None, skip=None):
         """The stripped name, or SkeletonError: the API's checks against the document, then the names already staged.
         ``own`` is the item object a rename is for, ``skip`` the projected name it currently has."""
         part = self.doc.getObject(self.part_name)
-        name = AS._check_name(part, name, own=own)
+        try:
+            name = AS._check_name(part, name, own=own)
+        except AS.SkeletonError:
+            # a name freed by a staged rename or withdrawal is free again once OK has applied it (ops apply in order)
+            freed = {op["name"] for op in self.ops if op["op"] in ("rename", "unpublish")}
+            holder = next((i for i in AS.items(part) if i.ItemName == str(name).strip() and i.ItemName in freed), None)
+            if holder is None or own is not None:
+                raise
+            name = AS._check_name(part, name, own=holder)
         if name in self._names_taken(skip):
             raise AS.SkeletonError(translate("Assembly", "%s already has a staged item named %r") % (part.Label, name))
         return name
@@ -641,7 +695,9 @@ class TaskSkeleton:
             except AS.SkeletonError as exc:
                 self._message(str(exc))
                 continue
-            self._stage({"op": "publish", "name": chosen, "target": c.target.Name, "sub": c.sub, "itemkind": kind})
+            mapped, key = _element_name_and_key(c.target, c.sub) if c.sub else (None, None)
+            self._stage({"op": "publish", "op_id": next(_op_ids), "name": chosen, "target": _ident(c.target),
+                         "target_label": c.target.Label, "sub": c.sub, "mapped": mapped, "fingerprint": key, "itemkind": kind})
             staged += 1
         return staged
 
@@ -686,7 +742,7 @@ class TaskSkeleton:
                 if op["new"] == op["name"]:
                     self.ops.remove(op)
                 return self._stage_done()
-        return self._stage({"op": "rename", "name": row["name"], "new": new_name})
+        return self._stage({"op": "rename", "op_id": next(_op_ids), "name": row["name"], "new": new_name})
 
     def _stage_done(self):
         self._message("")
@@ -711,8 +767,8 @@ class TaskSkeleton:
         pending_rename = next((op for op in self.ops if op["op"] == "rename" and op["new"] == row["name"]), None)
         if pending_rename is not None:
             self.ops.remove(pending_rename)
-            return self._stage({"op": "unpublish", "name": pending_rename["name"]})
-        return self._stage({"op": "unpublish", "name": row["name"]})
+            return self._stage({"op": "unpublish", "op_id": next(_op_ids), "name": pending_rename["name"]})
+        return self._stage({"op": "unpublish", "op_id": next(_op_ids), "name": row["name"]})
 
     def _sub_row_for(self, key):
         row = self._row(self.subs_tree) or self._row(self.items_tree)
@@ -745,10 +801,11 @@ class TaskSkeleton:
         except AS.SkeletonError as exc:
             self._message(str(exc))
             return False
-        if any(op["op"] == "subscribe" and op["item"] == (item.Document.Name, item.Name) for op in self.ops):
+        if any(op["op"] == "subscribe" and op["item"] == _ident(item) for op in self.ops):
             self._message(translate("Assembly", "A subscription to %s is already staged") % item.ItemName)
             return False
-        return self._stage({"op": "subscribe", "item": (item.Document.Name, item.Name), "label": item.ItemName,
+        return self._stage({"op": "subscribe", "op_id": next(_op_ids), "item": _ident(item), "label": item.ItemName,
+                            "item_name": item.ItemName, "skeleton_id": item.SkeletonId,
                             "skeleton": sk.Label if sk else item.SkeletonName})
 
     def unsubscribe(self, key=None, assume_yes=False):
@@ -763,10 +820,10 @@ class TaskSkeleton:
             return False
         if row["object"] is None:                 # staged here and never made: forget it
             for op in self.ops:
-                if op["op"] == "subscribe" and op["label"] == row["label"]:
+                if op["op"] == "subscribe" and op["op_id"] == row["op_id"]:
                     self.ops.remove(op)
                     return self._stage_done()
-        return self._stage({"op": "unsubscribe", "binder": row["object"], "document": row["document"]})
+        return self._stage({"op": "unsubscribe", "op_id": next(_op_ids), "binder": row["ident"], "label": row["label"]})
 
     def freeze(self, key=None):
         return self._freeze(key, "freeze", "unfreeze")
@@ -782,10 +839,10 @@ class TaskSkeleton:
         if (op == "freeze") == bool(row["frozen"]):
             return False
         for staged in self.ops:                   # freeze then unfreeze (or the reverse) cancels out
-            if staged["op"] == opposite and staged["binder"] == row["object"]:
+            if staged["op"] == opposite and staged["binder"] == row["ident"]:
                 self.ops.remove(staged)
                 return self._stage_done()
-        return self._stage({"op": op, "binder": row["object"], "document": row["document"]})
+        return self._stage({"op": op, "op_id": next(_op_ids), "binder": row["ident"], "label": row["label"]})
 
     # ---- go to
 
@@ -863,25 +920,60 @@ class TaskSkeleton:
     def _apply_one(self, part, op):
         kind = op["op"]
         if kind == "publish":
-            target = self.doc.getObject(op["target"])
+            target = _resolve(op["target"])
             if target is None:
-                raise AS.SkeletonError(translate("Assembly", "%s no longer exists") % op["target"])
-            AS.publish(part, op["name"], target, op["sub"])
+                raise AS.SkeletonError(translate("Assembly", "%s no longer exists") % op["target_label"])
+            AS.publish(part, op["name"], target, self._current_element(target, op))
         elif kind == "rename":
             AS.rename(part, op["name"], op["new"])
         elif kind == "unpublish":
             AS.unpublish(part, op["name"])
         elif kind == "subscribe":
-            item = _find_object(op["item"])
-            if item is None:
+            item = _resolve(op["item"])
+            if item is None or not AS.is_item(item) or item.ItemName != op["item_name"] \
+                    or item.SkeletonId != op["skeleton_id"] or not item.Published:
                 raise AS.SkeletonError(translate("Assembly", "the item %s no longer exists") % op["label"])
             AS.subscribe(part, item)
         else:
-            doc = App.listDocuments().get(op["document"])
-            binder = doc.getObject(op["binder"]) if doc else None
+            binder = _resolve(op["binder"])
             if binder is None:
                 raise AS.SkeletonError(translate("Assembly", "the subscription no longer exists"))
             {"unsubscribe": AS.unsubscribe, "freeze": AS.freeze, "unfreeze": AS.unfreeze}[kind](binder)
+
+    @staticmethod
+    def _current_element(target, op):
+        """The index name, now, of the element a staged publish meant, or SkeletonError. The element is followed by its mapped
+        name when that still resolves; failing that, by its geometric fingerprint, accepted only when exactly one element of
+        the same kind has it. An element that is gone, changed or ambiguous is never replaced by another one."""
+        sub = op["sub"]
+        if not sub:
+            return sub
+        shape = target.Shape
+
+        def same(name):
+            try:
+                return AS.shape_digest(shape.getElement(name)) == op["fingerprint"]
+            except Exception:  # noqa: BLE001
+                return False
+
+        current = sub
+        if op["mapped"]:
+            current = target.resolveSubElement(op["mapped"])[2]
+        if current and not current.startswith("?") and same(current):
+            return current
+        kind = sub.rstrip("0123456789")
+        found = [n for n in ("%s%d" % (kind, i + 1) for i in range(len(getattr(shape, kind + "s" if kind != "Vertex" else "Vertexes"))))
+                 if same(n)]
+        if len(found) == 1:
+            return found[0]
+        raise AS.SkeletonError(translate("Assembly", "the selected element of %s no longer exists or has changed")
+                               % op["target_label"])
+
+    def _release(self):
+        global _current
+        if _current is self:
+            _current = None
+        self.done = True
 
     def _stop_observing(self):
         if getattr(self, "_observing", False):
@@ -895,7 +987,7 @@ class TaskSkeleton:
         """Gui.Control.closeDialog() calls neither accept nor reject, nor does closing the document: nothing was changed, so
         there is nothing to undo."""
         self._stop_observing()
-        self.done = True
+        self._release()
         self.ops = []
 
     # ---- task dialog protocol
@@ -912,13 +1004,13 @@ class TaskSkeleton:
             self.done = True
             if self.problems:
                 report_problems(self.form, self.problems)
-        self.done = True
+        self._release()
         return True
 
     def reject(self):
         self._stop_observing()
         self.ops = []
-        self.done = True
+        self._release()
         return True
 
     def clicked(self, button):
@@ -940,11 +1032,6 @@ def _by_name(rows, name):
     return next((r for r in rows if r["name"] == name), None)
 
 
-def _find_object(ref):
-    doc = App.listDocuments().get(ref[0])
-    return doc.getObject(ref[1]) if doc else None
-
-
 def _op_text(op):
     kind = op["op"]
     if kind == "publish":
@@ -955,7 +1042,7 @@ def _op_text(op):
         return translate("Assembly", "unpublish %s") % op["name"]
     if kind == "subscribe":
         return translate("Assembly", "subscribe to %s") % op["label"]
-    return "%s %s" % (kind, op["binder"])
+    return "%s %s" % (kind, op["label"])
 
 
 def _select(obj, sub=""):

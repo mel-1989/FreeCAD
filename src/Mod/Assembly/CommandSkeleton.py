@@ -20,9 +20,12 @@ ICONS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 
 def open_panel(part):
     """Open the panel on ``part`` unless another task dialog is open. Returns the panel or None."""
-    if Gui.Control.activeDialog():   # Gui.runCommand ignores IsActive: never build a second, hidden panel
+    from SkeletonPanel import TaskSkeleton, panel_open
+
+    # Gui.runCommand ignores IsActive: never build a second, hidden panel. A Go to another document hides the first panel
+    # (task dialogs belong to a document), so activeDialog() alone does not see it.
+    if Gui.Control.activeDialog() or panel_open():
         return None
-    from SkeletonPanel import TaskSkeleton
 
     panel = TaskSkeleton(part)
     dialog = Gui.Control.showDialog(panel)
@@ -61,13 +64,15 @@ class CommandPublishSkeletonGeometry:
         }
 
     def IsActive(self):
-        if App.ActiveDocument is None or Gui.Control.activeDialog():
+        from SkeletonPanel import panel_open
+
+        if App.ActiveDocument is None or Gui.Control.activeDialog() or panel_open():
             return False
         return bool(publishable()[0])
 
     def Activated(self):
         cands, why = publishable()
-        if not cands or Gui.Control.activeDialog():
+        if not cands:
             return
         panel = open_panel(cands[0].skeleton)
         if panel is not None:
@@ -92,9 +97,10 @@ class CommandSubscribeSkeleton:
         }
 
     def IsActive(self):
-        if App.ActiveDocument is None or Gui.Control.activeDialog():
+        from SkeletonPanel import any_published_item, panel_open, selected_part
+
+        if App.ActiveDocument is None or Gui.Control.activeDialog() or panel_open():
             return False
-        from SkeletonPanel import any_published_item, selected_part
 
         return selected_part() is not None and any_published_item()
 
@@ -102,7 +108,7 @@ class CommandSubscribeSkeleton:
         from SkeletonPanel import selected_items, selected_part
 
         part = selected_part()
-        if part is None or Gui.Control.activeDialog():
+        if part is None:
             return
         chosen = selected_items()
         panel = open_panel(part)
