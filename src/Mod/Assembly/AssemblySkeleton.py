@@ -268,20 +268,51 @@ _ITEM_PROPS = {"Source": "App::PropertyXLinkSub", "ItemName": "App::PropertyStri
                "SkeletonSchema": "App::PropertyString"}
 
 
-def _datum_shape(target):
-    """The unbounded plane, line or point of a PartDesign datum, built from its Placement, for a datum that has no shape.
-    A datum line, plane or point gets its infinite shape once, in its constructor, and the core cannot store an infinite
-    BRep: a datum restored from a file has a null shape that no recompute rebuilds. Same geometry as the stock shape."""
+def _datum_from(type_id, placement):
     import Part
-    kind = {"PartDesign::Line": Part.Line, "PartDesign::Plane": Part.Plane}.get(target.TypeId)
-    if target.TypeId == "PartDesign::Point":
+    kind = {"PartDesign::Line": Part.Line, "PartDesign::Plane": Part.Plane}.get(type_id)
+    if type_id == "PartDesign::Point":
         sh = Part.Vertex(0, 0, 0)
     elif kind is not None:
         sh = kind().toShape()
     else:
         return None
-    sh.Placement = target.Placement
+    sh.Placement = placement
     return sh
+
+
+def _datum_shape(target):
+    """The unbounded plane, line or point of a PartDesign datum, built from its Placement, for a datum that has no shape.
+    A datum line, plane or point gets its infinite shape once, in its constructor, and the core cannot store an infinite
+    BRep: a datum restored from a file has a null shape that no recompute rebuilds. Same geometry as the stock shape."""
+    return _datum_from(target.TypeId, target.Placement)
+
+
+def _datum_record(item):
+    """What a subscriber must remember to rebuild a datum's geometry: the datum's type and Placement, or None."""
+    src = item.Source
+    if item.Kind != "object" or not src or src[0] is None or src[0].TypeId not in (
+            "PartDesign::Line", "PartDesign::Plane", "PartDesign::Point"):
+        return None
+    p = src[0].Placement
+    return json.dumps({"type": src[0].TypeId, "base": list(p.Base), "q": list(p.Rotation.Q)})
+
+
+def _restore_datum(binder):
+    """Give an unloaded datum subscriber its geometry back when the stock binder loaded it null (the core cannot store an
+    infinite shape). Returns True if the binder now holds geometry."""
+    if not _empty(binder.Shape):
+        return True
+    rec = binder.Datum if "Datum" in binder.PropertiesList else ""
+    if not rec:
+        return False
+    import Part
+    d = json.loads(rec)
+    sh = _datum_from(d["type"], App.Placement(App.Vector(*d["base"]), App.Rotation(*d["q"])))
+    if sh is None:
+        return False
+    binder.Shape = Part.Compound([sh])
+    return True
 
 
 def is_item(obj):
@@ -347,6 +378,8 @@ class Subscription:
     def __init__(self, obj):
         obj.addProperty("App::PropertyString", "Subscription", PROP_GROUP,
                         "What the binder subscribes to (JSON: item, publication, skeleton document)")
+        obj.addProperty("App::PropertyString", "Datum", PROP_GROUP,
+                        "Type and placement of a published datum, to rebuild its unbounded geometry while unloaded")
         obj.addProperty("App::PropertyString", "Basis", PROP_GROUP,
                         "Digest of the item's shape at the last following recompute")
         obj.Proxy = self
@@ -354,6 +387,7 @@ class Subscription:
     def execute(self, obj):
         info = classify(obj)
         if info["state"] == UNLOADED:
+            _restore_datum(obj)
             return True                     # keep the last shape: the stock execute would see no Support
         if info["state"] == BROKEN:
             _touch_dependents(obj)          # the features built on this subscriber must not stay Up-to-date
@@ -363,6 +397,9 @@ class Subscription:
             digest = shape_digest(item.Shape) or ""
             if obj.Basis != digest:
                 obj.Basis = digest
+            rec = _datum_record(item) or ""
+            if "Datum" in obj.PropertiesList and obj.Datum != rec:
+                obj.Datum = rec
         return False                        # let the stock binder do the (un)update
 
     def onChanged(self, obj, prop):
@@ -449,7 +486,10 @@ def classify(binder):
         out["skeleton_changed"] = None if not _document_open(binder, rec) else True
         return out
     if rec and not _document_open(binder, rec):
-        out.update(state=UNLOADED, reason="the skeleton document %r is not open" % (rec.get("file") or rec.get("doc")))
+        what = "the skeleton document %r is not open" % (rec.get("file") or rec.get("doc"))
+        if not _restore_datum(binder):
+            what += "; this subscriber holds no geometry (the core cannot store it and it was never recorded): open the skeleton"
+        out.update(state=UNLOADED, reason=what)
         return out
     out.update(state=BROKEN, reason="%s: the item no longer exists" % (rec.get("item") or "item"))
     return out

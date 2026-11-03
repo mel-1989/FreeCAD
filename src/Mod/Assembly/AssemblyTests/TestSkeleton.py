@@ -1285,6 +1285,28 @@ def skeleton_identity_label_and_containers():
     return P
 
 
+@case
+def unloaded_datum_subscribers_keep_their_geometry():
+    P = []
+    with world(True) as w:
+        w.both("line", "plane", "point", "face")
+        w.save()
+        d = w.dir
+        for n in (w.doc.Name, w.sdoc.Name):
+            App.closeDocument(n)
+        doc = App.openDocument(os.path.join(d, "subscriber.FCStd"))
+        App.closeDocument("skeleton")
+        for k in ("line", "plane", "point", "face"):
+            b = doc.getObject("S_" + k)
+            rec = AS.describe_subscription(b)
+            chk(P, rec["state"] == "unloaded", "%s: %s" % (k, rec["state"]))
+            chk(P, not AS._empty(b.Shape) and K.same(K.observe_shape(b.Shape, k), K.truth(k)),
+                "%s unloaded holds %s" % (k, None if AS._empty(b.Shape) else K.observe_shape(b.Shape, k)))
+        for n in list(App.listDocuments()):
+            App.closeDocument(n)
+    return P
+
+
 # ------------------------------------------------------------------ mutants
 
 @contextlib.contextmanager
@@ -1603,6 +1625,10 @@ def _m_containers_touched():
     return dict(_is_container=lambda o: False)
 
 
+def _m_datum_not_recorded():
+    return dict(_datum_record=lambda item: None)
+
+
 MUTANTS = {
     "subscriber_stores_raw_element": _m_raw_element,
     "broken_item_retargeted_to_first_of_type": _m_retarget_first_of_type,
@@ -1637,6 +1663,7 @@ MUTANTS = {
     "observer_prepares_every_document": _m_observer_ungated,
     "skeleton_bound_by_name_only": _m_bound_by_name,
     "break_touches_containers": _m_containers_touched,
+    "datum_geometry_not_recorded": _m_datum_not_recorded,
 }
 
 
