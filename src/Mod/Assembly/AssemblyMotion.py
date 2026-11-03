@@ -89,6 +89,10 @@ that starts inside the tolerance band without touching (gap above 1e-4 mm and no
 count as touching from the start), and a contact whose two parts never move. After a run every output step is checked:
 a contact pair that overlaps, or whose closest-point direction reverses between two steps in a way that cannot be shown
 harmless (a body may have passed through its partner), makes the run fail with ``MotionError`` instead of storing a wrong result.
+The proof assumes the joint path between two output states (and the event states the integrator stopped at inside the step) is the
+cubic Hermite interpolant of their positions and velocities, allows the real path to bulge from the chord of the placements by the
+Hermite midpoint's offset, and is not a proof for a path that departs from its cubic by more than that (a wiggle faster than the
+output step with no event); an interval it cannot clear is refused, never passed.
 
 Limits (slice 6a, contact and stops now in 6c): no initial velocity except ``Velocities`` (JSON ``{joint name: value}`` in
 rad/s or mm/s); components must sit directly in the assembly (not in a sub-assembly); the joint frames must already
@@ -1420,6 +1424,25 @@ def _reach(p0, p1, radius):
     return (p1.Base - p0.Base).Length + abs(float((p0.Rotation.inverted() * p1.Rotation).Angle)) * radius
 
 
+def _hermite_mid(qa, qb, va, vb, h):
+    """Value and slope at the midpoint of the cubic Hermite interpolant of the states ``(qa, va)`` and ``(qb, vb)`` a
+    time ``h`` apart (standard cubic Hermite interpolation): exact for any path that is quadratic in time."""
+    return 0.5 * (qa + qb) + h * (va - vb) / 8.0, 1.5 * (qb - qa) / h - 0.25 * (va + vb)
+
+
+def _deviation(p0, p1, pm, radius):
+    """Distance (mm) a point of a part of bounding ``radius`` can lie from the chord between the placements ``p0`` and ``p1``
+    when the part is at ``pm`` midway: the origin's offset from the midpoint of its end positions plus the angle between
+    ``pm`` and the half-way rotation times the radius."""
+    off = (pm.Base - (p0.Base + p1.Base) * 0.5).Length
+    return off + abs(float((p0.Rotation.slerp(p1.Rotation, 0.5).inverted() * pm.Rotation).Angle)) * radius
+
+
+def _inflation(dev):
+    """Extra reach (mm) for a relative path that bulges ``dev`` from its chord: out and back to the bulge costs 2 dev."""
+    return 2.0 * dev
+
+
 def _cannot_have_met(gap0, gap1, reach):
     """True when two parts ``gap0`` and ``gap1`` mm apart at two steps, whose points moved at most ``reach`` mm
     relative to each other in between, provably did not touch: meeting would need ``gap0 + gap1 <= reach``."""
@@ -1598,6 +1621,7 @@ class _Sim:
         self.armed = {}
         self.chunks = 0
         self.retries = 0
+        self._knots = []                                # (t, q, v before, v after) at every event the run resolved
 
     def note(self, t, el, what, **kw):
         rec = {"t": float(t), "element": el.name, "what": what}
@@ -1730,6 +1754,7 @@ class _Sim:
             if fired_n > _MAX_EVENTS:
                 raise MotionError("more than %d contact events in one run: the pair is chattering" % _MAX_EVENTS)
             y = self._resolve(owners[i][0], owners[i][1], te, ye)
+            self._knots.append((te, ye[:n].copy(), ye[n:].copy(), y[n:].copy()))
             t_cur = te
         if k0 < len(grid) or any(c is None for c in cols):
             raise MotionError("the integrator did not reach the end of the time span (%d of %d steps)" % (k0, len(grid)))
@@ -1741,7 +1766,7 @@ class _Sim:
         """After the run, at every output step: no contact pair overlaps, and no pair has changed sides between two
         steps (the direction between its closest points reversed) without a proof that the two parts could not have met
         in between. A pair that never touches may turn its closest-point direction as a body goes round a corner; it is
-        refused only when ``_could_not_have_met`` cannot show that the parts stayed apart. A touching step clears the
+        refused only when ``_could_not_have_met`` cannot show that the parts stayed apart, following the joint path as a cubic Hermite curve through the output states and the event states (bounces, locks, releases) the run passed through. A touching step clears the
         memory (a body that rests or slides on its partner may legitimately come off on any side), so a side change
         across a touching step is not flagged (a known limit). Poses unchanged since the last probed step reuse its result (no second distance query or boolean)."""
         m = self.m
@@ -1751,7 +1776,7 @@ class _Sim:
             if el.kind != "contact":
                 continue
             radii = [max(float(np.linalg.norm(c)) for c in cs) * 1e3 for cs in el.corners]
-            prev = None                                     # (u, gap, placements, grid index, q) of the last step apart
+            prev = None                                     # (u, node, grid index) of the last step apart
             last_q, last = None, None
             for k in range(Y.shape[1]):
                 q = Y[:n, k]
@@ -1778,29 +1803,51 @@ class _Sim:
                     continue
                 u = np.asarray(data["u"], dtype=float)
                 if prev is not None and float(prev[0] @ u) < 0.0:
-                    if not self._could_not_have_met(el, radii, (prev[4], prev[1], prev[2]), (q.copy(), gap, pls)):
+                    node = (t, q.copy(), Y[n:2 * n, k].copy(), Y[n:2 * n, k].copy(), gap, pls)
+                    if not self._could_not_have_met(el, radii, prev[1], node):
                         raise MotionError("contact %s: the closest-point direction between the parts %s and %s "
                                           "reversed between t = %.6g s and t = %.6g s, so the pair may have passed "
                                           "through or beside each other unseen; use a smaller step"
-                                          % (el.name, el.b1.name, el.b2.name, float(self.grid[prev[3]]), t))
-                prev = (u, gap, pls, k, q.copy())
+                                          % (el.name, el.b1.name, el.b2.name, prev[1][0], t))
+                prev = (u, (t, q.copy(), Y[n:2 * n, k].copy(), Y[n:2 * n, k].copy(), gap, pls), k)
 
     def _could_not_have_met(self, el, radii, a, b, depth=12):
-        """True when the pair provably did not touch between the poses ``a`` and ``b`` (each ``(q, gap, placements)``).
-        Meeting needs gap_a + gap_b <= reach, the most any point of either part can have moved relative to the other
-        (``_cannot_have_met``). When that cannot be excluded the interval is halved at the mean joint coordinates, the
-        parts taken to move on the straight line in joint space between two steps, and each half is judged the same way,
-        down to ``depth`` halvings: a body that goes round a corner is cleared, one that goes through its partner finds
-        a sample at zero gap (or a sub-interval it cannot clear) and stays refused."""
-        (qa, ga, pa), (qb, gb, pb) = a, b
+        """True when the pair provably did not touch between the nodes ``a`` and ``b``, each ``(t, q, v_in, v_out, gap,
+        placements)`` (``v_in`` and ``v_out`` are the joint velocities just before and just after the node; they differ
+        only at an event). An event inside the interval (a bounce, a lock or release: the velocity jumps) splits it
+        there. Within a piece the joint path is taken as the cubic Hermite interpolant of the two end states, exact for
+        a quadratic path (a ballistic arc). Meeting needs gap_a + gap_b <= the path length of the relative motion,
+        which for a path no further than ``dev`` from the chord of the end placements is at most ``reach + 2 dev``
+        (``_cannot_have_met``); ``reach`` is the chord (``_reach``) and ``dev`` the distance of the Hermite midpoint's
+        placements from the chord's midpoint, summed over both parts. When that cannot be excluded the piece is halved
+        at the Hermite midpoint (value and slope) and each half is judged the same way, down to ``depth`` halvings: a
+        body that goes round a corner is cleared, one that goes through its partner finds a sample at zero gap (or a
+        piece it cannot clear) and stays refused. What this does not prove: a path that departs from its cubic by more
+        than the midpoint shows (a fourth-order wiggle between two steps with no event), and any event the integrator
+        did not stop at."""
+        m = self.m
+        ta, tb = a[0], b[0]
+        inner = [k for k in getattr(self, "_knots", []) if ta < k[0] < tb]
+        if inner:
+            t, q, v_in, v_out = min(inner, key=lambda k: k[0])
+            g, _row, _data = el.probe(m, q)
+            if g <= 1e-4:
+                return False
+            c = (t, q, v_in, v_out, g, (App.Placement(el.sh1.Placement), App.Placement(el.sh2.Placement)))
+            return (self._could_not_have_met(el, radii, a, c, depth) and self._could_not_have_met(el, radii, c, b, depth))
+        _ta, qa, _vi, va, ga, pa = a
+        _tb, qb, vb, _vo, gb, pb = b
+        h = tb - ta
+        qm, vm = _hermite_mid(qa, qb, va, vb, h)
+        gm, _row, _data = el.probe(m, qm)
+        pm = (App.Placement(el.sh1.Placement), App.Placement(el.sh2.Placement))
+        mid = (0.5 * (ta + tb), qm, vm, vm, gm, pm)
         reach = sum(_reach(p0, p1, r) for p0, p1, r in zip(pa, pb, radii))
-        if _cannot_have_met(ga, gb, reach):
+        dev = sum(_deviation(p0, p1, p2, r) for p0, p1, p2, r in zip(pa, pb, pm, radii))
+        if _cannot_have_met(ga, gb, reach + _inflation(dev)):
             return True
-        if depth == 0 or min(ga, gb) <= 1e-4:
+        if depth == 0 or min(ga, gb) <= 1e-4 or gm <= 1e-4:
             return False
-        qm = 0.5 * (qa + qb)
-        gm, _row, _data = el.probe(self.m, qm)
-        mid = (qm, gm, (App.Placement(el.sh1.Placement), App.Placement(el.sh2.Placement)))
         return (self._could_not_have_met(el, radii, a, mid, depth - 1)
                 and self._could_not_have_met(el, radii, mid, b, depth - 1))
 

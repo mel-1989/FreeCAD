@@ -339,12 +339,138 @@ def probe_tunnelling_is_refused():
         App.closeDocument(doc.Name)
 
 
+def _arc_study(doc, step, T=0.6, xp=-0.5, yp=-20.0, zlo=300.0, zhi=600.0, th=1.0):
+    """A 20 mm ball thrown on a ballistic arc (gravity, a carriage on an x rail at 1 m/s, the ball on a z slider off the
+    carriage) from x = -310 mm over a post ``th`` mm thick at ``xp`` standing from ``zlo`` to ``zhi``, shifted to ``yp``; a
+    declared contact between ball and post. The arc rises 441 mm in the first half of ``T`` and comes down at x = 290 mm."""
+    rig = C.Rig(doc, "single")
+    car = rig.box("Car", 10, 10, 10, C.P(C.V(-305, -5, 95), C.R()))
+    ball = rig.box("Ball", 20, 20, 20, C.P(C.V(-310, -10, 90), C.R()))
+    post = rig.box("Post", th, 40, zhi - zlo, C.P(C.V(xp, yp, zlo), C.R()))
+    rig.fixed("PostFix", rig.G, post, (xp, yp + 5, zlo + 10))
+    rig.slide("X", rig.G, car, (-300, 0, 100), (1, 0, 0))
+    rig.slide("Z", car, ball, (-300, 0, 100), (0, 0, 1))
+    rig.finish()
+    study = C.new_study(rig, T, step)
+    MO.set_mass(study, car, density=C.STEEL)
+    MO.set_mass(study, ball, density=C.STEEL)
+    MO.add_gravity(study)
+    MO.add_contact(study, ball, post, 0.5)
+    study.Velocities = json.dumps({"X": 1000.0, "Z": 9.80665e3 * T / 2})
+    return study
+
+
+def _bounce_study(doc, step, T=0.6, z0=400.0, xcross=450.0, zlo=200.0, zhi=300.0, th=1.0):
+    """A 20 mm ball dropped from ``z0`` mm onto a plate (restitution 0.9) while a carriage carries it along x at 1 m/s; it
+    bounces once at about 0.29 s and rises past a post ``th`` mm thick standing from ``zlo`` to ``zhi``, ``xcross`` mm
+    along, at about 0.45 s: inside one coarse output step. Gravity bends the path at the bounce."""
+    rig = C.Rig(doc, "single")
+    car = rig.box("Car", 10, 10, 10, C.P(C.V(-305, -5, z0 + 95), C.R()))
+    ball = rig.box("Ball", 20, 20, 20, C.P(C.V(-310, -10, z0), C.R()))
+    plate = rig.box("Plate", 3000, 100, 20, C.P(C.V(-1000, -50, -20), C.R()))
+    rig.fixed("PlateFix", rig.G, plate, (0, 0, -10))
+    xp = -310 + xcross + 10 - th / 2
+    post = rig.box("Post", th, 40, zhi - zlo, C.P(C.V(xp, -20, zlo), C.R()))
+    rig.fixed("PostFix", rig.G, post, (xp + th / 2, 0, zlo + 10))
+    rig.slide("X", rig.G, car, (-300, 0, z0 + 100), (1, 0, 0))
+    rig.slide("Z", car, ball, (-300, 0, z0 + 100), (0, 0, 1))
+    rig.finish()
+    study = C.new_study(rig, T, step)
+    MO.set_mass(study, car, density=C.STEEL)
+    MO.set_mass(study, ball, density=C.STEEL)
+    MO.add_gravity(study)
+    MO.add_contact(study, ball, plate, 0.9)
+    MO.add_contact(study, ball, post, 0.5)
+    study.Velocities = json.dumps({"X": 1000.0, "Z": 0.0})
+    return study
+
+
+def _run_guard_off(study, **extra):
+    """Run ``study`` with the contact guard off (and ``extra`` patches of ``_Sim``); the MotionError text or None."""
+    with patched(_guard_enabled=lambda: False), patched(MO._Sim, **extra):
+        try:
+            MO.run(study)
+        except MO.MotionError as exc:
+            return str(exc)
+    return None
+
+
+def probe_ballistic_arc_through_a_post_is_refused():
+    """Guard off, the ball's arc goes through a 1 mm post at steps of 0.6, 0.3 and 0.15 s: refused each time. At 0.6 s both
+    ends of the step are 290 mm from the post and a straight line in joint space between them passes 200 mm under it."""
+    problems = []
+    for step in (0.6, 0.3, 0.15):
+        doc = App.newDocument("MotionArc")
+        try:
+            if _run_guard_off(_arc_study(doc, step)) is None:
+                problems.append("a ball thrown through a post was stored at a %g s step" % step)
+        finally:
+            App.closeDocument(doc.Name)
+    return problems
+
+
+def _plate_guard_only():
+    """Test hook, not a model of anything real: only the pair with the plate is guarded and has events, so the ball
+    bounces where the integrator sees it but passes through the post unseen (the post-run check is its only watch)."""
+    orig_plan, orig_events = MO._Sim._plan, MO._Sim._events
+
+    def plan(self, guards, t, y, rhs):
+        return orig_plan(self, [g for g in guards if g.b2.name == "Plate"], t, y, rhs)
+
+    def events(self):
+        evs, owners = orig_events(self)
+        keep = [i for i, o in enumerate(owners) if o[0].b2.name != "Post"]
+        return [evs[i] for i in keep], [owners[i] for i in keep]
+    return plan, events
+
+
+def _run_plate_guarded(study, plan, events):
+    with patched(MO._Sim, _plan=plan, _events=events):
+        try:
+            MO.run(study)
+        except MO.MotionError as exc:
+            return str(exc)
+    return None
+
+
+def probe_bounce_then_post_inside_one_step_is_refused():
+    """A ball bounces on a plate and rises through a 1 mm post, both inside one 0.6 s output step, with only the plate
+    watched by the integrator (``_plate_guard_only``): refused. The straight line between the two output states passes
+    over the post, so the event state is what shows the path."""
+    plan, events = _plate_guard_only()
+    doc = App.newDocument("MotionBounce")
+    try:
+        if _run_plate_guarded(_bounce_study(doc, 0.6), plan, events) is None:
+            return ["a ball that bounced and then went through a post inside one step was stored"]
+        return []
+    finally:
+        App.closeDocument(doc.Name)
+
+
+def probe_arcs_clear_of_a_post_complete():
+    """A ball thrown on the same arc at a 0.6 s step completes when the post is well below it (200 mm under the arc's
+    flat top, 100 mm tall) or well to its side (100 mm in y), guard off: the pair never comes close."""
+    problems = []
+    for tag, kw in (("below", dict(zlo=100.0, zhi=200.0)), ("beside", dict(yp=100.0))):
+        doc = App.newDocument("MotionArcClear")
+        try:
+            msg = _run_guard_off(_arc_study(doc, 0.6, **kw))
+            if msg is not None:
+                problems.append("an arc clear of the post (%s) was refused: %s" % (tag, msg))
+        finally:
+            App.closeDocument(doc.Name)
+    return problems
+
+
 PROBES = {"guard_plan_needs_no_retries": probe_guard_plan_needs_no_retries,
           "guard_retries_recover": probe_guard_retries_recover, "part_documents": probe_part_documents_unchanged, "restores_placements": probe_run_restores_placements,
           "undo": probe_undo, "two_runs": probe_two_runs_identical,
           "overlap_refused": probe_overlapping_start_is_refused, "band_refused": probe_start_inside_the_band_is_refused,
           "baumgarte": probe_baumgarte_pulls_a_displaced_lock_back,
-          "pass_beside": probe_pair_passing_beside_is_not_refused, "tunnelling": probe_tunnelling_is_refused}
+          "pass_beside": probe_pair_passing_beside_is_not_refused, "tunnelling": probe_tunnelling_is_refused,
+          "arc_through_post": probe_ballistic_arc_through_a_post_is_refused,
+          "bounce_then_post": probe_bounce_then_post_inside_one_step_is_refused,
+          "arcs_clear": probe_arcs_clear_of_a_post_complete}
 
 
 def save_reopen_problems(name="spring_mass_k200", mode="single"):
@@ -582,6 +708,14 @@ def _m_crossing_bound_never_clears():
     return dict(_cannot_have_met=lambda g0, g1, reach: False)
 
 
+def _m_crossing_midpoints_on_the_chord():
+    return dict(_hermite_mid=lambda qa, qb, va, vb, h: (0.5 * (qa + qb), (qb - qa) / h))
+
+
+def _m_crossing_bound_ignores_deviation():
+    return dict(_inflation=lambda dev: 0.0)
+
+
 def _m_no_release_on_separation():
     return dict(_separation_value=lambda gap, tol: 1.0)
 
@@ -691,6 +825,8 @@ MUTANTS = {
     "crossing_check_removed": (_m_crossing_check_removed, [], ["tunnelling"]),
     "crossing_bound_always_clears": (_m_crossing_bound_always_clears, [], ["tunnelling"]),
     "crossing_bound_never_clears": (_m_crossing_bound_never_clears, [], ["pass_beside"]),
+    "crossing_midpoints_on_the_chord": (_m_crossing_midpoints_on_the_chord, [], ["arc_through_post", "bounce_then_post"]),
+    "crossing_bound_ignores_the_path_deviation": (_m_crossing_bound_ignores_deviation, [], ["arc_through_post"]),
     "released_pair_not_re_armed_inside_the_band": (_m_no_resettle_after_release, ["contact_released_in_band_returns_to_rest"], []),
 }
 
@@ -1375,6 +1511,14 @@ class TestMotion(unittest.TestCase):
     def test_a_pair_that_could_not_have_met_is_not_refused_but_a_tunnelling_body_is(self):
         self.assertEqual(probe_pair_passing_beside_is_not_refused(), [])
         self.assertEqual(probe_tunnelling_is_refused(), [])
+
+    def test_a_curved_path_is_sampled_not_chorded(self):
+        """The crossing check follows the joint path as a cubic through the output states and the event states: a ballistic
+        arc, and a path bent by a bounce inside one step, are refused when they go through a post, and arcs clear of it
+        complete."""
+        self.assertEqual(probe_ballistic_arc_through_a_post_is_refused(), [])
+        self.assertEqual(probe_bounce_then_post_inside_one_step_is_refused(), [])
+        self.assertEqual(probe_arcs_clear_of_a_post_complete(), [])
 
     def test_the_crossing_check_reuses_an_unchanged_pose(self):
         """A block resting on the plate for 100 steps costs the check a couple of distance queries and booleans, not one
