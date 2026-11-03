@@ -562,7 +562,11 @@ def save_and_reopen_keeps_publication_and_states():
             App.closeDocument(n)
         doc = App.openDocument(os.path.join(d, "subscriber.FCStd"))
         after = _states(doc)
-        chk(P, before == after, "states changed across save and reopen: %s vs %s" % (before, after))
+        chk(P, {k: v for k, v in before.items() if k != "S_line"} == {k: v for k, v in after.items() if k != "S_line"},
+            "states changed across save and reopen: %s vs %s" % (before, after))
+        ln = doc.getObject("S_line")
+        chk(P, after["S_line"][0] == "stale" or not AS._empty(ln.Shape),
+            "a published datum line that loaded with a null shape is reported following")
         sk = App.getDocument("skeleton")
         pub_after = [(i["item"], i["published"]) for i in AS.status(sk.getObject("Skel"))["items"]]
         chk(P, pub_before == pub_after, "publication changed: %s vs %s" % (pub_before, pub_after))
@@ -962,6 +966,159 @@ def configuration_suppresses_a_subscriber():
     return P
 
 
+# ------------------------------------------------------------------ repair 1: stale, aliasing, lost proxies, same-name documents
+
+@case
+def item_follows_changes_a_fingerprint_would_miss():
+    P = []
+    with world(False) as w:
+        w.both("face", "vertex", "edge")
+        for L in (10.0000004, 10.0000009, 10.4):
+            w.set_length(L)
+            for k in ("face", "vertex", "edge"):
+                follows(P, w, k, "L=%r" % L, L=L)
+        # a centred 40 x 20 plate turned into 20 x 40: same area, same centroid, different geometry
+        doc = App.newDocument("Turned")
+        body = doc.addObject("PartDesign::Body", "Skel")
+        sk = body.newObject("Sketcher::SketchObject", "Sketch")
+        sk.AttachmentSupport = (body.Origin.OriginFeatures[3], [""])
+        sk.MapMode = "FlatFace"
+        pts = [V(-20, -10, 0), V(20, -10, 0), V(20, 10, 0), V(-20, 10, 0)]
+        for i in range(4):
+            sk.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 4]), False)
+        for i in range(4):
+            sk.addConstraint(Sketcher.Constraint("Coincident", i, 2, (i + 1) % 4, 1))
+        for g in (0, 2):
+            sk.addConstraint(Sketcher.Constraint("Horizontal", g))
+        for g in (1, 3):
+            sk.addConstraint(Sketcher.Constraint("Vertical", g))
+        sk.addConstraint(Sketcher.Constraint("Symmetric", 0, 1, 1, 2, -1, 1))
+        sk.renameConstraint(sk.addConstraint(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 40.0)), "Width")
+        sk.renameConstraint(sk.addConstraint(Sketcher.Constraint("DistanceY", 1, 1, 1, 2, 20.0)), "Height")
+        pad = body.newObject("PartDesign::Pad", "Pad")
+        pad.Profile = sk
+        pad.Length = 10
+        doc.recompute()
+        AS.publish(body, "top", body, K.pick_face(body.Shape, (0, 0, 1), (0, 0, 10)))
+        hold = doc.addObject("PartDesign::Body", "Sub")
+        b = doc.getObject(AS.subscribe(hold, AS.find_item(body, "top"))["object"])
+        sk.setDatum("Width", App.Units.Quantity("20 mm"))
+        sk.setDatum("Height", App.Units.Quantity("40 mm"))
+        doc.recompute()
+        bb = b.Shape.BoundBox
+        chk(P, abs(bb.XLength - 20) < 1e-9 and abs(bb.YLength - 40) < 1e-9, "a turned plate: the subscriber holds %s" % bb)
+        App.closeDocument("Turned")
+    return P
+
+
+@case
+def subscriber_is_not_following_while_upstream_is_stale_or_broken():
+    P = []
+    for xdoc in (False, True):
+        with world(xdoc) as w:
+            w.both("face", "sketch")
+            b, sb = w.binders["face"], w.binders["sketch"]
+            h0 = digest(b)
+            w.sdoc.getObject("Sketch").touch()              # edited but not recomputed: upstream of both items
+            for k in ("face", "sketch"):
+                chk(P, state(w.binders[k]) == "stale", "xdoc=%s %s: %s while its source is Touched" % (xdoc, k, state(w.binders[k])))
+            w.recompute()
+            follows(P, w, "face", "recomputed xdoc=%s" % xdoc)
+            w.sdoc.getObject("Pad").Length = 0.0            # the feature the face belongs to fails
+            w.recompute()
+            chk(P, state(b) == "broken", "xdoc=%s: face with a failed Pad: %s" % (xdoc, state(b)))
+            chk(P, digest(b) == h0, "the face lost its last shape")
+            chk(P, "in error" in (AS.describe_subscription(b)["reason"] or ""), "reason: %s" % AS.describe_subscription(b)["reason"])
+    return P
+
+
+@case
+def lost_proxies_are_reattached_before_a_recompute():
+    P = []
+    for xdoc in (False, True):
+        with world(xdoc) as w:
+            w.both("face", "sketch")
+            for d in {w.sdoc.Name: w.sdoc, w.doc.Name: w.doc}.values():
+                for o in d.Objects:
+                    if AS.is_item(o) or AS.is_subscription(o):
+                        o.Proxy = None                          # what a re-save by stable FreeCAD leaves behind
+            w.sdoc.getObject("Pad").Length = 25.0
+            w.recompute()
+            follows(P, w, "face", "no proxies xdoc=%s" % xdoc, L=25.0)
+            chk(P, isinstance(AS.find_item(w.body, "face").Proxy, AS.PublishedItem), "the item proxy was not re-attached")
+    return P
+
+
+@case
+def break_reaches_features_on_a_plain_recompute():
+    P = []
+    for xdoc in (False, True):
+        with world(xdoc) as w:
+            w.both("face")
+            b = w.binders["face"]
+            s = _slab_sketch(w.holder, (w.holder.Origin.OriginFeatures[3], [""]), "UpSketch")
+            pad = w.holder.newObject("PartDesign::Pad", "UpPad")
+            pad.Profile = s
+            pad.Type = "UpToFace"
+            pad.UpToFace = (b, ["Face1"])
+            w.recompute()
+            K.insert_vertical_fillet(w.sdoc)
+            w.recompute()                                       # no refresh()
+            chk(P, "Up-to-date" not in b.State, "xdoc=%s: the broken subscriber is Up-to-date after a plain recompute" % xdoc)
+            chk(P, "Up-to-date" not in pad.State, "xdoc=%s: the feature built on it is Up-to-date (%s)" % (xdoc, pad.State))
+    return P
+
+
+@case
+def a_subscriber_without_geometry_is_not_following():
+    P = []
+    with world(False) as w:
+        w.both("face")
+        b = w.binders["face"]
+        b.Shape = Part.Shape()                     # what a failed restore of a stored shape leaves
+        chk(P, state(b) == "stale", "an empty subscriber is %s" % state(b))
+        w.recompute()
+        follows(P, w, "face", "after a recompute")
+    return P
+
+
+@case
+def unrelated_document_with_the_same_name_does_not_hide_unloaded():
+    P = []
+    with world(True) as w:
+        w.both("face")
+        w.save()
+        App.closeDocument(w.sdoc.Name)
+        other = os.path.join(K.tmpdir(), "elsewhere")
+        os.makedirs(other)
+        d2 = App.newDocument("skeleton")
+        d2.saveAs(os.path.join(other, "skeleton.FCStd"))
+        b = w.binders["face"]
+        chk(P, state(b) == "unloaded", "an unrelated document called skeleton changes the state to %s" % state(b))
+        App.closeDocument(d2.Name)
+        shutil.rmtree(os.path.dirname(other), ignore_errors=True)
+    return P
+
+
+@case
+def reopened_skeleton_is_stale_until_the_subscriber_recomputes():
+    P = []
+    with world(True) as w:
+        w.both("face", "sketch")
+        w.save()
+        path = w.sdoc.FileName
+        App.closeDocument(w.sdoc.Name)
+        sd = App.openDocument(path)
+        sd.getObject("Pad").Length = 22.0
+        sd.recompute()
+        sd.save()
+        w.sdoc, w.body = sd, sd.getObject("Skel")
+        chk(P, state(w.binders["face"]) == "stale", "face after the skeleton changed on reopen, before a recompute: %s" % state(w.binders["face"]))
+        w.doc.recompute()
+        follows(P, w, "face", "after the subscriber recomputed", L=22.0)
+    return P
+
+
 # ------------------------------------------------------------------ mutants
 
 @contextlib.contextmanager
@@ -1079,10 +1236,10 @@ def _m_removed_item_resolves():
 
 
 def _m_absolute_path():
-    def record(item):
+    def record(item, holder_doc=None):
         d = item.Document
-        return {"item": item.ItemName, "publication": item.Publication, "skeleton": item.Skeleton.Label, "doc": d.Name,
-                "file": d.FileName}
+        return {"item": item.ItemName, "publication": item.Publication, "skeleton": AS.skeleton_of(item).Label, "doc": d.Name,
+                "file": d.FileName, "same": holder_doc is None or holder_doc == d}
     return dict(_record_of=record)
 
 
@@ -1118,7 +1275,7 @@ def _m_subscribe_touches_skeleton():
 
     def subscribe(holder, item, label=None, object_name="Subscription"):
         rec = real(holder, item, label, object_name)
-        item.Skeleton.Label2 = "subscribed"
+        AS.skeleton_of(item).Label2 = "subscribed"
         return rec
     return dict(subscribe=subscribe)
 
@@ -1177,6 +1334,57 @@ def _m_following_ignores_frozen():
     return dict(classify=classify)
 
 
+def _m_weak_digest():
+    def digest(shape):
+        if shape is None or shape.isNull():
+            return None
+        import hashlib as h
+        return h.sha1(repr((round(shape.Area, 6), tuple(round(c, 6) for c in shape.CenterOfMass))).encode()).hexdigest() if shape.Faces else "x"
+
+    def execute(self, obj):
+        shape = AS.resolve_item(obj)
+        if digest(shape) != digest(obj.Shape):
+            obj.Placement = shape.Placement
+            obj.Shape = shape
+        if obj.Status != "ok":
+            obj.Status = "ok"
+    return dict(shape_digest=digest, _proxy_item=(AS.PublishedItem, "execute", execute))
+
+
+def _m_upstream_ignored():
+    return dict(_upstream=lambda item: [])
+
+
+def _m_no_reattach():
+    return dict(reattach=lambda doc: None)
+
+
+def _m_dependents_not_touched():
+    return dict(_touch_dependents=lambda obj: None)
+
+
+def _m_document_open_by_basename():
+    def open_(binder, rec):
+        return any(os.path.basename(d.FileName or "") == os.path.basename(rec.get("file", "") or "?")
+                   for d in App.listDocuments().values()) or bool(rec.get("same"))
+    return dict(_document_open=open_)
+
+
+def _m_empty_is_following():
+    return dict(_empty=lambda shape: False)
+
+
+def _m_never_stale():
+    real = AS.classify
+
+    def classify(binder):
+        r = real(binder)
+        if r["state"] == AS.STALE:
+            r["state"], r["reason"] = AS.FOLLOWING, None
+        return r
+    return dict(classify=classify)
+
+
 MUTANTS = {
     "subscriber_stores_raw_element": _m_raw_element,
     "broken_item_retargeted_to_first_of_type": _m_retarget_first_of_type,
@@ -1196,21 +1404,28 @@ MUTANTS = {
     "broken_subscriber_does_not_raise": _m_broken_does_not_raise,
     "duplicate_names_accepted": _m_publish_unchecked_name,
     "status_hides_reason": _m_status_hides_reason,
+    "fingerprint_decides_whether_item_changed": _m_weak_digest,
+    "upstream_state_ignored": _m_upstream_ignored,
+    "lost_proxies_not_reattached": _m_no_reattach,
+    "break_does_not_touch_dependents": _m_dependents_not_touched,
+    "document_open_matched_by_file_name": _m_document_open_by_basename,
+    "empty_geometry_reported_following": _m_empty_is_following,
+    "stale_reported_as_following": _m_never_stale,
 }
 
 
 @contextlib.contextmanager
 def mutated(name):
     spec = MUTANTS[name]()
-    proxy = spec.pop("_proxy_execute", None)
-    saved = getattr(AS.Subscription, "execute")
+    proxy = spec.pop("_proxy_execute", None) or spec.pop("_proxy_item", None)
+    saved = (AS.Subscription.execute, AS.PublishedItem.execute)
     try:
         if proxy is not None:
             setattr(proxy[0], proxy[1], proxy[2])
         with patched(**spec):
             yield
     finally:
-        AS.Subscription.execute = saved
+        AS.Subscription.execute, AS.PublishedItem.execute = saved
 
 
 def run_case(name):

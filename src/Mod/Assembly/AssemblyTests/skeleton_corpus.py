@@ -90,17 +90,17 @@ def fill_rect(sk, w, h, order=0):
         sk.addGeometry(Part.LineSegment(a, b), False)
     for i in range(4):
         sk.addConstraint(Sketcher.Constraint("Coincident", i, 2, (i + 1) % 4, 1))
-    x0 = 0 if not order else 1          # the segment that starts at the origin
-    sk.addConstraint(Sketcher.Constraint("Coincident", x0, 1, -1, 1))
-    for g in (0, 2):
+    sk.addConstraint(Sketcher.Constraint("Coincident", 0, 1, -1, 1))          # segment 0 starts at the origin in both orders
+    horiz, vert = ((0, 2), (1, 3)) if not order else ((1, 3), (0, 2))
+    for g in horiz:
         sk.addConstraint(Sketcher.Constraint("Horizontal", g))
-    for g in (1, 3):
+    for g in vert:
         sk.addConstraint(Sketcher.Constraint("Vertical", g))
     i = sk.addConstraint(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, w) if not order else
-                         Sketcher.Constraint("DistanceX", 2, 1, 2, 2, -w))
+                         Sketcher.Constraint("DistanceX", 1, 1, 1, 2, w))
     sk.renameConstraint(i, "Width")
     i = sk.addConstraint(Sketcher.Constraint("DistanceY", 1, 1, 1, 2, h) if not order else
-                         Sketcher.Constraint("DistanceY", 3, 1, 3, 2, -h))
+                         Sketcher.Constraint("DistanceY", 0, 1, 0, 2, h))
     sk.renameConstraint(i, "Height")
 
 

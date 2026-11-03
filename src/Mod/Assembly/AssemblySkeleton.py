@@ -14,9 +14,15 @@ element of the kind published, or does not resolve), when the source object is g
 from the publication: the object goes into error, keeps its last shape and ``Status`` says why. It never rebinds
 to a different element. Renaming an item changes only its ``ItemName`` and label.
 
+Staleness. A subscriber is ``following`` only when the item, its source and everything upstream of the source (a Body is
+judged by its Tip chain) are recomputed and not in error and the item's geometry is the geometry the subscriber last
+followed; if only the recompute is missing it is ``stale``, and a failed item touches everything downstream of it so
+that features built on a broken subscriber do not stay Up-to-date. A document observer re-attaches proxies that a
+re-save by stable FreeCAD dropped, before any recompute.
+
 Subscription. A ``PartDesign::SubShapeBinderPython`` whose ``Support`` is the whole item object (never a raw element
 of the skeleton, never a name string) and whose Python proxy decides, at every recompute, what the stock binder
-may do. Four states, always computed from the live objects (``classify``) and never stored:
+may do. Five states (following, stale, frozen, broken, unloaded), always computed from the live objects (``classify``) and never stored:
 
 - following: the item resolves; the stock binder (BindMode Synchronized) copies the item's shape at every recompute.
 - frozen: stock BindMode Frozen; the binder keeps the shape it last had and ``status`` says whether the item has
@@ -47,13 +53,11 @@ import re
 
 import FreeCAD as App
 
-import ReplaceComponent as _rc
-
 SCHEMA = "cadfork.assembly.skeleton/1"
 PROP_GROUP = "Skeleton"
 DEFAULT_PUBLICATION = "Default"
 
-FOLLOWING, FROZEN, BROKEN, UNLOADED = "following", "frozen", "broken", "unloaded"
+FOLLOWING, STALE, FROZEN, BROKEN, UNLOADED = "following", "stale", "frozen", "broken", "unloaded"
 _KINDS = {"Face": "face", "Edge": "edge", "Vertex": "vertex"}
 
 
@@ -74,38 +78,54 @@ def _transaction(doc, title):
 
 
 def _entity(obj, sub=""):
+    import ReplaceComponent as _rc
     return _rc._entity(obj, sub)
 
 
 # ------------------------------------------------------------------ shape helpers
 
 def _r(x):
-    return round(x, 6) + 0.0
+    return round(x, 9) + 0.0
+
+
+def _vec(v):
+    return (_r(v.x), _r(v.y), _r(v.z))
+
+
+def _face_key(f):
+    u0, u1, v0, v1 = f.ParameterRange
+    try:
+        n = _vec(f.normalAt((u0 + u1) / 2, (v0 + v1) / 2))
+    except Exception:
+        n = ()
+    return (_r(f.Area), _vec(f.CenterOfMass), n, len(f.Edges))
 
 
 def shape_digest(shape):
-    """sha1 of a geometric key of a shape (type, counts, and the rounded measure and centre of every face, else edge, else
-    vertex; an unbounded datum by its plane or line); None for a null shape. A reload from a file or a recompute that
-    rebuilds the same geometry gives the same key; the BRep text is not stable enough for that."""
+    """sha1 of a strict geometric key of a shape: type, counts, bounding box, every vertex, and for every face its area,
+    centre, a normal and edge count (else every edge's length and centre), all rounded to 1e-9 mm; an unbounded datum by
+    its plane or line. It cannot alias a turned plate (same area and centroid) or a 4e-7 length change; a reload from a
+    file or a recompute that rebuilds the same geometry gives the same key (the BRep text does not). None for a null shape."""
     if shape is None or shape.isNull():
         return None
     key = [shape.ShapeType, len(shape.Faces), len(shape.Edges), len(shape.Vertexes)]
     try:
-        if shape.BoundBox.DiagonalLength > 1e50:
+        bb = shape.BoundBox
+        if bb.DiagonalLength > 1e50:
             if shape.Faces:
                 s = shape.Faces[0].Surface
-                key += [_r(s.Axis.x), _r(s.Axis.y), _r(s.Axis.z), _r(s.Axis.dot(s.Position))]
+                key += [_vec(s.Axis), _r(s.Axis.dot(s.Position))]
             elif shape.Edges:
                 c = shape.Edges[0].Curve
-                key += [_r(c.Direction.x), _r(c.Direction.y), _r(c.Direction.z),
-                        _r(c.Location.dot(c.Direction.cross(App.Vector(1, 0, 0)))),
+                key += [_vec(c.Direction), _r(c.Location.dot(c.Direction.cross(App.Vector(1, 0, 0)))),
                         _r(c.Location.dot(c.Direction.cross(App.Vector(0, 1, 0))))]
-        elif shape.Faces:
-            key += sorted((_r(f.Area), _r(f.CenterOfMass.x), _r(f.CenterOfMass.y), _r(f.CenterOfMass.z)) for f in shape.Faces)
-        elif shape.Edges:
-            key += sorted((_r(e.Length), _r(e.CenterOfMass.x), _r(e.CenterOfMass.y), _r(e.CenterOfMass.z)) for e in shape.Edges)
         else:
+            key += [_r(bb.XMin), _r(bb.YMin), _r(bb.ZMin), _r(bb.XMax), _r(bb.YMax), _r(bb.ZMax)]
             key += sorted((_r(v.X), _r(v.Y), _r(v.Z)) for v in shape.Vertexes)
+            if shape.Faces:
+                key += sorted(_face_key(f) for f in shape.Faces)
+            elif shape.Edges:
+                key += sorted((_r(e.Length), _vec(e.CenterOfMass)) for e in shape.Edges)
     except Exception:
         key.append(repr(shape.BoundBox))
     return hashlib.sha1(repr(key).encode("utf-8")).hexdigest()
@@ -130,7 +150,8 @@ class PublishedItem:
         obj.addProperty("App::PropertyString", "Publication", PROP_GROUP, "Publication the item belongs to")
         obj.addProperty("App::PropertyString", "Kind", PROP_GROUP,
                         "What is published: object, face, edge or vertex")
-        obj.addProperty("App::PropertyLink", "Skeleton", PROP_GROUP, "The skeleton part that carries the item")
+        obj.addProperty("App::PropertyString", "SkeletonName", PROP_GROUP,
+                        "Name of the skeleton part that carries the item (a name, not a link: a link would make the item wait for the whole skeleton)")
         obj.addProperty("App::PropertyBool", "Published", PROP_GROUP,
                         "False once the item was withdrawn from the publication")
         obj.addProperty("App::PropertyString", "Status", PROP_GROUP,
@@ -141,9 +162,8 @@ class PublishedItem:
 
     def execute(self, obj):
         shape = resolve_item(obj)           # raises SkeletonError with the reason
-        if shape_digest(shape) != shape_digest(obj.Shape):
-            obj.Placement = shape.Placement     # a feature's Placement and its shape's location are one thing
-            obj.Shape = shape
+        obj.Placement = shape.Placement         # a feature's Placement and its shape's location are one thing
+        obj.Shape = shape                       # always: no fingerprint decides whether the geometry changed
         if obj.Status != "ok":
             obj.Status = "ok"
 
@@ -151,9 +171,27 @@ class PublishedItem:
         pass
 
 
+def _touch_dependents(obj):
+    """Mark everything downstream of ``obj`` (any document) as not up to date."""
+    try:
+        todo, seen = list(obj.InList), set()
+        while todo:
+            o = todo.pop()
+            if (o.Document.Name, o.Name) in seen:
+                continue
+            seen.add((o.Document.Name, o.Name))
+            o.touch()
+            todo += list(o.InList)
+    except Exception:
+        pass
+
+
 def _fail(obj, reason):
+    """Record why the item cannot be resolved, mark everything that depends on it as not up to date (FreeCAD does not
+    recompute the dependents of a failed object and would leave them Up-to-date, with the old geometry) and raise."""
     if obj.Status != reason:
         obj.Status = reason
+    _touch_dependents(obj)
     raise SkeletonError(reason)
 
 
@@ -205,11 +243,15 @@ def is_item(obj):
         p in obj.PropertiesList for p in ("Source", "ItemName", "Publication", "Published", "Status"))
 
 
+def skeleton_of(item):
+    return item.Document.getObject(item.SkeletonName)
+
+
 def items(skeleton, publication=None, include_withdrawn=False):
     """The published items of a skeleton, in creation order."""
     out = []
     for o in skeleton.Document.Objects:
-        if not is_item(o) or o.Skeleton != skeleton:
+        if not is_item(o) or o.SkeletonName != skeleton.Name:
             continue
         if not include_withdrawn and not o.Published:
             continue
@@ -249,11 +291,13 @@ class Subscription:
         if info["state"] == UNLOADED:
             return True                     # keep the last shape: the stock execute would see no Support
         if info["state"] == BROKEN:
+            _touch_dependents(obj)          # the features built on this subscriber must not stay Up-to-date
             raise SkeletonError(info["reason"])
-        if info["state"] == FOLLOWING and info["_item"] is not None:
-            digest = shape_digest(info["_item"].Shape)
-            if obj.Basis != (digest or ""):
-                obj.Basis = digest or ""
+        item = info["_item"]
+        if item is not None and obj.BindMode != "Frozen" and _item_problem(item)[0] is None:
+            digest = shape_digest(item.Shape) or ""
+            if obj.Basis != digest:
+                obj.Basis = digest
         return False                        # let the stock binder do the (un)update
 
     def onChanged(self, obj, prop):
@@ -281,62 +325,116 @@ def _support_item(binder):
     return sup[0][0]
 
 
-def _document_open(rec):
-    for d in App.listDocuments().values():
-        if rec.get("doc") and d.Name == rec["doc"]:
-            return True
-        if rec.get("file") and d.FileName and os.path.basename(d.FileName) == rec["file"]:
-            return True
-    return False
+def _real(path):
+    return os.path.realpath(path) if path else ""
+
+
+def _document_open(binder, rec):
+    """Is the skeleton's document open? Matched by the resolved full path of the link's target (the stored relative path
+    resolved against the subscriber's directory), never by a document's name: an unrelated document called "skeleton"
+    does not count."""
+    if rec.get("same"):
+        return True
+    rel, here = rec.get("file"), binder.Document.FileName
+    if not rel or not here:
+        return False
+    want = _real(os.path.join(os.path.dirname(here), rel))
+    return any(_real(d.FileName) == want for d in App.listDocuments().values() if d.FileName)
 
 
 def classify(binder):
-    """State of a subscriber from the live objects. ``_item`` (the item object or None) is for internal use."""
+    """State of a subscriber from the live objects. ``_item`` (the item object or None) is for internal use.
+
+    following needs an item whose own recompute succeeded, whose source and everything upstream of the source are
+    recomputed (not Touched, not in error), whose geometry is the geometry the binder last followed, and a binder
+    that holds geometry. A subscriber that fails only the recompute test is ``stale`` (recompute to refresh it); one
+    whose item or upstream is in error is ``broken``."""
     rec = _info(binder)
     item = _support_item(binder)
     out = {"state": FOLLOWING, "reason": None, "_item": item, "skeleton_changed": None}
     frozen = binder.BindMode == "Frozen"
     if item is not None:
+        if is_item(item) and not isinstance(getattr(item, "Proxy", None), PublishedItem):
+            PublishedItem.attach(item)
         digest = shape_digest(item.Shape)
         if frozen:
             out["state"] = FROZEN
             out["skeleton_changed"] = bool(binder.Basis) and (digest or "") != binder.Basis
-            reason = _item_problem(item)
+            kind, reason = _item_problem(item)
             if reason:
                 out["item_problem"] = reason
             return out
-        reason = _item_problem(item)
-        if reason:
-            out.update(state=BROKEN, reason="%s: %s" % (_item_label(item, rec), reason))
+        kind, reason = _item_problem(item)
+        if kind:
+            out.update(state=kind, reason="%s: %s" % (_item_label(item, rec), reason))
+        elif (digest or "") != binder.Basis:
+            out.update(state=STALE, reason="%s: the item changed since this subscriber last followed it (recompute)"
+                       % _item_label(item, rec))
+        elif _empty(binder.Shape):
+            out.update(state=STALE, reason="%s: the subscriber holds no geometry (recompute)" % _item_label(item, rec))
         return out
     if frozen:
         out["state"] = FROZEN
-        out["skeleton_changed"] = None if not _document_open(rec) else True
+        out["skeleton_changed"] = None if not _document_open(binder, rec) else True
         return out
-    if rec and not _document_open(rec):
-        out.update(state=UNLOADED, reason="the skeleton document %r is not open" % rec.get("doc"))
+    if rec and not _document_open(binder, rec):
+        out.update(state=UNLOADED, reason="the skeleton document %r is not open" % (rec.get("file") or rec.get("doc")))
         return out
     out.update(state=BROKEN, reason="%s: the item no longer exists" % (rec.get("item") or "item"))
     return out
+
+
+def _empty(shape):
+    return shape is None or shape.isNull() or not (shape.Faces or shape.Edges or shape.Vertexes)
 
 
 def _item_label(item, rec):
     return item.ItemName if item.ItemName else (rec.get("item") or item.Label)
 
 
-def _item_problem(item):
-    if not is_item(item):
-        return "the Support is not a published item"
-    if not item.Published:
-        return "withdrawn from the publication"
-    if item.Status != "ok":
-        return item.Status
-    if _bad(item):
-        return "the item is in error"
+def _upstream(item):
+    """The objects whose recompute decides the item: the source and what is upstream of it (for a Body, its own state
+    and the chain of its Tip, not unrelated datums), across documents."""
     src = item.Source
-    if src and src[0] is not None and _bad(src[0]):
-        return "the published %s is in error" % src[0].Label
-    return None
+    if not src or src[0] is None:
+        return []
+    out, seen, todo = [], set(), [src[0]]
+    while todo:
+        o = todo.pop()
+        key = (o.Document.Name, o.Name)
+        if key in seen:
+            continue
+        seen.add(key)
+        if o.TypeId == "PartDesign::Body":
+            tip = getattr(o, "Tip", None)       # a Body is judged by its Tip chain: an unrelated failed datum does not count
+            if tip is not None:
+                todo.append(tip)
+        else:
+            out.append(o)
+            todo += list(o.OutList)
+    return out
+
+
+def _item_problem(item):
+    """(kind, reason): kind is BROKEN or STALE, or None with no reason when the item is sound."""
+    if not is_item(item):
+        return BROKEN, "the Support is not a published item"
+    if not item.Published:
+        return BROKEN, "withdrawn from the publication"
+    if item.Status != "ok":
+        return BROKEN, item.Status
+    if _bad(item):
+        return BROKEN, "the item is in error"
+    if _empty(item.Shape):
+        return STALE, "the item holds no geometry (recompute the skeleton)"
+    ups = _upstream(item)
+    for o in ups:
+        if _bad(o):
+            return BROKEN, "%s is in error" % o.Label
+    for o in [item] + ups:
+        if "Touched" in o.State or "Recompute" in o.State:
+            return STALE, "%s has not been recomputed (recompute the skeleton)" % o.Label
+    return None, None
 
 
 # ------------------------------------------------------------------ publish API
@@ -369,7 +467,7 @@ def _check_name(skeleton, name, own=None):
 
 
 def describe_item(item):
-    sk = item.Skeleton
+    sk = skeleton_of(item)
     return {"schema": SCHEMA, "item": item.ItemName, "object": item.Name, "entity": _entity(item),
             "publication": item.Publication, "kind": item.Kind, "published": bool(item.Published),
             "status": item.Status, "skeleton": sk.Label if sk else None,
@@ -400,7 +498,7 @@ def publish(skeleton, name, target, sub="", publication=DEFAULT_PUBLICATION):
         item.ItemName = name
         item.Publication = str(publication)
         item.Kind = kind
-        item.Skeleton = skeleton
+        item.SkeletonName = skeleton.Name
         item.Source = (target, [sub] if sub else [])
         item.Label = "%s.%s" % (skeleton.Label, name)
         doc.recompute([item])
@@ -448,17 +546,22 @@ def subscribe(holder, item, label=None, object_name="Subscription"):
     with _transaction(doc, "Subscribe to " + item.ItemName):
         b = holder.newObject("PartDesign::SubShapeBinderPython", object_name)
         Subscription(b)
-        b.Subscription = json.dumps(_record_of(item), sort_keys=True)
+        b.Subscription = json.dumps(_record_of(item, doc), sort_keys=True)
         b.Label = label or item.ItemName
         b.Support = [(item, ("",))]
         doc.recompute([b])
     return describe_subscription(b)
 
 
-def _record_of(item):
+def _record_of(item, holder_doc=None):
+    """What a subscriber remembers about its item. The file is a path relative to the subscriber's own file (no machine path)."""
     d = item.Document
-    return {"item": item.ItemName, "publication": item.Publication, "skeleton": item.Skeleton.Label,
-            "doc": d.Name, "file": os.path.basename(d.FileName) if d.FileName else ""}
+    same = holder_doc is None or d == holder_doc
+    rel = ""
+    if not same and d.FileName and holder_doc.FileName:
+        rel = os.path.relpath(_real(d.FileName), os.path.dirname(_real(holder_doc.FileName)))
+    return {"item": item.ItemName, "publication": item.Publication, "skeleton": skeleton_of(item).Label,
+            "doc": d.Name, "file": rel, "same": same}
 
 
 def unsubscribe(binder):
@@ -551,7 +654,7 @@ def status(target=None):
     docs = [target] if target is not None else list(App.listDocuments().values())
     pubs, subs = [], []
     for d in docs:
-        skels = {o.Skeleton.Name: o.Skeleton for o in d.Objects if is_item(o) and o.Skeleton is not None}
+        skels = {o.SkeletonName: skeleton_of(o) for o in d.Objects if is_item(o) and skeleton_of(o) is not None}
         for sk in skels.values():
             pubs.append(_publication_status(sk))
         subs += [describe_subscription(b) for b in subscriptions(d)]
@@ -586,3 +689,42 @@ def signature(doc):
         out[o.Name] = {"type": o.TypeId, "label": o.Label, "props": props,
                        "shape": shape_digest(o.Shape) if hasattr(o, "Shape") else None}
     return out
+
+
+# ------------------------------------------------------------------ proxies lost in a re-save by stable FreeCAD
+
+def reattach(doc):
+    """Give the items and subscribers of a document (and the items its subscribers name, in other documents) their proxy
+    back. A file re-saved by a FreeCAD without this module keeps every property but drops the Python proxies; without
+    them an item would never recompute and its subscribers would follow stale geometry."""
+    for o in doc.Objects:
+        if is_item(o) and not isinstance(getattr(o, "Proxy", None), PublishedItem):
+            PublishedItem.attach(o)
+        elif is_subscription(o):
+            if not isinstance(getattr(o, "Proxy", None), Subscription):
+                Subscription.attach(o)
+            it = _support_item(o)
+            if it is not None and is_item(it) and not isinstance(getattr(it, "Proxy", None), PublishedItem):
+                PublishedItem.attach(it)
+
+
+class _Observer:
+    def slotBeforeRecomputeDocument(self, doc):
+        try:
+            reattach(doc)
+        except Exception as exc:  # never let this break a recompute
+            App.Console.PrintWarning("AssemblySkeleton: re-attaching proxies failed: %s\n" % exc)
+
+
+_observer = None
+
+
+def install_observer():
+    """Idempotent; Init.py calls it at start-up, so every recompute of every document re-attaches lost proxies first."""
+    global _observer
+    if _observer is None:
+        _observer = _Observer()
+        App.addDocumentObserver(_observer)
+
+
+install_observer()

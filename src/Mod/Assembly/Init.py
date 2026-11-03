@@ -31,6 +31,12 @@ ParGrp.SetString("WorkBenchModule", "AssemblyWorkbench.py")
 
 FreeCAD.__unit_test__ += ["TestAssemblyWorkbench"]
 
+# Skeleton publish/subscribe: its document observer re-attaches proxies that a stable FreeCAD re-save dropped.
+try:
+    import AssemblySkeleton  # noqa: F401
+except Exception as _exc:
+    FreeCAD.Console.PrintWarning("Assembly: skeleton support not loaded: %s\n" % _exc)
+
 # This adds a custom import type to the FreeCAD import dialog.
 # The correct format for assembly interoperability is a research topic. ASMT is a placeholder.
 FreeCAD.addImportType("Assembly Format (*.asmt *.ASMT)", "AssemblyImport")
