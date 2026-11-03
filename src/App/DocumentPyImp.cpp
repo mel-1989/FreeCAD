@@ -204,6 +204,21 @@ PyObject* DocumentPy::saveCopy(PyObject* args)
     PY_CATCH
 }
 
+PyObject* DocumentPy::holdRecoverySnapshots(PyObject* args)
+{
+    PyObject* hold = nullptr;
+    if (!PyArg_ParseTuple(args, "O!", &PyBool_Type, &hold)) {
+        return nullptr;
+    }
+
+    PY_TRY
+    {
+        getDocumentPtr()->holdRecoverySnapshots(hold == Py_True);
+        Py_Return;
+    }
+    PY_CATCH
+}
+
 PyObject* DocumentPy::canWriteRecoverySnapshot(PyObject* args)
 {
     if (!PyArg_ParseTuple(args, "")) {

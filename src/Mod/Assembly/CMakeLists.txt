@@ -57,6 +57,9 @@ set(Assembly_Scripts
     CommandSkeleton.py
     SkeletonPanel.py
     TestAssemblySkeletonGui.py
+    CommandMotion.py
+    MotionStudyPanel.py
+    TestAssemblyMotionGui.py
 )
 
 if(BUILD_GUI)
@@ -83,6 +86,13 @@ SET(Assembly_Icons
     icons/Assembly_Configurations.svg
     icons/Assembly_PublishSkeletonGeometry.svg
     icons/Assembly_SubscribeSkeleton.svg
+    icons/Assembly_CreateMotionStudy.svg
+    icons/Assembly_EditMotionStudy.svg
+    icons/Assembly_AddMotionGravity.svg
+    icons/Assembly_AddMotionForce.svg
+    icons/Assembly_AddMotionTorque.svg
+    icons/Assembly_AddMotionSpring.svg
+    icons/Assembly_AddMotionDamper.svg
 )
 
 
@@ -112,6 +122,8 @@ SET(AssemblyTests_SRCS
     AssemblyTests/TestConfigurationsGui.py
     AssemblyTests/skeleton_gui_fixture.py
     AssemblyTests/TestSkeletonGui.py
+    AssemblyTests/motion_gui_fixture.py
+    AssemblyTests/TestMotionGui.py
     AssemblyTests/mocks/__init__.py
     AssemblyTests/mocks/MockGui.py
 )

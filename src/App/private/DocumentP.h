@@ -114,6 +114,7 @@ struct DocumentP
     bool rollback {false};
     bool undoing {false};  ///< document in the middle of undo or redo
     bool committing {false};
+    bool recoveryHeld {false};  ///< a caller shows display-only state, see holdRecoverySnapshots()
     bool definingTransaction {false};
     bool opentransaction {false};
     std::bitset<32> StatusBits;

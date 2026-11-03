@@ -2081,7 +2081,18 @@ bool Document::canWriteRecoverySnapshot() const
 {
     return !testStatus(Document::PartialDoc) && !testStatus(Document::TempDoc)
         && !testStatus(Document::Recomputing) && !transactionStateBlocksRecoveryWrite(*d)
-        && !isPerformingTransaction();
+        && !isPerformingTransaction() && !d->recoveryHeld;
+}
+
+void Document::holdRecoverySnapshots(bool hold)
+{
+    if (d->recoveryHeld == hold) {
+        return;
+    }
+    d->recoveryHeld = hold;
+    if (!hold) {
+        signalBecameStable(*this);
+    }
 }
 
 // Save the document under the name it has been opened

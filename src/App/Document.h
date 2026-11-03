@@ -338,6 +338,15 @@ public:
     bool canWriteRecoverySnapshot() const;
 
     /**
+     * @brief Refuse recovery writes while a caller shows display-only state.
+     *
+     * A recovery snapshot is written without the start-save signals that a save emits, so code that puts display-only
+     * values into the document (a motion study playing a frame) cannot swap them out for it. While held,
+     * canWriteRecoverySnapshot() is false; releasing signals signalBecameStable() so a deferred autosave is retried.
+     */
+    void holdRecoverySnapshots(bool hold);
+
+    /**
      * @brief Restore the document from the file in Property Path.
      *
      * @param[in] filename: The file name to restore the document from. If nullptr, then
