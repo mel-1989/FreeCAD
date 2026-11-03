@@ -63,11 +63,30 @@ Lagrange multiplier (acceleration level, with Baumgarte stabilisation ``BAUMGART
 and normal are held at their values when the constraint was locked). The lock is refused when the multiplier is
 tensile in that state, and is released by a terminal event when the multiplier crosses zero; a pair that begins in
 contact at t = 0 goes through the same test. The rule leaves the first bounces alone: at the heights the corpus uses the
-third post-impact speed is several times the threshold. Limits of the model: one pair or stop is handled at a time (a
-second impact projects the velocity back onto the locked constraints, and simultaneous impacts are taken in turn), the
-solver steps at most one output step so a body cannot cross a thin one unseen, the contact point of a face-to-face
-pair is the first closest-point pair OCCT reports, and there is no friction. ``energy.conservative`` is false when any
-contact or stop has ``e < 1``.
+third post-impact speed is several times the threshold. While a contact is locked its real gap is watched too: the
+lock is released, with a ``release`` event marked ``separated``, as soon as the parts' real distance exceeds twice the
+tolerance (the body slid off the partner's edge, or left it), whatever the multiplier says. A pair that starts inside
+the tolerance band, or is released inside it, while moving away is *unarmed*: it is watched for the turn-around of
+its normal speed (captured there, locked) and re-armed when the gap leaves the band, so a rise that stays below the
+tolerance never lets the body fall through.
+
+Tunnelling guard. Detection is a sign change of ``gap - tolerance`` between solver steps, so a step that carried a
+body clean through a thin partner would be missed. The integration therefore runs in chunks. For each unlocked
+contact the allowed relative displacement of one chunk is the larger of half the thinner part's thickness (the shortest
+side of the part's own bounding box) and 0.8 of the current gap beyond the tolerance (the pair cannot reach the band
+in that distance); a chunk is as long as 1.5 times a speed bound (the largest speed of the eight bounding-box corners
+of each part, taken from the Jacobians, at the start and at the end of the chunk) lets that distance be covered. After the
+chunk the bound is checked with the end state and, if it was exceeded, the chunk is discarded and redone with half the
+length; a chunk that cannot be made shorter than a nanosecond raises ``MotionError``. The result's ``contact.guard``
+counts chunks and retries. The bound is not a proof for a body whose speed peaks inside one chunk, a thin part rotated
+so that its bounding box is thicker than its true width, or more than two bodies colliding in one chunk. Other limits:
+one pair or stop is handled at a time (a second impact projects the velocity back onto the locked constraints, and
+simultaneous impacts are taken in turn), the contact point of a face-to-face pair is the first closest-point pair OCCT
+reports, and there is no friction. ``energy.conservative`` is false when any contact or stop has ``e < 1``.
+
+Starts that are refused, naming the pair: parts that overlap at the start (their common volume is not zero), a pair
+that starts inside the tolerance band without touching (gap above 1e-4 mm and not above the tolerance: the pair would
+count as touching from the start), and a contact whose two parts never move.
 
 Limits (slice 6a, contact and stops now in 6c): no initial velocity except ``Velocities`` (JSON ``{joint name: value}`` in
 rad/s or mm/s); components must sit directly in the assembly (not in a sub-assembly); the joint frames must already
@@ -106,6 +125,7 @@ CAPTURE_INTERVAL = 2e-3   # s: an impact this soon after the previous one of the
 BAUMGARTE = 20.0         # 1/s: stabilisation of a locked constraint
 _GRAZE = 1e-9            # m/s: a normal speed closer to zero than this is not an approach
 _MAX_EVENTS = 20000      # impacts, locks and releases in one run
+_MIN_CHUNK = 1e-9        # s: the shortest chunk of the tunnelling guard
 
 
 class MotionError(Exception):
@@ -416,8 +436,25 @@ def add_contact(study, part1, part2, restitution=0.5, tolerance=CONTACT_TOLERANC
     _check_contact_values(name, restitution, tolerance)
     if _name_of(part1) == _name_of(part2):
         raise MotionError("a contact needs two different parts, got %s twice" % _name_of(part1))
+    both = grounded_pair(study, part1, part2)
+    if both:
+        raise MotionError("a contact needs a part that can move, but %s and %s are both grounded" % both)
     return _new_load(study, name, "Contact", Part1=part1, Part2=part2, Restitution=restitution,
                      ContactTolerance=tolerance)
+
+
+def grounded_pair(study, part1, part2):
+    """``(name1, name2)`` when both parts are grounded in the study's assembly (a contact between them can never act),
+    else ``None``."""
+    asm = assembly_of(study)
+    if asm is None:
+        return None
+    fixed = set()
+    for j in _joints_of(asm):
+        if "ObjectToGround" in j.PropertiesList and not _is_joint(j) and j.ObjectToGround is not None:
+            fixed.add(j.ObjectToGround.Name)
+    n1, n2 = _name_of(part1), _name_of(part2)
+    return (n1, n2) if n1 in fixed and n2 in fixed else None
 
 
 def _check_contact_values(what, restitution, tolerance):
@@ -630,9 +667,15 @@ class Model:
         self.static = []
         self.refusals = []
         self.unilaterals = []       # contact pairs and joint stops, in a fixed order
+        e_lim = _q(getattr(study, "LimitRestitution", LIMIT_RESTITUTION))
+        if not math.isfinite(e_lim) or not 0.0 <= e_lim <= 1.0:
+            raise MotionError("LimitRestitution must be between 0 and 1, got %r" % e_lim)
         self._build_tree()
         self._masses()
         self._loads()
+        for u in self.unilaterals:
+            if u.kind == "contact":
+                u.check_start(self)
 
     # -- tree
     def _body(self, obj):
@@ -776,16 +819,21 @@ class Model:
         if not (en_lo or en_hi):
             return
         lo, hi = _lim_value(j, names[2]), _lim_value(j, names[3])
+        entered = (lo, hi, en_lo, en_hi)
+        swapped = False
         if en_lo and en_hi and lo > hi:                        # FreeCAD swaps a reversed pair
             lo, hi, en_lo, en_hi = hi, lo, en_hi, en_lo
+            swapped = True
         e = _q(getattr(self.study, "LimitRestitution", LIMIT_RESTITUTION))
         if not math.isfinite(e) or not 0.0 <= e <= 1.0:
             raise MotionError("LimitRestitution must be between 0 and 1, got %r" % e)
         v0 = jt.value0
         if (en_lo and v0 < lo - 1e-9) or (en_hi and v0 > hi + 1e-9):
-            reasons.append("joint %s starts outside its limit (value %.6g %s, limits %s to %s %s): move it inside the "
-                           "range and solve first" % (j.Name, v0, unit, ("%.6g" % lo) if en_lo else "none",
-                                                      ("%.6g" % hi) if en_hi else "none", unit))
+            elo, ehi, een_lo, een_hi = entered
+            reasons.append("joint %s starts outside its limit (value %.6g %s, limits %s to %s %s as entered%s): move it "
+                           "inside the range and solve first"
+                           % (j.Name, v0, unit, ("%.6g" % elo) if een_lo else "none", ("%.6g" % ehi) if een_hi else "none",
+                              unit, "; FreeCAD reads a reversed pair as swapped" if swapped else ""))
             return
         # value = value0 + sgn * q / scale; a lower limit on the value is a lower bound on q when sgn = +1, an upper one when -1
         for enabled, val, side in ((en_lo, lo, "lower"), (en_hi, hi, "upper")):
@@ -866,7 +914,8 @@ class Model:
         if b2 is None:
             return False, "part %s is not in the live assembly" % (ld.Part2 or "(none)")
         if not (b1.moving or b2.moving):
-            return False, "neither %s nor %s moves, the contact has no effect" % (ld.Part1, ld.Part2)
+            raise MotionRefused(["%s: neither %s nor %s moves (both are grounded or fixed to ground), so the contact can "
+                                 "never act: remove it or contact a part that moves" % (what, ld.Part1, ld.Part2)])
         self.unilaterals.append(_Contact(self, ld, b1, b2))
         return True, ""
 
@@ -1186,6 +1235,52 @@ class _Contact:
         self.tol = _q(load.ContactTolerance)
         self.load = load.Name
         self.sh1, self.sh2 = _local_shape(b1.obj), _local_shape(b2.obj)
+        np = model.np
+        # the guard's geometry: the thinner part's thickness (shortest bounding-box side, mm to m, never below four
+        # tolerances) and the eight bounding-box corners of each part (m, part frame)
+        thick = min(min(s.BoundBox.XLength, s.BoundBox.YLength, s.BoundBox.ZLength) for s in (self.sh1, self.sh2))
+        self.t_min = max(thick, 4.0 * self.tol) * 1e-3
+        self.corners = []
+        for s in (self.sh1, self.sh2):
+            bb = s.BoundBox
+            self.corners.append([np.array([x, y, z]) * 1e-3 for x in (bb.XMin, bb.XMax)
+                                 for y in (bb.YMin, bb.YMax) for z in (bb.ZMin, bb.ZMax)])
+
+    def speed(self, model, q, v):
+        """Bound of the speed (m/s) of any point of the two parts, relative to the ground, for the joint rates ``v``:
+        the largest over the eight bounding-box corners of each part, summed over the two parts."""
+        np = model.np
+        Rd, td, A, O = model.kin(q)
+        tot = 0.0
+        for b, cs in ((self.b1, self.corners[0]), (self.b2, self.corners[1])):
+            if not b.chain:
+                continue
+            base, R = model.pose(b, Rd, td)
+            base = base * 1e-3
+            tot += max(float(np.linalg.norm(model.jac(b, R @ c + base, A, O)[0] @ v)) for c in cs)
+        return tot
+
+    def check_start(self, model):
+        """Refuse a start that is overlapping, or inside the tolerance band without touching."""
+        np = model.np
+        q = np.zeros(model.n)
+        gap, _row, _data = self.probe(model, q)
+        if gap <= 1e-4:
+            try:
+                common = self.sh1.common(self.sh2)
+                vol = float(common.Volume) if not common.isNull() else 0.0
+            except Exception as exc:                        # noqa: BLE001 - the boolean can fail on odd shapes
+                model.warnings.append("the contact %s: the overlap test at the start failed (%s)" % (self.name, exc))
+                return
+            small = min(abs(self.sh1.Volume), abs(self.sh2.Volume))
+            if vol > max(1e-9 * small, 1e-12):
+                raise MotionRefused(["contact %s: the parts %s and %s overlap at the start (common volume %.4g mm^3); "
+                                     "move them apart and solve first" % (self.name, self.b1.name, self.b2.name, vol)])
+        elif gap <= self.tol * (1.0 + 1e-9):
+            raise MotionRefused(["contact %s: the parts %s and %s start %.6g mm apart, inside the contact tolerance of "
+                                 "%.6g mm, so they would count as touching from the start: move them apart by more than "
+                                 "the tolerance, put them in contact, or lower the tolerance"
+                                 % (self.name, self.b1.name, self.b2.name, gap, self.tol)])
 
     def _place(self, model, q):
         Rd, td, A, O = model.kin(q)
@@ -1263,6 +1358,15 @@ def _impulse_sign():
 
 def _should_capture(vn_after, since_last):
     return vn_after < CAPTURE_SPEED or since_last < CAPTURE_INTERVAL
+
+
+def _guard_enabled():
+    return True
+
+
+def _separation_value(gap, tol):
+    """Positive while a locked contact is still in contact, zero when the real gap reaches twice the tolerance."""
+    return 2.0 * tol - gap
 
 
 def _lock_ok(lam):
@@ -1424,6 +1528,9 @@ class _Sim:
         self.locks = []
         self.events = []
         self.last = {}
+        self.armed = {}
+        self.chunks = 0
+        self.retries = 0
 
     def note(self, t, el, what, **kw):
         rec = {"t": float(t), "element": el.name, "what": what}
@@ -1453,17 +1560,30 @@ class _Sim:
         n = m.n
         q, qd = y[:n].copy(), y[n:].copy()
         for el in m.unilaterals:
-            gap, row, data = el.probe(m, q)
-            if _event_value(gap, el.tol) > 0.0:
-                continue
+            qd = self._settle(el, 0.0, q, qd, "start")
+        return np_concat(m.np, q, qd)
+
+    def _settle(self, el, t, q, qd, mode):
+        """What a pair is doing at a restart. Outside its band it is armed (a gap event is enough). Inside it (at the
+        start, or just released) a closing pair is an impact, a resting one a lock (``mode == "start"``), and one that is
+        moving away is unarmed: its gap event could never change sign if it stays inside the band, so it is watched
+        for the turn-around of its normal speed instead."""
+        m = self.m
+        gap, row, data = el.probe(m, q)
+        if _event_value(gap, el.tol) > 0.0:
+            self.armed[el.name] = True
+            return qd
+        if mode == "start":
             vn = float(row @ qd)
             if vn < -_GRAZE:
-                qd = self.impact(el, 0.0, q, qd, gap, row, data)
+                qd = self.impact(el, t, q, qd, gap, row, data)
             elif vn <= _GRAZE:
-                new = self._try_lock(el, q, qd, data, 0.0, "start")
+                new = self._try_lock(el, q, qd, data, t, "start")
                 if new is not None:
                     qd = new
-        return np_concat(m.np, q, qd)
+        if el.kind == "contact" and not self.locked(el):
+            self.armed[el.name] = False
+        return qd
 
     def impact(self, el, t, q, qd, gap, row, data):
         m = self.m
@@ -1497,48 +1617,130 @@ class _Sim:
         cols = [None] * len(grid)
         y = self.start(np.concatenate([np.zeros(n), self._qd0]))
         cols[0] = y.copy()
-        k0, t_cur = 1, 0.0
-        for _guard in range(_MAX_EVENTS):
-            if k0 >= len(grid):
-                break
-            evs, owners = [], []
-            for el in m.unilaterals:
-                lk = next((x for x in self.locks if x.el is el), None)
-                if lk is None:
-                    f = self._gap_event(el)
-                else:
-                    f = self._release_event(lk)
-                f.terminal, f.direction = True, -1
-                evs.append(f)
-                owners.append(el)
+        k0, t_cur, fired_n = 1, 0.0, 0
+        while k0 < len(grid):
+            evs, owners = self._events()
             rhs = m.rhs_locked(list(self.locks)) if self.locks else m.rhs
-            sol = solve_ivp(rhs, (t_cur, grid[-1]), y, method=self.method, t_eval=grid[k0:], events=evs,
-                            rtol=self.rtol, atol=self.atol, max_step=self.step)
-            if sol.status < 0:
-                raise MotionError("the integrator failed: %s" % sol.message)
-            ys = np.asarray(sol.y)
-            got = len(sol.t)
+            guards = [el for el in m.unilaterals if el.kind == "contact" and not self.locked(el)] \
+                if _guard_enabled() else []
+            plan = self._plan(guards, t_cur, y, rhs) if guards else None
+            f = 1.0
+            while True:
+                t_end = grid[-1] if plan is None else min(grid[-1], t_cur + max(plan[0] * f, _MIN_CHUNK))
+                sel = grid[k0:]
+                sel = sel[sel <= t_end]
+                extra = len(sel) == 0 or sel[-1] < t_end
+                t_eval = np.append(sel, t_end) if extra else sel
+                sol = solve_ivp(rhs, (t_cur, t_end), y, method=self.method, t_eval=t_eval, events=evs,
+                                rtol=self.rtol, atol=self.atol, max_step=self.step)
+                if sol.status < 0:
+                    raise MotionError("the integrator failed: %s" % sol.message)
+                ys = np.asarray(sol.y)
+                fired = [(float(te[0]), i) for i, te in enumerate(sol.t_events) if len(te)]
+                if fired:
+                    te, i = min(fired)
+                    ye = np.asarray(sol.y_events[i][0], dtype=float)
+                    t_stop, y_stop = te, ye
+                else:
+                    t_stop, y_stop = t_end, ys[:, -1]
+                if plan is not None and not self._chunk_ok(plan, t_cur, t_stop, y_stop):
+                    f *= 0.5
+                    self.retries += 1
+                    if plan[0] * f < _MIN_CHUNK:
+                        raise MotionError("the contact guard cannot keep a body from crossing its partner unseen: the "
+                                          "motion is too fast for the thickness of the parts at t = %.6g s" % t_cur)
+                    continue
+                break
+            self.chunks += 1
+            got = min(len(sol.t), len(sel))
             for j in range(got):
                 cols[k0 + j] = ys[:, j].copy()
             k0 += got
-            fired = [(float(te[0]), i) for i, te in enumerate(sol.t_events) if len(te)]
-            if sol.status == 0 or not fired:
-                break
-            te, i = min(fired)
-            ye = np.asarray(sol.y_events[i][0], dtype=float)
-            y = self._resolve(owners[i], te, ye)
+            if not fired:
+                y, t_cur = ys[:, -1].copy(), t_end
+                continue
+            fired_n += 1
+            if fired_n > _MAX_EVENTS:
+                raise MotionError("more than %d contact events in one run: the pair is chattering" % _MAX_EVENTS)
+            y = self._resolve(owners[i][0], owners[i][1], te, ye)
             t_cur = te
-        else:
-            raise MotionError("more than %d contact events in one run: the pair is chattering" % _MAX_EVENTS)
         if k0 < len(grid) or any(c is None for c in cols):
             raise MotionError("the integrator did not reach the end of the time span (%d of %d steps)" % (k0, len(grid)))
         return np.array(cols).T
+
+    def _events(self):
+        evs, owners = [], []
+
+        def add(fn, direction, el, what):
+            fn.terminal, fn.direction = True, direction
+            evs.append(fn)
+            owners.append((el, what))
+        for el in self.m.unilaterals:
+            lk = next((x for x in self.locks if x.el is el), None)
+            if lk is not None:
+                add(self._release_event(lk), -1, el, "release")
+                if el.kind == "contact":
+                    add(self._separation_event(el), -1, el, "sep")
+            elif el.kind == "contact" and not self.armed.get(el.name, True):
+                add(self._turn_event(el), -1, el, "turn")
+                add(self._gap_event(el), 1, el, "rearm")
+            else:
+                add(self._gap_event(el), -1, el, "gap")
+        return evs, owners
+
+    def _plan(self, guards, t, y, rhs):
+        """Chunk length and, per unlocked contact, the speed bound and the relative displacement one chunk may cover."""
+        m = self.m
+        n = m.n
+        q, qd = y[:n], y[n:]
+        qdd = rhs(t, y)[n:]
+        h_min, items = max(self.grid[-1] - t, self.step), []
+        for el in guards:
+            gap = el.probe(m, q)[0]
+            allow = max(0.5 * el.t_min, 0.8 * (gap - el.tol) * 1e-3)
+            v0 = el.speed(m, q, qd)
+            a = el.speed(m, q, qdd)
+            items.append((el, v0, allow))
+            if a > 1e-12:
+                h = (-1.5 * v0 + math.sqrt(2.25 * v0 * v0 + 6.0 * a * allow)) / (3.0 * a)
+            elif v0 > 1e-12:
+                h = allow / (1.5 * v0)
+            else:
+                h = math.inf
+            h_min = min(h_min, h)
+        return h_min, items
+
+    def _chunk_ok(self, plan, t0, t1, y1):
+        """The chunk from ``t0`` to ``t1`` ended in ``y1``: no body can have covered more than the allowed distance."""
+        dt = t1 - t0
+        if dt <= _MIN_CHUNK:
+            return True
+        m = self.m
+        for el, v0, allow in plan[1]:
+            v1 = el.speed(m, y1[:m.n], y1[m.n:])
+            if 1.5 * dt * max(v0, v1) > allow * (1.0 + 1e-9):
+                return False
+        return True
 
     def _gap_event(self, el):
         m = self.m
 
         def f(t, y):
             return _event_value(el.probe(m, y[:m.n])[0], el.tol)
+        return f
+
+    def _turn_event(self, el):
+        m = self.m
+
+        def f(t, y):
+            return float(el.probe(m, y[:m.n])[1] @ y[m.n:])
+        return f
+
+    def _separation_event(self, el):
+        m = self.m
+
+        def f(t, y):
+            return _separation_value(el.probe(m, y[:m.n])[0], el.tol)
         return f
 
     def _release_event(self, lk):
@@ -1550,16 +1752,27 @@ class _Sim:
             return _release_value(float(m.locked_accel(y[:m.n], y[m.n:], locks)[1][idx]))
         return f
 
-    def _resolve(self, el, t, y):
+    def _resolve(self, el, what, t, y):
         m = self.m
         n = m.n
         q, qd = y[:n].copy(), y[n:].copy()
-        lk = next((x for x in self.locks if x.el is el), None)
-        if lk is not None:
+        if what in ("release", "sep"):
+            lk = next(x for x in self.locks if x.el is el)
             self.locks.remove(lk)
-            self.note(t, el, "release")
+            if what == "sep":
+                self.note(t, el, "release", separated=1.0)
+            else:
+                self.note(t, el, "release")
+            if el.kind == "contact":
+                qd = self._settle(el, t, q, qd, "release")
+            return np_concat(m.np, q, qd)
+        if what == "rearm":
+            self.armed[el.name] = True
             return y
         gap, row, data = el.probe(m, q)
+        if what == "turn":
+            new = self._try_lock(el, q, qd, data, t, "turn")
+            return y if new is None else np_concat(m.np, q, new)
         qd = self.impact(el, t, q, qd, gap, row, data)
         return np_concat(m.np, q, qd)
 
@@ -1644,7 +1857,8 @@ def _run_dynamic(study, end=None, step=None):
     }
     if sim is not None:
         out["contact"] = {"events": sim.events, "elements": [u.describe() for u in model.unilaterals],
-                          "capture_speed": CAPTURE_SPEED, "capture_interval": CAPTURE_INTERVAL}
+                          "capture_speed": CAPTURE_SPEED, "capture_interval": CAPTURE_INTERVAL,
+                          "guard": {"chunks": sim.chunks, "retries": sim.retries}}
     return out
 
 
@@ -1799,7 +2013,7 @@ def stale_reason(study, res, end=None, step=None):
         return "it was computed for a span of %g s and a step of %g s, the analysis now has %g s and %g s" % (
             res["t"][-1], res["step"], end, step)
     if "inputs" in res and res["inputs"] != inputs_fingerprint(study):
-        return "the loads, masses or settings were edited after it was computed"
+        return "the loads, masses, settings, joints or the shape or placement of a part were edited after it was computed"
     gone = [p["name"] for p in res["parts"] if study.Document.getObject(p["name"]) is None]
     if gone:
         return "it names parts that no longer exist (%s)" % ", ".join(gone)
