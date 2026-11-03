@@ -300,8 +300,8 @@ def _m_inertia_origin():
 def _m_step_doubled():
     real = MO._grid
 
-    def grid(study):
-        step, g = real(study)
+    def grid(study, end=None, step=None):
+        step, g = real(study, end, step)
         return step, [2 * t for t in g]
     return dict(_grid=grid)
 
