@@ -562,7 +562,9 @@ class TestSkeletonGui(GuiCase):
         self.assertTrue(p.rename("Top_Plate", name="Top_Face"))
         self.assertTrue(p.rename("Top_Plate2", name="Top_Plate"))
         self.assertEqual([o["op"] for o in p.ops], ["publish", "rename"])
-        self.assertEqual({k: v for k, v in p.ops[1].items() if k != "op_id"}, {"op": "rename", "name": "Top_Face", "new": "Top_Plate2"})
+        self.assertEqual({k: v for k, v in p.ops[1].items() if k != "op_id"}, {"op": "rename", "name": "Top_Face", "new": "Top_Plate2",
+                          "item": p.ops[1]["item"], "skeleton_id": self.skel.ID})
+        self.assertEqual(p.ops[1]["item"]["name"], AS.find_item(self.skel, "Top_Face").Name)
         items, _ = p.rows()
         self.assertIn("Top_Plate2", [r["name"] for r in items])
 
@@ -968,3 +970,189 @@ class TestSkeletonStagedIdentity(GuiCase):
         self.assertEqual(AS.find_item(self.skel, "Top_Plate").Kind, "face")
         self.assertEqual(AS.find_item(self.skel, "Top_Face").Kind, "vertex")
         self.assertEqual(AS.find_item(self.skel, "Edge_Y").Kind, "face")
+
+
+class TestSkeletonRepairs(GuiCase):
+    """Round 2 of run 047: copied files, rename and withdrawal keyed by item, order of replaced actions, swapped names,
+    a panel whose construction or OK fails."""
+
+    def _copies(self, root, build):
+        """Two open documents from the same file: ``build(doc)`` builds the original, which is saved in a/ and copied to b/.
+        Returns (a, b), opened in the order b, a."""
+        os.makedirs(os.path.join(root, "a"))
+        os.makedirs(os.path.join(root, "b"))
+        d = App.newDocument("Orig")
+        build(d)
+        d.saveAs(os.path.join(root, "a", "Orig.FCStd"))
+        App.closeDocument(d.Name)
+        shutil.copy(os.path.join(root, "a", "Orig.FCStd"), os.path.join(root, "b", "Orig.FCStd"))
+        b = App.openDocument(os.path.join(root, "b", "Orig.FCStd"))
+        a = App.openDocument(os.path.join(root, "a", "Orig.FCStd"))
+        self.assertEqual(a.Uid, b.Uid)
+        return a, b
+
+    def test_a_staged_subscribe_goes_to_the_copy_it_was_staged_from_not_to_the_first_with_the_same_uid(self):
+        root = os.path.realpath(K.tmpdir())
+        try:
+            def build(d):
+                body = K.build_skeleton(d, "Skel")
+                AS.publish(body, "Top", *K.target_of(body, "face"))
+
+            a, b = self._copies(root, build)
+            asm = App.newDocument("AsmQ1")
+            part = asm.addObject("PartDesign::Body", "PartA")
+            asm.saveAs(os.path.join(root, "Asm.FCStd"))
+            for staged_from, other in ((a, b), (b, a)):
+                self.activate(asm)
+                p = self.open_panel(part)
+                self.assertTrue(p.subscribe(AS.find_item(staged_from.getObject("Skel"), "Top")))
+                self.close_panel(accept=True)
+                self.assertEqual(p.problems, [])
+                binder = AS.subscriptions(asm)[-1]
+                self.assertIs(AS._support_item(binder).Document, staged_from)
+                self.assertEqual(AS._support_item(binder).Document.Name, staged_from.Name)
+                self.assertNotEqual(AS._support_item(binder).Document.Name, other.Name)
+        finally:
+            for n in list(App.listDocuments()):
+                App.closeDocument(n)
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_a_staged_freeze_freezes_the_binder_of_the_copy_it_was_staged_from(self):
+        root = os.path.realpath(K.tmpdir())
+        try:
+            def build(d):
+                body = K.build_skeleton(d, "Skel")
+                part = d.addObject("PartDesign::Body", "PartB")
+                AS.publish(body, "Top", *K.target_of(body, "face"))
+                AS.subscribe(part, AS.find_item(body, "Top"), object_name="SubTop")
+                d.recompute()
+
+            a, b = self._copies(root, build)
+            for staged_from, other in ((a, b), (b, a)):
+                self.activate(staged_from)
+                p = self.open_panel(staged_from.getObject("PartB"))
+                self.assertTrue(p.freeze("SubTop"))
+                self.close_panel(accept=True)
+                self.assertEqual(p.problems, [])
+                self.assertTrue(AS.describe_subscription(staged_from.getObject("SubTop"))["frozen"], staged_from.Name)
+                self.assertFalse(AS.describe_subscription(other.getObject("SubTop"))["frozen"], other.Name)
+                AS.unfreeze(staged_from.getObject("SubTop"))
+        finally:
+            for n in list(App.listDocuments()):
+                App.closeDocument(n)
+            shutil.rmtree(root, ignore_errors=True)
+
+    def _reused_name(self, with_subscriber):
+        """A skeleton whose item A was withdrawn and published again as a vertex (a second object), with a subscriber of the
+        first one when asked; returns (doc, skeleton, part)."""
+        doc = App.newDocument("RepR")
+        skel = K.build_skeleton(doc, "Skel")
+        part = doc.addObject("PartDesign::Body", "PartB")
+        AS.publish(skel, "A", *K.target_of(skel, "face"))
+        if with_subscriber:
+            AS.subscribe(part, AS.find_item(skel, "A"), object_name="SubFace")
+        AS.unpublish(skel, "A")
+        AS.publish(skel, "A", *K.target_of(skel, "vertex"))
+        doc.recompute()
+        self.activate(doc)
+        return doc, skel, part
+
+    def test_a_staged_rename_is_skipped_when_undo_makes_the_name_belong_to_another_item(self):
+        doc, skel, _ = self._reused_name(False)
+        p = self.open_panel(skel)
+        self.assertTrue(p.rename("R", name="A"))                # the vertex item
+        doc.undo()
+        doc.undo()                                              # the vertex item is gone, A is the face item again
+        doc.recompute()
+        Gui.updateGui()
+        self.close_panel(accept=True)
+        self.assertEqual(len(p.problems), 1, p.problems)
+        self.assertEqual([(i.ItemName, i.Kind) for i in AS.items(skel)], [("A", "face")])
+
+    def test_a_staged_unpublish_is_skipped_when_undo_makes_the_name_belong_to_a_subscribed_item(self):
+        doc, skel, _ = self._reused_name(True)
+        p = self.open_panel(skel)
+        self.assertTrue(p.unpublish(name="A", assume_yes=True))   # the vertex item, no subscribers
+        doc.undo()
+        doc.undo()
+        doc.recompute()
+        Gui.updateGui()
+        self.close_panel(accept=True)
+        self.assertEqual(len(p.problems), 1, p.problems)
+        self.assertEqual([(i.ItemName, i.Kind) for i in AS.items(skel)], [("A", "face")])
+        self.assertNotEqual(AS.describe_subscription(doc.getObject("SubFace"))["state"], AS.BROKEN)
+
+    def test_a_staged_unpublish_is_skipped_when_a_subscriber_appeared_that_was_not_confirmed(self):
+        self.load()
+        p = self.open_panel(self.skel)
+        part = self.doc.addObject("PartDesign::Body", "LatePart")
+        self.assertTrue(p.unpublish(name="Edge_Y", assume_yes=True))
+        AS.subscribe(part, AS.find_item(self.skel, "Edge_Y"), object_name="Late")
+        self.close_panel(accept=True)
+        self.assertEqual(len(p.problems), 1, p.problems)
+        self.assertTrue(AS.find_item(self.skel, "Edge_Y").Published)
+
+    def test_replacing_a_staged_rename_by_a_withdrawal_keeps_the_order_the_preview_shows(self):
+        doc = App.newDocument("RepOrder")
+        skel = K.build_skeleton(doc, "Skel")
+        AS.publish(skel, "A", *K.target_of(skel, "face"))
+        self.activate(doc)
+        p = self.open_panel(skel)
+        self.assertTrue(p.rename("C", name="A"))
+        vt, vs = K.target_of(skel, "vertex")
+        self.assertEqual(p.publish(name="A", candidates=[SP.Candidate(vt, vs, skel)]), 1)
+        self.assertTrue(p.unpublish(name="C", assume_yes=True))
+        self.assertEqual([o["op"] for o in p.ops], ["unpublish", "publish"])
+        self.assertEqual([o["name"] for o in p.ops], ["A", "A"])
+        self.close_panel(accept=True)
+        self.assertEqual(p.problems, [])
+        self.assertEqual([(i.ItemName, i.Kind) for i in AS.items(skel)], [("A", "vertex")])
+
+    def test_two_names_can_be_swapped_through_a_third(self):
+        doc = App.newDocument("RepSwap")
+        skel = K.build_skeleton(doc, "Skel")
+        AS.publish(skel, "A", *K.target_of(skel, "face"))
+        AS.publish(skel, "B", *K.target_of(skel, "vertex"))
+        self.activate(doc)
+        p = self.open_panel(skel)
+        self.assertTrue(p.rename("C", name="A"))
+        self.assertTrue(p.rename("A", name="B"))
+        self.assertTrue(p.rename("B", name="C"))
+        self.close_panel(accept=True)
+        self.assertEqual(p.problems, [])
+        self.assertEqual(AS.find_item(skel, "A").Kind, "vertex")
+        self.assertEqual(AS.find_item(skel, "B").Kind, "face")
+
+    def test_a_panel_whose_construction_fails_leaves_no_registry_entry_and_no_observer(self):
+        with self.assertRaises(Exception):
+            SP.TaskSkeleton(None)
+        self.assertFalse(SP.panel_open())
+        self.load()
+        p = self.open_panel(self.skel)
+        self.assertTrue(SP.panel_open())
+        self.close_panel()
+        self.assertFalse(p._observing)
+
+    def test_the_panel_is_released_even_when_reporting_the_problems_fails(self):
+        self.load()
+        p = self.open_panel(self.skel)
+        p.ops.append({"op": "unpublish", "op_id": 999, "name": "Nope", "item": SP._ident(self.skel), "skeleton_id": 0,
+                      "confirmed": []})
+
+        def boom(*_):
+            raise RuntimeError("report failed")
+
+        SP.report_problems = boom
+        with self.assertRaises(RuntimeError):
+            p.accept()
+        Gui.Control.closeDialog()
+        self.assertFalse(SP.panel_open())
+        self.assertFalse(p._observing)
+
+    def test_closing_the_document_stops_the_observer(self):
+        self.load()
+        p = self.open_panel(self.skel)
+        App.closeDocument(self.doc.Name)
+        self.settle()
+        self.assertFalse(SP.panel_open())
+        self.assertFalse(p._observing)
