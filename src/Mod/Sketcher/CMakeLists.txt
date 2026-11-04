@@ -34,6 +34,8 @@ set(Sketcher_TestScripts
     SketcherTests/SketchAutoDefineOracle.py
     SketcherTests/SketchAutoDefineRun.py
     SketcherTests/SketchAutoDefineMutants.py
+    SketcherTests/TestSketchSolverCore.py
+    SketcherTests/SketchSolverBaseline.py
 )
 
 if(BUILD_GUI)

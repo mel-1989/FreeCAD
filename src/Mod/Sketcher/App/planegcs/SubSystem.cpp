@@ -60,7 +60,6 @@ void SubSystem::initialize(VEC_pD& params, MAP_pD_pD& reductionmap)
     // relevant for the constraints listed in clist
     VEC_pD tmpplist;
     {
-        SET_pD s1(params.begin(), params.end());
         SET_pD s2;
         for (std::vector<Constraint*>::iterator constr = clist.begin(); constr != clist.end();
              ++constr) {
@@ -68,7 +67,15 @@ void SubSystem::initialize(VEC_pD& params, MAP_pD_pD& reductionmap)
             VEC_pD constr_params = (*constr)->params();
             s2.insert(constr_params.begin(), constr_params.end());
         }
-        std::set_intersection(s1.begin(), s1.end(), s2.begin(), s2.end(), std::back_inserter(tmpplist));
+        // Keep the order of `params`: an intersection of two pointer-ordered sets would order the
+        // unknowns by heap address, which differs between processes and changes pivoting and
+        // therefore the branch the solver picks on systems with more than one solution.
+        SET_pD seen;
+        for (double* p : params) {
+            if (s2.count(p) != 0 && seen.insert(p).second) {
+                tmpplist.push_back(p);
+            }
+        }
     }
 
     plist.clear();

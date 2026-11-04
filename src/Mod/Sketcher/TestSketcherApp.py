@@ -33,6 +33,7 @@ from SketcherTests.TestSketchInternalFaces import TestSketchInternalFaces
 from SketcherTests.TestSketcherEllipse import TestSketcherEllipse
 from SketcherTests.TestSketchDiagnosis import TestSketchDiagnosis
 from SketcherTests.TestSketchAutoDefine import TestSketchAutoDefine
+from SketcherTests.TestSketchSolverCore import TestSketchSolverCore
 
 # Path and PartDesign tests use these functions that used to live here
 # but moved to SketcherTests/TestSketcherSolver.py
