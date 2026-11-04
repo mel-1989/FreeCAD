@@ -273,27 +273,53 @@ class TestSolverScale(_Base):
         self.assertEqual(sk.DoF, 0)
         self.assertLess(elapsed, 2.0)
 
-    def _strip_lists(self, n, plants, partition, sparse):
+    def _strip_lists(self, n, plants, partition, sparse, omit=0):
         with partition_threshold(partition), sparse_threshold(sparse):
             doc = FreeCAD.newDocument("Strip", "Strip", True, True)
-            sk, _ = Corpus.build_coupled(doc, "strip", n, plants=plants)
+            sk, _ = Corpus.build_coupled(doc, "strip", n, plants=plants, omit=omit)
             rec = Baseline.record(sk)
             rec["seconds"] = 0.0
             FreeCAD.closeDocument(doc.Name)
         return rec
 
     def test_strip_diagnosis_with_conflict_and_redundancy(self):
-        """A 1,200 constraint strip (one component of 2,400 unknowns, sparse
+        """A 1,000 constraint strip (one component of 2,000 unknowns, sparse
         QR) with a conflict and a redundancy planted gives the lists of the
         whole-system path."""
         plants = [(450, "conflict"), (150, "redundant")]
-        whole = self._strip_lists(1200, plants, 0, 0)
-        parts = self._strip_lists(1200, plants, 2000, 0)
+        whole = self._strip_lists(1000, plants, 0, 0)
+        parts = self._strip_lists(1000, plants, 2000, 0)
         self.assertEqual(whole["conflicting"], parts["conflicting"])
         self.assertEqual(whole["redundant"], parts["redundant"])
         self.assertEqual(whole["partial"], parts["partial"])
         self.assertEqual(whole["dof"], parts["dof"])
         self.assertTrue(parts["conflicting"])
+        self.assertEqual(whole["dependent"], parts["dependent"])
+
+    def test_strip_with_one_plant_or_missing_constraints(self):
+        """One conflict, one redundancy, or three constraints missing (so
+        points are free and the dependent parameters are found by the sparse
+        QR): the partitioned lists, DOF and dependent geometry are the
+        whole-system ones."""
+        for plants, omit in (([(450, "conflict")], 0), ([(450, "redundant")], 0), ([], 3)):
+            whole = self._strip_lists(1000, plants, 0, 0, omit)
+            parts = self._strip_lists(1000, plants, 2000, 0, omit)
+            for key in ("code", "dof", "conflicting", "redundant", "partial", "malformed", "dependent"):
+                self.assertEqual(whole[key], parts[key], (plants, omit, key))
+            if plants:
+                self.assertTrue(parts["conflicting"] or parts["redundant"])
+            else:
+                self.assertEqual(parts["dof"], 3)
+                self.assertTrue(parts["dependent"])
+
+    def test_coupled_strip_solves_from_a_perturbed_start_quickly(self):
+        """2,400 constraints, one connected system, drawn off its place: the
+        sparse dogleg step solves it (the dense step takes tens of seconds)."""
+        sk, _ = Corpus.build_coupled(self.doc, "perturbed", 2400)
+        t0 = time.perf_counter()
+        self.assertEqual(sk.solve(), 0)
+        self.assertLess(time.perf_counter() - t0, 8.0)
+        self.assertEqual(sk.DoF, 0)
 
     def test_sparse_dogleg_matches_dense(self):
         """The sparse dogleg step (threshold lowered to 1) reaches the dense

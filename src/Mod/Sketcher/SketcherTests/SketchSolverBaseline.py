@@ -33,7 +33,7 @@ Run it with ``FreeCADCmd SketchSolverBaseline.py``.  Environment variables:
 
 Per sketch the record holds the return code of ``SketchObject.solve()``, the
 DOF, the sorted conflicting, redundant, partially redundant and malformed
-constraint lists, and every solved coordinate.  ``compare(a, b)`` applies the
+constraint lists, the geometry with dependent parameters, and every solved coordinate.  ``compare(a, b)`` applies the
 equivalence bar of check 6: same code, DOF and lists exactly, coordinates
 within 1e-9 mm.
 """
@@ -101,6 +101,7 @@ def record(sketch):
         "redundant": sorted(sketch.RedundantConstraints),
         "partial": sorted(sketch.PartiallyRedundantConstraints),
         "malformed": sorted(sketch.MalformedConstraints),
+        "dependent": sorted([int(g), int(pos)] for g, pos in sketch.getGeometryWithDependentParameters()),
         "geometry": geometry_record(sketch),
         "constraints": len(sketch.Constraints),
         "seconds": elapsed,
@@ -129,7 +130,7 @@ def compare(a, b, tol=COORD_TOLERANCE):
             diffs.append((label, "missing", "in " + ("b" if label in a else "a")))
             continue
         x, y = a[label], b[label]
-        for key in ("code", "dof", "conflicting", "redundant", "partial", "malformed", "constraints"):
+        for key in ("code", "dof", "conflicting", "redundant", "partial", "malformed", "dependent", "constraints"):
             if x.get(key) != y.get(key):
                 diffs.append((label, key, "%r -> %r" % (x.get(key), y.get(key))))
         gx, gy = x.get("geometry", []), y.get("geometry", [])

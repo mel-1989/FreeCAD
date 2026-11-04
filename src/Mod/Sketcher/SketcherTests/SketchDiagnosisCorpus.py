@@ -1180,7 +1180,7 @@ def build_scale(doc, name, n, planted=False, chained=True, plants=()):
     return s.o, info
 
 
-def build_coupled(doc, name, n, plants=()):
+def build_coupled(doc, name, n, plants=(), omit=0):
     """One connected system of exactly `n` constraints (n even, at least 6)
     with DOF 0, in which x and y are coupled everywhere: a strip of equilateral
     triangles made of points, every point after the second held at distance 1
@@ -1191,6 +1191,8 @@ def build_coupled(doc, name, n, plants=()):
     ``plants`` is a list of ``(point, kind)``: kind ``"conflict"`` states the
     distance to the point two before as 2 instead of 1, ``"redundant"``
     repeats the distance to the point before.  Each adds one constraint.
+    ``omit`` leaves out the last `omit` constraints of the strip, which gives
+    the sketch that many degrees of freedom.
 
     Returns (sketch, info) with the number of points."""
     assert n % 2 == 0 and n >= 6
@@ -1209,6 +1211,9 @@ def build_coupled(doc, name, n, plants=()):
     for i in range(2, count):
         s.c("Distance", pts[i - 1], 1, pts[i], 1, 1.0)
         s.c("Distance", pts[i - 2], 1, pts[i], 1, 1.0)
+    if omit:
+        del s._cons[-omit:]
+        s._ncons -= omit
     for k, kind in plants:
         if kind == "conflict":
             s.c("Distance", pts[k - 2], 1, pts[k], 1, 2.0)
