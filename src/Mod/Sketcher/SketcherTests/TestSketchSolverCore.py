@@ -283,12 +283,12 @@ class TestSolverScale(_Base):
         return rec
 
     def test_strip_diagnosis_with_conflict_and_redundancy(self):
-        """A 1,000 constraint strip (one component of 2,000 unknowns, sparse
+        """A 1,000 constraint strip (one component of 1,000 unknowns, sparse
         QR) with a conflict and a redundancy planted gives the lists of the
         whole-system path."""
         plants = [(450, "conflict"), (150, "redundant")]
         whole = self._strip_lists(1000, plants, 0, 0)
-        parts = self._strip_lists(1000, plants, 2000, 0)
+        parts = self._strip_lists(1000, plants, 1, 0)
         self.assertEqual(whole["conflicting"], parts["conflicting"])
         self.assertEqual(whole["redundant"], parts["redundant"])
         self.assertEqual(whole["partial"], parts["partial"])
@@ -303,7 +303,7 @@ class TestSolverScale(_Base):
         whole-system ones."""
         for plants, omit in (([(450, "conflict")], 0), ([(450, "redundant")], 0), ([], 3)):
             whole = self._strip_lists(1000, plants, 0, 0, omit)
-            parts = self._strip_lists(1000, plants, 2000, 0, omit)
+            parts = self._strip_lists(1000, plants, 1, 0, omit)
             for key in ("code", "dof", "conflicting", "redundant", "partial", "malformed", "dependent"):
                 self.assertEqual(whole[key], parts[key], (plants, omit, key))
             if plants:

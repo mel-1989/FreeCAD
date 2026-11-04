@@ -50,7 +50,7 @@ MUTANTS = [
      "        const int nr = (c == 1) ? 0 : static_cast<int>(comp.rows.size());\n        done[c].paramsNum = np;",
      "the constraints of the second component are left out of the diagnosis"),
     ("wrong_column_map", GCS, "Jc(r, localCol[col]) = row.constr->grad(pdiag[col]);",
-     "Jc(r, (localCol[col] + 1) % np) = row.constr->grad(pdiag[col]);",
+     "Jc(r, (localCol[col] + 7) % np) = row.constr->grad(pdiag[col]);",
      "a Jacobian entry goes to the neighbouring column"),
     ("threshold_inverted", GCS, "    if (static_cast<int>(pdiag.size()) < partitionThreshold) {\n        return false;",
      "    if (static_cast<int>(pdiag.size()) >= partitionThreshold) {\n        return false;",
