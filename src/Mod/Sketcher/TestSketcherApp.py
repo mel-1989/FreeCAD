@@ -43,6 +43,7 @@ from SketcherTests.TestSketchDragSession import TestDragSession
 from SketcherTests.TestSketchDragSession import TestDragBfgsGuard
 from SketcherTests.TestSketchDragSession import TestDragFallback
 from SketcherTests.TestSketchDragSession import TestDragEscape
+from SketcherTests.TestSketchDragSession import TestDragRestart
 from SketcherTests.TestSketchDragSession import TestDragSilentSuccess
 from SketcherTests.TestSketchSolverCore import TestStartValues
 from SketcherTests.TestSketchSolverCore import TestSolverCliff

@@ -5413,20 +5413,26 @@ int Sketch::initMove(const std::vector<GeoElementId>& geoEltIds)
 
     InitParameters = MoveParameters;
 
-    // The size of the sketch, for the drag escape: the span of its points
+    // The size of the sketch, for the drag escape and the restart: the span of its own points (the
+    // axes and external geometry would stretch it to include the origin)
     {
         double lo[2] = {0., 0.}, hi[2] = {0., 0.};
         bool first = true;
-        for (const GCS::Point& pt : Points) {
-            if (!pt.x || !pt.y) {
+        for (const GeoDef& geo : Geoms) {
+            if (geo.external) {
                 continue;
             }
-            const double c[2] = {*pt.x, *pt.y};
-            for (int k = 0; k < 2; ++k) {
-                lo[k] = first ? c[k] : std::min(lo[k], c[k]);
-                hi[k] = first ? c[k] : std::max(hi[k], c[k]);
+            for (const int id : {geo.startPointId, geo.endPointId, geo.midPointId}) {
+                if (id < 0 || id >= static_cast<int>(Points.size())) {
+                    continue;
+                }
+                const double c[2] = {*Points[id].x, *Points[id].y};
+                for (int k = 0; k < 2; ++k) {
+                    lo[k] = first ? c[k] : std::min(lo[k], c[k]);
+                    hi[k] = first ? c[k] : std::max(hi[k], c[k]);
+                }
+                first = false;
             }
-            first = false;
         }
         GCSsys.dragExtent = std::max(hi[0] - lo[0], hi[1] - lo[1]);
     }
@@ -5659,6 +5665,13 @@ GCS::SolveStatus Sketch::moveGeometries(
     // drag that never gets stuck still returns to where it began.
     if (!follow) {
         return status;
+    }
+    // A failed solve leaves the unknowns at the reference (the solver restores it before every
+    // solve): the sketch keeps the state it had before the move instead
+    if (status != GCS::SolveStatus::Success) {
+        for (size_t i = 0; i < Parameters.size(); ++i) {
+            *Parameters[i] = before[i];
+        }
     }
     const double extent = GCSsys.dragExtent;
     bool ok = status == GCS::SolveStatus::Success && GCSsys.dragGap >= 0.;

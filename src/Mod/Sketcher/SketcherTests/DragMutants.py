@@ -43,15 +43,15 @@ SKETCH = "src/Mod/Sketcher/App/Sketch.cpp"
 OPS = "src/Mod/Sketcher/App/SketchObjectOperations.cpp"
 PYIMP = "src/Mod/Sketcher/App/SketchObjectPyImp.cpp"
 
-TESTS = ["TestDragSession", "TestDragBfgsGuard", "TestDragFallback", "TestDragEscape", "TestDragSilentSuccess"]
+TESTS = ["TestDragSession", "TestDragBfgsGuard", "TestDragFallback", "TestDragEscape", "TestDragRestart", "TestDragSilentSuccess"]
 
 # (name, file, old text, new text, what it plants)
 MUTANTS = [
-    ("binding_resets_every_call", OPS, "    if (!keepSession) {\n        solvedSketch.resetInitMove();",
-     "    if (true) {\n        solvedSketch.resetInitMove();", "a kept session is reset after every call, as the Python default does"),
-    ("binding_flag_ignored", PYIMP, "                (relative > 0),\n                false,\n                (keepSession > 0)",
-     "                (relative > 0),\n                false,\n                false", "moveGeometry drops the keep_session flag"),
-    ("drag_mode_never_set", SKETCH, "        GCSsys.dragSolve = true;", "        GCSsys.dragSolve = false;",
+    ("binding_ignores_relative", PYIMP, "this->getSketchObjectPtr()->moveGeometriesTemporary(geoEltIds, v1, (relative > 0))",
+     "this->getSketchObjectPtr()->moveGeometriesTemporary(geoEltIds, v1, false)", "moveGeometriesTemporary drops the relative flag"),
+    ("release_keeps_session", OPS, "    solvedSketch.resetInitMove();  // reset solver point moving mechanism",
+     "    // solvedSketch.resetInitMove();", "the release leaves the move session alive"),
+    ("drag_mode_never_set", SKETCH, "                system.dragSolve = true;", "                system.dragSolve = false;",
      "the drag SQP runs the stock iteration and the escape never runs"),
     ("update_not_cautious", GCS, "            if (guarded && !(yTh > 0.)) {", "            if (false && !(yTh > 0.)) {",
      "the BFGS update is applied whatever the sign of the curvature"),
@@ -77,6 +77,18 @@ MUTANTS = [
     # and a grid of single cursor jumps from the start state of each of S01, S03, S05 to S08, S19 and S20
     # found no landing farther from the cursor than the jump (S01: three, by under 1 mm). Planting
     # it would need a sketch built for the purpose, which is not a defect any drag has shown.
+    ("restart_never_tried", SKETCH, "    if (!stuck || dragRefIsLastGood || dragRetrying", "    if (true || dragRefIsLastGood || dragRetrying",
+     "a stuck move is never solved again from the last state that met the cursor"),
+    ("restart_from_the_stuck_state", SKETCH, "        *Parameters[i] = dragLastGood[i];\n    }\n    if (initMove", "        *Parameters[i] = first[i];\n    }\n    if (initMove",
+     "the restart saves the stuck state as its reference instead of the last good one"),
+    ("restart_keeps_any_result", SKETCH, "        && (gap1 >= 0. ? gap2 < gap1 : gap2 <= stuckGap * extent)) {", "        && (gap1 >= 0. ? true : true)) {",
+     "the second solve is kept even when it ends farther from the cursor"),
+    ("diverged_result_kept", SKETCH, "if (GCSsys.dragGap > stay + 10. * extent) {", "if (GCSsys.dragGap > stay + 1e12 * extent) {",
+     "a move that ends ten sketch sizes from the cursor is kept"),
+    ("failed_move_keeps_reference_state", SKETCH, "    if (status != GCS::SolveStatus::Success) {\n        for (size_t i = 0; i < Parameters.size(); ++i) {\n            *Parameters[i] = before[i];",
+     "    if (false) {\n        for (size_t i = 0; i < Parameters.size(); ++i) {\n            *Parameters[i] = before[i];", "a failed move leaves the unknowns at the reference, not at the state before the move"),
+    ("extent_is_largest_coordinate", SKETCH, "        GCSsys.dragExtent = std::max(hi[0] - lo[0], hi[1] - lo[1]);", "        GCSsys.dragExtent = std::max(std::abs(hi[0]), std::abs(hi[1]));",
+     "the sketch's size is its largest coordinate, which a sketch far from the origin overstates"),
     ("escape_perturbs_nothing", GCS, "                xs[j] += fraction * extent * std::sin(2.399963229728653 * (j + 1));",
      "                xs[j] += 0. * fraction * extent * std::sin(2.399963229728653 * (j + 1));", "the probes do not move the unknowns"),
 ]
