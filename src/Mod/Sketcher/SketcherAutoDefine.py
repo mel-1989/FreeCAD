@@ -96,7 +96,8 @@ fails in fewer than about 1 solve in 4 can still pass ten solves.  The gate
 costs up to 20 solves, so it is skipped by wall clock when a pass is slow
 (`STABILITY_BUDGET`; on the loaded mini that is between about 320 and 640
 geometries) and the skip is reported, never silent: every candidate carries
-``gate`` (``"full"`` or ``"skipped"``) and ``gate_reason``, and the dict
+``gate`` (``"full"``, ``"repeats_skipped"`` when the gate ran but the repeat
+passes did not, or ``"skipped"``) and ``gate_reason``, and the dict
 ``apply_candidate`` returns carries ``gate`` (``"full"`` or ``"reduced"``),
 ``gate_runs`` and ``gate_reason``.  ``apply_candidate`` never applies a result
 unvetted: when its own apply was too slow for the full gate it asks for
@@ -1191,8 +1192,8 @@ def _verify(scratch, specs, batches, keep, stability_budget=None):
     pass (the batch apply, the solves and the re-solve gate, which is itself up
     to 20 solves) took longer than `stability_budget` seconds (large sketches),
     and the gate inside a pass is skipped when its batch apply alone took longer
-    than that.  Either skip is recorded in the facts as ``gate`` (``"full"`` or
-    ``"skipped"``) with a ``gate_reason``.  Returns the facts measured,
+    than that.  Either skip is recorded in the facts as ``gate`` (``"full"``,
+    ``"repeats_skipped"`` or ``"skipped"``) with a ``gate_reason``.  Returns the facts measured,
     including the batches that passed, or None when the hard bar is not met."""
     budget = STABILITY_BUDGET if stability_budget is None else stability_budget
     for trial in ([len(specs)], list(batches)) if len(batches) > 1 else (list(batches),):
@@ -1207,13 +1208,14 @@ def _verify(scratch, specs, batches, keep, stability_budget=None):
         facts["batches"] = trial
         facts["runs"] = 1 + repeats
         reasons = []
-        if not facts.pop("gate_ran"):
+        gate_ran = facts.pop("gate_ran")
+        if not gate_ran:
             reasons.append("the re-solve gate (%d solves on the sketch and on a serialised copy) was not run because applying the constraints took %.2f s, over the %.2f s stability budget" % (GATE_RUNS, facts.pop("apply_seconds"), budget))
         else:
             facts.pop("apply_seconds")
         if not repeats:
             reasons.append("the %d repeat passes on fresh copies were not run because the first pass took %.2f s, over the %.2f s stability budget" % (STABILITY_RUNS, elapsed, budget))
-        facts["gate"] = "skipped" if reasons else "full"
+        facts["gate"] = "skipped" if not gate_ran else ("repeats_skipped" if reasons else "full")
         facts["gate_reason"] = "; ".join(reasons) or None
         return facts
     return None

@@ -1052,6 +1052,7 @@ class TestSketchAutoDefine(unittest.TestCase):
         try:
             AD._stable = lambda sk, runs=AD.GATE_RUNS: (seen.append((sk.Name, runs)), real(sk, runs))[1]
             res = AD.apply_candidate(target, cand, stability_budget=0)
+            self.assertGreaterEqual(AD.REDUCED_GATE_RUNS, 1)  # zero solves would vet nothing
             self.assertEqual(seen, [(target.Name, AD.REDUCED_GATE_RUNS)])  # reduced: the real sketch only, a few solves
             self.assertEqual((res["gate"], res["gate_runs"]), ("reduced", AD.REDUCED_GATE_RUNS))
             self.assertIn("stability budget", res["gate_reason"])
