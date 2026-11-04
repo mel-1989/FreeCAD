@@ -4871,6 +4871,23 @@ SolveStatus System::solve(SubSystem* subsysA, SubSystem* subsysB, bool isRedunda
     subsysA->getParams(plistAB, x);
     subsysB->setParams(plistAB, x);  // just to ensure that A and B are synchronized
 
+    // While dragging, the first run is guarded: the BFGS update is cautious and the penalty
+    // parameter mu stays finite. Where it does not end with A satisfied, the stock iteration is
+    // run from the same start, so that a move the stock iteration could solve (S18 past its
+    // zero-length line, where the stock undamped update recovers 180 moves before a damped one)
+    // is never lost to the guard. An ordinary solve (the last-resort SQP) runs the stock one.
+    bool guarded = dragSolve;
+    const Eigen::VectorXd xStart = x;
+
+retry:
+    x = xStart;
+    subsysB->setParams(plistAB, x);
+    subsysA->setParams(plistAB, x);
+    B.setIdentity();
+    if (guarded) {
+        h.setZero();
+    }
+
     subsysB->calcGrad(plistAB, grad);
     subsysA->calcJacobi(plistAB, JA);
     subsysA->calcResidual(resA);
@@ -4904,12 +4921,16 @@ SolveStatus System::solve(SubSystem* subsysA, SubSystem* subsysB, bool isRedunda
             double alpha = 1;
             alpha = std::min(alpha, subsysA->maxStep(plistAB, xdir));
 
-            // Eq. 18.36
-            mu = std::max(
-                mu,
-                (grad.dot(xdir) + std::max(0., 0.5 * xdir.dot(B * xdir)))
-                    / ((1. - rho) * resA.lpNorm<1>())
-            );
+            // Eq. 18.36. With every residual of A zero the quotient is infinite or NaN, which
+            // made the merit function NaN and let the line search accept any step: the guarded
+            // run leaves mu alone then.
+            if (!guarded || resA.lpNorm<1>() > 0.) {
+                mu = std::max(
+                    mu,
+                    (grad.dot(xdir) + std::max(0., 0.5 * xdir.dot(B * xdir)))
+                        / ((1. - rho) * resA.lpNorm<1>())
+                );
+            }
 
             // Eq. 18.27
             double f0 = subsysB->error() + mu * resA.lpNorm<1>();
@@ -4964,6 +4985,13 @@ SolveStatus System::solve(SubSystem* subsysA, SubSystem* subsysB, bool isRedunda
 
         if (iter > 1) {
             double yTh = y.dot(h);
+            // Cautious BFGS (Powell 1978, Li and Fukushima 2001): the update keeps B positive
+            // definite only when the curvature y.h is positive. A non-positive y.h made the
+            // stock update indefinite, and its next step was far outside the model (2.7 from
+            // 0.9 away on the crank-slider, run 054).
+            if (guarded && !(yTh > 0.)) {
+                yTh = 0.;
+            }
             if (yTh != 0) {
                 Bh = B * h;
                 // Now calculate the BFGS update on B
@@ -4990,6 +5018,11 @@ SolveStatus System::solve(SubSystem* subsysA, SubSystem* subsysB, bool isRedunda
     }
     else {
         status = SolveStatus::Failed;
+    }
+
+    if (guarded && status != SolveStatus::Success) {
+        guarded = false;
+        goto retry;
     }
 
     subsysA->revertParams();

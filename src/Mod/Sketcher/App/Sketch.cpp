@@ -5021,7 +5021,9 @@ GCS::SolveStatus Sketch::internalSolve(std::string& solvername, int level)
 
     if (isInitMove) {
         solvername = "DogLeg";  // DogLeg is used for dragging (same as before)
+        GCSsys.dragSolve = true;
         status = GCSsys.solve(GCS::DogLeg);
+        GCSsys.dragSolve = false;
     }
     else {
         switch (defaultSolver) {

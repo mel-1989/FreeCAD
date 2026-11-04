@@ -40,6 +40,7 @@ from SketcherTests.TestSketchSolverCore import TestSubsystemStatus
 from SketcherTests.TestSketchSolverCore import TestSolverScale
 from SketcherTests.TestSketchSolverCore import TestSqpUnknownOrder
 from SketcherTests.TestSketchDragSession import TestDragSession
+from SketcherTests.TestSketchDragSession import TestDragBfgsGuard
 
 # Path and PartDesign tests use these functions that used to live here
 # but moved to SketcherTests/TestSketcherSolver.py

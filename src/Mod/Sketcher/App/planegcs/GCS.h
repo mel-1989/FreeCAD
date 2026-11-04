@@ -319,6 +319,12 @@ public:
     DogLegGaussStep dogLegGaussStep;
     double qrpivotThreshold;
     DebugMode debugMode;
+    // True while a mouse drag is being solved (Sketch::internalSolve sets it around the solve of
+    // an initialised move). Only then does the two-subsystem SQP take its drag measures: the
+    // cautious BFGS update, the finite penalty parameter and the stock fallback. The same SQP
+    // also serves the last-resort "augmented system" solve of an ordinary sketch, which keeps
+    // the stock iteration.
+    bool dragSolve = false;
     double LM_eps;
     double LM_eps1;
     double LM_tau;

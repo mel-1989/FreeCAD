@@ -23,6 +23,7 @@
 """Tests for the drag half of G10 slice 3b: the move-session binding, the
 BFGS guard, the stall escape, silent success."""
 
+import math
 import unittest
 
 import FreeCAD
@@ -107,3 +108,48 @@ class TestDragSession(unittest.TestCase):
         sk, geo, pos, targets = self._s03()
         sk.moveGeometries([(geo, pos)], V(*targets[0], 0), False, True)
         sk.endMoveSession()
+
+
+def _all_finite(sk):
+    for g in sk.Geometry:
+        for name in ("StartPoint", "EndPoint", "Center"):
+            if hasattr(g, name):
+                v = getattr(g, name)
+                if not all(map(math.isfinite, (v.x, v.y, v.z))):
+                    return False
+    return True
+
+
+class TestDragBfgsGuard(unittest.TestCase):
+    """The drag SQP's BFGS update is cautious and its penalty parameter stays
+    finite (check 8)."""
+
+    def setUp(self):
+        self.doc = FreeCAD.newDocument("DragGuard")
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.doc.Name)
+
+    def _slider(self):
+        name, builder = _scenario("S08")
+        sk, (geo, pos), wp, spec = builder(self.doc)
+        sk.solve()
+        return sk, geo, pos
+
+    def test_slider_at_69_9_follows_cursor_at_69(self):
+        sk, geo, pos = self._slider()
+        for x in (62.0, 69.9):
+            sk.moveGeometry(geo, pos, V(x, 0, 0))
+        for _ in range(4):
+            sk.moveGeometry(geo, pos, V(69.0, 0, 0))
+            q = sk.getPoint(geo, pos)
+            self.assertAlmostEqual(q.x, 69.0, delta=0.01)
+            self.assertTrue(_all_finite(sk))
+
+    def test_slider_in_a_kept_session_follows_cursor_at_69(self):
+        sk, geo, pos = self._slider()
+        for x in (62.0, 69.9, 69.0, 69.0, 69.0):
+            sk.moveGeometry(geo, pos, V(x, 0, 0), False, True)
+        sk.endMoveSession()
+        self.assertAlmostEqual(sk.getPoint(geo, pos).x, 69.0, delta=0.01)
+        self.assertTrue(_all_finite(sk))
