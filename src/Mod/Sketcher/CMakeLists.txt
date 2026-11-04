@@ -36,6 +36,7 @@ set(Sketcher_TestScripts
     SketcherTests/SketchAutoDefineMutants.py
     SketcherTests/TestSketchSolverCore.py
     SketcherTests/SketchSolverBaseline.py
+    SketcherTests/SolverCoreMutants.py
 )
 
 if(BUILD_GUI)

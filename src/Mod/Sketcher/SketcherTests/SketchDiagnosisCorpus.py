@@ -1180,13 +1180,17 @@ def build_scale(doc, name, n, planted=False, chained=True, plants=()):
     return s.o, info
 
 
-def build_coupled(doc, name, n):
+def build_coupled(doc, name, n, plants=()):
     """One connected system of exactly `n` constraints (n even, at least 6)
     with DOF 0, in which x and y are coupled everywhere: a strip of equilateral
     triangles made of points, every point after the second held at distance 1
     from the two before it.  The first point is placed from the origin, the
     second by one distance and one horizontal offset.  Each point is drawn a
     little off its place so that a solve has to iterate.
+
+    ``plants`` is a list of ``(point, kind)``: kind ``"conflict"`` states the
+    distance to the point two before as 2 instead of 1, ``"redundant"``
+    repeats the distance to the point before.  Each adds one constraint.
 
     Returns (sketch, info) with the number of points."""
     assert n % 2 == 0 and n >= 6
@@ -1205,6 +1209,11 @@ def build_coupled(doc, name, n):
     for i in range(2, count):
         s.c("Distance", pts[i - 1], 1, pts[i], 1, 1.0)
         s.c("Distance", pts[i - 2], 1, pts[i], 1, 1.0)
+    for k, kind in plants:
+        if kind == "conflict":
+            s.c("Distance", pts[k - 2], 1, pts[k], 1, 2.0)
+        else:
+            s.c("Distance", pts[k - 1], 1, pts[k], 1, 1.0)
     s.finish()
     return s.o, {"points": count}
 

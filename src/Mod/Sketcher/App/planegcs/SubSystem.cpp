@@ -271,6 +271,26 @@ void SubSystem::calcJacobi(VEC_pD& params, Eigen::MatrixXd& jacobi)
     }
 }
 
+void SubSystem::calcJacobiSparse(Eigen::SparseMatrix<double>& jacobi)
+{
+    std::vector<Eigen::Triplet<double>> entries;
+    entries.reserve(static_cast<std::size_t>(csize) * 4);
+    for (int i = 0; i < csize; i++) {
+        auto it = c2p.find(clist[i]);
+        if (it == c2p.end()) {
+            continue;
+        }
+        for (double* p : it->second) {
+            const double g = clist[i]->grad(p);
+            if (g != 0.0) {
+                entries.emplace_back(i, static_cast<int>(p - pvals.data()), g);
+            }
+        }
+    }
+    jacobi.resize(csize, psize);
+    jacobi.setFromTriplets(entries.begin(), entries.end());
+}
+
 void SubSystem::calcJacobi(Eigen::MatrixXd& jacobi)
 {
     calcJacobi(plist, jacobi);

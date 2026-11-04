@@ -464,7 +464,8 @@ def main(out_path=None):
     doc = FreeCAD.newDocument("SketchBenchmarkCorpus")
     if os.environ.get("SKETCH_BENCH_ONLY") == "series":
         sizes = tuple(int(x) for x in os.environ.get("SKETCH_BENCH_SIZES", "1000,5000").split(","))
-        report = {"series": run_series(doc, sizes=sizes, repeats=int(os.environ.get("SKETCH_BENCH_REPEATS", "5")))}
+        kinds = tuple(os.environ.get("SKETCH_BENCH_KINDS", "chain,decoupled,coupled").split(","))
+        report = {"series": run_series(doc, kinds=kinds, sizes=sizes, repeats=int(os.environ.get("SKETCH_BENCH_REPEATS", "5")))}
         with open(out_path, "w") as fh:
             json.dump(report, fh, indent=1)
         print("wrote", out_path)

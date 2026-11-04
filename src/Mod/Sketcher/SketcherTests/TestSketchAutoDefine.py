@@ -152,6 +152,24 @@ def _pairs(res, kind):
     return out
 
 
+def with_retry(test):
+    """`apply_candidate` makes one attempt by default (run 053: the nudged retry
+    rescued a degenerate line the solver used to reject, which is fixed at its
+    source); the retry mechanism is kept and these tests run it with three."""
+
+    def wrapper(self):
+        saved = AD.APPLY_ATTEMPTS
+        AD.APPLY_ATTEMPTS = 3
+        try:
+            test(self)
+        finally:
+            AD.APPLY_ATTEMPTS = saved
+
+    wrapper.__name__ = test.__name__
+    wrapper.__doc__ = test.__doc__
+    return wrapper
+
+
 class TestSketchAutoDefine(unittest.TestCase):
     """The gate corpus is built and run once; the tests share the records."""
 
@@ -822,6 +840,7 @@ class TestSketchAutoDefine(unittest.TestCase):
         finally:
             self.doc.removeObject(stripped.Name)
 
+    @with_retry
     def testApplyTriesAgainWhenTheSolverDoesNotRepeat(self):
         stripped, cand = self._first_candidate()
         target = Corpus.clone(self.doc, stripped, "Target")
@@ -857,6 +876,7 @@ class TestSketchAutoDefine(unittest.TestCase):
     def _centres(geometry):
         return [g.toShape().BoundBox.Center for g in geometry]
 
+    @with_retry
     def testRetryStartsFromNudgedGeometryAndTheResultIsStillChecked(self):
         # PlaneGCS returns -1 with DOF 0 and nothing flagged from a start that already satisfies every
         # constraint, in some processes only (dovetail, run 052); the retry starts a hair away from it.
@@ -991,6 +1011,7 @@ class TestSketchAutoDefine(unittest.TestCase):
             scratch.close()
             self.doc.removeObject(stripped.Name)
 
+    @with_retry
     def testApplyRollsBackWhenTheResultFailsTheReSolveGate(self):
         stripped, cand = self._first_candidate()
         target = Corpus.clone(self.doc, stripped, "Target")
@@ -1012,6 +1033,7 @@ class TestSketchAutoDefine(unittest.TestCase):
             self.doc.removeObject(target.Name)
             self.doc.removeObject(stripped.Name)
 
+    @with_retry
     def testRetryNudgeMovesTheStartByAtMostNudgeAndSolvesBack(self):
         stripped, cand = self._first_candidate()
         target = Corpus.clone(self.doc, stripped, "Target")

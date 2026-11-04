@@ -25,6 +25,7 @@ ordering, degenerate lines, partitioned diagnosis."""
 
 import contextlib
 import os
+import time
 import unittest
 
 import FreeCAD
@@ -37,6 +38,24 @@ from SketcherTests import SketchSolverBaseline as Baseline
 V = FreeCAD.Vector
 
 PARTITION_ENV = "FREECAD_GCS_PARTITION_THRESHOLD"
+
+
+SPARSE_ENV = "FREECAD_GCS_SPARSE_THRESHOLD"
+
+
+@contextlib.contextmanager
+def sparse_threshold(value):
+    """Set the test-only sparse dogleg threshold of every sketch created
+    inside the block."""
+    old = os.environ.get(SPARSE_ENV)
+    os.environ[SPARSE_ENV] = str(value)
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(SPARSE_ENV, None)
+        else:
+            os.environ[SPARSE_ENV] = old
 
 
 @contextlib.contextmanager
@@ -89,7 +108,7 @@ class TestSketchSolverCore(_Base):
         of a one-DOF mechanism does not depend on the process or the
         document (run 053: two assemblies, 1.2 mm apart, by process)."""
         ends = set()
-        for i in range(12):
+        for i in range(40):
             sk, cr = _fourbar(self.doc, "FourBar%d" % i)
             self.assertEqual(sk.solve(), 0)
             self.assertEqual(sk.DoF, 1)
@@ -239,3 +258,64 @@ class TestSubsystemStatus(_Base):
             # the failed solution is not applied: the fixed points stay where they are
             fixed = [g for g in sk.Geometry if abs(g.Y) < 1e-9 and abs(g.X) in (0.0, 10.0)]
             self.assertEqual(len(fixed), 2, first)
+
+
+class TestSolverScale(_Base):
+    """Speed and equivalence of the large-sketch paths (checks 4, 5, 6)."""
+
+    def test_decoupled_5000_solves_fast(self):
+        """5,000 constraints in about 400 independent components: the
+        diagnosis works per component (stock: 9.8 s)."""
+        sk, _ = Corpus.build_scale(self.doc, "dec5000", 5000, chained=False)
+        t0 = time.perf_counter()
+        self.assertEqual(sk.solve(), 0)
+        elapsed = time.perf_counter() - t0
+        self.assertEqual(sk.DoF, 0)
+        self.assertLess(elapsed, 2.0)
+
+    def _strip_lists(self, n, plants, partition, sparse):
+        with partition_threshold(partition), sparse_threshold(sparse):
+            doc = FreeCAD.newDocument("Strip", "Strip", True, True)
+            sk, _ = Corpus.build_coupled(doc, "strip", n, plants=plants)
+            rec = Baseline.record(sk)
+            rec["seconds"] = 0.0
+            FreeCAD.closeDocument(doc.Name)
+        return rec
+
+    def test_strip_diagnosis_with_conflict_and_redundancy(self):
+        """A 1,200 constraint strip (one component of 2,400 unknowns, sparse
+        QR) with a conflict and a redundancy planted gives the lists of the
+        whole-system path."""
+        plants = [(450, "conflict"), (150, "redundant")]
+        whole = self._strip_lists(1200, plants, 0, 0)
+        parts = self._strip_lists(1200, plants, 2000, 0)
+        self.assertEqual(whole["conflicting"], parts["conflicting"])
+        self.assertEqual(whole["redundant"], parts["redundant"])
+        self.assertEqual(whole["partial"], parts["partial"])
+        self.assertEqual(whole["dof"], parts["dof"])
+        self.assertTrue(parts["conflicting"])
+
+    def test_sparse_dogleg_matches_dense(self):
+        """The sparse dogleg step (threshold lowered to 1) reaches the dense
+        solution on a strip drawn off its place, and on every fully
+        constrained synthetic case of slice 1."""
+        dense = self._strip_lists(600, (), 0, 0)
+        sparse = self._strip_lists(600, (), 0, 1)
+        self.assertEqual(Baseline.compare({"strip": dense}, {"strip": sparse}), [])
+
+        def full_cases():
+            doc = FreeCAD.newDocument("SparseFull", "SparseFull", True, True)
+            for c in Corpus.build_synthetic(doc):
+                if c.cls == "full":
+                    yield c.name, c.sketch
+
+        with sparse_threshold(0):
+            dense_all = {k: Baseline.record(v) for k, v in full_cases()}
+        with sparse_threshold(1):
+            sparse_all = {k: Baseline.record(v) for k, v in full_cases()}
+        for rec in list(dense_all.values()) + list(sparse_all.values()):
+            rec["seconds"] = 0.0
+        self.assertGreater(len(dense_all), 10)
+        # The two steps stop at different points inside the solver's convergence band: on the
+        # quarter arc (a poorly conditioned fully constrained case) they end 2.8e-6 mm apart.
+        self.assertEqual(Baseline.compare(dense_all, sparse_all, tol=1e-5), [])

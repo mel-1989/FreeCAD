@@ -493,6 +493,7 @@ System::System()
     , autoChooseAlgorithm(true)
     , autoQRThreshold(1000)
     , partitionThreshold(2000)
+    , sparseSolveThreshold(2000)
     , dogLegGaussStep(FullPivLU)
     , qrpivotThreshold(1E-13)
     , debugMode(Minimal)
@@ -516,6 +517,9 @@ System::System()
 #endif
     if (const char* env = std::getenv("FREECAD_GCS_PARTITION_THRESHOLD")) {
         partitionThreshold = std::atoi(env);
+    }
+    if (const char* env = std::getenv("FREECAD_GCS_SPARSE_THRESHOLD")) {
+        sparseSolveThreshold = std::atoi(env);
     }
 }
 
@@ -2276,6 +2280,64 @@ SolveStatus System::solve_LM(SubSystem* subsys, bool isRedundantsolving)
     return (stop == 1) ? SolveStatus::Success : SolveStatus::Failed;
 }
 
+Eigen::VectorXd System::gaussNewtonStepSparse(Eigen::SparseMatrix<double>& Jx, const Eigen::VectorXd& fx)
+{
+    Jx.makeCompressed();
+    Eigen::VectorXd h_gn;
+    bool done = false;
+    switch (dogLegGaussStep) {
+        case FullPivLU: {
+            // least-squares solution of Jx h = -fx, rank revealing like the dense full pivoting LU
+            Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> qr;
+            qr.setPivotThreshold(qrpivotThreshold);
+            qr.compute(Jx);
+            if (qr.info() == Eigen::Success) {
+                h_gn = qr.solve(-fx);
+                done = h_gn.allFinite();
+            }
+            break;
+        }
+        case LeastNormFullPivLU: {
+            Eigen::SparseMatrix<double> JJt = Jx * Jx.adjoint();
+            JJt.makeCompressed();
+            Eigen::SparseLU<Eigen::SparseMatrix<double>> lu;
+            lu.compute(JJt);
+            if (lu.info() == Eigen::Success) {
+                h_gn = Jx.adjoint() * lu.solve(-fx);
+                done = h_gn.allFinite();
+            }
+            break;
+        }
+        case LeastNormLdlt: {
+            Eigen::SparseMatrix<double> JJt = Jx * Jx.adjoint();
+            JJt.makeCompressed();
+            Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> ldlt;
+            ldlt.compute(JJt);
+            if (ldlt.info() == Eigen::Success) {
+                h_gn = Jx.adjoint() * ldlt.solve(-fx);
+                done = h_gn.allFinite();
+            }
+            break;
+        }
+    }
+    if (!done) {
+        // the sparse factorisation gave up: take the dense step the small systems use
+        Eigen::MatrixXd Jd = Eigen::MatrixXd(Jx);
+        switch (dogLegGaussStep) {
+            case FullPivLU:
+                h_gn = Jd.fullPivLu().solve(-fx);
+                break;
+            case LeastNormFullPivLU:
+                h_gn = Jd.adjoint() * (Jd * Jd.adjoint()).fullPivLu().solve(-fx);
+                break;
+            case LeastNormLdlt:
+                h_gn = Jd.adjoint() * (Jd * Jd.adjoint()).ldlt().solve(-fx);
+                break;
+        }
+    }
+    return h_gn;
+}
+
 SolveStatus System::solve_DL(SubSystem* subsys, bool isRedundantsolving)
 {
 #ifdef _GCS_EXTRACT_SOLVER_SUBSYSTEM_
@@ -2287,6 +2349,10 @@ SolveStatus System::solve_DL(SubSystem* subsys, bool isRedundantsolving)
 
     if (xsize == 0) {
         return SolveStatus::Success;
+    }
+
+    if (sparseSolveThreshold > 0 && xsize >= sparseSolveThreshold) {
+        return solve_DL_sparse(subsys, isRedundantsolving);
     }
 
     double tolg = DL_tolg;
@@ -2427,6 +2493,213 @@ SolveStatus System::solve_DL(SubSystem* subsys, bool isRedundantsolving)
         subsys->setParams(x_new);
         subsys->calcResidual(fx_new, err_new);
         subsys->calcJacobi(Jx_new);
+
+        // calculate the linear model and the update ratio
+        double dL = err - 0.5 * (fx + Jx * h_dl).squaredNorm();
+        double dF = err - err_new;
+        double rho = dL / dF;
+
+        if (dF > 0 && dL > 0) {
+            x = x_new;
+            Jx = Jx_new;
+            fx = fx_new;
+            err = err_new;
+
+            g = Jx.transpose() * (-fx);
+
+            // get infinity norms
+            g_inf = g.lpNorm<Eigen::Infinity>();
+            fx_inf = fx.lpNorm<Eigen::Infinity>();
+        }
+        else {
+            rho = -1;
+        }
+
+        // update delta
+        if (fabs(rho - 1.) < 0.2 && h_dl.norm() > delta / 3. && reduce <= 0) {
+            delta = 3 * delta;
+            nu = 2;
+            reduce = 0;
+        }
+        else if (rho < 0.25) {
+            delta = delta / nu;
+            nu = 2 * nu;
+            reduce = 2;
+        }
+        else {
+            reduce--;
+        }
+
+        if (debugMode == IterationLevel) {
+            std::stringstream stream;
+            // Iteration: 1, residual: 1e-3, tolg: 1e-5, tolx: 1e-3
+            stream << "DL, Iteration: " << iter << ", fx_inf(tolf): " << fx_inf
+                   << ", g_inf(tolg): " << g_inf << ", delta(f(tolx)): " << delta
+                   << ", err(divergingLim): " << err << "\n";
+
+            const std::string tmp = stream.str();
+            Base::Console().log("{}", tmp);
+        }
+
+        // count this iteration and start again
+        iter++;
+    }
+
+    subsys->revertParams();
+
+    if (debugMode == IterationLevel) {
+        std::stringstream stream;
+        stream << "DL: stopcode: " << stop << ((stop == 1) ? ", Success" : ", Failed") << "\n";
+
+        const std::string tmp = stream.str();
+        Base::Console().log("{}", tmp);
+    }
+
+    return (stop == 1) ? SolveStatus::Success : SolveStatus::Failed;
+}
+
+
+// The dogleg solver on a sparse Jacobian, for subsystems above sparseSolveThreshold unknowns.
+// Same iteration as solve_DL; only the Jacobian is sparse and the Gauss-Newton step comes from a
+// sparse factorisation chosen by dogLegGaussStep.
+SolveStatus System::solve_DL_sparse(SubSystem* subsys, bool isRedundantsolving)
+{
+    int xsize = subsys->pSize();
+    int csize = subsys->cSize();
+    (void)csize;
+
+    if (xsize == 0) {
+        return SolveStatus::Success;
+    }
+
+    double tolg = DL_tolg;
+    double tolx = DL_tolx;
+    double tolf = DL_tolf;
+
+    int maxIterNumber = (sketchSizeMultiplier ? maxIter * xsize : maxIter);
+    if (isRedundantsolving) {
+        tolg = DL_tolgRedundant;
+        tolx = DL_tolxRedundant;
+        tolf = DL_tolfRedundant;
+
+        maxIterNumber = (sketchSizeMultiplierRedundant ? maxIterRedundant * xsize : maxIterRedundant);
+    }
+
+    if (debugMode == IterationLevel) {
+        std::stringstream stream;
+        stream << "DL: tolg: " << tolg << ", tolx: " << tolx << ", tolf: " << tolf
+               << ", convergence: " << (isRedundantsolving ? convergenceRedundant : convergence)
+               << ", dogLegGaussStep: "
+               << (dogLegGaussStep == FullPivLU
+                       ? "FullPivLU"
+                       : (dogLegGaussStep == LeastNormFullPivLU ? "LeastNormFullPivLU"
+                                                                : "LeastNormLdlt"))
+               << ", xsize: " << xsize << ", csize: " << csize << ", maxIter: " << maxIterNumber
+               << "\n";
+
+        const std::string tmp = stream.str();
+        Base::Console().log("{}", tmp);
+    }
+
+    Eigen::VectorXd x(xsize), x_new(xsize);
+    Eigen::VectorXd fx(csize), fx_new(csize);
+    Eigen::SparseMatrix<double> Jx, Jx_new;
+    Eigen::VectorXd g(xsize), h_sd(xsize), h_gn(xsize), h_dl(xsize);
+
+    subsys->redirectParams();
+
+    double err;
+    subsys->getParams(x);
+    subsys->calcResidual(fx, err);
+    subsys->calcJacobiSparse(Jx);
+
+    g = Jx.transpose() * (-fx);
+
+    // get the infinity norm fx_inf and g_inf
+    double g_inf = g.lpNorm<Eigen::Infinity>();
+    double fx_inf = fx.lpNorm<Eigen::Infinity>();
+
+    double divergingLim = 1e6 * err + 1e12;
+
+    double delta = 0.1;
+    double alpha = 0.;
+    double nu = 2.;
+    int iter = 0, stop = 0, reduce = 0;
+    while (!stop) {
+        // check if finished
+        if (fx_inf <= tolf) {
+            // Success
+            stop = 1;
+            break;
+        }
+        else if (g_inf <= tolg) {
+            stop = 2;
+            break;
+        }
+        else if (delta <= tolx * (tolx + x.norm())) {
+            stop = 2;
+            break;
+        }
+        else if (iter >= maxIterNumber) {
+            stop = 4;
+            break;
+        }
+        else if (err > divergingLim || err != err) {
+            // check for diverging and NaN
+            stop = 6;
+            break;
+        }
+
+        // get the steepest descent direction
+        alpha = g.squaredNorm() / (Jx * g).squaredNorm();
+        h_sd = alpha * g;
+
+        // get the gauss-newton step
+        // https://forum.freecad.org/viewtopic.php?f=10&t=12769&start=50#p106220
+        // https://forum.kde.org/viewtopic.php?f=74&t=129439#p346104
+        h_gn = gaussNewtonStepSparse(Jx, fx);
+
+        double rel_error = (Jx * h_gn + fx).norm() / fx.norm();
+        if (rel_error > 1e15) {
+            break;
+        }
+
+        // compute the dogleg step
+        if (h_gn.norm() < delta) {
+            h_dl = h_gn;
+            if (h_dl.norm() <= tolx * (tolx + x.norm())) {
+                stop = 5;
+                break;
+            }
+        }
+        else if (alpha * g.norm() >= delta) {
+            h_dl = (delta / (alpha * g.norm())) * h_sd;
+        }
+        else {
+            // compute beta
+            double beta = 0;
+            Eigen::VectorXd b = h_gn - h_sd;
+            double bb = (b.transpose() * b).norm();
+            double gb = (h_sd.transpose() * b).norm();
+            double c = (delta + h_sd.norm()) * (delta - h_sd.norm());
+
+            if (gb > 0) {
+                beta = c / (gb + sqrt(gb * gb + c * bb));
+            }
+            else {
+                beta = (sqrt(gb * gb + c * bb) - gb) / bb;
+            }
+
+            // and update h_dl and dL with beta
+            h_dl = h_sd + beta * b;
+        }
+
+        // get the new values
+        double err_new;
+        x_new = x + h_dl;
+        subsys->setParams(x_new);
+        subsys->calcResidual(fx_new, err_new);
+        subsys->calcJacobiSparse(Jx_new);
 
         // calculate the linear model and the update ratio
         double dL = err - 0.5 * (fx + Jx * h_dl).squaredNorm();

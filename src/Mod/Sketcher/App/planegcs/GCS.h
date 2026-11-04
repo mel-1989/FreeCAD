@@ -150,6 +150,8 @@ private:
     SolveStatus solve_BFGS(SubSystem* subsys, bool isRedundantsolving = false);
     SolveStatus solve_LM(SubSystem* subsys, bool isRedundantsolving = false);
     SolveStatus solve_DL(SubSystem* subsys, bool isRedundantsolving = false);
+    SolveStatus solve_DL_sparse(SubSystem* subsys, bool isRedundantsolving = false);
+    Eigen::VectorXd gaussNewtonStepSparse(Eigen::SparseMatrix<double>& Jx, const Eigen::VectorXd& fx);
 
     void makeReducedJacobian(
         Eigen::MatrixXd& J,
@@ -311,6 +313,9 @@ public:
     // 0 switches it off. The environment variable FREECAD_GCS_PARTITION_THRESHOLD overrides the
     // default for tests.
     int partitionThreshold;
+    // Dogleg subsystems with at least this many unknowns use a sparse Jacobian and a sparse
+    // Gauss-Newton step. 0 switches it off; FREECAD_GCS_SPARSE_THRESHOLD overrides it for tests.
+    int sparseSolveThreshold;
     DogLegGaussStep dogLegGaussStep;
     double qrpivotThreshold;
     DebugMode debugMode;
