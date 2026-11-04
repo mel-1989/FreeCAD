@@ -1925,14 +1925,20 @@ SolveStatus System::solve(Algorithm alg, bool isRedundantsolving)
             restoreReference();
             referenceRestored = true;
         }
+        auto subStatus = SolveStatus::Success;
         if (subSystems[cid] && subSystemsAux[cid]) {
-            status = solve(subSystems[cid], subSystemsAux[cid], isRedundantsolving);
+            subStatus = solve(subSystems[cid], subSystemsAux[cid], isRedundantsolving);
         }
         else if (subSystems[cid]) {
-            status = solve(subSystems[cid], alg, isRedundantsolving);
+            subStatus = solve(subSystems[cid], alg, isRedundantsolving);
         }
         else if (subSystemsAux[cid]) {
-            status = solve(subSystemsAux[cid], alg, isRedundantsolving);
+            subStatus = solve(subSystemsAux[cid], alg, isRedundantsolving);
+        }
+        // Report the first subsystem that did not succeed. Keeping only the last status let a
+        // system whose earlier component failed pass as solved when a later one converged.
+        if (subStatus != SolveStatus::Success && status == SolveStatus::Success) {
+            status = subStatus;
         }
     }
     if (status == SolveStatus::Success) {

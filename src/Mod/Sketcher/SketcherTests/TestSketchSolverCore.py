@@ -201,3 +201,41 @@ class TestPartitionedDiagnosis(_Base):
                 ([], [], [], []),
             )
             FreeCAD.closeDocument(doc.Name)
+
+
+class TestSubsystemStatus(_Base):
+    """System::solve reports a failure of any component, not only of the last
+    one (run 053: a failing component followed by a solvable one passed as
+    solved and its points were moved off their fixed coordinates)."""
+
+    def _build(self, name, infeasible_first):
+        sk = self.doc.addObject("Sketcher::SketchObject", name)
+
+        def infeasible():
+            # a point 1 mm from two points that are 10 mm apart: no solution
+            a = sk.addGeometry(Part.Point(V(0, 0, 0)), False)
+            b = sk.addGeometry(Part.Point(V(10, 0, 0)), False)
+            p = sk.addGeometry(Part.Point(V(5, 0.5, 0)), False)
+            for g, x in ((a, 0.0), (b, 10.0)):
+                sk.addConstraint(Sketcher.Constraint("DistanceX", -1, 1, g, 1, x))
+                sk.addConstraint(Sketcher.Constraint("DistanceY", -1, 1, g, 1, 0.0))
+            sk.addConstraint(Sketcher.Constraint("Distance", a, 1, p, 1, 1.0))
+            sk.addConstraint(Sketcher.Constraint("Distance", b, 1, p, 1, 1.0))
+
+        def solvable():
+            c = sk.addGeometry(Part.Point(V(20, 20.1, 0)), False)
+            sk.addConstraint(Sketcher.Constraint("DistanceX", -1, 1, c, 1, 20.0))
+            sk.addConstraint(Sketcher.Constraint("DistanceY", -1, 1, c, 1, 20.0))
+
+        for part in ((infeasible, solvable) if infeasible_first else (solvable, infeasible)):
+            part()
+        return sk
+
+    def test_failure_of_an_earlier_component_is_reported(self):
+        for first in (True, False):
+            sk = self._build("Sub%d" % first, first)
+            self.assertEqual(sk.solve(), -1, first)
+            self.assertEqual(sk.ConflictingConstraints, [])
+            # the failed solution is not applied: the fixed points stay where they are
+            fixed = [g for g in sk.Geometry if abs(g.Y) < 1e-9 and abs(g.X) in (0.0, 10.0)]
+            self.assertEqual(len(fixed), 2, first)

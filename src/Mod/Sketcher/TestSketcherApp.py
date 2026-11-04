@@ -36,6 +36,7 @@ from SketcherTests.TestSketchAutoDefine import TestSketchAutoDefine
 from SketcherTests.TestSketchSolverCore import TestSketchSolverCore
 from SketcherTests.TestSketchSolverCore import TestDegenerateLine
 from SketcherTests.TestSketchSolverCore import TestPartitionedDiagnosis
+from SketcherTests.TestSketchSolverCore import TestSubsystemStatus
 
 # Path and PartDesign tests use these functions that used to live here
 # but moved to SketcherTests/TestSketcherSolver.py
