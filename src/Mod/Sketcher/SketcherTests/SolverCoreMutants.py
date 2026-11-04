@@ -100,7 +100,8 @@ MUTANTS = [
      "the minimum norm step is taken for square and tall Jacobians and the SparseQR one for wide ones"),
     ("redirect_loop_removed", SUB, "    for (std::size_t j = 0; j < plist.size(); ++j) {\n        pvals[j] = *plist[j];\n    }\n",
      "", "a reduced slot starts from whichever entry of the address-ordered map came last"),
-    ("redirect_wrong_index", SUB, "        pvals[j] = *plist[j];", "        pvals[j] = *plist[(j + 1) % plist.size()];",
+    ("redirect_wrong_index", SUB, "std::size_t j = 0; j < plist.size(); ++j) {\n        pvals[j] = *plist[j];",
+     "std::size_t j = 0; j < plist.size(); ++j) {\n        pvals[j] = *plist[(j + 1) % plist.size()];",
      "a slot starts from the next parameter's value"),
 ]
 
