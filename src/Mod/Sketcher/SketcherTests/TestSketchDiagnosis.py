@@ -666,3 +666,60 @@ def _pos(sketch):
 
 def _dist(a, b):
     return SD._max_move(a, b)
+
+
+class TestSketchDiagnosisProgress(unittest.TestCase):
+    """The progress callback of ``diagnose`` (G10 slice 4a, check 7): it is called, it can cancel and it changes nothing
+    else."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.doc = FreeCAD.newDocument("DiagnosisProgress")
+        sk = cls.doc.addObject("Sketcher::SketchObject", "S")
+        sk.addGeometry(Part.LineSegment(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(10, 0, 0)))
+        sk.addConstraint(Sketcher.Constraint("Horizontal", 0))
+        sk.addConstraint(Sketcher.Constraint("Distance", 0, 10.0))
+        sk.addConstraint(Sketcher.Constraint("Distance", 0, 12.0))
+        cls.doc.recompute()
+        cls.sk = sk
+
+    @classmethod
+    def tearDownClass(cls):
+        FreeCAD.closeDocument(cls.doc.Name)
+
+    def testResultIsTheSameWithAndWithoutACallback(self):
+        calls = []
+        a = SD.diagnose(self.sk)
+        b = SD.diagnose(self.sk, progress=lambda info: calls.append(info["phase"]) or False)
+        for r in (a, b):
+            for k in ("seconds", "solves", "copies"):
+                r.pop(k)
+        self.assertEqual(a, b)
+        self.assertGreater(len(calls), 5)
+        self.assertIn("solve", calls)
+
+    def testCancelRaisesAndLeavesNothingBehind(self):
+        before = _signature(self.sk)
+        n = []
+
+        def stop(info):
+            n.append(1)
+            return len(n) == 4
+
+        with self.assertRaises(SD.DiagnosisCancelled):
+            SD.diagnose(self.sk, progress=stop)
+        self.assertEqual(len(n), 4)
+        self.assertEqual(_signature(self.sk), before)
+        self.assertFalse([d for d in FreeCAD.listDocuments() if "Scratch" in d])
+
+    def testACallbackThatRaisesPropagatesAndLeavesNothingBehind(self):
+        before = _signature(self.sk)
+
+        def boom(info):
+            raise ValueError("planted")
+
+        with self.assertRaises(ValueError):
+            SD.diagnose(self.sk, progress=boom)
+        self.assertEqual(_signature(self.sk), before)
+        self.assertFalse([d for d in FreeCAD.listDocuments() if "Scratch" in d])
+        SD.diagnose(self.sk)  # the hook is gone: a later call without a callback works

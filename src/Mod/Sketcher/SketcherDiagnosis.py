@@ -129,7 +129,7 @@ import time
 
 import FreeCAD
 
-__all__ = ["diagnose", "apply_fix", "DiagnosisError"]
+__all__ = ["diagnose", "apply_fix", "DiagnosisError", "DiagnosisCancelled"]
 
 _DATUM_TYPES = {
     "Distance",
@@ -156,6 +156,31 @@ _POSITION_TOLERANCE = 1e-9
 
 class DiagnosisError(RuntimeError):
     """Raised for input the diagnosis cannot work with."""
+
+
+class DiagnosisCancelled(DiagnosisError):
+    """Raised by ``diagnose`` when its progress callback asked to stop.  The
+    scratch document is closed and the user's sketch is untouched, as after
+    any other exit."""
+
+
+# The progress callback of the diagnosis running now, if any.  Diagnosis runs
+# on the main thread (document operations are not thread-safe), so a caller
+# that must stay responsive gets control back through this hook at every
+# solver call, copy and long loop step.
+_progress = None
+_progress_ticks = 0
+
+
+def _tick(phase="solve"):
+    """Give the caller's progress callback a turn; it cancels by returning
+    a true value.  Without a callback this does nothing."""
+    global _progress_ticks
+    if _progress is None:
+        return
+    _progress_ticks += 1
+    if _progress({"phase": phase, "ticks": _progress_ticks}):
+        raise DiagnosisCancelled("diagnosis cancelled")
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +217,7 @@ class _Scratch:
         followed: the cached external geometry travels with the copy.  The
         copy is never recomputed, only solved."""
         src = self._source
+        _tick("copy")
         n = self.doc.addObject("Sketcher::SketchObject", "Copy")
         n.Placement = src.Placement
         for prop in ("Geometry", "ExternalGeo", "Constraints"):
@@ -229,6 +255,7 @@ class _Status:
     __slots__ = ("code", "conflicts", "redundant", "partial", "malformed", "dof")
 
     def __init__(self, sk):
+        _tick("solve")
         self.code = sk.solve()
         self.conflicts = [i - 1 for i in sk.ConflictingConstraints]
         self.redundant = [i - 1 for i in sk.RedundantConstraints]
@@ -293,6 +320,7 @@ class _Probe:
         for i in self.candidates:
             want = i in keep
             if self.state[i] != want:
+                _tick("activate")
                 self.sk.setActive(i, want)
                 self.state[i] = want
 
@@ -432,7 +460,9 @@ class _FreshTester:
             sk.Geometry = self.geo
         try:
             for i in self.d.probe.candidates:
+                _tick("activate")
                 sk.setActive(i, i in keep)
+            _tick("solve")
             sk.solve()
             return bool(sk.ConflictingConstraints)
         finally:
@@ -725,6 +755,7 @@ class _Diagnoser:
                 span = max(span, abs(v))
         out = {}
         for i in probe.candidates:
+            _tick("errors")
             try:
                 err = abs(float(sk.calculateConstraintError(i)))
             except Exception:
@@ -1037,7 +1068,7 @@ class _Diagnoser:
         }
 
 
-def diagnose(sketch, max_sets=12, max_fixes=6, time_budget=120.0, with_fixes=True):
+def diagnose(sketch, max_sets=12, max_fixes=6, time_budget=120.0, with_fixes=True, progress=None):
     """Diagnose a sketch and return a JSON-serialisable dict.
 
     Keys: ``dof``, ``status``, ``solve_code``, the solver's own lists
@@ -1048,7 +1079,21 @@ def diagnose(sketch, max_sets=12, max_fixes=6, time_budget=120.0, with_fixes=Tru
     with ``members`` and ``suggested_removal``), ``plan`` (the top fix of every
     set applied together to a fresh copy) and ``complete``.  All constraint
     indices are 0-based.
+
+    ``progress`` is an optional callable.  It is called on the calling thread
+    before every solver call, copy and long loop step with a dict (``phase``
+    and a running ``ticks`` count) and may keep the interface alive (process
+    events) in the call.  If it returns a true value the diagnosis stops and
+    raises ``DiagnosisCancelled`` after closing its scratch document.  An
+    exception raised by the callback propagates the same way.  Without a
+    callback nothing changes.
     """
+    global _progress, _progress_ticks
     if getattr(sketch, "TypeId", None) != "Sketcher::SketchObject":
         raise DiagnosisError("diagnose() needs a Sketcher::SketchObject")
-    return _Diagnoser(sketch, max_sets, max_fixes, time_budget, with_fixes).run()
+    outer = (_progress, _progress_ticks)
+    _progress, _progress_ticks = progress, 0
+    try:
+        return _Diagnoser(sketch, max_sets, max_fixes, time_budget, with_fixes).run()
+    finally:
+        _progress, _progress_ticks = outer

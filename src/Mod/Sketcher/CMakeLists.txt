@@ -44,6 +44,9 @@ if(BUILD_GUI)
     list (APPEND Sketcher_Scripts
           InitGui.py
           TestSketcherGui.py
+          TestSketcherDiagnosisPanelGui.py
+          SketcherDiagnosisPanel.py
+          CommandDiagnoseSketch.py
     )
     list (APPEND Sketcher_TestScripts
           SketcherTests/TestConstraintPreselectionGui.py
@@ -55,6 +58,9 @@ if(BUILD_GUI)
           SketcherTests/TestOnViewParameterGui.py
           SketcherTests/TestExternalFacePreselection.py
           SketcherTests/TestVisualLayerListGui.py
+          SketcherTests/TestSketcherDiagnosisPanelGui.py
+          SketcherTests/SketchDiagnosisPanelMutants.py
+          SketcherTests/diagnosis_gui_fixture.py
     )
 endif(BUILD_GUI)
 
