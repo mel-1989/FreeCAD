@@ -96,6 +96,9 @@ MUTANTS = [
     # only saves one solve per search of a lock (a version that retried it as the cursor moved ran
     # S06 at 1.7 times the baseline's time per move, this one at 0.7); the trajectories are identical, so no test short of a
     # timing bar sees it, and the timing bars of check 10 are measured in the Exhibit 1 run.
+    # Dropped, run 055: skipping the restart after a shortcut that is held back from the probes
+    # (`if (!held)`) saves one solve per move and changes no trajectory in the 78 cells or on S19, so
+    # only a timing bar sees it, and the planted version ran within the receding-cursor test's margin.
     ("origin_replaced_by_every_init", SKETCH, "    GCSsys.dragOriginPending = !isInitMove;", "    GCSsys.dragOriginPending = true;",
      "the editor's re-initialisation while dragging replaces the state the drag began in"),
     ("origin_never_captured", SKETCH, "    GCSsys.dragOriginPending = !isInitMove;", "    GCSsys.dragOriginPending = false;",

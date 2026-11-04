@@ -5282,21 +5282,27 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
         }
     }
     const double Eshortcut = Ebest;
-    converge();
+    // A shortcut whose gap is still at least half the one the probes found nothing at has been
+    // restarted to no gain on the moves before: no restart is made (see below)
+    const double gapShortcut = std::sqrt(2. * Ebest);
+    const bool held = viaShortcut && dragProbeGap >= 0. && gapShortcut > 0.5 * dragProbeGap;
+    if (!held) {
+        converge();
+    }
     // A shortcut that landed on the sketch of the last escape and that a restart does not improve
     // is that sketch's minimum again, with the cursor moved. While the cursor stays as far from
     // it as when the probes last searched there, or farther, they would find nothing again
     // (S19 with the cursor running away from its circle: 6 solves a move, 2 here); once the gap
     // has halved, as the cursor comes back toward reach, they run again.
     const double gapNow = std::sqrt(2. * Ebest);
-    const bool settled = viaShortcut && Ebest == Eshortcut && dragProbeGap >= 0.
-        && gapNow > 0.5 * dragProbeGap;
+    const bool settled = held || (viaShortcut && Ebest == Eshortcut && dragProbeGap >= 0.
+                                  && gapNow > 0.5 * dragProbeGap);
     if (!settled && gapNow > gapTol) {
         // the gap the probes found nothing at, or none when they find a way on
         dragProbeGap = gapNow;
-        // The first probe tilts the sketch toward the state the drag began in, so that a cursor
-        // coming back over a dead point (S08) goes on along the branch it came by; the others
-        // are along a fixed pseudo-random direction, both ways, at two sizes.
+        // The first probe tilts the sketch toward the state the drag began in (S09 at 10 mm: 6
+        // failures without it, 1 with it); the others are along a fixed pseudo-random direction,
+        // both ways, at two sizes.
         static const double fractions[] = {0., 1e-3, -1e-3, 1e-2, -1e-2};
         for (const double fraction : fractions) {
             Eigen::VectorXd xs = xbest;
