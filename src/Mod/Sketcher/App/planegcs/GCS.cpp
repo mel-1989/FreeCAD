@@ -5019,6 +5019,12 @@ retry:
         if (err > divergingLim || err != err) {  // check for diverging and NaN
             break;
         }
+        // A step of length zero (the line search gave up) changes nothing: y is zero, so B stays,
+        // and the next iteration would repeat this one to the iteration limit. While dragging,
+        // the failed move ends here with the status the limit would have given it.
+        if (dragSolve && h.squaredNorm() == 0.) {
+            break;
+        }
     }
 
     SolveStatus status;
@@ -5070,7 +5076,7 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
     VEC_pD& plist = dragPlistAB;
     const int n = static_cast<int>(plist.size());
     constexpr double gapTol = 1e-5;
-    constexpr double gapFraction = 1e-3;
+    constexpr double gapFraction = 1e-2;
     constexpr double moveFraction = 2e-2;
     constexpr double accept = 0.25;
     constexpr int maxRestarts = 12;
@@ -5104,7 +5110,9 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
         cursor.push_back(*param);
     }
 
-    // A cursor a hair off the locus of the dragged point leaves a small gap that is not a stall
+    // A cursor a hair off the locus of the dragged point leaves a small gap that is not a stall:
+    // 1% of the sketch's size (0.1% let S02's offset of 0.02 mm start a search every few moves,
+    // and S06 at 0.1 mm release its first lock only at a gap of 1.16 mm)
     const double slack = std::max(gapTol, gapFraction * extent);
     const bool reached = !(gap0 > slack);
     // A stall is a lock that opens continuously: the gap grows from a reached cursor by about the
