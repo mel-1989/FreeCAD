@@ -102,6 +102,12 @@ MUTANTS = [
      "    if (false) {\n        for (size_t i = 0; i < Parameters.size(); ++i) {\n            *Parameters[i] = before[i];", "a failed move leaves the unknowns at the reference, not at the state before the move"),
     ("extent_is_largest_coordinate", SKETCH, "        GCSsys.dragExtent = std::max(hi[0] - lo[0], hi[1] - lo[1]);", "        GCSsys.dragExtent = std::max(std::abs(hi[0]), std::abs(hi[1]));",
      "the sketch's size is its largest coordinate, which a sketch far from the origin overstates"),
+    # Run 055: origin_never_tried, origin_replaced_by_every_init and origin_never_captured SURVIVE.
+    # Sketch::moveGeometries now solves a move from the state the drag began in whenever the cursor is
+    # back at the point the drag began at, which gives the out-and-back figure of S08 at 0.1 mm
+    # (0.000 mm) without the escape's try; the try's own effect (the branch taken at the dead points
+    # between) is a free choice by check 7, and mid-path the two builds differ by up to 5 mm there, so
+    # no test can pin it. They stay in the list so that the script reports them and exits 1.
     ("origin_never_tried", GCS, "    if (!dragOriginFailed && !dragOrigin.empty()\n",
      "    if (false && !dragOriginFailed && !dragOrigin.empty()\n", "the state the drag began in is never tried before the probes"),
     # Dropped, run 055: "dragOriginFailed = true" after a failed try of the drag's first state
