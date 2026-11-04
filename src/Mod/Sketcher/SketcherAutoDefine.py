@@ -78,7 +78,21 @@ Stability.  PlaneGCS is not repeatable on a few ill-conditioned systems (the
 same constraints on the same geometry solved in about half the tries in one
 process and every time in the next), so a candidate must pass the fresh-copy
 verification `STABILITY_RUNS` more times, and ``apply_candidate`` tries up to
-`APPLY_ATTEMPTS` times before giving up.  A line within about 1.7 degrees of an
+`APPLY_ATTEMPTS` times before giving up.
+
+Re-solve guarantee.  A sketch the user saves must keep solving.  On a few
+ill-conditioned sets PlaneGCS returns -1 with DOF 0 and nothing flagged,
+differently from process to process, and a result reached from a nudged start
+can re-solve that way on 30 to 95% of solves after the file is reopened while
+every one-off check is green.  So (1) verification starts from the exact drawn
+geometry only, with no nudged fallback, (2) every verification pass, repeats
+included, and every ``apply_candidate`` result must give `GATE_RUNS` (10)
+consecutive clean DOF-0 solves, on the sketch and on a serialised copy, or the
+set is dropped or the apply rolled back, and (3) the nudged retry in
+``apply_candidate`` only rescues a first attempt that the solver missed, and
+its result passes the same gate.  A clean refusal (``AutoDefineError``) is
+preferred to an unreliable file.  The gate is bounded, not a proof: a set that
+fails in fewer than about 1 solve in 4 can still pass ten solves.  A line within about 1.7 degrees of an
 axis is dimensioned by its extent along that axis, not by its length: with the
 other end placed by other constraints a length has a mirror solution only
 twice the small extent away, and the solver can land on it after an edit and
@@ -133,6 +147,7 @@ MOVE_TOLERANCE = 1e-6
 APPLY_ATTEMPTS = 3
 STABILITY_RUNS = 3  # extra fresh-copy passes a candidate must survive
 STABILITY_BUDGET = 0.3  # seconds; slower sketches are verified once
+GATE_RUNS = 10  # consecutive clean solves a result must give (on the sketch and on a serialised copy)
 NUDGE = 1e-7  # mm; size of the start offset of a retried solve (well under MOVE_TOLERANCE)
 NEAR_AXIS = 0.03  # a line within about 1.7 degrees of an axis is dimensioned by its extent
 SCHEMES = ("baseline", "chain", "symmetric")
@@ -884,6 +899,26 @@ def _nudged(geometry, size, seed=1):
     return out
 
 
+def _stable(sk, runs=GATE_RUNS):
+    """`runs` consecutive solves of `sk`, each clean with DOF 0.  PlaneGCS can
+    return -1 at DOF 0 with nothing flagged, differently from process to process,
+    on a few ill-conditioned sets whose first solves are fine; a sketch that
+    does that after the user saves and reopens it is worse than no offer."""
+    for _ in range(runs):
+        st = _Status(sk)
+        if not (_clean(st) and st.dof == 0):
+            return False
+    return True
+
+
+def _serialised_stable(sk, runs=GATE_RUNS):
+    """`_stable` on a copy rebuilt from the serialised geometry and constraints
+    of `sk` in a hidden document, the nearest thing to saving and reopening."""
+    scratch = _Scratch(sk)
+    with contextlib.closing(scratch):
+        return _stable(scratch.copy(), runs)
+
+
 def _apply_batches(sk, specs, batches, start_geometry):
     """Add `specs` to `sk` in the batches the builder accepted them in.  The
     drawn geometry is put back before each batch because the solver result
@@ -1157,17 +1192,17 @@ def _verify(scratch, specs, batches, keep):
 
 
 def _verify_pass(scratch, specs, batches, keep):
-    """The first verification pass: the drawn geometry as the start, and when
-    that does not come out clean, the start nudged by `NUDGE` (``apply_candidate``
-    retries the same way, so a plan that needs the nudge can still be applied).
-    The facts say which start passed; the stability repeats use that same start,
-    so a plan that passes one way and fails the next time is still refused."""
-    for nudge in (0.0, NUDGE):
-        facts = _verify_once(scratch, specs, batches, keep, nudge)
-        if facts is not None:
-            facts["nudge"] = nudge
-            return facts
-    return None
+    """The first verification pass, from the drawn geometry exactly.  There is no
+    nudged fallback here: a plan that only solves from a start moved by `NUDGE`
+    is ill-conditioned, its result is the kind that later re-solves with -1 after
+    the user saves and reopens, and offering such plans also made the one
+    sensitive dovetail plan far more common (run 052).  ``apply_candidate``
+    still retries from a nudged start, but its result has to pass the re-solve
+    gate too."""
+    facts = _verify_once(scratch, specs, batches, keep, 0.0)
+    if facts is not None:
+        facts["nudge"] = 0.0
+    return facts
 
 
 def _verify_once(scratch, specs, batches, keep, nudge=0.0):
@@ -1176,7 +1211,9 @@ def _verify_once(scratch, specs, batches, keep, nudge=0.0):
         start = list(fresh.Geometry)
         sig0 = _geometry_signature(fresh)
         rows0 = [_constraint_row(c) for c in fresh.Constraints]
+        t0 = time.time()
         st = _apply_batches(fresh, specs, batches, _nudged(start, nudge))
+        cheap = time.time() - t0 <= STABILITY_BUDGET
         rows = [_constraint_row(c) for c in fresh.Constraints]
         if len(rows) != len(rows0) + len(specs) or rows[: len(rows0)] != rows0:
             return None
@@ -1190,6 +1227,8 @@ def _verify_once(scratch, specs, batches, keep, nudge=0.0):
             return None
         if any(k >= len(rows0) or rows[k] != rows0[k] for k in keep):
             return None
+        if cheap and not (_stable(fresh) and _serialised_stable(fresh)):
+            return None  # the re-solve gate; a nudged start rarely passes it
         return {"max_move": move, "dof": st.dof}
     finally:
         _discard(fresh)
@@ -1387,7 +1426,12 @@ def apply_candidate(sketch, candidate):
     from the drawn geometry moved by `NUDGE`; the result must still be clean,
     DOF 0, solve again cleanly and be within `MOVE_TOLERANCE` of the
     drawn geometry) before ``AutoDefineError`` is raised (and the sketch is
-    left as it was).
+    left as it was).  Every result, from an exact or a nudged start, must also
+    pass the re-solve gate before it is accepted: `GATE_RUNS` consecutive clean
+    solves with DOF 0 of the sketch and of a copy rebuilt from its serialised
+    content.  A result that fails it is rolled back like any other miss.  The
+    gate is skipped when one solve took longer than `STABILITY_BUDGET` seconds
+    (large sketches).
     Returns the solver status as a dict."""
     specs = [tuple([c["type"]] + list(c["args"])) for c in candidate["constraints"]]
     batches = candidate.get("batches") or [len(specs)]
@@ -1402,11 +1446,15 @@ def apply_candidate(sketch, candidate):
 
     for attempt in range(APPLY_ATTEMPTS):
         try:
+            t0 = time.time()
             st = _apply_batches(sketch, specs, batches, _nudged(start, NUDGE if attempt else 0.0, attempt))
+            cheap = time.time() - t0 <= STABILITY_BUDGET
             if _clean(st):
                 again = _Status(sketch)  # a second solve must agree
                 st = st if _clean(again) else again
             ok = _clean(st) and st.dof == 0 and _max_move(sig0, _geometry_signature(sketch)) <= MOVE_TOLERANCE
+            if ok and cheap:  # the re-solve gate, on the sketch and on its serialised copy
+                ok = _stable(sketch) and _serialised_stable(sketch)
         except Exception as exc:
             roll_back()
             raise AutoDefineError("the candidate could not be applied: %s" % exc)

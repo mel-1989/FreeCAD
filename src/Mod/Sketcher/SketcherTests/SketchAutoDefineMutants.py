@@ -103,8 +103,8 @@ mutant("prefer_ignored", "prefer is ignored", "        names = [prefer] + [s for
 mutant("max_candidates_ignored", "max_candidates is ignored", '            if len(result["candidates"]) >= max_candidates:\n                break', '            if False:\n                break')
 mutant("verify_skips_move", "verification ignores point movement", "        if move > MOVE_TOLERANCE:\n            return None\n        again", "        again")
 mutant("verify_skips_rows", "verification ignores that existing rows are unchanged", "        if len(rows) != len(rows0) + len(specs) or rows[: len(rows0)] != rows0:\n            return None\n", "")
-mutant("apply_ignores_dof", "apply_candidate accepts DOF>0", "ok = _clean(st) and st.dof == 0 and", "ok = _clean(st) and")
-mutant("apply_ignores_move", "apply_candidate accepts moved geometry", " and _max_move(sig0, _geometry_signature(sketch)) <= MOVE_TOLERANCE\n        except", "\n        except")
+mutant("apply_ignores_dof", "apply_candidate accepts DOF>0", ["ok = _clean(st) and st.dof == 0 and", "        if not (_clean(st) and st.dof == 0):\n            return False\n    return True"], ["ok = _clean(st) and", "        if not _clean(st):\n            return False\n    return True"])
+mutant("apply_ignores_move", "apply_candidate accepts moved geometry", " and _max_move(sig0, _geometry_signature(sketch)) <= MOVE_TOLERANCE\n            if ok and cheap", "\n            if ok and cheap")
 mutant("no_parallel", "parallel detection removed", 'ph["parallel"].append(("Parallel", a.i, b.i))', "pass")
 mutant("no_perpendicular", "perpendicular detection removed", 'ph["parallel"].append(("Perpendicular", groups[a][0].i, groups[b][0].i))', "pass")
 mutant("no_equal", "equal detection removed", 'ph["equal"].append(("Equal", i1, i2))', "pass")
@@ -115,7 +115,18 @@ mutant("no_symmetric", "symmetry detection removed", 'found.append(("Symmetric",
 mutant("no_stability_repeats", "a candidate is verified once", "STABILITY_RUNS = 3", "STABILITY_RUNS = 0")
 mutant("apply_tries_once", "apply_candidate does not try again after a solver miss", "APPLY_ATTEMPTS = 3", "APPLY_ATTEMPTS = 1")
 mutant("apply_retry_not_nudged", "the retry in apply_candidate starts from the same geometry as the first try", "NUDGE if attempt else 0.0", "0.0")
-mutant("verify_without_nudge_fallback", "verification does not try the nudged start a plan is applied with", "    for nudge in (0.0, NUDGE):", "    for nudge in (0.0,):")
+mutant(
+    "verify_nudge_fallback_restored",
+    "verification again accepts a plan that only solves from a nudged start",
+    '    facts = _verify_once(scratch, specs, batches, keep, 0.0)\n    if facts is not None:\n        facts["nudge"] = 0.0\n    return facts',
+    '    for nudge in (0.0, NUDGE):\n        facts = _verify_once(scratch, specs, batches, keep, nudge)\n        if facts is not None:\n            facts["nudge"] = nudge\n            return facts\n    return None',
+)
+mutant("verify_gate_removed", "verification skips the re-solve gate", "        if cheap and not (_stable(fresh) and _serialised_stable(fresh)):\n            return None", "        if False:\n            return None")
+mutant("apply_gate_removed", "apply_candidate skips the re-solve gate", "            if ok and cheap:", "            if False:")
+mutant("gate_serialised_copy_dropped", "the gate solves only the sketch itself, not a serialised copy", "ok = _stable(sketch) and _serialised_stable(sketch)", "ok = _stable(sketch)")
+mutant("gate_single_solve", "the gate asks for one clean solve only", "GATE_RUNS = 10", "GATE_RUNS = 1")
+mutant("gate_always_passes", "the gate accepts a -1 on any solve", "        if not (_clean(st) and st.dof == 0):\n            return False\n    return True", "        pass\n    return True")
+mutant("nudge_not_applied", "the nudge moves nothing", "            g.translate(FreeCAD.Vector(dx, dy, 0))", "            pass")
 mutant("console_left_silenced", "the console categories are not put back", "            FreeCAD.Console.SetStatus(name, kind, True)", "            pass")
 mutant("console_not_silenced", "the console is not silenced during propose", '                    FreeCAD.Console.SetStatus(name, kind, False)\n', "                    pass\n")
 mutant("stale_geometry_worked_on", "stored geometry that disagrees with its constraints is worked on", "        if drift > MOVE_TOLERANCE:\n", "        if False:\n")

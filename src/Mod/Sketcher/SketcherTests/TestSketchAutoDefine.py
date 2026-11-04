@@ -893,21 +893,158 @@ class TestSketchAutoDefine(unittest.TestCase):
             self.doc.removeObject(target.Name)
             self.doc.removeObject(stripped.Name)
 
-    def testVerificationAcceptsAPlanThatOnlySolvesFromANudgedStart(self):
+    def testVerificationDoesNotFallBackToANudgedStart(self):
+        # A plan that only solves from a start moved by NUDGE is ill-conditioned: its result re-solves with -1
+        # after the file is reopened, so verification refuses it (run 052).
         from SketcherDiagnosis import _Scratch
 
         stripped, cand = self._first_candidate()
         specs = [tuple([c["type"]] + list(c["args"])) for c in cand["constraints"]]
         scratch = _Scratch(stripped)
         real = AD._verify_once
+        starts = []
         try:
-            AD._verify_once = lambda s, sp, ba, keep, nudge=0.0: real(s, sp, ba, keep, nudge) if nudge else None  # the exact start never solves
             self.assertIsNotNone(AD._verify_pass(scratch, specs, cand["batches"], []))
-            AD._verify_once = lambda *a, **k: None  # nothing solves
+
+            def only_nudged(s, sp, ba, keep, nudge=0.0):
+                starts.append(nudge)
+                return real(s, sp, ba, keep, nudge) if nudge else None  # the exact start never solves
+
+            AD._verify_once = only_nudged
             self.assertIsNone(AD._verify_pass(scratch, specs, cand["batches"], []))
+            self.assertEqual(starts, [0.0])
         finally:
             AD._verify_once = real
             scratch.close()
+            self.doc.removeObject(stripped.Name)
+
+    def testStableNeedsEveryConsecutiveSolveToBeClean(self):
+        stripped, cand = self._first_candidate()
+        target = Corpus.clone(self.doc, stripped, "Target")
+        real = AD._Status
+        try:
+            AD.apply_candidate(target, cand)
+            calls = []
+            AD._Status = lambda sk: (calls.append(1), real(sk))[1]
+            self.assertTrue(AD._stable(target))
+            self.assertEqual(len(calls), AD.GATE_RUNS)
+            self.assertGreaterEqual(AD.GATE_RUNS, 10)  # PlaneGCS failed 30 to 95% of solves on the sets the gate is for
+
+            for bad in (1, AD.GATE_RUNS):  # a -1 on the first and on the last solve both count
+
+                class Failing:
+                    n = 0
+
+                    def __new__(cls, sk):
+                        cls.n += 1
+                        st = real(sk)
+                        if cls.n == bad:
+                            st.code = -1
+                        return st
+
+                AD._Status = Failing
+                self.assertFalse(AD._stable(target))
+            AD._Status = real
+            self.assertTrue(AD._serialised_stable(target))
+        finally:
+            AD._Status = real
+            self.doc.removeObject(target.Name)
+            self.doc.removeObject(stripped.Name)
+
+    def testGateRunsOnTheSketchAndOnASerialisedCopy(self):
+        stripped, cand = self._first_candidate()
+        target = Corpus.clone(self.doc, stripped, "Target")
+        real = AD._stable
+        seen = []
+        try:
+            AD._stable = lambda sk, runs=AD.GATE_RUNS: (seen.append((sk.Name, sk.Document.Name)), real(sk, runs))[1]
+            AD.apply_candidate(target, cand)
+            self.assertIn((target.Name, self.doc.Name), seen)
+            others = [d for n, d in seen if d != self.doc.Name]
+            self.assertTrue(others)  # a copy in a hidden document
+        finally:
+            AD._stable = real
+            self.doc.removeObject(target.Name)
+            self.doc.removeObject(stripped.Name)
+
+    def testVerificationDropsASetThatFailsTheReSolveGate(self):
+        from SketcherDiagnosis import _Scratch
+
+        stripped, cand = self._first_candidate()
+        specs = [tuple([c["type"]] + list(c["args"])) for c in cand["constraints"]]
+        scratch = _Scratch(stripped)
+        real = AD._stable
+        try:
+            self.assertIsNotNone(AD._verify(scratch, specs, cand["batches"], []))
+            calls = []
+
+            def third_solve_fails(sk, runs=AD.GATE_RUNS):
+                calls.append(1)
+                return len(calls) < 3  # passes twice, then the sketch fails the gate
+            AD._stable = third_solve_fails
+            self.assertIsNone(AD._verify(scratch, specs, cand["batches"], []))
+            self.assertGreaterEqual(len(calls), 3)
+            AD._stable = lambda sk, runs=AD.GATE_RUNS: False
+            self.assertIsNone(AD._verify_once(scratch, specs, cand["batches"], []))
+        finally:
+            AD._stable = real
+            scratch.close()
+            self.doc.removeObject(stripped.Name)
+
+    def testApplyRollsBackWhenTheResultFailsTheReSolveGate(self):
+        stripped, cand = self._first_candidate()
+        target = Corpus.clone(self.doc, stripped, "Target")
+        real = AD._stable
+        try:
+            before = _signature(target)
+            AD._stable = lambda sk, runs=AD.GATE_RUNS: False
+            with self.assertRaises(AD.AutoDefineError):
+                AD.apply_candidate(target, cand)
+            after = _signature(target)
+            self.assertEqual(after["constraints"], before["constraints"])
+            self.assertEqual(after["geometry"], before["geometry"])
+            gate = []  # a gate that fails once is retried like any other miss
+            AD._stable = lambda sk, runs=AD.GATE_RUNS: (gate.append(1), len(gate) > 1 and real(sk, runs))[1]
+            AD.apply_candidate(target, cand)
+            self.assertEqual(target.DoF, 0)
+        finally:
+            AD._stable = real
+            self.doc.removeObject(target.Name)
+            self.doc.removeObject(stripped.Name)
+
+    def testRetryNudgeMovesTheStartByAtMostNudgeAndSolvesBack(self):
+        stripped, cand = self._first_candidate()
+        target = Corpus.clone(self.doc, stripped, "Target")
+        drawn = list(target.Geometry)
+        moved = self._centres(AD._nudged(drawn, AD.NUDGE, 1))
+        exact = self._centres(drawn)
+        shifts = [(a - b).Length for a, b in zip(moved, exact)]
+        self.assertGreater(max(shifts), 0.0)
+        self.assertLessEqual(max(shifts), 2 * AD.NUDGE)
+        self.assertEqual([(a - b).Length for a, b in zip(self._centres(AD._nudged(drawn, 0.0)), exact)], [0.0] * len(drawn))
+        real = AD._Status
+        first = []
+
+        def first_attempt_fails(sk):
+            st = real(sk)
+            if not first:
+                first.append(1)
+                st.code = -1
+            return st
+        try:
+            AD._Status = first_attempt_fails
+            starts = []
+            ra = AD._apply_batches
+            AD._apply_batches = lambda sk, sp, ba, start: (starts.append(self._centres(start)), ra(sk, sp, ba, start))[1]
+            try:
+                AD.apply_candidate(target, cand)
+            finally:
+                AD._apply_batches = ra
+            self.assertEqual(len(starts), 2)
+            self.assertGreater(max((a - b).Length for a, b in zip(starts[1], exact)), 0.0)  # NUDGE is really applied
+        finally:
+            AD._Status = real
+            self.doc.removeObject(target.Name)
             self.doc.removeObject(stripped.Name)
 
     def testNestedProposeClosesItsOwnScratchDocument(self):
