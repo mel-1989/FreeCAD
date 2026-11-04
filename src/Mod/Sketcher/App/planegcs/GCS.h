@@ -215,7 +215,8 @@ private:
         int rank,
         const GCS::VEC_pD& pdiagnoselist,
         DependentResult& out,
-        bool skipEliminationWhenFullRank
+        bool skipEliminationWhenFullRank,
+        bool backSubstitute
     );
 
     DependentResult dependentParametersDense(

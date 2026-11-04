@@ -2285,7 +2285,12 @@ Eigen::VectorXd System::gaussNewtonStepSparse(Eigen::SparseMatrix<double>& Jx, c
     Jx.makeCompressed();
     Eigen::VectorXd h_gn;
     bool done = false;
-    switch (dogLegGaussStep) {
+    // A wide Jacobian (fewer equations than unknowns) makes SparseQR fill the triangle almost
+    // completely (nnz(R) 2.3 million against 16 thousand when square, for 3,000 unknowns: 1.6 s
+    // a step against 1 ms), so take the minimum norm step through J J^T instead, which is the step
+    // the dense path takes for the same system.
+    const DogLegGaussStep stepKind = (Jx.rows() < Jx.cols()) ? LeastNormLdlt : dogLegGaussStep;
+    switch (stepKind) {
         case FullPivLU: {
             // least-squares solution of Jx h = -fx, rank revealing like the dense full pivoting LU
             Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> qr;
@@ -2323,7 +2328,7 @@ Eigen::VectorXd System::gaussNewtonStepSparse(Eigen::SparseMatrix<double>& Jx, c
     if (!done) {
         // the sparse factorisation gave up: take the dense step the small systems use
         Eigen::MatrixXd Jd = Eigen::MatrixXd(Jx);
-        switch (dogLegGaussStep) {
+        switch (stepKind) {
             case FullPivLU:
                 h_gn = Jd.fullPivLu().solve(-fx);
                 break;
@@ -5881,12 +5886,28 @@ void System::collectDependentParameters(
     int rank,
     const GCS::VEC_pD& pdiagnoselist,
     DependentResult& out,
-    bool skipEliminationWhenFullRank
+    bool skipEliminationWhenFullRank,
+    bool backSubstitute
 )
 {
     // With no column beyond the rank the eliminated entries are never read.
     if (!(skipEliminationWhenFullRank && rank == qrJ.cols())) {
-        eliminateNonZerosOverPivotInUpperTriangularMatrix(Rparams, rank);
+        if (backSubstitute) {
+            // Only the columns at or beyond the rank are read below, and they need the pivot block
+            // inverted against them: R11^-1 R12 by back substitution on the triangle, O(rank^2 k)
+            // where the Gauss-Jordan sweep of the pivot columns is O(rank^3). Behaviour from the
+            // standard definition of the null space basis of a triangular factor; used only on the
+            // sparse branch so the dense path keeps its bit-identical result.
+            const int extra = static_cast<int>(Rparams.cols()) - rank;
+            if (rank > 0 && extra > 0) {
+                Rparams.topLeftCorner(rank, rank)
+                    .triangularView<Eigen::Upper>()
+                    .solveInPlace(Rparams.block(0, rank, rank, extra));
+            }
+        }
+        else {
+            eliminateNonZerosOverPivotInUpperTriangularMatrix(Rparams, rank);
+        }
     }
 
     out.groups.resize(qrJ.cols() - rank);
@@ -5919,7 +5940,7 @@ void System::identifyDependentParameters(
                    // thread-safe. Removes warning in non Debug mode.
 
     DependentResult out;
-    collectDependentParameters(qrJ, Rparams, rank, pdiagnoselist, out, false);
+    collectDependentParameters(qrJ, Rparams, rank, pdiagnoselist, out, false, false);
 
 #ifdef _GCS_DEBUG
     if (!silent) {
@@ -5961,7 +5982,7 @@ System::DependentResult System::dependentParametersDense(
     makeDenseQRDecomposition(J, jacobianconstraintmap, qrJ, rank, Rparams, false, true);
     DependentResult out;
     out.rank = rank;
-    collectDependentParameters(qrJ, Rparams, rank, pdiagnoselist, out, true);
+    collectDependentParameters(qrJ, Rparams, rank, pdiagnoselist, out, true, false);
     return out;
 }
 
@@ -5978,7 +5999,7 @@ System::DependentResult System::dependentParametersSparse(
     makeSparseQRDecomposition(J, jacobianconstraintmap, SqrJ, rank, Rparams, false, true);
     DependentResult out;
     out.rank = rank;
-    collectDependentParameters(SqrJ, Rparams, rank, pdiagnoselist, out, true);
+    collectDependentParameters(SqrJ, Rparams, rank, pdiagnoselist, out, true, true);
     return out;
 }
 #endif

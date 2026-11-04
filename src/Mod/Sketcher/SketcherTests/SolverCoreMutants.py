@@ -20,7 +20,8 @@
 # *   <https://www.gnu.org/licenses/>.                                      *
 # *                                                                         *
 
-"""Planted defects for the solver core of G10 slice 3a (check 10).
+"""Planted defects for the solver core of G10 slice 3a (check 10) and the
+cliff fixes of slice 3b (check 11, solver half).
 
 Each mutant is a text replacement in one C++ file of the tree; the script
 applies it, builds through the harness, runs the solver-core tests and puts the
@@ -42,7 +43,7 @@ GCS = "src/Mod/Sketcher/App/planegcs/GCS.cpp"
 SUB = "src/Mod/Sketcher/App/planegcs/SubSystem.cpp"
 SKETCH = "src/Mod/Sketcher/App/Sketch.cpp"
 
-TESTS = ["TestSketchSolverCore", "TestDegenerateLine", "TestPartitionedDiagnosis", "TestSubsystemStatus", "TestSolverScale"]
+TESTS = ["TestSketchSolverCore", "TestDegenerateLine", "TestPartitionedDiagnosis", "TestSubsystemStatus", "TestSolverScale", "TestStartValues", "TestSolverCliff"]
 
 # (name, file, old text, new text, what it plants)
 MUTANTS = [
@@ -88,6 +89,20 @@ MUTANTS = [
      "            continue;", "a driving constraint with no unknowns is silently dropped from the partitioned diagnosis"),
     ("degenerate_direction_flipped", SKETCH, "p2 = p1 + oldDir * (length / oldLength);", "p2 = p1 - oldDir * (length / oldLength);",
      "a kept degenerate line points the opposite way"),
+    ("backsub_wrong_column", GCS, "                    .solveInPlace(Rparams.block(0, rank, rank, extra));",
+     "                    .solveInPlace(Rparams.block(0, rank + 1, rank, extra - 1));",
+     "the back substitution leaves the first column beyond the rank unsolved"),
+    ("backsub_lower_triangle", GCS, "                    .triangularView<Eigen::Upper>()\n                    .solveInPlace(",
+     "                    .triangularView<Eigen::Lower>()\n                    .solveInPlace(",
+     "the back substitution reads the lower triangle of the pivot block"),
+    ("min_norm_branch_inverted", GCS, "const DogLegGaussStep stepKind = (Jx.rows() < Jx.cols()) ? LeastNormLdlt : dogLegGaussStep;",
+     "const DogLegGaussStep stepKind = (Jx.rows() >= Jx.cols()) ? LeastNormLdlt : dogLegGaussStep;",
+     "the minimum norm step is taken for square and tall Jacobians and the SparseQR one for wide ones"),
+    ("redirect_loop_removed", SUB, "    for (std::size_t j = 0; j < plist.size(); ++j) {\n        pvals[j] = *plist[j];\n    }\n",
+     "", "a reduced slot starts from whichever entry of the address-ordered map came last"),
+    ("redirect_wrong_index", SUB, "std::size_t j = 0; j < plist.size(); ++j) {\n        pvals[j] = *plist[j];",
+     "std::size_t j = 0; j < plist.size(); ++j) {\n        pvals[j] = *plist[(j + 1) % plist.size()];",
+     "a slot starts from the next parameter's value"),
 ]
 
 
@@ -136,7 +151,7 @@ def main(argv):
         finally:
             with open(path, "wb") as fh:
                 fh.write(original)
-        rows.append({"mutant": name, "file": rel, "what": what, "build": status, "failing_tests": failed, "caught": bool(failed) or status != "ok"})
+        rows.append({"mutant": name, "file": rel, "what": what, "build": status, "failing_tests": failed, "caught": bool(failed)})
         print(name, "CAUGHT" if rows[-1]["caught"] else "SURVIVED", failed, flush=True)
     build_and_test()  # leave the tree built from the original source
     with open("solver_core_mutants.json", "w") as fh:
