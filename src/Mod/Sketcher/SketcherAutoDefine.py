@@ -92,13 +92,27 @@ set is dropped or the apply rolled back, and (3) the nudged retry in
 ``apply_candidate`` only rescues a first attempt that the solver missed, and
 its result passes the same gate.  A clean refusal (``AutoDefineError``) is
 preferred to an unreliable file.  The gate is bounded, not a proof: a set that
-fails in fewer than about 1 solve in 4 can still pass ten solves.  A line within about 1.7 degrees of an
+fails in fewer than about 1 solve in 4 can still pass ten solves.  The gate
+costs up to 20 solves, so it is skipped by wall clock when a pass is slow
+(`STABILITY_BUDGET`; on the loaded mini that is between about 320 and 640
+geometries) and the skip is reported, never silent: every candidate carries
+``gate`` (``"full"``, ``"repeats_skipped"`` when the gate ran but the repeat
+passes did not, or ``"skipped"``) and ``gate_reason``, and the dict
+``apply_candidate`` returns carries ``gate`` (``"full"`` or ``"reduced"``),
+``gate_runs`` and ``gate_reason``.  ``apply_candidate`` never applies a result
+unvetted: when its own apply was too slow for the full gate it asks for
+`REDUCED_GATE_RUNS` clean solves of the real sketch instead.  Both functions
+take ``stability_budget`` (seconds) so a test or a caller can force or forbid
+the skip (``0`` always skips, ``float("inf")`` never does) independently of
+machine load.  A line within about 1.7 degrees of an
 axis is dimensioned by its extent along that axis, not by its length: with the
 other end placed by other constraints a length has a mirror solution only
 twice the small extent away, and the solver can land on it after an edit and
 back.  While ``propose`` runs, the console's warning and notification
 categories are switched off (the solver would name the scratch sketch "Copy"
 for every partly redundant trial constraint) and put back in ``finally``.
+The switch is process-wide and ``FreeCAD.Console`` has nothing narrower, so a
+warning another thread prints meanwhile is lost too (see ``_quiet``).
 
 Sketches it will not close, and why: a plain ellipse or ellipse arc whose
 internal geometry is not exposed (its centre and axes have nothing to
@@ -146,7 +160,8 @@ ANGLE_TOLERANCE = 1e-8
 MOVE_TOLERANCE = 1e-6
 APPLY_ATTEMPTS = 3
 STABILITY_RUNS = 3  # extra fresh-copy passes a candidate must survive
-STABILITY_BUDGET = 0.3  # seconds; slower sketches are verified once
+STABILITY_BUDGET = 0.3  # seconds; slower sketches skip the repeats and the full re-solve gate (see "The re-solve gate" in the module docstring)
+REDUCED_GATE_RUNS = 3  # solves of the real sketch ``apply_candidate`` asks for when its own apply was too slow for the full gate
 GATE_RUNS = 10  # consecutive clean solves a result must give (on the sketch and on a serialised copy)
 NUDGE = 1e-7  # mm; size of the start offset of a retried solve (well under MOVE_TOLERANCE)
 NEAR_AXIS = 0.03  # a line within about 1.7 degrees of an axis is dimensioned by its extent
@@ -1166,32 +1181,47 @@ def _candidate_key(specs):
     return frozenset(_spec_key(s) for s in specs)
 
 
-def _verify(scratch, specs, batches, keep):
+def _verify(scratch, specs, batches, keep, stability_budget=None):
     """Apply to a brand-new copy and re-solve, first in one batch and, if that
     does not pass, in the batches the builder used.  A plan that passes is
     applied to `STABILITY_RUNS` further fresh copies: PlaneGCS gives different
     answers from run to run on a few ill-conditioned systems (the same
     constraints on the same geometry solved 15 times out of 30 in one process
     and 30 out of 30 in the next), and a candidate that passes once but not
-    always must not be offered.  The repeats are skipped when one pass took
-    longer than `STABILITY_BUDGET` seconds (large sketches).  Returns the
-    facts measured, including the batches that passed, or None when the hard
-    bar is not met."""
+    always must not be offered.  The repeats are skipped when the whole first
+    pass (the batch apply, the solves and the re-solve gate, which is itself up
+    to 20 solves) took longer than `stability_budget` seconds (large sketches),
+    and the gate inside a pass is skipped when its batch apply alone took longer
+    than that.  Either skip is recorded in the facts as ``gate`` (``"full"``,
+    ``"repeats_skipped"`` or ``"skipped"``) with a ``gate_reason``.  Returns the facts measured,
+    including the batches that passed, or None when the hard bar is not met."""
+    budget = STABILITY_BUDGET if stability_budget is None else stability_budget
     for trial in ([len(specs)], list(batches)) if len(batches) > 1 else (list(batches),):
         t0 = time.time()
-        facts = _verify_pass(scratch, specs, trial, keep)
+        facts = _verify_pass(scratch, specs, trial, keep, budget)
         if facts is None:
             continue
-        repeats = STABILITY_RUNS if time.time() - t0 <= STABILITY_BUDGET else 0
-        if any(_verify_once(scratch, specs, trial, keep, facts["nudge"]) is None for _ in range(repeats)):
+        elapsed = time.time() - t0
+        repeats = STABILITY_RUNS if elapsed <= budget else 0
+        if any(_verify_once(scratch, specs, trial, keep, facts["nudge"], budget) is None for _ in range(repeats)):
             continue
         facts["batches"] = trial
         facts["runs"] = 1 + repeats
+        reasons = []
+        gate_ran = facts.pop("gate_ran")
+        if not gate_ran:
+            reasons.append("the re-solve gate (%d solves on the sketch and on a serialised copy) was not run because applying the constraints took %.2f s, over the %.2f s stability budget" % (GATE_RUNS, facts.pop("apply_seconds"), budget))
+        else:
+            facts.pop("apply_seconds")
+        if not repeats:
+            reasons.append("the %d repeat passes on fresh copies were not run because the first pass took %.2f s, over the %.2f s stability budget" % (STABILITY_RUNS, elapsed, budget))
+        facts["gate"] = "skipped" if not gate_ran else ("repeats_skipped" if reasons else "full")
+        facts["gate_reason"] = "; ".join(reasons) or None
         return facts
     return None
 
 
-def _verify_pass(scratch, specs, batches, keep):
+def _verify_pass(scratch, specs, batches, keep, budget=STABILITY_BUDGET):
     """The first verification pass, from the drawn geometry exactly.  There is no
     nudged fallback here: a plan that only solves from a start moved by `NUDGE`
     is ill-conditioned, its result is the kind that later re-solves with -1 after
@@ -1199,13 +1229,13 @@ def _verify_pass(scratch, specs, batches, keep):
     sensitive dovetail plan far more common (run 052).  ``apply_candidate``
     still retries from a nudged start, but its result has to pass the re-solve
     gate too."""
-    facts = _verify_once(scratch, specs, batches, keep, 0.0)
+    facts = _verify_once(scratch, specs, batches, keep, 0.0, budget)
     if facts is not None:
         facts["nudge"] = 0.0
     return facts
 
 
-def _verify_once(scratch, specs, batches, keep, nudge=0.0):
+def _verify_once(scratch, specs, batches, keep, nudge=0.0, budget=STABILITY_BUDGET):
     fresh = scratch.copy()
     try:
         start = list(fresh.Geometry)
@@ -1213,7 +1243,8 @@ def _verify_once(scratch, specs, batches, keep, nudge=0.0):
         rows0 = [_constraint_row(c) for c in fresh.Constraints]
         t0 = time.time()
         st = _apply_batches(fresh, specs, batches, _nudged(start, nudge))
-        cheap = time.time() - t0 <= STABILITY_BUDGET
+        spent = time.time() - t0
+        cheap = spent <= budget
         rows = [_constraint_row(c) for c in fresh.Constraints]
         if len(rows) != len(rows0) + len(specs) or rows[: len(rows0)] != rows0:
             return None
@@ -1229,7 +1260,7 @@ def _verify_once(scratch, specs, batches, keep, nudge=0.0):
             return None
         if cheap and not (_stable(fresh) and _serialised_stable(fresh)):
             return None  # the re-solve gate; a nudged start rarely passes it
-        return {"max_move": move, "dof": st.dof}
+        return {"max_move": move, "dof": st.dof, "gate_ran": cheap, "apply_seconds": spent}
     finally:
         _discard(fresh)
 
@@ -1255,6 +1286,8 @@ def _describe(scheme, specs, batches, facts):
         "verification_runs": facts["runs"],
         "max_move": facts["max_move"],
         "verified": True,
+        "gate": facts["gate"],
+        "gate_reason": facts["gate_reason"],
     }
 
 
@@ -1306,7 +1339,17 @@ def _quiet():
     scratch copies are solved: the solver reports every partly redundant
     trial constraint by naming the scratch sketch ("Copy"), which the user
     never made.  The categories of every registered observer are put back in
-    ``finally``, so nothing changes after ``propose`` returns or raises."""
+    ``finally``, so nothing changes after ``propose`` returns or raises.
+
+    Known limit: the switch is process-wide, so a warning or notification
+    printed by another thread (or by a callback) while ``propose`` runs is
+    lost too (6 of 36 in a measured run).  ``Err``, ``Critical``, ``Msg`` and
+    ``Log`` are untouched.  There is no narrower mechanism without C++ changes:
+    ``FreeCAD.Console`` exposes only ``SetStatus``/``GetStatus``/``GetObservers``,
+    which flip a per-observer flag read by every thread; there is no per-thread
+    or per-sender filter, no capture or scoped-suppression call, and a Python
+    object cannot be registered as an observer.  Callers that need every
+    warning should not run ``propose`` while another thread prints them."""
     saved = []
     try:
         for name in FreeCAD.Console.GetObservers():
@@ -1321,7 +1364,7 @@ def _quiet():
             FreeCAD.Console.SetStatus(name, kind, True)
 
 
-def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0):
+def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0, stability_budget=None):
     """Propose constraint sets that make `sketch` fully defined.
 
     Returns a JSON-serialisable dict: ``dof`` (before), ``status`` (``ok``,
@@ -1331,7 +1374,10 @@ def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0)
     could not reach DOF 0: the DOF that was left and why).  `keep` is a list of
     constraint indices whose presence is verified; existing constraints are
     never changed whether listed or not.  `prefer` is a scheme name or a list
-    of names tried first (``baseline``, ``chain``, ``symmetric``)."""
+    of names tried first (``baseline``, ``chain``, ``symmetric``).
+    `stability_budget` (seconds, default `STABILITY_BUDGET`) is the longest a
+    verification step may take before the repeat passes and the re-solve gate
+    are skipped; each candidate's ``gate`` says whether that happened."""
     if getattr(sketch, "TypeId", None) != "Sketcher::SketchObject":
         raise AutoDefineError("propose() needs a Sketcher::SketchObject")
     if isinstance(max_candidates, bool) or not isinstance(max_candidates, int) or max_candidates < 1:
@@ -1342,10 +1388,10 @@ def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0)
     if any((not isinstance(k, int)) or k < 0 or k >= ncons for k in keep):
         raise AutoDefineError("keep refers to a constraint that does not exist")
     with _quiet():
-        return _propose(sketch, names, keep, max_candidates, time_budget)
+        return _propose(sketch, names, keep, max_candidates, time_budget, stability_budget)
 
 
-def _propose(sketch, names, keep, max_candidates, time_budget):
+def _propose(sketch, names, keep, max_candidates, time_budget, stability_budget=None):
     deadline = time.time() + time_budget
     scratch = _Scratch(sketch)
     try:
@@ -1402,7 +1448,7 @@ def _propose(sketch, names, keep, max_candidates, time_budget):
                 key = _candidate_key(b.specs)
                 if key in seen:
                     continue
-                facts = _verify(scratch, b.specs, b.batches, keep)
+                facts = _verify(scratch, b.specs, b.batches, keep, stability_budget)
                 if facts is None:
                     result["unclosed"].append({"scheme": scheme, "remaining_dof": b.dof, "reason": "verification on a fresh copy failed; candidate dropped"})
                     continue
@@ -1417,7 +1463,7 @@ def _propose(sketch, names, keep, max_candidates, time_budget):
         scratch.close()
 
 
-def apply_candidate(sketch, candidate):
+def apply_candidate(sketch, candidate, stability_budget=None):
     """Apply a candidate returned by ``propose`` to the real sketch.  The
     result is checked on the real sketch; if it is not clean with DOF 0 the
     constraints are removed again and the drawn geometry is put back.  The
@@ -1430,9 +1476,14 @@ def apply_candidate(sketch, candidate):
     pass the re-solve gate before it is accepted: `GATE_RUNS` consecutive clean
     solves with DOF 0 of the sketch and of a copy rebuilt from its serialised
     content.  A result that fails it is rolled back like any other miss.  The
-    gate is skipped when one solve took longer than `STABILITY_BUDGET` seconds
-    (large sketches).
-    Returns the solver status as a dict."""
+    full gate costs up to 20 solves, so when applying the constraints took
+    longer than `stability_budget` seconds (default `STABILITY_BUDGET`; large
+    sketches) the gate is reduced, not skipped: `REDUCED_GATE_RUNS` clean DOF 0
+    solves of the real sketch, with no serialised copy.  A reduced gate catches
+    only a result that fails most solves.  Returns a dict: ``dof``, ``added``,
+    ``gate`` (``"full"`` or ``"reduced"``), ``gate_runs`` (solves asked for
+    on the sketch) and ``gate_reason`` (None for a full gate)."""
+    budget = STABILITY_BUDGET if stability_budget is None else stability_budget
     specs = [tuple([c["type"]] + list(c["args"])) for c in candidate["constraints"]]
     batches = candidate.get("batches") or [len(specs)]
     n0 = len(sketch.Constraints)
@@ -1445,20 +1496,27 @@ def apply_candidate(sketch, candidate):
         sketch.Geometry = start
 
     for attempt in range(APPLY_ATTEMPTS):
+        cheap, spent = True, 0.0
         try:
             t0 = time.time()
             st = _apply_batches(sketch, specs, batches, _nudged(start, NUDGE if attempt else 0.0, attempt))
-            cheap = time.time() - t0 <= STABILITY_BUDGET
+            spent = time.time() - t0
+            cheap = spent <= budget
             if _clean(st):
                 again = _Status(sketch)  # a second solve must agree
                 st = st if _clean(again) else again
             ok = _clean(st) and st.dof == 0 and _max_move(sig0, _geometry_signature(sketch)) <= MOVE_TOLERANCE
             if ok and cheap:  # the re-solve gate, on the sketch and on its serialised copy
                 ok = _stable(sketch) and _serialised_stable(sketch)
+            elif ok:  # too slow for 20 solves: a reduced gate on the real sketch, never none
+                ok = _stable(sketch, REDUCED_GATE_RUNS)
         except Exception as exc:
             roll_back()
             raise AutoDefineError("the candidate could not be applied: %s" % exc)
         if ok:
-            return {"dof": st.dof, "added": len(specs)}
+            if cheap:
+                return {"dof": st.dof, "added": len(specs), "gate": "full", "gate_runs": GATE_RUNS, "gate_reason": None}
+            reason = "applying the constraints took %.2f s, over the %.2f s stability budget, so the %d-solve gate on the sketch and a serialised copy was cut to %d solves of the sketch" % (spent, budget, GATE_RUNS, REDUCED_GATE_RUNS)
+            return {"dof": st.dof, "added": len(specs), "gate": "reduced", "gate_runs": REDUCED_GATE_RUNS, "gate_reason": reason}
         roll_back()
     raise AutoDefineError("the candidate did not solve cleanly on this sketch; it was rolled back")

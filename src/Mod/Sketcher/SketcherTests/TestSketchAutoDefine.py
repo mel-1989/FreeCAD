@@ -906,9 +906,9 @@ class TestSketchAutoDefine(unittest.TestCase):
         try:
             self.assertIsNotNone(AD._verify_pass(scratch, specs, cand["batches"], []))
 
-            def only_nudged(s, sp, ba, keep, nudge=0.0):
+            def only_nudged(s, sp, ba, keep, nudge=0.0, budget=AD.STABILITY_BUDGET):
                 starts.append(nudge)
-                return real(s, sp, ba, keep, nudge) if nudge else None  # the exact start never solves
+                return real(s, sp, ba, keep, nudge, budget) if nudge else None  # the exact start never solves
 
             AD._verify_once = only_nudged
             self.assertIsNone(AD._verify_pass(scratch, specs, cand["batches"], []))
@@ -1011,6 +1011,99 @@ class TestSketchAutoDefine(unittest.TestCase):
             AD._stable = real
             self.doc.removeObject(target.Name)
             self.doc.removeObject(stripped.Name)
+
+    def testGateIsReportedFullByDefault(self):
+        stripped, cand = self._first_candidate()
+        target = Corpus.clone(self.doc, stripped, "Target")
+        try:
+            self.assertEqual(cand["gate"], "full")
+            self.assertIsNone(cand["gate_reason"])
+            res = AD.apply_candidate(target, cand)
+            self.assertEqual((res["gate"], res["gate_runs"], res["gate_reason"]), ("full", AD.GATE_RUNS, None))
+        finally:
+            self.doc.removeObject(target.Name)
+            self.doc.removeObject(stripped.Name)
+
+    def testForcedSkipIsReportedOnTheCandidateAndNoGateRuns(self):
+        stripped, _ = Corpus.strip(self.doc, self.generated[0].sketch, "all")
+        real = AD._stable
+
+        def must_not_run(sk, runs=AD.GATE_RUNS):
+            raise AssertionError("the gate ran although the budget forced a skip")
+
+        try:
+            AD._stable = must_not_run
+            res = AD.propose(stripped, prefer="baseline", max_candidates=1, stability_budget=0)
+            cand = res["candidates"][0]
+            self.assertEqual(cand["gate"], "skipped")
+            self.assertIn("stability budget", cand["gate_reason"])
+            self.assertIn("re-solve gate", cand["gate_reason"])
+            self.assertEqual(cand["verification_runs"], 1)  # the repeat passes are skipped too, and the reason says so
+            self.assertIn("repeat passes", cand["gate_reason"])
+        finally:
+            AD._stable = real
+            self.doc.removeObject(stripped.Name)
+
+    def testApplyNeverAppliesAnUnvettedResultWhenTheGateIsSlow(self):
+        stripped, cand = self._first_candidate()
+        target = Corpus.clone(self.doc, stripped, "Target")
+        real = AD._stable
+        seen = []
+        try:
+            AD._stable = lambda sk, runs=AD.GATE_RUNS: (seen.append((sk.Name, runs)), real(sk, runs))[1]
+            res = AD.apply_candidate(target, cand, stability_budget=0)
+            self.assertGreaterEqual(AD.REDUCED_GATE_RUNS, 1)  # zero solves would vet nothing
+            self.assertEqual(seen, [(target.Name, AD.REDUCED_GATE_RUNS)])  # reduced: the real sketch only, a few solves
+            self.assertEqual((res["gate"], res["gate_runs"]), ("reduced", AD.REDUCED_GATE_RUNS))
+            self.assertIn("stability budget", res["gate_reason"])
+            self.assertEqual(target.DoF, 0)
+        finally:
+            AD._stable = real
+            self.doc.removeObject(target.Name)
+            self.doc.removeObject(stripped.Name)
+
+    def testReducedGateStillRollsBackAnUnstableResult(self):
+        stripped, cand = self._first_candidate()
+        target = Corpus.clone(self.doc, stripped, "Target")
+        real = AD._stable
+        try:
+            before = _signature(target)
+            AD._stable = lambda sk, runs=AD.GATE_RUNS: False
+            with self.assertRaises(AD.AutoDefineError):
+                AD.apply_candidate(target, cand, stability_budget=0)
+            after = _signature(target)
+            self.assertEqual(after["constraints"], before["constraints"])
+            self.assertEqual(after["geometry"], before["geometry"])
+        finally:
+            AD._stable = real
+            self.doc.removeObject(target.Name)
+            self.doc.removeObject(stripped.Name)
+
+    def testRealSketchListIsFoundFromASourceRootAndAShortfallIsLoud(self):
+        import tempfile
+
+        from SketcherTests import SketchDiagnosisCorpus as Slice1
+
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "src", "Mod", "Foo"))
+            open(os.path.join(root, "src", "Mod", "Foo", "x.FCStd"), "w").close()
+            old = os.environ.pop("AUTODEFINE_SOURCE_ROOT", None)
+            try:
+                self.assertIsNone(Slice1.find_data_file("Mod/Foo/x.FCStd"))
+                os.environ["AUTODEFINE_SOURCE_ROOT"] = root
+                self.assertEqual(Slice1.find_data_file("Mod/Foo/x.FCStd"), os.path.join(root, "src", "Mod", "Foo", "x.FCStd"))
+            finally:
+                os.environ.pop("AUTODEFINE_SOURCE_ROOT", None)
+                if old is not None:
+                    os.environ["AUTODEFINE_SOURCE_ROOT"] = old
+        total = len(Corpus.REAL_SKETCHES)
+        self.assertEqual(Run.real_summary(total, total, []), "real sketches: found %d of %d" % (total, total))
+        Run.check_real(total, total, [], allow=False)  # complete: no error
+        with self.assertRaises(RuntimeError) as cm:
+            Run.check_real(total - 8, total, ["a:Sketch"], allow=False)
+        self.assertIn("found %d of %d" % (total - 8, total), str(cm.exception))
+        self.assertIn("a:Sketch", str(cm.exception))
+        Run.check_real(total - 8, total, ["a:Sketch"], allow=True)  # only on an explicit request
 
     def testRetryNudgeMovesTheStartByAtMostNudgeAndSolvesBack(self):
         stripped, cand = self._first_candidate()
