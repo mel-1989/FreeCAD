@@ -209,6 +209,8 @@ class PanelTestBase(SketcherGuiTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        Gui.activateWorkbench("SketcherWorkbench")  # the editor is entered from it; stock commands need it loaded
+        _pump(50)
         _Rig.build()
 
     def setUp(self):
@@ -866,15 +868,13 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
         self.close_panel()
         Gui.Selection.clearSelection()
         # the stock click still selects the conflicting constraints
-        ev = QtGui.QMouseEvent(
-            QtCore.QEvent.MouseButtonRelease,
-            QtCore.QPointF(2, 2),
-            QtCore.QPointF(2, 2),
-            QtCore.Qt.LeftButton,
-            QtCore.Qt.NoButton,
-            QtCore.Qt.NoModifier,
-        )
-        QtWidgets.QApplication.sendEvent(stock[0], ev)
+        for typ, buttons in (
+            (QtCore.QEvent.MouseButtonPress, QtCore.Qt.LeftButton),
+            (QtCore.QEvent.MouseButtonRelease, QtCore.Qt.NoButton),
+        ):
+            pos = QtCore.QPoint(3, 3)
+            ev = QtGui.QMouseEvent(typ, pos, stock[0].mapToGlobal(pos), QtCore.Qt.LeftButton, buttons, QtCore.Qt.NoModifier)
+            QtWidgets.QApplication.sendEvent(stock[0], ev)
         _pump(30)
         self.assertEqual(
             _selected_names(), sorted("Constraint%d" % i for i in c.sketch.ConflictingConstraints)
