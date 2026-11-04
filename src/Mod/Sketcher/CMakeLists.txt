@@ -29,6 +29,10 @@ set(Sketcher_TestScripts
     SketcherTests/TestSketchDiagnosis.py
     SketcherTests/SketchDiagnosisCorpus.py
     SketcherTests/SketchBenchmark.py
+    SketcherTests/SketchDragScenarios.py
+    SketcherTests/SketchDragMeasure.py
+    SketcherTests/SketchDragHeld.json.gz
+    SketcherTests/TestSketchDragSession.py
     SketcherTests/TestSketchAutoDefine.py
     SketcherTests/SketchAutoDefineCorpus.py
     SketcherTests/SketchAutoDefineOracle.py

@@ -1368,16 +1368,18 @@ PyObject* SketchObjectPy::moveGeometries(PyObject* args)
     PyObject* pyList;
     PyObject* pcObj;
     int relative = 0;
+    int keepSession = 0;
 
-    // Parse arguments: list of pairs, Base::VectorPy, optional relative flag
+    // Parse arguments: list of pairs, Base::VectorPy, optional relative flag, optional keep-session flag
     if (!PyArg_ParseTuple(
             args,
-            "O!O!|i",
+            "O!O!|ii",
             &PyList_Type,
             &pyList,  // List of pairs (geoId, pointPos)
             &(Base::VectorPy::Type),
             &pcObj,  // Target vector
-            &relative
+            &relative,
+            &keepSession
         )) {  // Optional relative flag
         return nullptr;
     }
@@ -1409,11 +1411,22 @@ PyObject* SketchObjectPy::moveGeometries(PyObject* args)
     Base::Vector3d v1 = static_cast<Base::VectorPy*>(pcObj)->value();
 
     // Call the C++ method
-    if (this->getSketchObjectPtr()->moveGeometries(geoEltIds, v1, (relative > 0))
+    if (this->getSketchObjectPtr()->moveGeometries(geoEltIds, v1, (relative > 0), false, (keepSession > 0))
         != SketchSolveStatus::Success) {
         PyErr_SetString(PyExc_ValueError, "Failed to move geometries.");
         return nullptr;
     }
+
+    Py_RETURN_NONE;
+}
+
+PyObject* SketchObjectPy::endMoveSession(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+
+    this->getSketchObjectPtr()->endMoveSession();
 
     Py_RETURN_NONE;
 }
@@ -1423,17 +1436,32 @@ PyObject* SketchObjectPy::moveGeometry(PyObject* args)
     PyObject* pcObj;
     int GeoId, PointType;
     int relative = 0;
+    int keepSession = 0;
 
-    if (
-        !PyArg_ParseTuple(args, "iiO!|i", &GeoId, &PointType, &(Base::VectorPy::Type), &pcObj, &relative)
-    ) {
+    if (!PyArg_ParseTuple(
+            args,
+            "iiO!|ii",
+            &GeoId,
+            &PointType,
+            &(Base::VectorPy::Type),
+            &pcObj,
+            &relative,
+            &keepSession
+        )) {
         return nullptr;
     }
 
     Base::Vector3d v1 = static_cast<Base::VectorPy*>(pcObj)->value();
 
     if (this->getSketchObjectPtr()
-            ->moveGeometry(GeoId, static_cast<Sketcher::PointPos>(PointType), v1, (relative > 0))
+            ->moveGeometry(
+                GeoId,
+                static_cast<Sketcher::PointPos>(PointType),
+                v1,
+                (relative > 0),
+                false,
+                (keepSession > 0)
+            )
         != SketchSolveStatus::Success) {
         std::stringstream str;
         str << "Not able to move point with the id and type: (" << GeoId << ", " << PointType << ")";

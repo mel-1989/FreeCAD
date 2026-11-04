@@ -638,7 +638,13 @@ class SketchObject(Part2DObject):
         ...
 
     def moveGeometry(
-        self, geo_index: int, point_pos: int, vector: Vector, relative: bool = False, /
+        self,
+        geo_index: int,
+        point_pos: int,
+        vector: Vector,
+        relative: bool = False,
+        keep_session: bool = False,
+        /,
     ) -> None:
         """
         Move a given point (or curve) to another location.
@@ -652,11 +658,21 @@ class SketchObject(Part2DObject):
         the sketch.
         The argument 'relative', if present, states if the new location is given
         relatively to the current one.
+        The argument 'keep_session', if true, keeps one move session alive across calls
+        exactly as a mouse drag in the sketch editor does: every call restarts from the
+        state saved when the session began (not from the previous result), and the session
+        begins again when the cursor is more than 20 first steps from where it began.
+        Call endMoveSession() when the drag is over. By default every call is its own session.
         """
         ...
 
     def moveGeometries(
-        self, geos: List[Tuple[int, int]], vector: Vector, relative: bool = False, /
+        self,
+        geos: List[Tuple[int, int]],
+        vector: Vector,
+        relative: bool = False,
+        keep_session: bool = False,
+        /,
     ) -> None:
         """
         Move given points and curves to another location.
@@ -671,6 +687,15 @@ class SketchObject(Part2DObject):
         The argument 'relative', if present, states if the new location is given
         relatively to the current one. For group dragging this is enforced.
         Geos is a vector of pairs of geoId and posId.
+        The argument 'keep_session' is as for moveGeometry().
+        """
+        ...
+
+    def endMoveSession(self) -> None:
+        """
+        Ends a move session kept alive by moveGeometry/moveGeometries with keep_session.
+
+        endMoveSession()
         """
         ...
 
