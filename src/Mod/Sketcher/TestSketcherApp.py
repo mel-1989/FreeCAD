@@ -45,6 +45,8 @@ from SketcherTests.TestSketchDragSession import TestDragFallback
 from SketcherTests.TestSketchDragSession import TestDragEscape
 from SketcherTests.TestSketchDragSession import TestDragRestart
 from SketcherTests.TestSketchDragSession import TestDragSilentSuccess
+from SketcherTests.TestSketchDragSession import TestDragTeleport
+from SketcherTests.TestSketchDragSession import TestDragLockMemory
 from SketcherTests.TestSketchSolverCore import TestStartValues
 from SketcherTests.TestSketchSolverCore import TestSolverCliff
 

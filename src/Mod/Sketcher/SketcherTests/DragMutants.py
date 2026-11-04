@@ -43,7 +43,16 @@ SKETCH = "src/Mod/Sketcher/App/Sketch.cpp"
 OPS = "src/Mod/Sketcher/App/SketchObjectOperations.cpp"
 PYIMP = "src/Mod/Sketcher/App/SketchObjectPyImp.cpp"
 
-TESTS = ["TestDragSession", "TestDragBfgsGuard", "TestDragFallback", "TestDragEscape", "TestDragRestart", "TestDragSilentSuccess"]
+TESTS = [
+    "TestDragSession",
+    "TestDragBfgsGuard",
+    "TestDragFallback",
+    "TestDragEscape",
+    "TestDragRestart",
+    "TestDragSilentSuccess",
+    "TestDragTeleport",
+    "TestDragLockMemory",
+]
 
 # (name, file, old text, new text, what it plants)
 MUTANTS = [
@@ -67,23 +76,26 @@ MUTANTS = [
      "            if (false && !isRedundantsolving && subStatus == SolveStatus::Success) {", "the escape is never tried"),
     ("escape_memory_ignored", GCS, "    if (dragStallValid && dragStallCursor.size() == cursor.size()) {",
      "    if (false && dragStallCursor.size() == cursor.size()) {", "an escape that found nothing is searched for again on every move"),
-    ("escape_accepts_any_result", GCS, "            if (ok && E < accept * Ebest) {", "            if (ok && E < (accept + 1e9) * Ebest) {",
+    ("escape_accepts_any_result", GCS,
+     "            if (ok && E < accept * Ebest) {\n                xbest = xr;\n                Ebest = E;\n                improved = true;\n                pvalsHoldBest = true;\n                dragProbeGap = -1.;",
+     "            if (ok && E < (accept + 1e9) * Ebest) {\n                xbest = xr;\n                Ebest = E;\n                improved = true;\n                pvalsHoldBest = true;\n                dragProbeGap = -1.;",
      "a probe result is kept even when the gap did not fall"),
+    ("origin_accepts_any_result", GCS,
+     "            if (ok && E < accept * Ebest) {\n                xbest = xr;\n                Ebest = E;\n                improved = true;\n                pvalsHoldBest = true;\n                viaOrigin = true;",
+     "            if (ok && E < (accept + 1e9) * Ebest) {\n                xbest = xr;\n                Ebest = E;\n                improved = true;\n                pvalsHoldBest = true;\n                viaOrigin = true;",
+     "the state the drag began in is kept whatever it gives (run 055: the cause of the snap-back was not this, but it must not be one)"),
     ("escape_ignores_sudden_gap", GCS, "        if (gap0 > 2. * dragPrevGap + travel + slack) {",
      "        if (false) {", "an escape runs on a landing whose gap appeared at once, as S18 after its failed moves"),
-    # Dropped, run 054: "if (reached) { dragLockClean = true;" only matters when a drag meets a sudden gap
-    # (which switches the escape off) and later a dead-point lock the escape must release. No sketch in
-    # the 20 scenarios does both: S18 is the only one with a sudden gap and its path has no later lock,
-    # and a grid of single cursor jumps from the start state of each of S01, S03, S05 to S08, S19 and S20
-    # found no landing farther from the cursor than the jump (S01: three, by under 1 mm). Planting
-    # it would need a sketch built for the purpose, which is not a defect any drag has shown.
+    ("lock_clean_not_restored_on_reach", GCS, "    if (reached) {\n        dragLockClean = true;", "    if (reached) {\n",
+     "the escape stays off for good once a gap has appeared at once, even after a move reaches the cursor again"),
     ("restart_never_tried", SKETCH, "    if (!stuck || dragRefIsLastGood || dragRetrying", "    if (!stuck || true || dragRefIsLastGood || dragRetrying",
      "a stuck move is never solved again from the last state that met the cursor"),
     ("restart_from_the_stuck_state", SKETCH, "        *Parameters[i] = dragLastGood[i];\n    }\n    if (initMove", "        *Parameters[i] = first[i];\n    }\n    if (initMove",
      "the restart saves the stuck state as its reference instead of the last good one"),
-    # Dropped, run 054: keeping a second solve that ends farther from the cursor than the first
-    # (the `gap2 < gap1` test of Sketch::moveGeometries) changes one cell of the 20 scenarios, and
-    # for the better (S09 at 10 mm: 6 failures to 5); no scenario reaches a second solve that is worse.
+    # Dropped, run 055: keeping a second solve that ends farther from the cursor than the first
+    # (the `gap2 < gap1` test of Sketch::moveGeometries). Planted as `gap2 < 1e300`, it changes no
+    # move's failure and no total gap on 336 seeded walks (14 scenarios, 24 seeds, 150 moves each,
+    # steps of 0.5 to 60 mm), only hash-level coordinates below 0.01 mm: no test can see it.
     ("diverged_result_kept", SKETCH, "if (GCSsys.dragGap > stay + 10. * extent) {", "if (GCSsys.dragGap > stay + 1e12 * extent) {",
      "a move that ends ten sketch sizes from the cursor is kept"),
     ("failed_move_keeps_reference_state", SKETCH, "    if (status != GCS::SolveStatus::Success) {\n        for (size_t i = 0; i < Parameters.size(); ++i) {\n            *Parameters[i] = before[i];",
@@ -103,10 +115,27 @@ MUTANTS = [
      "the editor's re-initialisation while dragging replaces the state the drag began in"),
     ("origin_never_captured", SKETCH, "    GCSsys.dragOriginPending = !isInitMove;", "    GCSsys.dragOriginPending = false;",
      "the state the drag began in is never saved"),
-    ("probes_held_back_whatever_the_gap", GCS, "    const bool settled = viaShortcut && Ebest == Eshortcut && dragProbeGap >= 0.\n        && gapNow > 0.5 * dragProbeGap;",
-     "    const bool settled = viaShortcut && Ebest == Eshortcut;", "the probes stay off after a settled shortcut even when the cursor comes back toward reach"),
-    ("probes_never_held_back", GCS, "    const bool settled = viaShortcut && Ebest == Eshortcut && dragProbeGap >= 0.\n        && gapNow > 0.5 * dragProbeGap;",
-     "    const bool settled = false && viaShortcut && Ebest == Eshortcut;", "the probes run on every move after a shortcut, as before run 055"),
+    ("probes_held_back_whatever_the_gap", GCS,
+     "    const bool settled = held || (viaShortcut && Ebest == Eshortcut && dragProbeGap >= 0.\n                                  && gapNow > 0.5 * dragProbeGap);",
+     "    const bool settled = held || (viaShortcut && Ebest == Eshortcut);",
+     "the probes stay off after a settled shortcut even when the cursor comes back toward reach"),
+    ("probes_never_held_back", GCS,
+     "    const bool settled = held || (viaShortcut && Ebest == Eshortcut && dragProbeGap >= 0.\n                                  && gapNow > 0.5 * dragProbeGap);",
+     "    const bool settled = false && (held || (viaShortcut && Ebest == Eshortcut));",
+     "the probes run on every move after a shortcut, as before run 055"),
+    # Run 055: an invalid solution of a drag move was undone to the reference (the state the drag
+    # began in) and the move reported success, so the whole sketch jumped back to the start.
+    ("invalid_solution_still_succeeds", SKETCH,
+     "    if (follow && dragSolveInvalid) {\n        status = GCS::SolveStatus::SuccessfulSolutionInvalid;\n    }",
+     "    if (false && follow && dragSolveInvalid) {\n        status = GCS::SolveStatus::SuccessfulSolutionInvalid;\n    }",
+     "the guard against an invalid solution of a drag move is removed: the sketch goes back to the drag's start and the move succeeds"),
+    ("invalid_solution_never_flagged", SKETCH, "            dragSolveInvalid = isInitMove;", "            dragSolveInvalid = false;",
+     "an undone invalid solution is not told to the drag"),
+    ("origin_return_never_tried", SKETCH, "if (!dragRetrying && !dragRefIsOrigin && dragOriginAnchor.size() == 2",
+     "if (false && !dragRetrying && !dragRefIsOrigin && dragOriginAnchor.size() == 2",
+     "a cursor that comes back to where the drag began does not find the sketch as it began"),
+    ("origin_return_wherever_the_cursor_is", SKETCH, "                    <= 1e-2 * GCSsys.dragExtent) {", "                    <= 1e12 * GCSsys.dragExtent) {",
+     "every move after a restart is solved from the state the drag began in, whatever the cursor"),
     ("escape_perturbs_nothing", GCS, "                xs[j] += fraction * extent * std::sin(2.399963229728653 * (j + 1));",
      "                xs[j] += 0. * fraction * extent * std::sin(2.399963229728653 * (j + 1));", "the probes do not move the unknowns"),
 ]
@@ -158,12 +187,18 @@ def main(argv):
             with open(path, "wb") as fh:
                 fh.write(original)
         rows.append({"mutant": name, "file": rel, "what": what, "build": status, "failing_tests": failed,
-                     "caught": bool(failed)})
+                     "caught": status == "ok" and bool(failed)})
         print(name, "CAUGHT" if rows[-1]["caught"] else "SURVIVED", failed, flush=True)
     build_and_test()  # leave the tree built from the original source
     with open("drag_mutants.json", "w") as fh:
         json.dump(rows, fh, indent=1)
-    print("caught %d of %d" % (sum(r.get("caught", False) for r in rows), len(rows)))
+    # A mutant that did not apply or did not build is a failure of this script, never a catch
+    broken = [r["mutant"] for r in rows if r.get("result") == "pattern not found once" or r.get("build") != "ok"]
+    survived = [r["mutant"] for r in rows if r.get("build") == "ok" and not r.get("caught")]
+    print("caught %d of %d; did not apply or build: %s; survived: %s" % (
+        sum(r.get("caught", False) for r in rows), len(rows), broken or "none", survived or "none"))
+    if broken or survived:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ getTemporaryPoint, because only the solver's working copy changes), and the
 Python moveGeometries command when the button is released."""
 
 import math
+import random
 import time
 import unittest
 
@@ -512,3 +513,117 @@ class TestDragSilentSuccess(unittest.TestCase):
         failed, succeeded = self._drive("S03", 1.0, True, 1, 120)
         self.assertGreater(failed, 0)
         self.assertGreater(succeeded, 0)
+
+
+class TestDragTeleport(unittest.TestCase):
+    """A drag never puts the whole sketch back where the drag began while the
+    cursor is somewhere else and reports that the move succeeded (run 055: an
+    invalid solution was undone to the reference, the state the drag began in,
+    and the move still returned success; 61 mm at move 35 of S15's walk)."""
+
+    def setUp(self):
+        self.doc = FreeCAD.newDocument("DragTeleport")
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.doc.Name)
+
+    def _walk(self, prefix, seed, moves, steps=None, turn=0.2, step=1.0):
+        """Seeded random walk of the cursor on the editor's path. Returns the
+        moves (index, gap) that landed the sketch exactly on the drag-start state
+        while the move before had left it 10 mm or more from it, and the gap of
+        the dragged point after the move was more than 1 mm."""
+        name, builder = _scenario(prefix)
+        sk, (geo, pos), wp, spec = builder(self.doc)
+        sk.solve()
+        verts = Measure._verts(sk)
+        i = verts.index((geo, pos))
+        p0 = Measure._pts(sk, verts)
+        st0 = p0[i]
+        rnd = random.Random(seed * 7 + 1)
+        sk.setRecalculateInitialSolutionWhileMovingPoint(True)
+        sk.initTemporaryMove([(geo, pos)])
+        prev_d0 = 0.0
+        cursor = st0
+        ang = rnd.uniform(0, 6.28) if steps is None else 0.0
+        bad = []
+        for k in range(moves):
+            if steps is None:
+                ang += rnd.gauss(0, turn)
+                a, length = ang, step
+            else:
+                length, a = rnd.choice(steps), rnd.uniform(0, 2 * math.pi)
+            new = (cursor[0] + length * math.cos(a), cursor[1] + length * math.sin(a))
+            if math.hypot(new[0] - st0[0], new[1] - st0[1]) > 90:
+                new = (st0[0] + (new[0] - st0[0]) * 0.5, st0[1] + (new[1] - st0[1]) * 0.5)
+            cursor = new
+            ok = sk.moveGeometriesTemporary([(geo, pos)], V(new[0], new[1], 0), False) == 0
+            pts = Measure._tpts(sk, verts)
+            d0 = max(math.hypot(a_[0] - b_[0], a_[1] - b_[1]) for a_, b_ in zip(pts, p0))
+            gap = math.hypot(pts[i][0] - new[0], pts[i][1] - new[1])
+            if ok and d0 < 1e-3 and prev_d0 > 10 and gap > 1:
+                bad.append((k, round(gap, 2)))
+            prev_d0 = d0
+        return bad
+
+    def test_s15_walk_does_not_snap_back_to_the_start(self):
+        # seed 0, move 35: the point had reached the cursor, the move was 3 mm, and the sketch
+        # went 61 mm back to (0, 20) with a gap of 60 mm
+        self.assertEqual(self._walk("S15", 0, 60, steps=[0.1, 1, 3, 10, 30, 60]), [])
+
+    def test_s01_smooth_walk_does_not_snap_back_to_the_start(self):
+        # seed 1, move 245 at 1 mm steps: 57 mm back to the start
+        self.assertEqual(self._walk("S01", 1, 300), [])
+
+    def test_s15_out_and_back_returns_to_the_start(self):
+        # the ellipse is free to turn, so the state after the way back is the start only because
+        # a cursor that comes back to where the drag began finds the sketch as it began
+        for step in (1.0, 10.0):
+            with self.subTest(step=step):
+                cell = _cell("S15", step)
+                self.assertLess(cell["hys"], 0.01, cell)
+                self.assertEqual(cell["fails"], 0, cell)
+
+    def test_s16_invalid_ellipse_is_not_a_lock(self):
+        # the minor axis longer than the major one is invalid geometry: the sketch stays where it
+        # was instead of going back to the start, and the cursor is followed again after it
+        for step in (0.1, 1.0):
+            with self.subTest(step=step):
+                cell = _cell("S16", step)
+                self.assertEqual(cell["fails"], 0, cell)
+                self.assertEqual(cell["lockups_out"] + cell["lockups_ret"], 0, cell)
+                self.assertLess(cell["gapreach"], 1.0, cell)
+
+
+class TestDragLockMemory(unittest.TestCase):
+    """The escape stays off after a gap that appeared at once and comes back on
+    when a move reaches the cursor again (S18's walk, seed 23: with the escape
+    off for good, 8 failures and a total gap of 2577 mm instead of 7 and 2517)."""
+
+    def test_s18_walk_keeps_its_failures_and_gaps(self):
+        doc = FreeCAD.newDocument("DragLockMemory")
+        try:
+            name, builder = _scenario("S18")
+            sk, (geo, pos), wp, spec = builder(doc)
+            sk.solve()
+            verts = Measure._verts(sk)
+            i = verts.index((geo, pos))
+            st0 = Measure._pts(sk, verts)[i]
+            rnd = random.Random(23 * 7 + 1)
+            sk.setRecalculateInitialSolutionWhileMovingPoint(True)
+            sk.initTemporaryMove([(geo, pos)])
+            cursor = st0
+            fails, total = 0, 0.0
+            for k in range(150):
+                length, a = rnd.choice([0.5, 3, 10, 30, 60]), rnd.uniform(0, 2 * math.pi)
+                new = (cursor[0] + length * math.cos(a), cursor[1] + length * math.sin(a))
+                if math.hypot(new[0] - st0[0], new[1] - st0[1]) > 90:
+                    new = (st0[0] + (new[0] - st0[0]) * 0.5, st0[1] + (new[1] - st0[1]) * 0.5)
+                cursor = new
+                ok = sk.moveGeometriesTemporary([(geo, pos)], V(new[0], new[1], 0), False) == 0
+                q = Measure._tpts(sk, verts)[i]
+                fails += 0 if ok else 1
+                total += math.hypot(q[0] - new[0], q[1] - new[1])
+            self.assertLessEqual(fails, 7)
+            self.assertLess(total, 2540.0)
+        finally:
+            FreeCAD.closeDocument(doc.Name)

@@ -655,6 +655,14 @@ private:
     std::vector<double> dragLastGoodCursor;
     bool dragRefIsLastGood = true;
     bool dragRetrying = false;
+    // Set by internalSolve when a drag move's solution was invalid geometry and was undone, which
+    // put the unknowns back at the reference (the state the drag began in)
+    bool dragSolveInvalid = false;
+    // The state the drag began in and where its dragged point was then: a cursor that comes back
+    // to that point finds the sketch as it was, whatever the drag has been through since
+    std::vector<double> dragOriginState;
+    std::vector<double> dragOriginAnchor;
+    bool dragRefIsOrigin = false;
 
     // Group related things :
     /// container to store information about groups

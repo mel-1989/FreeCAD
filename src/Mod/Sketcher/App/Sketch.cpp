@@ -5065,6 +5065,7 @@ GCS::SolveStatus Sketch::internalSolve(std::string& solvername, int level)
             GCSsys.undoSolution();
             updateGeometry();
             Base::Console().log("Invalid solution from {} solver.\n", solvername);
+            dragSolveInvalid = isInitMove;
         }
         else {
             updateNonDrivingConstraints();
@@ -5440,6 +5441,17 @@ int Sketch::initMove(const std::vector<GeoElementId>& geoEltIds)
     // a drag that starts here keeps the state it began in (the stock re-initialisation while
     // dragging, and the drag's own restarts, are not starts)
     GCSsys.dragOriginPending = !isInitMove;
+    dragRefIsOrigin = !isInitMove;
+    if (!isInitMove) {
+        dragOriginState.resize(Parameters.size());
+        for (size_t i = 0; i < Parameters.size(); ++i) {
+            dragOriginState[i] = *Parameters[i];
+        }
+        dragOriginAnchor.assign(
+            InitParameters.begin(),
+            InitParameters.begin() + std::min<size_t>(2, InitParameters.size())
+        );
+    }
     GCSsys.initSolution();
     GCSsys.dragOriginPending = false;
     isInitMove = true;
@@ -5544,6 +5556,7 @@ GCS::SolveStatus Sketch::moveGeometries(
         return GCS::SolveStatus::Failed;
     }
 
+    std::vector<double> preMove;  // the state before the move, when it is not what the unknowns hold
     if (!isInitMove) {
         GCSsys.dragReset();
         initMove(geoEltIds);
@@ -5560,6 +5573,36 @@ GCS::SolveStatus Sketch::moveGeometries(
                 if ((toPoint - initToPoint).Length() > 20 * moveStep) {
                     initMove(geoEltIds);
                     initToPoint = toPoint;
+                }
+            }
+            // A drag that has gone on from a later state (a restart, or the editor's
+            // re-initialisation) and whose cursor comes back to the point it began at finds the
+            // sketch as it began: the move is solved from the state the drag began in, which is
+            // that state itself there. Where it does not end at the cursor the restart below goes
+            // on from the last state that did, as for any move.
+            if (!dragRetrying && !dragRefIsOrigin && dragOriginAnchor.size() == 2
+                && dragOriginState.size() == Parameters.size() && GCSsys.dragExtent > 0.
+                && std::hypot(toPoint.x - dragOriginAnchor[0], toPoint.y - dragOriginAnchor[1])
+                    <= 1e-2 * GCSsys.dragExtent) {
+                preMove.resize(Parameters.size());
+                for (size_t i = 0; i < Parameters.size(); ++i) {
+                    preMove[i] = *Parameters[i];
+                    *Parameters[i] = dragOriginState[i];
+                }
+                const std::vector<double> keep = dragLastGood;
+                const std::vector<double> keepCursor = dragLastGoodCursor;
+                if (initMove(geoEltIds) == 0) {
+                    dragLastGood = keep;
+                    dragLastGoodCursor = keepCursor;
+                    dragRefIsLastGood = false;
+                    dragRefIsOrigin = true;
+                    initToPoint = toPoint;
+                }
+                else {
+                    for (size_t i = 0; i < Parameters.size(); ++i) {
+                        *Parameters[i] = preMove[i];
+                    }
+                    preMove.clear();
                 }
             }
         }
@@ -5653,11 +5696,26 @@ GCS::SolveStatus Sketch::moveGeometries(
     if (follow) {
         before.resize(Parameters.size());
         for (size_t i = 0; i < Parameters.size(); ++i) {
-            before[i] = *Parameters[i];
+            before[i] = preMove.empty() ? *Parameters[i] : preMove[i];
         }
     }
     GCSsys.dragGap = -1.;
+    dragSolveInvalid = false;
     GCS::SolveStatus status = solve();
+    // A solution of invalid geometry is undone to the reference, the state the drag began in,
+    // whatever state the drag has reached since (S15's ellipse arc, 61 mm back): the move failed,
+    // and the failed-move handling below puts the sketch back as it was before the move. The
+    // editor sees a sketch that stays where it was, as with a cursor out of reach, not an error.
+    if (follow && dragSolveInvalid) {
+        status = GCS::SolveStatus::SuccessfulSolutionInvalid;
+    }
+    auto reported = [&](GCS::SolveStatus st) {
+        if (st == GCS::SolveStatus::SuccessfulSolutionInvalid && !dragRetrying) {
+            GCSsys.dragGap = -1.;
+            return GCS::SolveStatus::Success;
+        }
+        return st;
+    };
 
     // A temporary move restarts from the reference saved by initMove, which is the state the
     // drag began in. A move from there to a distant cursor can be stuck on a branch the drag has
@@ -5676,6 +5734,7 @@ GCS::SolveStatus Sketch::moveGeometries(
         for (size_t i = 0; i < Parameters.size(); ++i) {
             *Parameters[i] = before[i];
         }
+        updateGeometry();
     }
     const double extent = GCSsys.dragExtent;
     bool ok = status == GCS::SolveStatus::Success && GCSsys.dragGap >= 0.;
@@ -5715,7 +5774,7 @@ GCS::SolveStatus Sketch::moveGeometries(
     constexpr double stuckGap = 0.1;
     const bool stuck = !ok || GCSsys.dragGap > stuckGap * extent;
     if (!stuck || dragRefIsLastGood || dragRetrying || dragLastGood.size() != Parameters.size()) {
-        return status;
+        return reported(status);
     }
 
     const double gap1 = (status == GCS::SolveStatus::Success) ? GCSsys.dragGap : -1.;
@@ -5749,7 +5808,7 @@ GCS::SolveStatus Sketch::moveGeometries(
     }
     updateGeometry();
     GCSsys.dragGap = gap1;
-    return status;
+    return reported(status);
 }
 
 GCS::SolveStatus Sketch::moveGeometry(int geoId, PointPos pos, Base::Vector3d toPoint, bool relative)
