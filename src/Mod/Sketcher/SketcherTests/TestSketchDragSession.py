@@ -253,6 +253,12 @@ class TestDragEscape(unittest.TestCase):
         cell = _cell("S18", 0.1)
         self.assertLess(cell["hys"], 0.01, cell)
 
+    def test_cells_where_the_escape_decides_keep_their_counts(self):
+        # measured on the editor path: S03 at 0.1 mm has 18 lock moves in one run, S19 at 0.1 mm
+        # has 9 jumps; an escape that keeps probe results which did not lower the gap gives 20 and 12
+        self.assertLessEqual(_cell("S03", 0.1)["lockmoves"], 18)
+        self.assertLessEqual(_cell("S19", 0.1)["jumps"], 9)
+
     def test_flat_valley_is_not_a_lock(self):
         # S01 on the return leg is a known open case; the outward leg must still follow
         cell = _cell("S01", 1.0)

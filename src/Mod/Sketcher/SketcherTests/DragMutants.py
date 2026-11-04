@@ -77,12 +77,13 @@ MUTANTS = [
     # and a grid of single cursor jumps from the start state of each of S01, S03, S05 to S08, S19 and S20
     # found no landing farther from the cursor than the jump (S01: three, by under 1 mm). Planting
     # it would need a sketch built for the purpose, which is not a defect any drag has shown.
-    ("restart_never_tried", SKETCH, "    if (!stuck || dragRefIsLastGood || dragRetrying", "    if (true || dragRefIsLastGood || dragRetrying",
+    ("restart_never_tried", SKETCH, "    if (!stuck || dragRefIsLastGood || dragRetrying", "    if (!stuck || true || dragRefIsLastGood || dragRetrying",
      "a stuck move is never solved again from the last state that met the cursor"),
     ("restart_from_the_stuck_state", SKETCH, "        *Parameters[i] = dragLastGood[i];\n    }\n    if (initMove", "        *Parameters[i] = first[i];\n    }\n    if (initMove",
      "the restart saves the stuck state as its reference instead of the last good one"),
-    ("restart_keeps_any_result", SKETCH, "        && (gap1 >= 0. ? gap2 < gap1 : gap2 <= stuckGap * extent)) {", "        && (gap1 >= 0. ? true : true)) {",
-     "the second solve is kept even when it ends farther from the cursor"),
+    # Dropped, run 054: keeping a second solve that ends farther from the cursor than the first
+    # (the `gap2 < gap1` test of Sketch::moveGeometries) changes one cell of the 20 scenarios, and
+    # for the better (S09 at 10 mm: 6 failures to 5); no scenario reaches a second solve that is worse.
     ("diverged_result_kept", SKETCH, "if (GCSsys.dragGap > stay + 10. * extent) {", "if (GCSsys.dragGap > stay + 1e12 * extent) {",
      "a move that ends ten sketch sizes from the cursor is kept"),
     ("failed_move_keeps_reference_state", SKETCH, "    if (status != GCS::SolveStatus::Success) {\n        for (size_t i = 0; i < Parameters.size(); ++i) {\n            *Parameters[i] = before[i];",
