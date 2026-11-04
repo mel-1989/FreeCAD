@@ -263,7 +263,8 @@ class PanelTestBase(SketcherGuiTestCase):
         """Wait until the panel shows a diagnosis of the sketch as it is now."""
         panel = panel or self.panel
         for _ in range(20):
-            self.assertTrue(_wait(lambda: panel.state == "ready"), "panel state %s" % panel.state)
+            _wait(lambda: panel.state in ("ready", "failed", "closed"))
+            self.assertEqual(panel.state, "ready", panel.status.text())
             if panel._fingerprint() == panel.fingerprint:
                 return
             _pump(100)
@@ -525,6 +526,23 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
                 self.assertEqual(a, b)
             Gui.ActiveDocument.resetEdit()
             _pump(20)
+
+    def testNoSideEffectsOnASketchDrawnOffItsConstraints(self):
+        """Solving would move the drawn points; diagnosing must not (a redundant but consistent sketch, drawn
+        slightly off, which the solver would pull into place)."""
+        d = FreeCAD.newDocument("PanelOffDrawn")
+        self._extra_docs.append("PanelOffDrawn")
+        sk = d.addObject("Sketcher::SketchObject", "S")
+        sk.addGeometry(Part.LineSegment(V(0, 0, 0), V(9.7, 0.3, 0)))
+        sk.addConstraint(Sketcher.Constraint("Coincident", 0, 1, -1, 1))
+        sk.addConstraint(Sketcher.Constraint("Horizontal", 0))
+        sk.addConstraint(Sketcher.Constraint("Distance", 0, 10.0))
+        sk.addConstraint(Sketcher.Constraint("Distance", 0, 10.0))
+        d.recompute()
+        drawn = [str(g) for g in sk.Geometry]
+        b, a = self._browse_and_close(sk)
+        self.assertEqual(a, b)
+        self.assertEqual([str(g) for g in sk.Geometry], drawn)
 
     def testNoSideEffectsWhenDiagnoseRaises(self):
         c = self.case("single_conflict")

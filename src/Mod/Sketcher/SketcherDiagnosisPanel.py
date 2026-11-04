@@ -44,6 +44,7 @@ PROGRESS_NAME = "diagnosisProgress"
 # properties of the sketch whose change makes a diagnosis out of date
 _WATCHED = {"Constraints", "Geometry", "ExternalGeo", "ExpressionEngine", "Placement", "Support", "AttachmentOffset"}
 _PUMP_INTERVAL = 0.03
+_MAX_RESTARTS = 3  # consecutive automatic diagnoses that were overtaken by a change before the panel gives up
 
 _ROLE = QtCore.Qt.UserRole
 _panel = None
@@ -200,6 +201,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         self._generation = 0
         self._cancel = False
         self._rerun = False
+        self._restarts = 0
         self._applying = False
         self._rediagnose_pending = False
         self._owned = []  # selection names the panel put in the editor
@@ -384,6 +386,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         self.result = result
         self.fingerprint = fp
         self.state = "ready"
+        self._restarts = 0
         self._show(result)
 
     def _schedule_rediagnose(self):
@@ -394,6 +397,13 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         def go():
             self._rediagnose_pending = False
             if self.state in ("stale", "cancelled") and self._rerun_wanted():
+                self._restarts += 1
+                if self._restarts > _MAX_RESTARTS:
+                    # something keeps changing the sketch while it is diagnosed: stop instead of looping
+                    self.state = "failed"
+                    self.status.setText(tr("The sketch keeps changing while it is diagnosed. Use Diagnose again."))
+                    self.tree.setEnabled(True)
+                    return
                 self.state = "idle"
                 self.diagnose_now()
 
