@@ -988,10 +988,16 @@ REAL_SKETCHES = [
 
 
 def find_data_file(relative):
-    """Find an FCStd shipped with the build or the source tree."""
+    """Find an FCStd shipped with the build or the source tree.  The
+    environment variable ``AUTODEFINE_SOURCE_ROOT`` names a source checkout to
+    search before the build tree."""
     home = FreeCAD.getHomePath()
     here = os.path.dirname(os.path.abspath(__file__))
-    roots = [
+    roots = []
+    source = os.environ.get("AUTODEFINE_SOURCE_ROOT")  # a source checkout, searched first: a build tree does not install every test file
+    if source:
+        roots += [source, os.path.join(source, "data"), os.path.join(source, "src")]
+    roots += [
         home,
         os.path.join(home, "share"),
         os.path.join(home, "data"),

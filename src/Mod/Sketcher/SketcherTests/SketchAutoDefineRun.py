@@ -26,10 +26,15 @@
 Imported by the tests (a small subset) and run as a script for the whole
 corpus::
 
-    AUTODEFINE_OUT=out.json AUTODEFINE_VARIANTS=9 AUTODEFINE_REAL=all FreeCADCmd SketchAutoDefineRun.py
+    AUTODEFINE_OUT=out.json AUTODEFINE_VARIANTS=9 AUTODEFINE_REAL=all AUTODEFINE_SOURCE_ROOT=<checkout> FreeCADCmd SketchAutoDefineRun.py
 
 (FreeCADCmd treats every command-line argument as a file to open, so the
-options are environment variables.)
+options are environment variables.)  ``AUTODEFINE_SOURCE_ROOT`` is the root of
+a source checkout: its copy of the module and its test files are used instead
+of the build tree's, which does not install all 61 frozen real sketches.  The
+script prints ``real sketches: found N of M`` and stops with an error when any
+are missing, unless ``AUTODEFINE_ALLOW_MISSING=1`` is set (the rates are then
+over a smaller denominator, and the summary says so).
 
 The script writes one JSON record per (case, strip level) and prints the
 rates.  Every record is a plain dict, see ``evaluate``."""
@@ -40,6 +45,16 @@ import sys
 import time
 
 import FreeCAD
+
+# A script run from a build tree would import the build tree's copy of the module
+# and look for the real sketches in the build tree, which does not install every
+# test file.  AUTODEFINE_SOURCE_ROOT names a source checkout and puts its copy first.
+_SOURCE_ROOT = os.environ.get("AUTODEFINE_SOURCE_ROOT")
+if _SOURCE_ROOT:
+    _src = os.path.join(_SOURCE_ROOT, "src", "Mod", "Sketcher")
+    if not os.path.isdir(_src):
+        raise SystemExit("AUTODEFINE_SOURCE_ROOT=%r has no src/Mod/Sketcher" % (_SOURCE_ROOT,))
+    sys.path.insert(0, _src)
 
 import SketcherAutoDefine as AD
 from SketcherTests import SketchAutoDefineCorpus as Corpus
@@ -172,6 +187,20 @@ def summarize(recs):
     return out
 
 
+def real_summary(found, expected, missing):
+    line = "real sketches: found %d of %d" % (found, expected)
+    return line + (", MISSING %d: %s" % (len(missing), missing)) if missing else line
+
+
+def check_real(found, expected, missing, allow=None):
+    """Refuse a run whose real-sketch denominator is smaller than the frozen
+    list, unless ``AUTODEFINE_ALLOW_MISSING=1`` (or `allow`) says so."""
+    if allow is None:
+        allow = os.environ.get("AUTODEFINE_ALLOW_MISSING") == "1"
+    if (found != expected or missing) and not allow:
+        raise RuntimeError("%s; set AUTODEFINE_SOURCE_ROOT to a source checkout (or AUTODEFINE_ALLOW_MISSING=1 to run on the smaller set)" % real_summary(found, expected, missing))
+
+
 def main():
     out_path = os.environ["AUTODEFINE_OUT"]
     variants = int(os.environ.get("AUTODEFINE_VARIANTS", "9"))
@@ -186,7 +215,8 @@ def main():
         rc, real_missing = Corpus.real_cases(cache)
         cases += rc
         real_run = len(rc)
-        print("real sketches: %d opened, %d missing %s" % (real_run, len(real_missing), real_missing))
+        print(real_summary(real_run, len(Corpus.REAL_SKETCHES), real_missing), flush=True)
+        check_real(real_run, len(Corpus.REAL_SKETCHES), real_missing)
     print("cases: %d (built in %.1f s)" % (len(cases), time.time() - t0), flush=True)
     for n, case in enumerate(cases):
         levels = [("dims", 0.0, 0), ("all", 0.0, 0)]
@@ -216,6 +246,8 @@ def main():
     )
     for k, v in summarize(recs).items():
         print(k, v)
+    if real:
+        print(real_summary(real_run, len(Corpus.REAL_SKETCHES), real_missing))
 
 
 if os.environ.get("AUTODEFINE_OUT") and __name__ in ("__main__", "SketchAutoDefineRun"):  # FreeCADCmd names a script run from the command line after its file
