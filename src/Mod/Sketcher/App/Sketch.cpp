@@ -22,12 +22,15 @@
  *                                                                         *
  ***************************************************************************/
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRep_Builder.hxx>
 #include <Precision.hxx>
+#include <gp.hxx>
 #include <ShapeFix_Wire.hxx>
 #include <Standard_Version.hxx>
 #include <TopoDS.hxx>
@@ -4780,10 +4783,26 @@ void Sketch::updatePoint(const GeoDef& def)
 void Sketch::updateLineSegment(const GeoDef& def)
 {
     GeomLineSegment* lineSeg = static_cast<GeomLineSegment*>(def.geo);
-    lineSeg->setPoints(
-        Vector3d(*Lines[def.index].p1.x, *Lines[def.index].p1.y, 0.0),
-        Vector3d(*Lines[def.index].p2.x, *Lines[def.index].p2.y, 0.0)
-    );
+    Vector3d p1(*Lines[def.index].p1.x, *Lines[def.index].p1.y, 0.0);
+    Vector3d p2(*Lines[def.index].p2.x, *Lines[def.index].p2.y, 0.0);
+
+    // A line that was drawn degenerate (shorter than the kernel's confusion tolerance before this
+    // solve) may have its two ends land on the same double after solving, and the segment cannot
+    // be built from two equal points. It keeps its direction and a length of at most 1e-7 mm
+    // instead of making the whole solution invalid. A line that was not degenerate and collapses
+    // is still rejected.
+    if ((p2 - p1).Length() < gp::Resolution()) {
+        const Vector3d oldDir = lineSeg->getEndPoint() - lineSeg->getStartPoint();
+        const double oldLength = oldDir.Length();
+        if (oldLength < Precision::Confusion() && oldLength > 0.0) {
+            const double scale = std::max({std::abs(p1.x), std::abs(p1.y), 1.0});
+            const double length = std::max(oldLength, 8.0 * std::numeric_limits<double>::epsilon() * scale);
+            if (length < Precision::Confusion()) {
+                p2 = p1 + oldDir * (length / oldLength);
+            }
+        }
+    }
+    lineSeg->setPoints(p1, p2);
 }
 
 void Sketch::updateArcOfCircle(const GeoDef& def)
