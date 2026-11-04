@@ -2626,6 +2626,18 @@ SolveStatus System::solve_DL_sparse(SubSystem* subsys, bool isRedundantsolving)
 
     double divergingLim = 1e6 * err + 1e12;
 
+    // A wide Jacobian (fewer equations than unknowns) lets a datum edit ask for a large
+    // minimum norm step that the trust region covers a fraction at a time (a datum edit on a strip
+    // of 1,050 or 1,500 points needed 108 to 182 iterations where the limit is 100).
+    // So on a wide system the iteration limit is extended, one window at a time up to ten
+    // windows, for as long as the residual has at least halved over the window just run; a
+    // system that stalls still stops at the first limit and goes on to the fallbacks.
+    const bool wideSystem = csize < xsize;
+    const int windowIter = maxIterNumber;
+    const int hardIterLimit = wideSystem ? 10 * windowIter : windowIter;
+    int iterLimit = windowIter;
+    double errAtWindowStart = err;
+
     double delta = 0.1;
     double alpha = 0.;
     double nu = 2.;
@@ -2645,9 +2657,15 @@ SolveStatus System::solve_DL_sparse(SubSystem* subsys, bool isRedundantsolving)
             stop = 2;
             break;
         }
-        else if (iter >= maxIterNumber) {
-            stop = 4;
-            break;
+        else if (iter >= iterLimit) {
+            if (iterLimit < hardIterLimit && err <= 0.5 * errAtWindowStart) {
+                errAtWindowStart = err;
+                iterLimit += windowIter;
+            }
+            else {
+                stop = 4;
+                break;
+            }
         }
         else if (err > divergingLim || err != err) {
             // check for diverging and NaN

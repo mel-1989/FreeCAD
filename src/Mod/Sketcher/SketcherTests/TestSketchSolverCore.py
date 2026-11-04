@@ -600,6 +600,34 @@ class TestSolverCliff(_Base):
             if i < 1499:
                 self.assertAlmostEqual(math.hypot(p.x - r.x, p.y - r.y), 1.0, places=7)
 
+    def test_datum_edit_on_a_wide_strip_stays_in_the_sparse_dogleg(self):
+        """Editing a distance on a 1,050 point strip with the last constraint
+        removed (2,100 unknowns, 2,099 equations) asks for a minimum norm step
+        of norm 170 or more, which the trust region covers in 108 to 182
+        iterations, over the old limit of 100.  The sparse DogLeg used to give
+        up there and the dense Levenberg-Marquardt, BFGS and SQP fallbacks took
+        400 seconds; the limit now extends while the residual halves per window.
+        The fallbacks cost minutes, so the time bound is the check that none ran."""
+        sk, _ = Corpus.build_coupled(self.doc, "wide", 2100, omit=1)
+        self.assertEqual(sk.solve(), 0)
+        self.assertEqual(sk.DoF, 1)
+        distances = [i for i, c in enumerate(sk.Constraints) if c.Type == "Distance"]
+        index = distances[350]
+        for step in (0.005, 0.02, 0.5):
+            target = sk.Constraints[index].Value + step
+            sk.setDatum(index, FreeCAD.Units.Quantity(target, "mm"))
+            t0 = time.perf_counter()
+            self.assertEqual(sk.solve(), 0, step)
+            elapsed = time.perf_counter() - t0
+            self.assertLess(elapsed, 10.0, step)
+            self.assertEqual(sk.DoF, 1, step)
+            self.assertEqual(len(sk.ConflictingConstraints) + len(sk.RedundantConstraints), 0, step)
+            for i in distances:
+                c = sk.Constraints[i]
+                p, q = sk.getPoint(c.First, 1), sk.getPoint(c.Second, 1)
+                want = target if i == index else c.Value
+                self.assertAlmostEqual(math.hypot(p.x - q.x, p.y - q.y), want, places=7, msg=(step, i))
+
     def test_dependent_parameters_of_a_strip_with_free_points(self):
         """The diagnosis of a strip with 1, 3 or 5 constraints removed names
         the last 1, 2 or 3 points: the null space basis from back
