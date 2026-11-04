@@ -138,6 +138,26 @@ class TestDegenerateLine(_Base):
             self.assertEqual(list(line.StartPoint)[:2], [4.0, 14.0])
             self.doc.removeObject(sk.Name)
 
+    def test_kept_degenerate_line_keeps_its_direction(self):
+        """The segment that replaces a collapsed degenerate line points the
+        way the line pointed before the solve, not the opposite way.  Every
+        solve collapses the line again, so a reversed direction would flip at
+        each solve: it is read after the solve that adding the constraint
+        runs and after three more."""
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (3, -4)):
+            sk = self.doc.addObject("Sketcher::SketchObject", "Dir")
+            n = (dx * dx + dy * dy) ** 0.5
+            g = sk.addGeometry(Part.LineSegment(V(4, 14, 0), V(4 + 3.6e-15 * dx / n, 14 + 3.6e-15 * dy / n, 0)), False)
+            sk.addConstraint(Sketcher.Constraint("Coincident", g, 1, g, 2))
+            for step in range(4):
+                if step:
+                    self.assertEqual(sk.solve(), 0, (dx, dy, step))
+                line = sk.Geometry[g]
+                ex, ey = line.EndPoint.x - line.StartPoint.x, line.EndPoint.y - line.StartPoint.y
+                self.assertGreater(ex * dx + ey * dy, 0.0, (dx, dy, step, ex, ey))
+                self.assertGreater(line.length(), 0.0)
+            self.doc.removeObject(sk.Name)
+
     def test_nondegenerate_line_that_collapses_is_rejected(self):
         for length in (2e-7, 1.0):
             sk, g = self._collapse(length)
@@ -205,6 +225,34 @@ class TestPartitionedDiagnosis(_Base):
             members = {i + 1 for p in info["plants"] for i in p["set"]}
             self.assertEqual(len(parts[3]), len(plants_at))
             self.assertTrue(set(parts[3]) <= members)
+
+    def test_driving_constraint_without_unknowns_is_not_dropped(self):
+        """A driving constraint between two points of the fixed axes has no
+        unknowns, so it is a row of zeros.  A sketch above the partition
+        threshold (lowered to 1 here) still reports a conflict through that
+        row, as the whole-system path does, and a consistent one stays clean."""
+
+        def build(value):
+            doc = FreeCAD.newDocument("NoUnknowns", "NoUnknowns", True, True)
+            sk = doc.addObject("Sketcher::SketchObject", "S")
+            g = sk.addGeometry(Part.LineSegment(V(1, 1, 0), V(10, 2, 0)), False)
+            sk.addConstraint(Sketcher.Constraint("Coincident", g, 1, -1, 1))
+            sk.addConstraint(Sketcher.Constraint("Horizontal", g))
+            sk.addConstraint(Sketcher.Constraint("Distance", g, 10.0))
+            if value is not None:
+                sk.addConstraint(Sketcher.Constraint("DistanceX", -1, 1, -1, 2, value))
+            rec = (sk.solve(), sk.DoF, sorted(sk.ConflictingConstraints), sorted(sk.RedundantConstraints))
+            FreeCAD.closeDocument(doc.Name)
+            return rec
+
+        for value in (None, 5.0):
+            with partition_threshold(0):
+                whole = build(value)
+            with partition_threshold(1):
+                parts = build(value)
+            self.assertEqual(whole, parts, value)
+        self.assertEqual(parts[2], [4])
+        self.assertLess(parts[0], 0)
 
     def test_coupled_strip_above_default_threshold(self):
         """A 2,200 constraint strip (4,400 unknowns, over the default

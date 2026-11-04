@@ -84,6 +84,10 @@ MUTANTS = [
     ("redundancy_solve_skipped", GCS, "            if (!part.hasGroups) {\n                continue;\n            }\n            std::vector<Constraint*> clistTmp;",
      "            if (true) {\n                continue;\n            }\n            std::vector<Constraint*> clistTmp;",
      "the per-component redundancy solve never runs"),
+    ("zero_row_dropped", GCS, "            if (constr->getTag() >= 0) {\n                return false;  // a row of zeros: the whole-system path decides what that means\n            }\n            continue;",
+     "            continue;", "a driving constraint with no unknowns is silently dropped from the partitioned diagnosis"),
+    ("degenerate_direction_flipped", SKETCH, "p2 = p1 + oldDir * (length / oldLength);", "p2 = p1 - oldDir * (length / oldLength);",
+     "a kept degenerate line points the opposite way"),
 ]
 
 
@@ -116,15 +120,22 @@ def main(argv):
         if only and name not in only:
             continue
         path = os.path.join(tree, rel)
-        original = open(path).read()
-        if old not in original:
+        # Bytes in and out, so the file comes back exactly as it was (Sketch.cpp has CRLF line ends).
+        with open(path, "rb") as fh:
+            original = fh.read()
+        old_b, new_b = old.encode(), new.encode()
+        if b"\r\n" in original:
+            old_b, new_b = old_b.replace(b"\n", b"\r\n"), new_b.replace(b"\n", b"\r\n")
+        if old_b not in original:
             rows.append({"mutant": name, "result": "pattern not found", "what": what})
             continue
-        open(path, "w").write(original.replace(old, new, 1))
+        with open(path, "wb") as fh:
+            fh.write(original.replace(old_b, new_b, 1))
         try:
             status, failed = build_and_test()
         finally:
-            open(path, "w").write(original)
+            with open(path, "wb") as fh:
+                fh.write(original)
         rows.append({"mutant": name, "file": rel, "what": what, "build": status, "failing_tests": failed, "caught": bool(failed) or status != "ok"})
         print(name, "CAUGHT" if rows[-1]["caught"] else "SURVIVED", failed, flush=True)
     build_and_test()  # leave the tree built from the original source
