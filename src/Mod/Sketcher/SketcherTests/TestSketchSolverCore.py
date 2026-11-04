@@ -508,24 +508,35 @@ class TestStartValues(_Base):
     parameter's, not whichever entry of an address-ordered map came last."""
 
     def test_coincident_pairs_start_from_the_first_point(self):
-        """Forty pairs of points, joined by Coincident and nothing else, each
-        pair drawn 3 mm or more apart: a solve starts at zero error and stays,
-        so the pair ends where the kept point began.  Before the fix the pair
-        ended at either point, depending on where the heap put the
+        """Forty pairs of points joined by Coincident, the first of each
+        pair drawn on one side of a fixed point and the second on the other,
+        with the pair held at distance 5 from that point.  The pair is off its
+        circle at the start, so the solver moves it from its start value, and
+        it must move it from the kept (first) point's: the pair ends on the
+        first point's side.  Before the fix the start value was the first or
+        the second point's, depending on where the heap put the
         parameters."""
+        count = 40
         sk = self.doc.addObject("Sketcher::SketchObject", "Pairs")
         geo = []
-        for i in range(40):
+        for i in range(count):
+            geo.append(Part.Point(V(10.0 * i + 3.5, 4.5, 0)))
+            geo.append(Part.Point(V(10.0 * i - 4.5, 3.5, 0)))
             geo.append(Part.Point(V(10.0 * i, 0.0, 0)))
-            geo.append(Part.Point(V(10.0 * i + 3.0 + 0.1 * i, 2.0, 0)))
         sk.addGeometry(geo, False)
-        sk.addConstraint([Sketcher.Constraint("Coincident", 2 * i, 1, 2 * i + 1, 1) for i in range(40)])
+        cons = []
+        for i in range(count):
+            cons.append(Sketcher.Constraint("Coincident", 3 * i, 1, 3 * i + 1, 1))
+            cons.append(Sketcher.Constraint("DistanceX", -1, 1, 3 * i + 2, 1, 10.0 * i))
+            cons.append(Sketcher.Constraint("DistanceY", -1, 1, 3 * i + 2, 1, 0.0))
+            cons.append(Sketcher.Constraint("Distance", 3 * i + 2, 1, 3 * i, 1, 5.0))
+        sk.addConstraint(cons)
         self.assertEqual(sk.solve(), 0)
-        at_first = [i for i in range(40) if abs(sk.getPoint(2 * i, 1).x - 10.0 * i) < 1e-9]
-        self.assertEqual(len(at_first), 40)
-        for i in range(40):
-            self.assertAlmostEqual(sk.getPoint(2 * i + 1, 1).x, 10.0 * i, places=9)
-            self.assertAlmostEqual(sk.getPoint(2 * i + 1, 1).y, 0.0, places=9)
+        for i in range(count):
+            a, b = sk.getPoint(3 * i, 1), sk.getPoint(3 * i + 1, 1)
+            self.assertAlmostEqual(a.x, b.x, places=7)
+            self.assertAlmostEqual(math.hypot(a.x - 10.0 * i, a.y), 5.0, places=7)
+            self.assertGreater(a.x, 10.0 * i + 1.0, i)
 
     def test_twelve_fresh_processes_agree(self):
         """The four-bar, three under-constrained grids of rectangles with
@@ -601,6 +612,21 @@ class TestSolverCliff(_Base):
                 self.assertEqual(sk.solve(), 0)
                 self.assertEqual(sk.DoF, omit)
                 self.assertEqual(sorted(sk.getGeometryWithDependentParameters()), expected, omit)
+                FreeCAD.closeDocument(doc.Name)
+
+    def test_dependent_parameters_of_a_strip_with_a_hinge(self):
+        """One constraint removed from the middle of a 1,000 constraint strip
+        leaves a hinge: every point after it can swing, so the dependent
+        parameters are those points.  The raw triangle names only about seven
+        of them; the rest come from the back substitution."""
+        for index in (500, 255, 30):
+            with partition_threshold(1):
+                doc = FreeCAD.newDocument("Hinge%d" % index, "Hinge", True, True)
+                sk, _ = Corpus.build_coupled(doc, "hinge", 1000)
+                sk.delConstraint(index)
+                self.assertEqual(sk.solve(), 0)
+                self.assertEqual(sk.DoF, 1)
+                self.assertEqual(sorted(sk.getGeometryWithDependentParameters()), [(g, 1) for g in range(index // 2, 500)], index)
                 FreeCAD.closeDocument(doc.Name)
 
     def _start(self, count):
