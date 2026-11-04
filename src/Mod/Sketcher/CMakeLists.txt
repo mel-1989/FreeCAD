@@ -13,6 +13,7 @@ set(Sketcher_Scripts
     TestSketcherApp.py
     Profiles.py
     SketcherDiagnosis.py
+    SketcherAutoDefine.py
 )
 
 set(Sketcher_TestScripts
@@ -28,6 +29,11 @@ set(Sketcher_TestScripts
     SketcherTests/TestSketchDiagnosis.py
     SketcherTests/SketchDiagnosisCorpus.py
     SketcherTests/SketchBenchmark.py
+    SketcherTests/TestSketchAutoDefine.py
+    SketcherTests/SketchAutoDefineCorpus.py
+    SketcherTests/SketchAutoDefineOracle.py
+    SketcherTests/SketchAutoDefineRun.py
+    SketcherTests/SketchAutoDefineMutants.py
 )
 
 if(BUILD_GUI)
