@@ -853,6 +853,83 @@ class TestSketchAutoDefine(unittest.TestCase):
             self.doc.removeObject(target.Name)
             self.doc.removeObject(stripped.Name)
 
+    @staticmethod
+    def _centres(geometry):
+        return [g.toShape().BoundBox.Center for g in geometry]
+
+    def testRetryStartsFromNudgedGeometryAndTheResultIsStillChecked(self):
+        # PlaneGCS returns -1 with DOF 0 and nothing flagged from a start that already satisfies every
+        # constraint, in some processes only (dovetail, run 052); the retry starts a hair away from it.
+        stripped, cand = self._first_candidate()
+        target = Corpus.clone(self.doc, stripped, "Target")
+        real = AD._apply_batches
+        starts = []
+
+        def flaky(sk, specs, batches, start):
+            starts.append(list(start))
+            st = real(sk, specs, batches, start)
+            if len(starts) == 1:
+                sk.addConstraint(Sketcher.Constraint("Distance", 0, 1.0))  # first attempt: not clean
+                st = AD._Status(sk)
+            return st
+
+        try:
+            drawn = list(target.Geometry)
+            AD._apply_batches = flaky
+            AD.apply_candidate(target, cand)
+            self.assertEqual(len(starts), 2)
+            first, second = self._centres(starts[0]), self._centres(starts[1])
+            exact = self._centres(drawn)
+            self.assertEqual(max((a - b).Length for a, b in zip(first, exact)), 0.0)  # the first try is the drawn geometry
+            shift = max((a - b).Length for a, b in zip(second, exact))
+            self.assertGreater(shift, 0.0)  # the retry is not the same start
+            self.assertLessEqual(shift, 2 * AD.NUDGE)
+            again = self._centres(AD._nudged(drawn, AD.NUDGE, 1))
+            self.assertEqual(max((a - b).Length for a, b in zip(again, self._centres(AD._nudged(drawn, AD.NUDGE, 1)))), 0.0)
+            self.assertEqual(target.DoF, 0)
+            self.assertLessEqual(max((a - b).Length for a, b in zip(self._centres(target.Geometry), exact)), AD.MOVE_TOLERANCE)
+        finally:
+            AD._apply_batches = real
+            self.doc.removeObject(target.Name)
+            self.doc.removeObject(stripped.Name)
+
+    def testVerificationAcceptsAPlanThatOnlySolvesFromANudgedStart(self):
+        from SketcherDiagnosis import _Scratch
+
+        stripped, cand = self._first_candidate()
+        specs = [tuple([c["type"]] + list(c["args"])) for c in cand["constraints"]]
+        scratch = _Scratch(stripped)
+        real = AD._verify_once
+        try:
+            AD._verify_once = lambda s, sp, ba, keep, nudge=0.0: real(s, sp, ba, keep, nudge) if nudge else None  # the exact start never solves
+            self.assertIsNotNone(AD._verify_pass(scratch, specs, cand["batches"], []))
+            AD._verify_once = lambda *a, **k: None  # nothing solves
+            self.assertIsNone(AD._verify_pass(scratch, specs, cand["batches"], []))
+        finally:
+            AD._verify_once = real
+            scratch.close()
+            self.doc.removeObject(stripped.Name)
+
+    def testNestedProposeClosesItsOwnScratchDocument(self):
+        stripped, _ = Corpus.strip(self.doc, self.generated[0].sketch, "all")
+        real = AD._verify
+        depth = []
+
+        def spy(*a, **k):
+            if not depth:
+                depth.append(1)
+                self.assertTrue(AD.propose(stripped, max_candidates=1)["candidates"])  # used to close the outer scratch document
+            return real(*a, **k)
+
+        try:
+            AD._verify = spy
+            self.assertTrue(AD.propose(stripped, max_candidates=1)["candidates"])
+            self.assertEqual(depth, [1])
+            self.assertEqual([n for n in FreeCAD.listDocuments() if n.startswith("SketchDiagnosisScratch")], [])
+        finally:
+            AD._verify = real
+            self.doc.removeObject(stripped.Name)
+
     def testVerificationRefusesACandidateThatChangesAnExistingConstraint(self):
         stripped, _ = Corpus.strip(self.doc, self.generated[0].sketch, "partial", 0.5, 7)
         real = AD._apply_batches

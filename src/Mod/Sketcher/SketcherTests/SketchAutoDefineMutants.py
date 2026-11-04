@@ -114,6 +114,8 @@ mutant("keep_unchecked", "verification of keep removed", "        if any(k >= le
 mutant("no_symmetric", "symmetry detection removed", 'found.append(("Symmetric", g, p, g2, p2))', "pass")
 mutant("no_stability_repeats", "a candidate is verified once", "STABILITY_RUNS = 3", "STABILITY_RUNS = 0")
 mutant("apply_tries_once", "apply_candidate does not try again after a solver miss", "APPLY_ATTEMPTS = 3", "APPLY_ATTEMPTS = 1")
+mutant("apply_retry_not_nudged", "the retry in apply_candidate starts from the same geometry as the first try", "NUDGE if attempt else 0.0", "0.0")
+mutant("verify_without_nudge_fallback", "verification does not try the nudged start a plan is applied with", "    for nudge in (0.0, NUDGE):", "    for nudge in (0.0,):")
 mutant("console_left_silenced", "the console categories are not put back", "            FreeCAD.Console.SetStatus(name, kind, True)", "            pass")
 mutant("console_not_silenced", "the console is not silenced during propose", '                    FreeCAD.Console.SetStatus(name, kind, False)\n', "                    pass\n")
 mutant("stale_geometry_worked_on", "stored geometry that disagrees with its constraints is worked on", "        if drift > MOVE_TOLERANCE:\n", "        if False:\n")

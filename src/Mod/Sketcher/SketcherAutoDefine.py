@@ -133,6 +133,7 @@ MOVE_TOLERANCE = 1e-6
 APPLY_ATTEMPTS = 3
 STABILITY_RUNS = 3  # extra fresh-copy passes a candidate must survive
 STABILITY_BUDGET = 0.3  # seconds; slower sketches are verified once
+NUDGE = 1e-7  # mm; size of the start offset of a retried solve (well under MOVE_TOLERANCE)
 NEAR_AXIS = 0.03  # a line within about 1.7 degrees of an axis is dimensioned by its extent
 SCHEMES = ("baseline", "chain", "symmetric")
 _MAX_BATCH = 400
@@ -856,6 +857,33 @@ def _constraint_row(c):
     return (c.Type, c.Name, c.First, c.FirstPos, c.Second, c.SecondPos, c.Third, c.ThirdPos, float(c.Value), bool(c.Driving), bool(c.IsActive))
 
 
+def _nudged(geometry, size, seed=1):
+    """`geometry` with every item translated by a small deterministic offset
+    (a fixed linear congruential sequence, so it does not depend on the
+    process).  PlaneGCS sometimes returns "no convergence" (-1) with DOF 0 and
+    nothing flagged when the start already satisfies every constraint to
+    rounding, and converges from the same start moved by 1e-9 or more (run 052,
+    dovetail); the constraints are not what is wrong, so a retried solve starts
+    from this.  Whatever comes out is checked against the drawn geometry like
+    any other result.  Items that cannot be translated are left as they are."""
+    if not size:
+        return list(geometry)
+    state = seed * 2654435761 % 2**32
+    out = []
+    for g in geometry:
+        try:
+            g = g.copy()
+            state = (state * 1664525 + 1013904223) % 2**32
+            dx = (state / 2**32 * 2 - 1) * size
+            state = (state * 1664525 + 1013904223) % 2**32
+            dy = (state / 2**32 * 2 - 1) * size
+            g.translate(FreeCAD.Vector(dx, dy, 0))
+        except Exception:
+            pass
+        out.append(g)
+    return out
+
+
 def _apply_batches(sk, specs, batches, start_geometry):
     """Add `specs` to `sk` in the batches the builder accepted them in.  The
     drawn geometry is put back before each batch because the solver result
@@ -1116,11 +1144,11 @@ def _verify(scratch, specs, batches, keep):
     bar is not met."""
     for trial in ([len(specs)], list(batches)) if len(batches) > 1 else (list(batches),):
         t0 = time.time()
-        facts = _verify_once(scratch, specs, trial, keep)
+        facts = _verify_pass(scratch, specs, trial, keep)
         if facts is None:
             continue
         repeats = STABILITY_RUNS if time.time() - t0 <= STABILITY_BUDGET else 0
-        if any(_verify_once(scratch, specs, trial, keep) is None for _ in range(repeats)):
+        if any(_verify_once(scratch, specs, trial, keep, facts["nudge"]) is None for _ in range(repeats)):
             continue
         facts["batches"] = trial
         facts["runs"] = 1 + repeats
@@ -1128,13 +1156,27 @@ def _verify(scratch, specs, batches, keep):
     return None
 
 
-def _verify_once(scratch, specs, batches, keep):
+def _verify_pass(scratch, specs, batches, keep):
+    """The first verification pass: the drawn geometry as the start, and when
+    that does not come out clean, the start nudged by `NUDGE` (``apply_candidate``
+    retries the same way, so a plan that needs the nudge can still be applied).
+    The facts say which start passed; the stability repeats use that same start,
+    so a plan that passes one way and fails the next time is still refused."""
+    for nudge in (0.0, NUDGE):
+        facts = _verify_once(scratch, specs, batches, keep, nudge)
+        if facts is not None:
+            facts["nudge"] = nudge
+            return facts
+    return None
+
+
+def _verify_once(scratch, specs, batches, keep, nudge=0.0):
     fresh = scratch.copy()
     try:
         start = list(fresh.Geometry)
         sig0 = _geometry_signature(fresh)
         rows0 = [_constraint_row(c) for c in fresh.Constraints]
-        st = _apply_batches(fresh, specs, batches, start)
+        st = _apply_batches(fresh, specs, batches, _nudged(start, nudge))
         rows = [_constraint_row(c) for c in fresh.Constraints]
         if len(rows) != len(rows0) + len(specs) or rows[: len(rows0)] != rows0:
             return None
@@ -1341,8 +1383,11 @@ def apply_candidate(sketch, candidate):
     result is checked on the real sketch; if it is not clean with DOF 0 the
     constraints are removed again and the drawn geometry is put back.  The
     solver is not repeatable on a few ill-conditioned systems, so a result
-    that is not clean is tried up to `APPLY_ATTEMPTS` times before
-    ``AutoDefineError`` is raised (and the sketch is left as it was).
+    that is not clean is tried up to `APPLY_ATTEMPTS` times (the retries start
+    from the drawn geometry moved by `NUDGE`; the result must still be clean,
+    DOF 0, solve again cleanly and be within `MOVE_TOLERANCE` of the
+    drawn geometry) before ``AutoDefineError`` is raised (and the sketch is
+    left as it was).
     Returns the solver status as a dict."""
     specs = [tuple([c["type"]] + list(c["args"])) for c in candidate["constraints"]]
     batches = candidate.get("batches") or [len(specs)]
@@ -1355,9 +1400,12 @@ def apply_candidate(sketch, candidate):
             sketch.delConstraints(list(range(n0, len(sketch.Constraints))), False, True)
         sketch.Geometry = start
 
-    for _ in range(APPLY_ATTEMPTS):
+    for attempt in range(APPLY_ATTEMPTS):
         try:
-            st = _apply_batches(sketch, specs, batches, start)
+            st = _apply_batches(sketch, specs, batches, _nudged(start, NUDGE if attempt else 0.0, attempt))
+            if _clean(st):
+                again = _Status(sketch)  # a second solve must agree
+                st = st if _clean(again) else again
             ok = _clean(st) and st.dof == 0 and _max_move(sig0, _geometry_signature(sketch)) <= MOVE_TOLERANCE
         except Exception as exc:
             roll_back()

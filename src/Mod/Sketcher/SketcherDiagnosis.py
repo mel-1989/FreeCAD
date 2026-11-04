@@ -124,6 +124,7 @@ those of the sketch as drawn.  Fix ranking does not know what a designer
 wants.
 """
 
+import itertools
 import time
 
 import FreeCAD
@@ -162,6 +163,9 @@ class DiagnosisError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
+_scratch_ids = itertools.count(1)
+
+
 class _Scratch:
     """A hidden temporary document that holds throwaway copies of one sketch."""
 
@@ -169,7 +173,8 @@ class _Scratch:
         self._source = sketch
         self._previous = FreeCAD.ActiveDocument
         self._previous_name = self._previous.Name if self._previous is not None else None
-        self.doc = FreeCAD.newDocument("SketchDiagnosisScratch", "SketchDiagnosisScratch", True, True)
+        name = "SketchDiagnosisScratch%d" % next(_scratch_ids)  # unique, so a nested use closes its own document
+        self.doc = FreeCAD.newDocument(name, name, True, True)
         self.name = self.doc.Name
         try:
             self.doc.UndoMode = 0
