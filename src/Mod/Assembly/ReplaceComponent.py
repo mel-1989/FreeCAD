@@ -153,6 +153,9 @@ IOU_MARGIN = 0.1        # another alignment must overlap this much better than i
 MOVE_TOL = 0.02         # axis shift (fraction of the part's diagonal) above which a feature counts as moved
 RESIZE_TOL = 0.05       # relative radius change above which a feature counts as resized
 CLEAR_REL = 1.0         # a rival must beat a candidate by this fraction (plus AMBIG_ABS) to own it
+IN_PLACE_IOU = 0.02       # an in-place half turn is a candidate only when it overlaps the old part this close to identity
+IN_PLACE_MIN = 0.5        # ... and only when the new part still overlaps the old one this much as placed
+IN_PLACE_TURNS = True  # also try the half turns about the old part's own axes as alignments (see _choose_alignment)
 NEAR_IOU = 0.1          # an alternative alignment this much below identity's overlap (or better) is compared by near twins
 NEAR_ANG = 0.02         # rad, largest direction difference of a near twin face (about 1 degree)
 NEAR_SIZE = 0.25        # relative, largest area difference of a near twin face
@@ -1177,6 +1180,27 @@ def _choose_alignment(old_shape, new_shape, forced=None, probe=None):
         shp = sn.copy()
         shp.transformShape(t)
         proper.append((_iou(so, shp), App.Placement(t), shp))
+    # the new part's own axes of inertia move when a big feature is added, so the turn it was given may not be among
+    # the candidates above; also try the half turns about the old part's axes, the turn in place
+    # (a bracket turned and then given a boss), about the centre of mass and about the centre of the bounding box
+    # (a feature on one side moves the first, not the second), with the inertia axes and the world axes
+    bb_o = so.BoundBox
+    pivots = (so.CenterOfMass, App.Vector(bb_o.Center))
+    axes_o = list(fo[1]) + [App.Vector(1, 0, 0), App.Vector(0, 1, 0), App.Vector(0, 0, 1)]
+    diag_o = so.BoundBox.DiagonalLength
+    for axis in (axes_o if IN_PLACE_TURNS and iou_id >= IN_PLACE_MIN else []):
+        for pivot in pivots:
+            t = App.Placement(App.Vector(), App.Rotation(axis, 180.0), pivot).toMatrix()
+            if any(App.Placement(t).isSame(c[1], NEAR_POS * diag_o) for c in proper):
+                continue
+            shp = sn.copy()
+            shp.transformShape(t)
+            iou_t = _iou(so, shp)
+            # only a turn that explains the new part as well as identity does is another reading of it, and not one
+            # that is the same reading as a candidate already there (the same overlap, about the same turn)
+            if iou_t >= iou_id - IN_PLACE_IOU and not any(
+                    abs(c[0] - iou_t) < 1e-4 and App.Placement(t).isSame(c[1], 0.1 * diag_o) for c in proper):
+                proper.append((iou_t, App.Placement(t), shp))
     best = max(proper, key=lambda c: c[0])
     info["candidates"] = 1 + len(proper)
     if best[0] < IOU_EXACT and iou_id < IOU_EXACT:

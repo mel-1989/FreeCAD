@@ -623,6 +623,10 @@ def _mut_symmetry_rule_off():
     R._symmetry_verdict = lambda *a, **k: None
 
 
+def _mut_in_place_turns_off():
+    R.IN_PLACE_TURNS = False
+
+
 def _mut_agreement_check_blind():
     # the comparison of two readings finds no difference: every ambiguous alignment "agrees" and the part stands as placed
     R._readings_differ = lambda first, second, both=False, tol=None: []
@@ -716,6 +720,7 @@ MUTANTS = {
     "alignment_conflict_check_off": (_mut_alignment_check_off, "e3_bar_turned_about_z_boss_top_and_end"),
     "near_twin_alignment_check_off": (_mut_near_check_off, "n1_bracket_turned_and_gained_a_small_hole"),
     "symmetry_rule_off": (_mut_symmetry_rule_off, "n20_square_plate_turned_a_quarter_and_gained_an_offcentre_hole"),
+    "in_place_turn_candidates_off": (_mut_in_place_turns_off, "n21_bracket_turned_about_y_and_given_a_big_boss"),
     "resize_exemption_off": (_mut_resize_exemption_off, "core_resize_cube_to_flat_plate"),
     "agreement_check_treats_differing_as_agreeing": (_mut_agreement_check_blind, "n5_symmetric_plate_turned_and_gained_an_offcentre_hole"),
     "near_twin_shortcut_drops_a_reading_unasked": (_mut_near_twin_shortcut, "n17_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_y"),
@@ -735,7 +740,7 @@ MUTANTS = {
 def mutated(name):
     saved = {k: getattr(R, k) for k in ("_match_element", "_choose_alignment", "_decide", "_new_link_placement",
                                         "_write_ref", "_break_joint", "_collect_refs", "_solve", "_new_ref_value", "apply",
-                                        "ADJ_MIN", "RADIUS_ADAPT", "SIZE_RATIO_MAX", "_claims", "MOVE_TOL",
+                                        "ADJ_MIN", "IN_PLACE_TURNS", "RADIUS_ADAPT", "SIZE_RATIO_MAX", "_claims", "MOVE_TOL",
                                         "_alignment_conflict", "_near_conflict", "_readings_differ", "_symmetry_verdict", "_same_topology", "_outside_users", "_deletion_set", "repair",
                                         "_check_element")}
     saved_u = U.findPlacement
@@ -1199,6 +1204,48 @@ class TestReplaceComponent(unittest.TestCase):
         finally:
             App.closeDocument(other.Name)
             App.closeDocument(doc.Name)
+
+    def test_grounded_part_under_every_alignment_case(self):
+        """r055 probe: the agreement check compares element and place, not the part's pose. Every alignment-class case is rebuilt
+        with the replaced part grounded (direct mode) and must still show no silent wrong remap and no moved frame."""
+        orig = C.scene
+
+        def grounded(doc, old_shape, new_shape, joints, **kw):
+            kw.update(mode="direct", ground_old=True, array=False, new_is_link=False)
+            return orig(doc, old_shape, new_shape, joints, **kw)
+
+        C.scene = grounded
+        try:
+            bad = {}
+            for name, cs in C.CASES.items():
+                if cs.klass != "alignment":
+                    continue
+                r = run_case(name)
+                if r["problems"] or (r["stats"] and r["stats"]["wrong"]):
+                    bad[name] = r["problems"][:2]
+        finally:
+            C.scene = orig
+        self.assertEqual(bad, {})
+
+    def test_thicker_symmetric_plate_keeps_its_elements(self):
+        """r055: run 041's verifier case A6 was an oracle artefact. The joint holds the hole's wall and a corner edge of a plate;
+        a plate 14 mm thick (grown upward or downward) keeps both, at the same place in the plan view, and Edge1 stays the
+        same corner edge, only longer."""
+        S = C.bracket(holes=((20, 10, 3),))
+        sd = (C.cy((20, 10, 0), (0, 0, 1), 3), C.ci((20, 10, 10), (0, 0, 1), 3))
+        for dz in (0, -4):
+            doc = App.newDocument("Rc_a6")
+            try:
+                new = C.moved(C.bracket(40, 20, 14, holes=((20, 10, 3),)), App.Placement(App.Vector(0, 0, dz), App.Rotation()))
+                b = C.scene(doc, S, new, [C.jspec("revolute", sd, (C.AMB, C.AMB))])
+                rep = R.plan(b.asm, b.old, b.new)
+                els = [e for j in rep["joints"] for r in j["references"] for e in r["elements"]]
+                self.assertEqual([(e["status"], e["old_element"], e["new_element"]) for e in els],
+                                 [("matched", "Face7", "Face7"), ("matched", "Edge1", "Edge1")])
+                oc, nc = S.getElement("Edge1").CenterOfMass, new.getElement("Edge1").CenterOfMass
+                self.assertAlmostEqual((oc.x - nc.x) ** 2 + (oc.y - nc.y) ** 2, 0.0, places=6)
+            finally:
+                App.closeDocument(doc.Name)
 
     def test_two_runs_identical(self):
         a = run_case("resize_slider", checks=("plan",))["plan"]

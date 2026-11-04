@@ -1425,6 +1425,15 @@ def n20_square_plate_turned_a_quarter_and_gained_an_offcentre_hole(doc):
     return scene(doc, old, new, [jspec("ball", (corner, corner), (AMB, AMB))])
 
 
+@case("alignment")
+def n21_bracket_turned_about_y_and_given_a_big_boss(doc):
+    # r055 (run 041 verifier case 19): the new part's own axes of inertia move with the big boss, so only the half turn about the
+    # old part's own axis (not one of the new part's candidates) sees that the hole may have been turned: the hole is 20 mm
+    # away as placed and in place when turned, so the reference is ambiguous (before, it was matched as placed, silently)
+    new = _turn_y(bracket(bosses=((25, 2, 14, 16, 8),)))
+    return scene(doc, BASE, new, [jspec("cylindrical", BR["cylindrical"], (AMB, AMB))])
+
+
 # --- delete_old must not destroy what is still used --------------------------------------------
 
 def _other_user(doc, target, mode_name="Assembly2"):
