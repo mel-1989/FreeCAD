@@ -57,6 +57,8 @@ MUTANTS = [
      "the BFGS update is applied whatever the sign of the curvature"),
     ("update_skipped_when_positive", GCS, "            if (guarded && !(yTh > 0.)) {", "            if (guarded && (yTh > 0.)) {",
      "the BFGS update is skipped when the curvature is good"),
+    # Equivalent under the cautious update: with B positive definite and A's residual zero the
+    # numerator of mu is not positive, so the quotient is never +inf. Kept as defence in depth.
     ("mu_divides_by_zero", GCS, "            if (!guarded || resA.lpNorm<1>() > 0.) {", "            if (true) {",
      "the penalty parameter is updated with a zero denominator"),
     ("no_stock_fallback", GCS, "    if (guarded && status != SolveStatus::Success) {\n        guarded = false;",
@@ -65,7 +67,7 @@ MUTANTS = [
      "            if (false && !isRedundantsolving && subStatus == SolveStatus::Success) {", "the escape is never tried"),
     ("escape_memory_ignored", GCS, "    if (dragStallValid && dragStallCursor.size() == cursor.size()) {",
      "    if (false && dragStallCursor.size() == cursor.size()) {", "an escape that found nothing is searched for again on every move"),
-    ("escape_accepts_any_result", GCS, "            if (ok && E < accept * Ebest) {", "            if (ok) {",
+    ("escape_accepts_any_result", GCS, "            if (ok && E < accept * Ebest) {", "            if (ok && E < (accept + 1e9) * Ebest) {",
      "a probe result is kept even when the gap did not fall"),
     ("escape_perturbs_nothing", GCS, "                xs[j] += fraction * extent * std::sin(2.399963229728653 * (j + 1));",
      "                xs[j] += 0. * fraction * extent * std::sin(2.399963229728653 * (j + 1));", "the probes do not move the unknowns"),
@@ -118,7 +120,7 @@ def main(argv):
             with open(path, "wb") as fh:
                 fh.write(original)
         rows.append({"mutant": name, "file": rel, "what": what, "build": status, "failing_tests": failed,
-                     "caught": bool(failed) or status != "ok"})
+                     "caught": bool(failed)})
         print(name, "CAUGHT" if rows[-1]["caught"] else "SURVIVED", failed, flush=True)
     build_and_test()  # leave the tree built from the original source
     with open("drag_mutants.json", "w") as fh:

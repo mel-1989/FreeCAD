@@ -5152,19 +5152,15 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
     dragStallValid = !improved;
     dragStallCursor = cursor;
 
-    SolveStatus status = SolveStatus::Success;
     if (!pvalsHoldBest) {
-        // Put the solution of the move itself back where solve leaves it: the escape's result
-        // when there was one, otherwise the plain solve of the move again, which is identical.
-        status = solveFrom(improved ? xbest : xorig);
-        if (status != SolveStatus::Success && improved) {
-            status = solveFrom(xorig);
-        }
+        // Put the best solution, the move's own or the escape's, back where solve leaves it
+        subsysA->setParams(plist, xbest);
+        subsysB->setParams(plist, xbest);
     }
     for (int j = 0; j < n; ++j) {
         *plist[j] = xorig[j];
     }
-    return status;
+    return SolveStatus::Success;
 }
 
 void System::applySolution()

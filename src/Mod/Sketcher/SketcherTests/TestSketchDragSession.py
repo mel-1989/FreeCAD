@@ -190,6 +190,13 @@ class TestDragEscape(unittest.TestCase):
             with self.subTest(scenario=prefix, step=step):
                 self.assertLess(_cell(prefix, step)["hys"], 0.01)
 
+    def test_cells_clean_in_the_baseline_stay_clean(self):
+        # S09 and S10 end where they began on the kept-session path; an escape that keeps a
+        # worse result (a different branch) breaks that
+        for prefix, step in (("S09", 0.1), ("S09", 1.0), ("S10", 0.1)):
+            with self.subTest(scenario=prefix, step=step):
+                self.assertLess(_cell(prefix, step)["hys"], 0.01)
+
     def test_flat_valley_is_not_a_lock(self):
         # S01 on the return leg is a known open case; the outward leg must still follow
         cell = _cell("S01", 1.0)
@@ -215,7 +222,7 @@ class TestDragEscape(unittest.TestCase):
             sk.moveGeometry(geo, pos, V(80, 0, 0), False, True)
             blocked = min(mean_ms(80.0, 200), mean_ms(80.0, 200))
             sk.endMoveSession()
-            self.assertLess(blocked, 3.0 * reachable + 0.02)
+            self.assertLess(blocked, 2.5 * reachable)
         finally:
             FreeCAD.closeDocument(doc.Name)
 
