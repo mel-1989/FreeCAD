@@ -420,18 +420,14 @@ public:
         const std::vector<GeoElementId>& geoEltIds,
         const Base::Vector3d& toPoint,
         bool relative = false,
-        bool updateGeoBeforeMoving = false,
-        bool keepSession = false
+        bool updateGeoBeforeMoving = false
     );
-    /// end a move session kept alive by moveGeometries(..., keepSession = true)
-    void endMoveSession();
     SketchSolveStatus moveGeometry(
         int GeoId,
         PointPos PosId,
         const Base::Vector3d& toPoint,
         bool relative = false,
-        bool updateGeoBeforeMoving = false,
-        bool keepSession = false
+        bool updateGeoBeforeMoving = false
     );
     /// retrieves the coordinates of a point
     static Base::Vector3d getPoint(const Part::Geometry* geo, PointPos PosId);

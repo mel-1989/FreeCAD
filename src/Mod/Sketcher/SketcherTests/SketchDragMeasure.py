@@ -25,7 +25,8 @@
 Each scenario drags one point along a polyline and back (SketchDragScenarios),
 once per step length (0.1, 1, 10, 50 mm), either one move session per call
 ("python" mode, the SketchObject default) or one session kept alive over the
-drag as the sketch editor does ("gui" mode, moveGeometry(..., keep_session)).
+drag as the sketch editor does ("gui" mode: initTemporaryMove, then one
+moveGeometriesTemporary per mouse move, then the release moveGeometries).
 
 Definitions, shared with the run 054 baseline:
 
@@ -117,9 +118,20 @@ def _pts(sk, verts):
     return r
 
 
+def _tpts(sk, verts):
+    r = []
+    for g, p in verts:
+        q = sk.getTemporaryPoint(g, p)
+        r.append((q.x, q.y))
+    return r
+
+
 def run_cell(name, builder, step, session):
-    """Trace one scenario at one step length. session=True keeps one move
-    session over the whole drag (the GUI), False resets it every call."""
+    """Trace one scenario at one step length. session=True drives the sketch the
+    way the editor's mouse drag does (initTemporaryMove, one moveGeometriesTemporary
+    per mouse move, read from the solver's working copy, then the release, which
+    is the Python moveGeometries command on the live session); False is the
+    python mode, one moveGeometry call (its own session) per move."""
     import FreeCAD
 
     V = FreeCAD.Vector
@@ -137,23 +149,48 @@ def run_cell(name, builder, step, session):
         i = verts.index((geo, pos))
         tr = []
         t_all = time.perf_counter()
+        if session:
+            # the editor sets this from its preference (default true) when a sketch is opened
+            sk.setRecalculateInitialSolutionWhileMovingPoint(True)
+            sk.initTemporaryMove([(geo, pos)])
         for k, (x, y) in enumerate(path[1:], 1):
             t0 = time.perf_counter()
-            try:
-                sk.moveGeometry(geo, pos, V(x, y, 0), False, bool(session))
-                ok = True
-            except Exception:
-                ok = False
+            if session:
+                ok = sk.moveGeometriesTemporary([(geo, pos)], V(x, y, 0), False) == 0
+            else:
+                try:
+                    sk.moveGeometry(geo, pos, V(x, y, 0), False)
+                    ok = True
+                except Exception:
+                    ok = False
             dt = time.perf_counter() - t0
-            P = _pts(sk, verts)
+            P = _tpts(sk, verts) if session else _pts(sk, verts)
             gap = math.hypot(P[i][0] - x, P[i][1] - y)
             dmax = max(math.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(P, prev))
             dpt = math.hypot(P[i][0] - prev[i][0], P[i][1] - prev[i][1])
             tr.append([k, x, y, P[i][0], P[i][1], int(ok), gap, dmax, dpt, dt])
             prev = P
-        if session:
-            sk.endMoveSession()
         hys = max(math.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(prev, P0))
+        rel = None
+        if session:
+            # release: the editor sends moveGeometries(...) for the last cursor position;
+            # a failure aborts the command and the sketch keeps its drag-start state
+            x, y = path[-1]
+            t0 = time.perf_counter()
+            try:
+                sk.moveGeometries([(geo, pos)], V(x, y, 0), False)
+                rok = True
+            except Exception:
+                rok = False
+            rdt = time.perf_counter() - t0
+            R = _pts(sk, verts)
+            rel = {
+                "ok": int(rok),
+                "gap": math.hypot(R[i][0] - x, R[i][1] - y),
+                "dmax_temp": max(math.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(R, prev)),
+                "hys": max(math.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(R, P0)),
+                "dt": rdt,
+            }
         return {
             "scenario": name,
             "step": step,
@@ -165,6 +202,7 @@ def run_cell(name, builder, step, session):
             "P0": P0,
             "Pend": prev,
             "hys": hys,
+            "rel": rel,
             "trace": tr,
             "total_s": time.perf_counter() - t_all,
         }
@@ -255,6 +293,7 @@ def cell_stats(r, held):
         "gapreach": round(gapmax, 3),
         "jumps": jumps,
         "hys": round(r["hys"], 3),
+        "rel": r.get("rel") and {k: round(v, 3) for k, v in r["rel"].items()},
         "ms_mean": round(1e3 * sum(times) / len(times), 4),
         "ms_p99": round(1e3 * ts[int(0.99 * (len(ts) - 1))], 4),
     }

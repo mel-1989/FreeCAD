@@ -637,14 +637,55 @@ class SketchObject(Part2DObject):
         """
         ...
 
+    def initTemporaryMove(self, geos: List[Tuple[int, int]], /) -> int:
+        """
+        Starts a temporary move session, as the sketch editor does when a drag begins.
+
+        initTemporaryMove(Geos)
+
+        Saves the current state as the reference of the session and adds the temporary
+        constraints that follow the cursor. Geos is a list of pairs of geoId and posId.
+        The session stays alive until moveGeometry()/moveGeometries() ends it, which is
+        what the editor's release does. Returns 0, or -1 when the sketch has conflicts.
+        """
+        ...
+
+    def moveGeometriesTemporary(
+        self, geos: List[Tuple[int, int]], vector: Vector, relative: bool = False, /
+    ) -> int:
+        """
+        One mouse move of a drag, exactly as the sketch editor performs it.
+
+        moveGeometriesTemporary(Geos,Vector,[relative])
+
+        Needs initTemporaryMove() first. Solves in the solver's working copy of the sketch
+        only: the Geometry property is not updated until moveGeometries() ends the drag, and
+        the result is read with getTemporaryPoint(). Returns the solver status (0 is success).
+        Every call restarts from the reference saved by initTemporaryMove().
+        """
+        ...
+
+    def getTemporaryPoint(self, geo_index: int, point_pos: int, /) -> Vector:
+        """
+        Position of a point in the solver's working copy of the sketch, which a temporary
+        move updates and the Geometry property does not.
+
+        getTemporaryPoint(GeoIndex,PointPos)
+        """
+        ...
+
+    def setRecalculateInitialSolutionWhileMovingPoint(self, flag: bool, /) -> None:
+        """
+        Enables or disables recalculating the reference of a move session when the cursor
+        has moved far from where the session began. The sketch editor sets it from the
+        preference RecalculateInitialSolutionWhileDragging, which defaults to true.
+
+        setRecalculateInitialSolutionWhileMovingPoint(flag)
+        """
+        ...
+
     def moveGeometry(
-        self,
-        geo_index: int,
-        point_pos: int,
-        vector: Vector,
-        relative: bool = False,
-        keep_session: bool = False,
-        /,
+        self, geo_index: int, point_pos: int, vector: Vector, relative: bool = False, /
     ) -> None:
         """
         Move a given point (or curve) to another location.
@@ -658,21 +699,11 @@ class SketchObject(Part2DObject):
         the sketch.
         The argument 'relative', if present, states if the new location is given
         relatively to the current one.
-        The argument 'keep_session', if true, keeps one move session alive across calls
-        exactly as a mouse drag in the sketch editor does: every call restarts from the
-        state saved when the session began (not from the previous result), and the session
-        begins again when the cursor is more than 20 first steps from where it began.
-        Call endMoveSession() when the drag is over. By default every call is its own session.
         """
         ...
 
     def moveGeometries(
-        self,
-        geos: List[Tuple[int, int]],
-        vector: Vector,
-        relative: bool = False,
-        keep_session: bool = False,
-        /,
+        self, geos: List[Tuple[int, int]], vector: Vector, relative: bool = False, /
     ) -> None:
         """
         Move given points and curves to another location.
@@ -687,15 +718,6 @@ class SketchObject(Part2DObject):
         The argument 'relative', if present, states if the new location is given
         relatively to the current one. For group dragging this is enforced.
         Geos is a vector of pairs of geoId and posId.
-        The argument 'keep_session' is as for moveGeometry().
-        """
-        ...
-
-    def endMoveSession(self) -> None:
-        """
-        Ends a move session kept alive by moveGeometry/moveGeometries with keep_session.
-
-        endMoveSession()
         """
         ...
 

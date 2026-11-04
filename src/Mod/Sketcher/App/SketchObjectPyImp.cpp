@@ -1363,23 +1363,46 @@ PyObject* SketchObjectPy::setLabelDistance(PyObject* args)
     Py_Return;
 }
 
+// parses a Python list of (geoId, pointPos) pairs; sets a Python error and returns false on bad input
+static bool parseGeoElementList(PyObject* pyList, std::vector<GeoElementId>& geoEltIds)
+{
+    Py_ssize_t listSize = PyList_Size(pyList);
+    for (Py_ssize_t i = 0; i < listSize; ++i) {
+        PyObject* pyPair = PyList_GetItem(pyList, i);  // Borrowed reference
+
+        if (!PyTuple_Check(pyPair) || PyTuple_Size(pyPair) != 2) {
+            PyErr_SetString(PyExc_ValueError, "List must contain pairs (geoId, pointPos).");
+            return false;
+        }
+
+        int geoId = PyLong_AsLong(PyTuple_GetItem(pyPair, 0));
+        int pointPos = PyLong_AsLong(PyTuple_GetItem(pyPair, 1));
+
+        if (PyErr_Occurred()) {
+            PyErr_SetString(PyExc_ValueError, "Invalid geoId or pointPos in the list.");
+            return false;
+        }
+
+        geoEltIds.emplace_back(GeoElementId(geoId, static_cast<Sketcher::PointPos>(pointPos)));
+    }
+    return true;
+}
+
 PyObject* SketchObjectPy::moveGeometries(PyObject* args)
 {
     PyObject* pyList;
     PyObject* pcObj;
     int relative = 0;
-    int keepSession = 0;
 
-    // Parse arguments: list of pairs, Base::VectorPy, optional relative flag, optional keep-session flag
+    // Parse arguments: list of pairs, Base::VectorPy, optional relative flag
     if (!PyArg_ParseTuple(
             args,
-            "O!O!|ii",
+            "O!O!|i",
             &PyList_Type,
             &pyList,  // List of pairs (geoId, pointPos)
             &(Base::VectorPy::Type),
             &pcObj,  // Target vector
-            &relative,
-            &keepSession
+            &relative
         )) {  // Optional relative flag
         return nullptr;
     }
@@ -1411,7 +1434,7 @@ PyObject* SketchObjectPy::moveGeometries(PyObject* args)
     Base::Vector3d v1 = static_cast<Base::VectorPy*>(pcObj)->value();
 
     // Call the C++ method
-    if (this->getSketchObjectPtr()->moveGeometries(geoEltIds, v1, (relative > 0), false, (keepSession > 0))
+    if (this->getSketchObjectPtr()->moveGeometries(geoEltIds, v1, (relative > 0))
         != SketchSolveStatus::Success) {
         PyErr_SetString(PyExc_ValueError, "Failed to move geometries.");
         return nullptr;
@@ -1420,13 +1443,69 @@ PyObject* SketchObjectPy::moveGeometries(PyObject* args)
     Py_RETURN_NONE;
 }
 
-PyObject* SketchObjectPy::endMoveSession(PyObject* args)
+PyObject* SketchObjectPy::initTemporaryMove(PyObject* args)
 {
-    if (!PyArg_ParseTuple(args, "")) {
+    PyObject* pyList;
+    if (!PyArg_ParseTuple(args, "O!", &PyList_Type, &pyList)) {
         return nullptr;
     }
 
-    this->getSketchObjectPtr()->endMoveSession();
+    std::vector<GeoElementId> geoEltIds;
+    if (!parseGeoElementList(pyList, geoEltIds)) {
+        return nullptr;
+    }
+
+    return Py::new_reference_to(Py::Long(this->getSketchObjectPtr()->initTemporaryMove(geoEltIds)));
+}
+
+PyObject* SketchObjectPy::moveGeometriesTemporary(PyObject* args)
+{
+    PyObject* pyList;
+    PyObject* pcObj;
+    int relative = 0;
+
+    if (!PyArg_ParseTuple(args, "O!O!|i", &PyList_Type, &pyList, &(Base::VectorPy::Type), &pcObj, &relative)) {
+        return nullptr;
+    }
+
+    std::vector<GeoElementId> geoEltIds;
+    if (!parseGeoElementList(pyList, geoEltIds)) {
+        return nullptr;
+    }
+
+    Base::Vector3d v1 = static_cast<Base::VectorPy*>(pcObj)->value();
+
+    return Py::new_reference_to(
+        Py::Long(
+            std::to_underlying(
+                this->getSketchObjectPtr()->moveGeometriesTemporary(geoEltIds, v1, (relative > 0))
+            )
+        )
+    );
+}
+
+PyObject* SketchObjectPy::getTemporaryPoint(PyObject* args)
+{
+    int geoId, pointPos;
+    if (!PyArg_ParseTuple(args, "ii", &geoId, &pointPos)) {
+        return nullptr;
+    }
+
+    Base::Vector3d p = this->getSketchObjectPtr()->getSolvedSketch().getPoint(
+        geoId,
+        static_cast<Sketcher::PointPos>(pointPos)
+    );
+    return new Base::VectorPy(new Base::Vector3d(p));
+}
+
+PyObject* SketchObjectPy::setRecalculateInitialSolutionWhileMovingPoint(PyObject* args)
+{
+    int flag = 0;
+    if (!PyArg_ParseTuple(args, "i", &flag)) {
+        return nullptr;
+    }
+
+    this->getSketchObjectPtr()->setRecalculateInitialSolutionWhileMovingPoint(flag > 0);
 
     Py_RETURN_NONE;
 }
@@ -1436,32 +1515,17 @@ PyObject* SketchObjectPy::moveGeometry(PyObject* args)
     PyObject* pcObj;
     int GeoId, PointType;
     int relative = 0;
-    int keepSession = 0;
 
-    if (!PyArg_ParseTuple(
-            args,
-            "iiO!|ii",
-            &GeoId,
-            &PointType,
-            &(Base::VectorPy::Type),
-            &pcObj,
-            &relative,
-            &keepSession
-        )) {
+    if (
+        !PyArg_ParseTuple(args, "iiO!|i", &GeoId, &PointType, &(Base::VectorPy::Type), &pcObj, &relative)
+    ) {
         return nullptr;
     }
 
     Base::Vector3d v1 = static_cast<Base::VectorPy*>(pcObj)->value();
 
     if (this->getSketchObjectPtr()
-            ->moveGeometry(
-                GeoId,
-                static_cast<Sketcher::PointPos>(PointType),
-                v1,
-                (relative > 0),
-                false,
-                (keepSession > 0)
-            )
+            ->moveGeometry(GeoId, static_cast<Sketcher::PointPos>(PointType), v1, (relative > 0))
         != SketchSolveStatus::Success) {
         std::stringstream str;
         str << "Not able to move point with the id and type: (" << GeoId << ", " << PointType << ")";

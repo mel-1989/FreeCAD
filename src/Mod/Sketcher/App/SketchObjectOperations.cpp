@@ -45,8 +45,7 @@ SketchSolveStatus SketchObject::moveGeometries(
     const std::vector<GeoElementId>& geoEltIds,
     const Base::Vector3d& toPoint,
     bool relative,
-    bool updateGeoBeforeMoving,
-    bool keepSession
+    bool updateGeoBeforeMoving
 )
 {
 
@@ -80,13 +79,6 @@ SketchSolveStatus SketchObject::moveGeometries(
         return SketchSolveStatus::SolverError;
     }
 
-    // A kept session behaves as the GUI drag does (ViewProviderSketch): one initMove stays alive
-    // over the calls, every call restarts from the reference saved at that initMove, and the
-    // initial solution is recalculated when the cursor gets far from where the session began.
-    if (keepSession) {
-        solvedSketch.setRecalculateInitialSolutionWhileMovingPoint(true);
-    }
-
     // move the point and solve
     lastSolverStatus = solvedSketch.moveGeometries(geoEltIds, toPoint, relative);
 
@@ -101,17 +93,10 @@ SketchSolveStatus SketchObject::moveGeometries(
         }
     }
 
-    if (!keepSession) {
-        solvedSketch.resetInitMove();  // reset solver point moving mechanism
-    }
+    solvedSketch.resetInitMove();  // reset solver point moving mechanism
 
     return lastSolverStatus == GCS::SolveStatus::Success ? SketchSolveStatus::Success
                                                          : SketchSolveStatus::SolverError;
-}
-
-void SketchObject::endMoveSession()
-{
-    solvedSketch.resetInitMove();
 }
 
 SketchSolveStatus SketchObject::moveGeometry(
@@ -119,12 +104,11 @@ SketchSolveStatus SketchObject::moveGeometry(
     PointPos pos,
     const Base::Vector3d& toPoint,
     bool relative,
-    bool updateGeoBeforeMoving,
-    bool keepSession
+    bool updateGeoBeforeMoving
 )
 {
     std::vector<GeoElementId> geoEltIds = {GeoElementId(geoId, pos)};
-    return moveGeometries(geoEltIds, toPoint, relative, updateGeoBeforeMoving, keepSession);
+    return moveGeometries(geoEltIds, toPoint, relative, updateGeoBeforeMoving);
 }
 
 // clang-format off
