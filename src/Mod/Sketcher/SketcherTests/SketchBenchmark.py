@@ -93,6 +93,81 @@ def bench_case(case):
 
 
 # ---------------------------------------------------------------------------
+# Scale series for the solver core (G10 slice 3a)
+# ---------------------------------------------------------------------------
+
+SERIES_BUILDERS = {
+    # one long chain of rectangles; x and y never meet, so the solver sees two big components
+    "chain": lambda doc, n: Corpus.build_scale(doc, "series_chain_%d" % n, n)[0],
+    # rectangles placed from the origin one by one: many small independent components
+    "decoupled": lambda doc, n: Corpus.build_scale(doc, "series_decoupled_%d" % n, n, chained=False)[0],
+    # one connected strip of triangles in which x and y are coupled everywhere
+    "coupled": lambda doc, n: Corpus.build_coupled(doc, "series_coupled_%d" % n, n)[0],
+}
+
+
+def _first_free_datum(sketch):
+    for i, c in enumerate(sketch.Constraints):
+        if c.Type in ("DistanceX", "Distance") and c.First != -1 and c.Driving:
+            return i, c.Value
+    raise ValueError("no datum")
+
+
+def series_row(doc, kind, n, repeats=5):
+    """Timings of one sketch of the series: the first solve after building it,
+    the median of `repeats` solves of the unchanged sketch (setup and
+    diagnosis, no iteration) and the median of `repeats` 2% datum edits, each
+    followed by the edit back (setup, diagnosis and the iteration).  The
+    iteration alone is the difference of the last two."""
+    sk = SERIES_BUILDERS[kind](doc, n)
+    t0 = time.perf_counter()
+    first = sk.solve()
+    first_s = time.perf_counter() - t0
+    code, solve_med = _median_solve(sk, repeats)
+    idx, value = _first_free_datum(sk)
+    edits = []
+    for _ in range(repeats):
+        t0 = time.perf_counter()
+        sk.setDatum(idx, FreeCAD.Units.Quantity(value * 1.02))
+        edits.append(time.perf_counter() - t0)
+        sk.setDatum(idx, FreeCAD.Units.Quantity(value))
+    return {
+        "kind": kind,
+        "constraints": sk.ConstraintCount,
+        "geometry": sk.GeometryCount,
+        "first_solve_s": first_s,
+        "first_code": first,
+        "solve_code": code,
+        "dof": sk.DoF,
+        "solve_median_s": solve_med,
+        "datum_edit_median_s": statistics.median(edits),
+        "iterate_s": statistics.median(edits) - solve_med,
+    }
+
+
+def run_series(doc, kinds=("chain", "decoupled", "coupled"), sizes=(1000, 5000), repeats=5):
+    rows = []
+    for kind in kinds:
+        for n in sizes:
+            row = series_row(doc, kind, n, repeats)
+            rows.append(row)
+            print(
+                "series %-10s n=%5d first=%.3fs solve=%.3fs datum=%.3fs iterate=%.3fs code=%s dof=%s"
+                % (
+                    kind,
+                    row["constraints"],
+                    row["first_solve_s"],
+                    row["solve_median_s"],
+                    row["datum_edit_median_s"],
+                    row["iterate_s"],
+                    row["solve_code"],
+                    row["dof"],
+                )
+            )
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Drag scenarios
 # ---------------------------------------------------------------------------
 
@@ -387,6 +462,13 @@ def main(out_path=None):
     )
     previous = FreeCAD.ActiveDocument.Name if FreeCAD.ActiveDocument is not None else None
     doc = FreeCAD.newDocument("SketchBenchmarkCorpus")
+    if os.environ.get("SKETCH_BENCH_ONLY") == "series":
+        sizes = tuple(int(x) for x in os.environ.get("SKETCH_BENCH_SIZES", "1000,5000").split(","))
+        report = {"series": run_series(doc, sizes=sizes, repeats=int(os.environ.get("SKETCH_BENCH_REPEATS", "5")))}
+        with open(out_path, "w") as fh:
+            json.dump(report, fh, indent=1)
+        print("wrote", out_path)
+        os._exit(0)
     cases, extra = Corpus.build_corpus(doc, scale_sizes=(10, 100, 1000, 5000))
     report = {
         "freecad": FreeCAD.Version()[:3] + [FreeCAD.Version()[3]],

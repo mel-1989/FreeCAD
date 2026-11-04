@@ -34,6 +34,8 @@ from SketcherTests.TestSketcherEllipse import TestSketcherEllipse
 from SketcherTests.TestSketchDiagnosis import TestSketchDiagnosis
 from SketcherTests.TestSketchAutoDefine import TestSketchAutoDefine
 from SketcherTests.TestSketchSolverCore import TestSketchSolverCore
+from SketcherTests.TestSketchSolverCore import TestDegenerateLine
+from SketcherTests.TestSketchSolverCore import TestPartitionedDiagnosis
 
 # Path and PartDesign tests use these functions that used to live here
 # but moved to SketcherTests/TestSketcherSolver.py
