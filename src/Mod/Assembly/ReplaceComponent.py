@@ -1138,6 +1138,35 @@ def _symmetry_verdict(so, sn, new_shape, iou_id, probe):
                              _turn_label(_plc_json(diff[0][0])), key, a, b, max(len(m) for _p, m in diff)), alts)
 
 
+def _in_place_turns(so, sn, fo, iou_id, proper):
+    """Half turns of the new part about the old part's own axes, as alignment candidates [(overlap, placement, shape)].
+
+    The new part's own axes of inertia move when a big feature is added, so the turn it was given may not be among the
+    candidates built from them (a bracket turned and then given a big boss). These turns are tried about the centre of mass
+    and the centre of the bounding box of the old part (a feature on one side moves the first, not the second), with its
+    inertia axes and the world axes. A turn is kept only when it explains the new part as well as identity does
+    (``IN_PLACE_IOU``), the new part still overlaps the old one as placed (``IN_PLACE_MIN``), and it is not the same
+    reading as a candidate already there (the same overlap, about the same turn)."""
+    out = []
+    if not IN_PLACE_TURNS or iou_id < IN_PLACE_MIN:
+        return out
+    diag_o = so.BoundBox.DiagonalLength
+    pivots = (so.CenterOfMass, App.Vector(so.BoundBox.Center))
+    axes_o = list(fo[1]) + [App.Vector(1, 0, 0), App.Vector(0, 1, 0), App.Vector(0, 0, 1)]
+    for axis in axes_o:
+        for pivot in pivots:
+            plc = App.Placement(App.Vector(), App.Rotation(axis, 180.0), pivot)
+            if any(plc.isSame(c[1], NEAR_POS * diag_o) for c in proper + out):
+                continue
+            shp = sn.copy()
+            shp.transformShape(plc.toMatrix())
+            iou_t = _iou(so, shp)
+            if iou_t >= iou_id - IN_PLACE_IOU and not any(
+                    abs(c[0] - iou_t) < 1e-4 and plc.isSame(c[1], 0.1 * diag_o) for c in proper + out):
+                out.append((iou_t, plc, shp))
+    return out
+
+
 def _choose_alignment(old_shape, new_shape, forced=None, probe=None):
     """(Placement taking new-local to old-local, info dict, aligned new shape).
 
@@ -1180,27 +1209,6 @@ def _choose_alignment(old_shape, new_shape, forced=None, probe=None):
         shp = sn.copy()
         shp.transformShape(t)
         proper.append((_iou(so, shp), App.Placement(t), shp))
-    # the new part's own axes of inertia move when a big feature is added, so the turn it was given may not be among
-    # the candidates above; also try the half turns about the old part's axes, the turn in place
-    # (a bracket turned and then given a boss), about the centre of mass and about the centre of the bounding box
-    # (a feature on one side moves the first, not the second), with the inertia axes and the world axes
-    bb_o = so.BoundBox
-    pivots = (so.CenterOfMass, App.Vector(bb_o.Center))
-    axes_o = list(fo[1]) + [App.Vector(1, 0, 0), App.Vector(0, 1, 0), App.Vector(0, 0, 1)]
-    diag_o = so.BoundBox.DiagonalLength
-    for axis in (axes_o if IN_PLACE_TURNS and iou_id >= IN_PLACE_MIN else []):
-        for pivot in pivots:
-            t = App.Placement(App.Vector(), App.Rotation(axis, 180.0), pivot).toMatrix()
-            if any(App.Placement(t).isSame(c[1], NEAR_POS * diag_o) for c in proper):
-                continue
-            shp = sn.copy()
-            shp.transformShape(t)
-            iou_t = _iou(so, shp)
-            # only a turn that explains the new part as well as identity does is another reading of it, and not one
-            # that is the same reading as a candidate already there (the same overlap, about the same turn)
-            if iou_t >= iou_id - IN_PLACE_IOU and not any(
-                    abs(c[0] - iou_t) < 1e-4 and App.Placement(t).isSame(c[1], 0.1 * diag_o) for c in proper):
-                proper.append((iou_t, App.Placement(t), shp))
     best = max(proper, key=lambda c: c[0])
     info["candidates"] = 1 + len(proper)
     if best[0] < IOU_EXACT and iou_id < IOU_EXACT:
@@ -1221,6 +1229,11 @@ def _choose_alignment(old_shape, new_shape, forced=None, probe=None):
             info.update(method="ambiguous", overlap=iou_id, note=sv[1][0], alternatives=sv[1][1])
             return None, info, None
         verdict = _alignment_conflict(old_shape, new_shape, iou_id, proper, probe)
+        if verdict is None:
+            # identity stands against the turns built from the new part's axes; the old part's own half turns may not
+            extra = _in_place_turns(so, sn, fo, iou_id, proper)
+            if extra:
+                verdict = _alignment_conflict(old_shape, new_shape, iou_id, proper + extra, probe)
         if verdict is None:
             return App.Placement(), info, new_shape.copy()
         kind, payload = verdict
