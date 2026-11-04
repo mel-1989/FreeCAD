@@ -44,6 +44,8 @@ from SketcherTests.TestSketchDragSession import TestDragBfgsGuard
 from SketcherTests.TestSketchDragSession import TestDragFallback
 from SketcherTests.TestSketchDragSession import TestDragEscape
 from SketcherTests.TestSketchDragSession import TestDragSilentSuccess
+from SketcherTests.TestSketchSolverCore import TestStartValues
+from SketcherTests.TestSketchSolverCore import TestSolverCliff
 
 # Path and PartDesign tests use these functions that used to live here
 # but moved to SketcherTests/TestSketcherSolver.py
