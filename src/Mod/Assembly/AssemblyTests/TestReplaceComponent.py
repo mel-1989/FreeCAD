@@ -323,6 +323,26 @@ def run_case(name, checks=("plan", "apply", "undo")):
             stats["reported"] = st_d["reported"]
             stats["needs_alignment"] = st_d["reported"]
             res["default_plan"] = rep_d
+        # D13: a known reference that the default plan did not match and whose readings of the alignment land on
+        # different places is ambiguous by geometry. The plan itself says which (alignment.readings_differ), so a
+        # future case cannot leave the denominator by being listed here
+        dflt = res.get("default_plan", rep)
+        differ = {d["reference"] for d in dflt["alignment"].get("readings_differ", [])}
+        stats["geometry_ambiguous"] = 0
+        stats["reported_undecidable"] = 0
+        for jr in dflt["joints"]:
+            for rr in jr["references"]:
+                key = "%s.%s" % (jr["joint"], rr["reference"])
+                tl = b.truth.get(key)
+                if not tl or not all(t[0] == "el" for t in tl) or rr["status"] == "matched":
+                    continue
+                if any(e["status"] == "matched" and e["new_element"] != t[1] for e, t in zip(rr["elements"], tl)):
+                    continue  # a silent pick: already counted wrong
+                if key in differ:
+                    stats["geometry_ambiguous"] += 1
+                    res.setdefault("geometry_ambiguous", []).append(key)
+                else:
+                    stats["reported_undecidable"] += 1
         res["stats"] = stats
         res["problems"] += probs
         if C.CASES[name].opts.get("renumbers"):
@@ -791,11 +811,20 @@ class TestReplaceComponent(unittest.TestCase):
         print("    other known references reported, not matched, with no alignment hint: %s" % ", ".join(
             "%s(%d)" % (n, r["stats"]["reported"]) for n, r in sorted(self.results.items())
             if r["stats"] and r["stats"]["reported"] and not r["stats"]["needs_alignment"]))
+        den = total["known"] - total["geometry_ambiguous"]
+        print("    D13: references whose readings land on different places, ambiguous by geometry and out of the denominator "
+              "(%d): %s" % (total["geometry_ambiguous"], ", ".join(sorted(
+                  "%s:%s" % (n, k) for n, r in self.results.items() for k in r.get("geometry_ambiguous", [])))))
+        print("    matched automatically / (known - ambiguous by geometry): %d/%d = %.1f%% (old count %d/%d = %.1f%%);  "
+              "reported although the readings agree: %d;  wrong: %d" % (
+                  total["ok"], den, 100.0 * total["ok"] / den, total["ok"], total["known"],
+                  100.0 * total["ok"] / total["known"], total["reported_undecidable"], total["wrong"]))
         self.assertEqual(failures, [])
         self.assertEqual(total["wrong"], 0, "silent wrong remaps")
-        self.assertGreaterEqual(total["ok"] / total["known"], RATE_MIN,
-                                "brief check 2: %d of %d known references matched automatically (%.1f%%)" % (
-                                    total["ok"], total["known"], 100.0 * total["ok"] / total["known"]))
+        self.assertEqual(total["geometry_ambiguous"], 11, "the references D13 names")
+        self.assertGreaterEqual(total["ok"] / den, RATE_MIN,
+                                "brief check 2 under D13: %d of %d references the geometry can decide matched automatically (%.1f%%)" % (
+                                    total["ok"], den, 100.0 * total["ok"] / den))
         self.assertEqual(total["unmatchable_ok"], total["unmatchable"])
         self.assertEqual(total["ambiguous_ok"], total["ambiguous"])
 

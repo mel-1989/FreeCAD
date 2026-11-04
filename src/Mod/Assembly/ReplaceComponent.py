@@ -1408,6 +1408,24 @@ def _alignment_candidates(assembly, old, new, ainfo, choices):
     return out
 
 
+def _reading_differences(new_shape, ainfo, probe, diag):
+    """The referenced elements that the readings of an ambiguous alignment send to different places.
+
+    Compares "as placed" with each alternative reading by element and by place (the comparison the symmetry
+    rule uses), and returns [{"reference": "Joint.Reference1", "index": k, "as_placed": element, "alternative":
+    element}], one per differing reference element and alternative. A reference not listed lands on the same
+    element, at the same place, under every reading."""
+    base = probe(new_shape, App.Placement())
+    out = []
+    for d in ainfo.get("alternatives", []):
+        plc_ = _plc_from_json(d)
+        shp = new_shape.copy()
+        shp.transformShape(plc_.toMatrix())
+        for (key, k), a, b in _readings_differ(base, probe(shp, plc_), tol=NEAR_POS * diag):
+            out.append({"reference": key, "index": k, "as_placed": a, "alternative": b})
+    return out
+
+
 def _plan(assembly, old, new, choices=None, alignment=None):
     hosts = _find_hosts(assembly, old)
     new_leaf, new_tokens, new_top = _resolve_new(new)
@@ -1440,6 +1458,7 @@ def _plan(assembly, old, new, choices=None, alignment=None):
     if plc is not None and any(h.array_elements for h in hosts) and not plc.isSame(App.Placement(), 1e-9):
         raise ReplaceError("a link array can only be repointed to a part with the old part's origin and orientation")
     mn = _Model(aligned) if aligned is not None else None
+    differ = _reading_differences(new_shape, ainfo, probe, mo.diag) if refs and plc is None else []
     cache = {}
     joints = {}
     for rf in refs:
@@ -1479,6 +1498,7 @@ def _plan(assembly, old, new, choices=None, alignment=None):
                       "placement": _plc_json(plc) if plc is not None else None,
                       "note": ainfo.get("note", ""),
                       "alternatives": ainfo.get("alternatives", []),
+                      "readings_differ": differ,
                       "candidates": _alignment_candidates(assembly, old, new, ainfo, choices)
                       if ainfo["method"] == "ambiguous" else []},
         "tolerances": {"position_mm": POS_TOL, "size_rel": SIZE_TOL, "angle_exact_rad": ANG_EXACT,
