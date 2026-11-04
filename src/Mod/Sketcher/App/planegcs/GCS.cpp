@@ -5051,6 +5051,8 @@ void System::dragReset()
     dragCursorKnown = false;
     dragHistValid = false;
     dragLockClean = true;
+    dragFailStreak = 0;
+    dragEscapeValid = false;
 }
 
 // A drag move that the SQP ended with A satisfied but the cursor not reached is either at the
@@ -5065,7 +5067,7 @@ void System::dragReset()
 // cursor has moved by a quarter of the gap, so an out-of-reach cursor costs the search once.
 SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
 {
-    VEC_pD plist = dragPlistAB;
+    VEC_pD& plist = dragPlistAB;
     const int n = static_cast<int>(plist.size());
     constexpr double gapTol = 1e-5;
     constexpr double gapFraction = 1e-3;
@@ -5073,16 +5075,13 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
     constexpr double accept = 0.25;
     constexpr int maxRestarts = 12;
 
-    Eigen::VectorXd xorig(n), xbest(n), xr(n);
-    for (int j = 0; j < n; ++j) {
-        xorig[j] = *plist[j];
-    }
-    subsysB->getParams(plist, xbest);
-    subsysA->getParams(plist, xbest);
+    // Most moves end here without a search, so nothing is allocated before the search starts
+    subsysB->getParams(plist, dragScratch);
+    subsysA->getParams(plist, dragScratch);
     double Ebest = dragErrB;
     const double gap0 = std::sqrt(2. * Ebest);
     // The size of the sketch, from its largest coordinate
-    const double extent = std::max(1., xbest.lpNorm<Eigen::Infinity>());
+    const double extent = std::max(1., dragScratch.lpNorm<Eigen::Infinity>());
     // The cursor is not an unknown: its coordinates are the parameters of B's constraints that
     // are not among the unknowns (found once per move session).
     if (!dragCursorKnown) {
@@ -5099,8 +5098,8 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
         }
         dragCursorKnown = true;
     }
-    std::vector<double> cursor;
-    cursor.reserve(dragCursorParams.size());
+    std::vector<double>& cursor = dragCursorNow;
+    cursor.clear();
     for (const double* param : dragCursorParams) {
         cursor.push_back(*param);
     }
@@ -5120,12 +5119,14 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
         for (size_t i = 0; i < cursor.size(); ++i) {
             travel += (cursor[i] - dragPrevCursor[i]) * (cursor[i] - dragPrevCursor[i]);
         }
-        if (gap0 > 2. * dragPrevGap + std::sqrt(travel) + slack) {
+        travel = std::sqrt(travel);
+        if (gap0 > 2. * dragPrevGap + travel + slack) {
             dragLockClean = false;
         }
     }
     if (reached) {
         dragLockClean = true;
+        dragFailStreak = 0;
     }
     auto record = [&](double gap) {
         dragHistValid = true;
@@ -5137,15 +5138,29 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
         return SolveStatus::Success;
     }
 
+    // Each search in a row that found nothing, after the second, doubles the cursor travel asked
+    // for before the next one, up to 16 times: a cursor held just out of reach, or a fixed offset
+    // such as an orbit's, is searched a few times and then left alone.
+    // A gap that has moved on from the one of the last search (grown, or fallen to half as the
+    // cursor came back within reach) is a new situation: the count starts again.
+    if (dragFailStreak > 0 && (gap0 > 1.25 * dragFailGap + slack || gap0 < 0.5 * dragFailGap)) {
+        dragFailStreak = 0;
+    }
+    const double backoff = static_cast<double>(1 << std::max(0, dragFailStreak - 2));
     if (dragStallValid && dragStallCursor.size() == cursor.size()) {
         double moved = 0.;
         for (size_t i = 0; i < cursor.size(); ++i) {
             moved += (cursor[i] - dragStallCursor[i]) * (cursor[i] - dragStallCursor[i]);
         }
-        if (std::sqrt(moved) < std::max(0.25 * gap0, moveFraction * extent)) {
+        if (std::sqrt(moved) < backoff * std::max(0.25 * gap0, moveFraction * extent)) {
             record(gap0);
             return SolveStatus::Success;
         }
+    }
+
+    Eigen::VectorXd xorig(n), xbest = dragScratch, xr(n);
+    for (int j = 0; j < n; ++j) {
+        xorig[j] = *plist[j];
     }
 
     // Solve from xs. The result is in xr and its cursor objective in E when A is satisfied.
@@ -5178,6 +5193,18 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
         }
     };
 
+    // A lock that the escape released on the last move is released the same way on this one: try
+    // the sketch it found first, which costs one solve where the probes below cost up to five.
+    if (dragEscapeValid && dragEscapeX.size() == static_cast<Eigen::Index>(n)) {
+        const bool ok = solveFrom(dragEscapeX) == SolveStatus::Success;
+        pvalsHoldBest = false;
+        if (ok && E < accept * Ebest) {
+            xbest = xr;
+            Ebest = E;
+            improved = true;
+            pvalsHoldBest = true;
+        }
+    }
     converge();
     if (std::sqrt(2. * Ebest) > gapTol) {
         static const double fractions[] = {1e-3, -1e-3, 1e-2, -1e-2};
@@ -5200,6 +5227,17 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
     }
 
     dragStallValid = !improved;
+    dragEscapeValid = improved || dragEscapeValid;
+    if (improved) {
+        dragEscapeX = xbest;
+    }
+    if (improved) {
+        dragFailStreak = 0;
+    }
+    else {
+        dragFailStreak = std::min(dragFailStreak + 1, 6);
+        dragFailGap = gap0;
+    }
     dragStallCursor = cursor;
     record(gap0);
 

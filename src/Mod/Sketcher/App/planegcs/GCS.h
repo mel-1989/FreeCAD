@@ -341,6 +341,12 @@ public:
     double dragPrevGap = 0.;
     std::vector<double> dragPrevCursor;
     bool dragLockClean = true;
+    int dragFailStreak = 0;
+    Eigen::VectorXd dragScratch;
+    std::vector<double> dragCursorNow;
+    bool dragEscapeValid = false;
+    Eigen::VectorXd dragEscapeX;
+    double dragFailGap = 0.;
     std::vector<double> dragStallCursor;
     double LM_eps;
     double LM_eps1;
