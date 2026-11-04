@@ -151,7 +151,7 @@ def main(argv):
         finally:
             with open(path, "wb") as fh:
                 fh.write(original)
-        rows.append({"mutant": name, "file": rel, "what": what, "build": status, "failing_tests": failed, "caught": bool(failed) or status != "ok"})
+        rows.append({"mutant": name, "file": rel, "what": what, "build": status, "failing_tests": failed, "caught": bool(failed)})
         print(name, "CAUGHT" if rows[-1]["caught"] else "SURVIVED", failed, flush=True)
     build_and_test()  # leave the tree built from the original source
     with open("solver_core_mutants.json", "w") as fh:
