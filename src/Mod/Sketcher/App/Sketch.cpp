@@ -5021,9 +5021,21 @@ GCS::SolveStatus Sketch::internalSolve(std::string& solvername, int level)
 
     if (isInitMove) {
         solvername = "DogLeg";  // DogLeg is used for dragging (same as before)
-        GCSsys.dragSolve = true;
+        // dragSolve is cleared again if the solver throws
+        struct DragSolveScope
+        {
+            explicit DragSolveScope(GCS::System& sys)
+                : system(sys)
+            {
+                system.dragSolve = true;
+            }
+            ~DragSolveScope()
+            {
+                system.dragSolve = false;
+            }
+            GCS::System& system;
+        } dragScope(GCSsys);
         status = GCSsys.solve(GCS::DogLeg);
-        GCSsys.dragSolve = false;
     }
     else {
         switch (defaultSolver) {
@@ -5401,8 +5413,37 @@ int Sketch::initMove(const std::vector<GeoElementId>& geoEltIds)
 
     InitParameters = MoveParameters;
 
+    // The size of the sketch, for the drag escape: the span of its points
+    {
+        double lo[2] = {0., 0.}, hi[2] = {0., 0.};
+        bool first = true;
+        for (const GCS::Point& pt : Points) {
+            if (!pt.x || !pt.y) {
+                continue;
+            }
+            const double c[2] = {*pt.x, *pt.y};
+            for (int k = 0; k < 2; ++k) {
+                lo[k] = first ? c[k] : std::min(lo[k], c[k]);
+                hi[k] = first ? c[k] : std::max(hi[k], c[k]);
+            }
+            first = false;
+        }
+        GCSsys.dragExtent = std::max(hi[0] - lo[0], hi[1] - lo[1]);
+    }
+
     GCSsys.initSolution();
     isInitMove = true;
+
+    // the state the reference holds is the last state of the drag that met the cursor
+    dragLastGood.resize(Parameters.size());
+    for (size_t i = 0; i < Parameters.size(); ++i) {
+        dragLastGood[i] = *Parameters[i];
+    }
+    dragRefIsLastGood = true;
+    dragLastGoodCursor.assign(
+        InitParameters.begin(),
+        InitParameters.begin() + std::min<size_t>(2, InitParameters.size())
+    );
 
     return 0;
 }
@@ -5597,7 +5638,101 @@ GCS::SolveStatus Sketch::moveGeometries(
         }
     }
 
-    return solve();
+    const bool follow = !relative && RecalculateInitialSolutionWhileMovingPoint && isInitMove;
+    std::vector<double> before;
+    if (follow) {
+        before.resize(Parameters.size());
+        for (size_t i = 0; i < Parameters.size(); ++i) {
+            before[i] = *Parameters[i];
+        }
+    }
+    GCSsys.dragGap = -1.;
+    GCS::SolveStatus status = solve();
+
+    // A temporary move restarts from the reference saved by initMove, which is the state the
+    // drag began in. A move from there to a distant cursor can be stuck on a branch the drag has
+    // already left (a dead point of a mechanism), or fail where a move from the state the drag
+    // reached would not. So when a move does not end at the cursor and the reference is not
+    // already the last state that did, the drag goes on from that state: the reference is saved
+    // again there and the move is solved once more, which is what recalculating the initial
+    // solution while moving a point is for. Moves that end at the cursor are never touched, so a
+    // drag that never gets stuck still returns to where it began.
+    if (!follow) {
+        return status;
+    }
+    const double extent = GCSsys.dragExtent;
+    bool ok = status == GCS::SolveStatus::Success && GCSsys.dragGap >= 0.;
+    // A move that ends farther from the cursor than the last state that met it was, by more than
+    // ten times the size of the sketch, has diverged and is not a result: the SQP can satisfy the
+    // constraints and leave the cursor behind by a long way (S03 across its coincident centres
+    // put a point 183 m away). It counts as a failed move and the sketch keeps its state.
+    if (ok && dragLastGoodCursor.size() >= 2 && MoveParameters.size() >= 2) {
+        const double stay = std::hypot(
+            MoveParameters[0] - dragLastGoodCursor[0],
+            MoveParameters[1] - dragLastGoodCursor[1]
+        );
+        if (GCSsys.dragGap > stay + 10. * extent) {
+            for (size_t i = 0; i < Parameters.size(); ++i) {
+                *Parameters[i] = before[i];
+            }
+            updateGeometry();
+            status = GCS::SolveStatus::Failed;
+            GCSsys.dragGap = -1.;
+            ok = false;
+        }
+    }
+    const bool good = ok && GCSsys.dragGap <= 0.01 * extent;
+    if (good) {
+        dragLastGood.resize(Parameters.size());
+        for (size_t i = 0; i < Parameters.size(); ++i) {
+            dragLastGood[i] = *Parameters[i];
+        }
+        dragRefIsLastGood = false;
+        dragLastGoodCursor.assign(
+            MoveParameters.begin(),
+            MoveParameters.begin() + std::min<size_t>(2, MoveParameters.size())
+        );
+        return status;
+    }
+    // stuck: no result, or a result a tenth of the sketch from the cursor
+    constexpr double stuckGap = 0.1;
+    const bool stuck = !ok || GCSsys.dragGap > stuckGap * extent;
+    if (!stuck || dragRefIsLastGood || dragRetrying || dragLastGood.size() != Parameters.size()) {
+        return status;
+    }
+
+    const double gap1 = (status == GCS::SolveStatus::Success) ? GCSsys.dragGap : -1.;
+    std::vector<double> first(Parameters.size());
+    for (size_t i = 0; i < Parameters.size(); ++i) {
+        first[i] = *Parameters[i];
+        *Parameters[i] = dragLastGood[i];
+    }
+    if (initMove(geoEltIds) != 0) {
+        for (size_t i = 0; i < Parameters.size(); ++i) {
+            *Parameters[i] = first[i];
+        }
+        return status;
+    }
+    initToPoint = toPoint;
+    dragRefIsLastGood = true;
+    dragRetrying = true;
+    const GCS::SolveStatus status2 = moveGeometries(geoEltIds, toPoint, relative);
+    dragRetrying = false;
+    const double gap2 = (status2 == GCS::SolveStatus::Success) ? GCSsys.dragGap : -1.;
+    // The second solve is kept when it ends at least as near the cursor as the first, or when
+    // the first gave nothing and it does not end stuck itself (a result far off is not better
+    // than the last state)
+    if (status2 == GCS::SolveStatus::Success
+        && (gap1 >= 0. ? gap2 < gap1 : gap2 <= stuckGap * extent)) {
+        return status2;
+    }
+    // no better: keep what the move from the old reference gave
+    for (size_t i = 0; i < Parameters.size(); ++i) {
+        *Parameters[i] = first[i];
+    }
+    updateGeometry();
+    GCSsys.dragGap = gap1;
+    return status;
 }
 
 GCS::SolveStatus Sketch::moveGeometry(int geoId, PointPos pos, Base::Vector3d toPoint, bool relative)

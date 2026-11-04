@@ -1935,6 +1935,9 @@ SolveStatus System::solve(Algorithm alg, bool isRedundantsolving)
         }
         auto subStatus = SolveStatus::Success;
         if (subSystems[cid] && subSystemsAux[cid]) {
+            if (dragSolve && !isRedundantsolving) {
+                dragGap = -1.;
+            }
             subStatus = solve(subSystems[cid], subSystemsAux[cid], isRedundantsolving);
             if (dragSolve && !isRedundantsolving && subStatus == SolveStatus::Success) {
                 subStatus = dragEscape(subSystems[cid], subSystemsAux[cid]);
@@ -5086,8 +5089,10 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
     subsysA->getParams(plist, dragScratch);
     double Ebest = dragErrB;
     const double gap0 = std::sqrt(2. * Ebest);
-    // The size of the sketch, from its largest coordinate
-    const double extent = std::max(1., dragScratch.lpNorm<Eigen::Infinity>());
+    // The size of the sketch: the span of its points when Sketch::initMove has measured it, else
+    // the largest coordinate (which a sketch far from the origin overstates)
+    const double extent = dragExtent > 0. ? dragExtent
+                                          : std::max(1., dragScratch.lpNorm<Eigen::Infinity>());
     // The cursor is not an unknown: its coordinates are the parameters of B's constraints that
     // are not among the unknowns (found once per move session).
     if (!dragCursorKnown) {
@@ -5141,6 +5146,7 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
         dragPrevGap = gap;
         dragPrevCursor = cursor;
     };
+    dragGap = gap0;
     if (reached || !dragLockClean) {
         record(gap0);
         return SolveStatus::Success;
@@ -5248,6 +5254,7 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
     }
     dragStallCursor = cursor;
     record(gap0);
+    dragGap = std::sqrt(2. * Ebest);
 
     if (!pvalsHoldBest) {
         // Put the best solution, the move's own or the escape's, back where solve leaves it

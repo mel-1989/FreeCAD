@@ -649,6 +649,12 @@ private:
     bool isInitMove;
     Base::Vector3d initToPoint;
     double moveStep;
+    // The unknowns after the last move of the drag that ended at the cursor, whether the saved
+    // reference is that state, and whether a move is being solved a second time from it
+    std::vector<double> dragLastGood;
+    std::vector<double> dragLastGoodCursor;
+    bool dragRefIsLastGood = true;
+    bool dragRetrying = false;
 
     // Group related things :
     /// container to store information about groups

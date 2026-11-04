@@ -331,6 +331,13 @@ public:
     // which no escape was found, which lasts until the next initSolution.
     VEC_pD dragPlistAB;
     double dragErrB = 0.;
+    // The size of the sketch being dragged (set by Sketch::initMove from the span of its points;
+    // 0 when unknown) and the cursor distance left by the last drag move of the dragged component
+    // (negative when that move did not succeed): the slack of the escape scales with the first,
+    // and Sketch::moveGeometries continues a drag from where it is only after a move with a small
+    // second.
+    double dragExtent = 0.;
+    double dragGap = -1.;
     bool dragStallValid = false;
     // The cursor's coordinates (found once per move session), and the gap and cursor at the end of
     // the last successful drag move of the drag, which tell a lock that opens continuously from a
