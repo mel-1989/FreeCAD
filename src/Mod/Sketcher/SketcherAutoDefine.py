@@ -77,21 +77,20 @@ is left; no candidate is made up for it.
 Stability.  PlaneGCS is not repeatable on a few ill-conditioned systems (the
 same constraints on the same geometry solved in about half the tries in one
 process and every time in the next), so a candidate must pass the fresh-copy
-verification `STABILITY_RUNS` more times, and ``apply_candidate`` tries up to
-`APPLY_ATTEMPTS` times before giving up.
+verification `STABILITY_RUNS` more times.
 
-Re-solve guarantee.  A sketch the user saves must keep solving.  On a few
-ill-conditioned sets PlaneGCS returns -1 with DOF 0 and nothing flagged,
-differently from process to process, and a result reached from a nudged start
-can re-solve that way on 30 to 95% of solves after the file is reopened while
-every one-off check is green.  So (1) verification starts from the exact drawn
-geometry only, with no nudged fallback, (2) every verification pass, repeats
-included, and every ``apply_candidate`` result must give `GATE_RUNS` (10)
-consecutive clean DOF-0 solves, on the sketch and on a serialised copy, or the
-set is dropped or the apply rolled back, and (3) the nudged retry in
-``apply_candidate`` only rescues a first attempt that the solver missed, and
-its result passes the same gate.  A clean refusal (``AutoDefineError``) is
-preferred to an unreliable file.  The gate is bounded, not a proof: a set that
+Re-solve guarantee.  A sketch the user saves must keep solving.  PlaneGCS
+once returned -1 with DOF 0 and nothing flagged on the dovetail sketch; the
+cause was a degenerate line that the solver rejected, fixed in
+``Sketch::updateLineSegment`` (G10 slice 3a), so there is no nudged start and
+no retry: verification and ``apply_candidate`` both start from the exact drawn
+geometry.  The gate stays as a bounded safety net because
+``Drilling_1.FCStd``'s sketch still gives process-dependent solve codes that
+are not explained.  (1) Every verification pass, repeats included, and every
+``apply_candidate`` result must give `GATE_RUNS` (10) consecutive clean DOF-0
+solves, on the sketch and on a serialised copy, or the set is dropped or the
+apply rolled back.  A clean refusal (``AutoDefineError``) is preferred to an
+unreliable file.  The gate is bounded, not a proof: a set that
 fails in fewer than about 1 solve in 4 can still pass ten solves.  The gate
 costs up to 20 solves, so it is skipped by wall clock when a pass is slow
 (`STABILITY_BUDGET`; on the loaded mini that is between about 320 and 640
@@ -158,12 +157,10 @@ __all__ = ["propose", "apply_candidate", "AutoDefineError", "SCHEMES"]
 LENGTH_TOLERANCE = 1e-7
 ANGLE_TOLERANCE = 1e-8
 MOVE_TOLERANCE = 1e-6
-APPLY_ATTEMPTS = 1  # the nudged retry is gone: the -1 at DOF 0 was a degenerate line the solver rejected (G10 slice 3a)
 STABILITY_RUNS = 3  # extra fresh-copy passes a candidate must survive
 STABILITY_BUDGET = 0.3  # seconds; slower sketches skip the repeats and the full re-solve gate (see "The re-solve gate" in the module docstring)
 REDUCED_GATE_RUNS = 3  # solves of the real sketch ``apply_candidate`` asks for when its own apply was too slow for the full gate
 GATE_RUNS = 10  # consecutive clean solves a result must give (on the sketch and on a serialised copy)
-NUDGE = 1e-7  # mm; size of the start offset of a retried solve (well under MOVE_TOLERANCE)
 NEAR_AXIS = 0.03  # a line within about 1.7 degrees of an axis is dimensioned by its extent
 SCHEMES = ("baseline", "chain", "symmetric")
 _MAX_BATCH = 400
@@ -887,33 +884,6 @@ def _constraint_row(c):
     return (c.Type, c.Name, c.First, c.FirstPos, c.Second, c.SecondPos, c.Third, c.ThirdPos, float(c.Value), bool(c.Driving), bool(c.IsActive))
 
 
-def _nudged(geometry, size, seed=1):
-    """`geometry` with every item translated by a small deterministic offset
-    (a fixed linear congruential sequence, so it does not depend on the
-    process).  PlaneGCS sometimes returns "no convergence" (-1) with DOF 0 and
-    nothing flagged when the start already satisfies every constraint to
-    rounding, and converges from the same start moved by 1e-9 or more (run 052,
-    dovetail); the constraints are not what is wrong, so a retried solve starts
-    from this.  Whatever comes out is checked against the drawn geometry like
-    any other result.  Items that cannot be translated are left as they are."""
-    if not size:
-        return list(geometry)
-    state = seed * 2654435761 % 2**32
-    out = []
-    for g in geometry:
-        try:
-            g = g.copy()
-            state = (state * 1664525 + 1013904223) % 2**32
-            dx = (state / 2**32 * 2 - 1) * size
-            state = (state * 1664525 + 1013904223) % 2**32
-            dy = (state / 2**32 * 2 - 1) * size
-            g.translate(FreeCAD.Vector(dx, dy, 0))
-        except Exception:
-            pass
-        out.append(g)
-    return out
-
-
 def _stable(sk, runs=GATE_RUNS):
     """`runs` consecutive solves of `sk`, each clean with DOF 0.  PlaneGCS can
     return -1 at DOF 0 with nothing flagged, differently from process to process,
@@ -1203,7 +1173,7 @@ def _verify(scratch, specs, batches, keep, stability_budget=None):
             continue
         elapsed = time.time() - t0
         repeats = STABILITY_RUNS if elapsed <= budget else 0
-        if any(_verify_once(scratch, specs, trial, keep, facts["nudge"], budget) is None for _ in range(repeats)):
+        if any(_verify_once(scratch, specs, trial, keep, budget) is None for _ in range(repeats)):
             continue
         facts["batches"] = trial
         facts["runs"] = 1 + repeats
@@ -1223,26 +1193,20 @@ def _verify(scratch, specs, batches, keep, stability_budget=None):
 
 def _verify_pass(scratch, specs, batches, keep, budget=STABILITY_BUDGET):
     """The first verification pass, from the drawn geometry exactly.  There is no
-    nudged fallback here: a plan that only solves from a start moved by `NUDGE`
-    is ill-conditioned, its result is the kind that later re-solves with -1 after
-    the user saves and reopens, and offering such plans also made the one
-    sensitive dovetail plan far more common (run 052).  ``apply_candidate``
-    still retries from a nudged start, but its result has to pass the re-solve
-    gate too."""
-    facts = _verify_once(scratch, specs, batches, keep, 0.0, budget)
-    if facts is not None:
-        facts["nudge"] = 0.0
-    return facts
+    nudged fallback and no retry: a plan that only solves from a moved start is
+    ill-conditioned, and its result is the kind that later re-solves with -1
+    after the user saves and reopens."""
+    return _verify_once(scratch, specs, batches, keep, budget)
 
 
-def _verify_once(scratch, specs, batches, keep, nudge=0.0, budget=STABILITY_BUDGET):
+def _verify_once(scratch, specs, batches, keep, budget=STABILITY_BUDGET):
     fresh = scratch.copy()
     try:
         start = list(fresh.Geometry)
         sig0 = _geometry_signature(fresh)
         rows0 = [_constraint_row(c) for c in fresh.Constraints]
         t0 = time.time()
-        st = _apply_batches(fresh, specs, batches, _nudged(start, nudge))
+        st = _apply_batches(fresh, specs, batches, start)
         spent = time.time() - t0
         cheap = spent <= budget
         rows = [_constraint_row(c) for c in fresh.Constraints]
@@ -1259,7 +1223,7 @@ def _verify_once(scratch, specs, batches, keep, nudge=0.0, budget=STABILITY_BUDG
         if any(k >= len(rows0) or rows[k] != rows0[k] for k in keep):
             return None
         if cheap and not (_stable(fresh) and _serialised_stable(fresh)):
-            return None  # the re-solve gate; a nudged start rarely passes it
+            return None  # the re-solve gate
         return {"max_move": move, "dof": st.dof, "gate_ran": cheap, "apply_seconds": spent}
     finally:
         _discard(fresh)
@@ -1468,11 +1432,9 @@ def apply_candidate(sketch, candidate, stability_budget=None):
     result is checked on the real sketch; if it is not clean with DOF 0 the
     constraints are removed again and the drawn geometry is put back.  The
     solver is not repeatable on a few ill-conditioned systems, so a result
-    that is not clean is tried up to `APPLY_ATTEMPTS` times (the retries start
-    from the drawn geometry moved by `NUDGE`; the result must still be clean,
-    DOF 0, solve again cleanly and be within `MOVE_TOLERANCE` of the
-    drawn geometry) before ``AutoDefineError`` is raised (and the sketch is
-    left as it was).  Every result, from an exact or a nudged start, must also
+    that is not clean is not retried: ``AutoDefineError`` is raised and the
+    sketch is left as it was.  The result must be clean, DOF 0, solve again
+    cleanly and be within `MOVE_TOLERANCE` of the drawn geometry, and must also
     pass the re-solve gate before it is accepted: `GATE_RUNS` consecutive clean
     solves with DOF 0 of the sketch and of a copy rebuilt from its serialised
     content.  A result that fails it is rolled back like any other miss.  The
@@ -1495,28 +1457,27 @@ def apply_candidate(sketch, candidate, stability_budget=None):
             sketch.delConstraints(list(range(n0, len(sketch.Constraints))), False, True)
         sketch.Geometry = start
 
-    for attempt in range(APPLY_ATTEMPTS):
-        cheap, spent = True, 0.0
-        try:
-            t0 = time.time()
-            st = _apply_batches(sketch, specs, batches, _nudged(start, NUDGE if attempt else 0.0, attempt))
-            spent = time.time() - t0
-            cheap = spent <= budget
-            if _clean(st):
-                again = _Status(sketch)  # a second solve must agree
-                st = st if _clean(again) else again
-            ok = _clean(st) and st.dof == 0 and _max_move(sig0, _geometry_signature(sketch)) <= MOVE_TOLERANCE
-            if ok and cheap:  # the re-solve gate, on the sketch and on its serialised copy
-                ok = _stable(sketch) and _serialised_stable(sketch)
-            elif ok:  # too slow for 20 solves: a reduced gate on the real sketch, never none
-                ok = _stable(sketch, REDUCED_GATE_RUNS)
-        except Exception as exc:
-            roll_back()
-            raise AutoDefineError("the candidate could not be applied: %s" % exc)
-        if ok:
-            if cheap:
-                return {"dof": st.dof, "added": len(specs), "gate": "full", "gate_runs": GATE_RUNS, "gate_reason": None}
-            reason = "applying the constraints took %.2f s, over the %.2f s stability budget, so the %d-solve gate on the sketch and a serialised copy was cut to %d solves of the sketch" % (spent, budget, GATE_RUNS, REDUCED_GATE_RUNS)
-            return {"dof": st.dof, "added": len(specs), "gate": "reduced", "gate_runs": REDUCED_GATE_RUNS, "gate_reason": reason}
+    cheap, spent = True, 0.0
+    try:
+        t0 = time.time()
+        st = _apply_batches(sketch, specs, batches, start)
+        spent = time.time() - t0
+        cheap = spent <= budget
+        if _clean(st):
+            again = _Status(sketch)  # a second solve must agree
+            st = st if _clean(again) else again
+        ok = _clean(st) and st.dof == 0 and _max_move(sig0, _geometry_signature(sketch)) <= MOVE_TOLERANCE
+        if ok and cheap:  # the re-solve gate, on the sketch and on its serialised copy
+            ok = _stable(sketch) and _serialised_stable(sketch)
+        elif ok:  # too slow for 20 solves: a reduced gate on the real sketch, never none
+            ok = _stable(sketch, REDUCED_GATE_RUNS)
+    except Exception as exc:
         roll_back()
+        raise AutoDefineError("the candidate could not be applied: %s" % exc)
+    if ok:
+        if cheap:
+            return {"dof": st.dof, "added": len(specs), "gate": "full", "gate_runs": GATE_RUNS, "gate_reason": None}
+        reason = "applying the constraints took %.2f s, over the %.2f s stability budget, so the %d-solve gate on the sketch and a serialised copy was cut to %d solves of the sketch" % (spent, budget, GATE_RUNS, REDUCED_GATE_RUNS)
+        return {"dof": st.dof, "added": len(specs), "gate": "reduced", "gate_runs": REDUCED_GATE_RUNS, "gate_reason": reason}
+    roll_back()
     raise AutoDefineError("the candidate did not solve cleanly on this sketch; it was rolled back")
