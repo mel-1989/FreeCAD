@@ -256,7 +256,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         self.refresh_button.setToolTip(tr("Runs the diagnosis again on the sketch as it is now"))
         self.refresh_button.setAccessibleName(tr("Diagnose again"))
         self.refresh_button.clicked.connect(self.diagnose_now)
-        self.cancel_button = QtWidgets.QPushButton(tr("Cancel"))
+        self.cancel_button = QtWidgets.QPushButton(tr("Stop"))
         self.cancel_button.setObjectName(CANCEL_NAME)
         self.cancel_button.setToolTip(tr("Stops the diagnosis that is running"))
         self.cancel_button.setAccessibleName(tr("Cancel diagnosis"))
