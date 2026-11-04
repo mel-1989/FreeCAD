@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
+# ***************************************************************************
+# *   Copyright (c) 2026 The FreeCAD project association AISBL              *
+# *                                                                         *
+# *   This file is part of FreeCAD.                                         *
+# *                                                                         *
+# *   FreeCAD is free software: you can redistribute it and/or modify it    *
+# *   under the terms of the GNU Lesser General Public License as           *
+# *   published by the Free Software Foundation, either version 2.1 of the  *
+# *   License, or (at your option) any later version.                       *
+# *                                                                         *
+# *   FreeCAD is distributed in the hope that it will be useful, but        *
+# *   WITHOUT ANY WARRANTY; without even the implied warranty of            *
+# *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU     *
+# *   Lesser General Public License for more details.                      *
+# *                                                                         *
+# *   You should have received a copy of the GNU Lesser General Public      *
+# *   License along with FreeCAD. If not, see                               *
+# *   <https://www.gnu.org/licenses/>.                                      *
+# *                                                                         *
+
+"""Planted defects for the drag half of G10 slice 3b (check 11).
+
+Each mutant is a text replacement in one C++ file of the tree; the script
+applies it, builds through the harness, runs the drag tests and puts the file
+back byte for byte.  A mutant is caught when a test fails or errors.
+
+    python3 DragMutants.py <freecad worktree> [name ...]
+
+The worktree is the one the harness builds (``FC_SRC``) and must be clean for
+the files named below.  ``CADFORK_CTL`` names the cad-fork folder whose
+``harness/build.sh`` builds it.  The table is printed and written to
+``drag_mutants.json`` in the current directory."""
+
+import json
+import os
+import subprocess
+import sys
+
+GCS = "src/Mod/Sketcher/App/planegcs/GCS.cpp"
+SKETCH = "src/Mod/Sketcher/App/Sketch.cpp"
+OPS = "src/Mod/Sketcher/App/SketchObjectOperations.cpp"
+PYIMP = "src/Mod/Sketcher/App/SketchObjectPyImp.cpp"
+
+TESTS = ["TestDragSession", "TestDragBfgsGuard", "TestDragFallback", "TestDragEscape", "TestDragSilentSuccess"]
+
+# (name, file, old text, new text, what it plants)
+MUTANTS = [
+    ("binding_resets_every_call", OPS, "    if (!keepSession) {\n        solvedSketch.resetInitMove();",
+     "    if (true) {\n        solvedSketch.resetInitMove();", "a kept session is reset after every call, as the Python default does"),
+    ("binding_flag_ignored", PYIMP, "                (relative > 0),\n                false,\n                (keepSession > 0)",
+     "                (relative > 0),\n                false,\n                false", "moveGeometry drops the keep_session flag"),
+    ("drag_mode_never_set", SKETCH, "        GCSsys.dragSolve = true;", "        GCSsys.dragSolve = false;",
+     "the drag SQP runs the stock iteration and the escape never runs"),
+    ("update_not_cautious", GCS, "            if (guarded && !(yTh > 0.)) {", "            if (false && !(yTh > 0.)) {",
+     "the BFGS update is applied whatever the sign of the curvature"),
+    ("update_skipped_when_positive", GCS, "            if (guarded && !(yTh > 0.)) {", "            if (guarded && (yTh > 0.)) {",
+     "the BFGS update is skipped when the curvature is good"),
+    ("mu_divides_by_zero", GCS, "            if (!guarded || resA.lpNorm<1>() > 0.) {", "            if (true) {",
+     "the penalty parameter is updated with a zero denominator"),
+    ("no_stock_fallback", GCS, "    if (guarded && status != SolveStatus::Success) {\n        guarded = false;",
+     "    if (false && status != SolveStatus::Success) {\n        guarded = false;", "a failed guarded run is not repeated with the stock iteration"),
+    ("escape_never_called", GCS, "            if (dragSolve && !isRedundantsolving && subStatus == SolveStatus::Success) {",
+     "            if (false && !isRedundantsolving && subStatus == SolveStatus::Success) {", "the escape is never tried"),
+    ("escape_memory_ignored", GCS, "    if (dragStallValid && dragStallCursor.size() == cursor.size()) {",
+     "    if (false && dragStallCursor.size() == cursor.size()) {", "an escape that found nothing is searched for again on every move"),
+    ("escape_accepts_any_result", GCS, "            if (ok && E < accept * Ebest) {", "            if (ok) {",
+     "a probe result is kept even when the gap did not fall"),
+    ("escape_perturbs_nothing", GCS, "                xs[j] += fraction * extent * std::sin(2.399963229728653 * (j + 1));",
+     "                xs[j] += 0. * fraction * extent * std::sin(2.399963229728653 * (j + 1));", "the probes do not move the unknowns"),
+]
+
+
+def run(cmd, cwd, env=None, timeout=3600):
+    return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+
+
+def main(argv):
+    tree = argv[1]
+    only = set(argv[2:])
+    ctl = os.environ["CADFORK_CTL"]
+    env = dict(os.environ, FC_SRC=tree, CMAKE_BUILD_PARALLEL_LEVEL="4", QT_QPA_PLATFORM="offscreen")
+    build = ["bash", "-c", 'source "%s/harness/env.sh" && nice "%s/harness/build.sh"' % (ctl, ctl)]
+    binary = os.path.join(tree, "build", "release", "bin", "FreeCADCmd")
+    rows = []
+
+    def build_and_test():
+        b = run(build, ctl, env)
+        if b.returncode != 0:
+            return "build failed", []
+        failed = []
+        for t in TESTS:
+            r = run([binary, "-t", "TestSketcherApp." + t], tree, env)
+            if "\nOK" not in r.stdout + r.stderr:
+                failed.append(t)
+        return "ok", failed
+
+    for name, rel, old, new, what in MUTANTS:
+        if only and name not in only:
+            continue
+        path = os.path.join(tree, rel)
+        # Bytes in and out, so the file comes back exactly as it was (CRLF files included).
+        with open(path, "rb") as fh:
+            original = fh.read()
+        old_b, new_b = old.encode(), new.encode()
+        if b"\r\n" in original:
+            old_b, new_b = old_b.replace(b"\n", b"\r\n"), new_b.replace(b"\n", b"\r\n")
+        if original.count(old_b) != 1:
+            rows.append({"mutant": name, "result": "pattern not found once", "what": what})
+            print(name, "PATTERN NOT FOUND ONCE", flush=True)
+            continue
+        with open(path, "wb") as fh:
+            fh.write(original.replace(old_b, new_b, 1))
+        try:
+            status, failed = build_and_test()
+        finally:
+            with open(path, "wb") as fh:
+                fh.write(original)
+        rows.append({"mutant": name, "file": rel, "what": what, "build": status, "failing_tests": failed,
+                     "caught": bool(failed) or status != "ok"})
+        print(name, "CAUGHT" if rows[-1]["caught"] else "SURVIVED", failed, flush=True)
+    build_and_test()  # leave the tree built from the original source
+    with open("drag_mutants.json", "w") as fh:
+        json.dump(rows, fh, indent=1)
+    print("caught %d of %d" % (sum(r.get("caught", False) for r in rows), len(rows)))
+
+
+if __name__ == "__main__":
+    main(sys.argv)

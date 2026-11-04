@@ -163,6 +163,16 @@ def _cell(prefix, step, session=True):
     return Measure.cell_stats(r, Measure.load_held())
 
 
+class TestDragFallback(unittest.TestCase):
+    """Where the guarded SQP does not end with the constraints met, the stock
+    iteration is run from the same start: S18 past its zero-length line fails
+    on 18 moves with the stock update and on about 400 with a damped one."""
+
+    def test_s18_failures_stay_at_the_stock_count(self):
+        cell = _cell("S18", 0.1, session=False)
+        self.assertLessEqual(cell["fails"], 20, cell)
+
+
 class TestDragEscape(unittest.TestCase):
     """The drag escape: a cursor that comes back within reach of a mechanism
     stopped at a dead point is followed again, and a cursor that stays out of

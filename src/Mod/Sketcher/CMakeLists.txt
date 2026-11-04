@@ -33,6 +33,7 @@ set(Sketcher_TestScripts
     SketcherTests/SketchDragMeasure.py
     SketcherTests/SketchDragHeld.json.gz
     SketcherTests/TestSketchDragSession.py
+    SketcherTests/DragMutants.py
     SketcherTests/TestSketchAutoDefine.py
     SketcherTests/SketchAutoDefineCorpus.py
     SketcherTests/SketchAutoDefineOracle.py

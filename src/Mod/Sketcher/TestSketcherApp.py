@@ -41,6 +41,7 @@ from SketcherTests.TestSketchSolverCore import TestSolverScale
 from SketcherTests.TestSketchSolverCore import TestSqpUnknownOrder
 from SketcherTests.TestSketchDragSession import TestDragSession
 from SketcherTests.TestSketchDragSession import TestDragBfgsGuard
+from SketcherTests.TestSketchDragSession import TestDragFallback
 from SketcherTests.TestSketchDragSession import TestDragEscape
 from SketcherTests.TestSketchDragSession import TestDragSilentSuccess
 
