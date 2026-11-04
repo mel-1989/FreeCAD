@@ -1809,6 +1809,14 @@ void MainWindow::closeEvent(QCloseEvent* e)
         if (this->property("QuitOnClosed").isValid()) {
             QApplication::closeAllWindows();
             qApp->processEvents();  // flush all pending deferredDelete events
+#ifdef Q_OS_MACOS
+            // On macOS quit() ends in NSApplication terminate: and libc exit() from inside this
+            // call. Qt then delivers whatever is still posted from a static destructor, after
+            // Shiboken's own statics are gone, and a Python-owned widget's metaObject() aborts
+            // the process on a destroyed mutex (crash reports of TestCAMGui, 2026-11-04).
+            QCoreApplication::sendPostedEvents();
+            QCoreApplication::removePostedEvents(nullptr);
+#endif
             qApp->quit();           // stop the event loop
         }
     }
