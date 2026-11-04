@@ -24,6 +24,15 @@ from AssemblyTests import replace_corpus as C
 POS_TOL = 1e-6   # brief check 3, mm
 ANG_TOL = 1e-9   # brief check 3, rad
 RATE_MIN = 0.85  # brief check 2
+# D13: the known references whose readings of the alignment land on different places, out of check 2's denominator (r055 repair:
+# the set is unchanged by the symmetric-turn fix; the cases added then have ambiguous truths and are not in it)
+D13_REFERENCES = sorted([
+    "array_elements_hole_moved:Rev0.Reference2", "array_elements_hole_moved:Rev1.Reference2",
+    "array_elements_hole_moved:Rev2.Reference2", "d1_both_holes_referenced_first_gone_second_shifted:J1.Reference2",
+    "d2_both_holes_referenced_both_shifted:J0.Reference2", "d2_both_holes_referenced_both_shifted:J1.Reference2",
+    "hole_moved_cylindrical:Cylindrical.Reference2", "hole_moved_revolute:Revolute.Reference2",
+    "t10_delete_old_body_nobody_else_uses:Planar.Reference2", "t11_delete_old_body_whose_pad_is_linked_elsewhere:Planar.Reference2",
+    "two_holes_second_removed_still_first_matches:Cylindrical.Reference2"])
 
 
 # ------------------------------------------------------------------ evaluation
@@ -701,6 +710,14 @@ def _mut_repair_unchecked():
     R._check_element = lambda *a, **k: None
 
 
+def _mut_stand_final():
+    R._stand_is_final = lambda *a, **k: True
+
+
+def _mut_in_place_near_inertia():
+    R.IN_PLACE_SKIP_NEAR_INERTIA = True
+
+
 MUTANTS = {
     "match_by_element_index_only": (_mut_index_only, "renumber_revolute"),
     "alignment_ignored_placement_and_origin": (_mut_ignore_alignment, "origin_rot_x_fixed"),
@@ -718,9 +735,11 @@ MUTANTS = {
     "one_to_one_assignment_off": (_mut_one_to_one_off, "d1_both_holes_referenced_first_gone_second_shifted"),
     "moved_and_resized_allowed": (_mut_move_and_resize_allowed, "c2_hole_gone_wider_hole_nearby"),
     "alignment_conflict_check_off": (_mut_alignment_check_off, "e3_bar_turned_about_z_boss_top_and_end"),
-    "near_twin_alignment_check_off": (_mut_near_check_off, "n1_bracket_turned_and_gained_a_small_hole"),
+    "near_twin_alignment_check_off": (_mut_near_check_off, "n26_bracket_turned_about_y_and_lost_a_10mm_end"),
     "symmetry_rule_off": (_mut_symmetry_rule_off, "n20_square_plate_turned_a_quarter_and_gained_an_offcentre_hole"),
     "in_place_turn_candidates_off": (_mut_in_place_turns_off, "n21_bracket_turned_about_y_and_given_a_big_boss"),
+    "stand_verdict_final_over_a_better_turn": (_mut_stand_final, "n23_bar_with_a_centreline_hole_turned_about_z"),
+    "in_place_turn_dropped_near_inertia_candidate": (_mut_in_place_near_inertia, "n22_bracket_turned_about_y_and_given_a_4mm_boss"),
     "resize_exemption_off": (_mut_resize_exemption_off, "core_resize_cube_to_flat_plate"),
     "agreement_check_treats_differing_as_agreeing": (_mut_agreement_check_blind, "n5_symmetric_plate_turned_and_gained_an_offcentre_hole"),
     "near_twin_shortcut_drops_a_reading_unasked": (_mut_near_twin_shortcut, "n17_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_y"),
@@ -740,7 +759,7 @@ MUTANTS = {
 def mutated(name):
     saved = {k: getattr(R, k) for k in ("_match_element", "_choose_alignment", "_decide", "_new_link_placement",
                                         "_write_ref", "_break_joint", "_collect_refs", "_solve", "_new_ref_value", "apply",
-                                        "ADJ_MIN", "IN_PLACE_TURNS", "RADIUS_ADAPT", "SIZE_RATIO_MAX", "_claims", "MOVE_TOL",
+                                        "ADJ_MIN", "IN_PLACE_TURNS", "IN_PLACE_SKIP_NEAR_INERTIA", "_stand_is_final", "RADIUS_ADAPT", "SIZE_RATIO_MAX", "_claims", "MOVE_TOL",
                                         "_alignment_conflict", "_near_conflict", "_readings_differ", "_symmetry_verdict", "_same_topology", "_outside_users", "_deletion_set", "repair",
                                         "_check_element")}
     saved_u = U.findPlacement
@@ -826,7 +845,9 @@ class TestReplaceComponent(unittest.TestCase):
                   100.0 * total["ok"] / total["known"], total["reported_undecidable"], total["wrong"]))
         self.assertEqual(failures, [])
         self.assertEqual(total["wrong"], 0, "silent wrong remaps")
-        self.assertEqual(total["geometry_ambiguous"], 11, "the references D13 names")
+        named = sorted("%s:%s" % (n, k) for n, r in self.results.items() for k in r.get("geometry_ambiguous", []))
+        self.assertEqual(named, D13_REFERENCES, "the references D13 names, by name: a new one is a decision, not a count")
+        self.assertEqual(total["geometry_ambiguous"], len(D13_REFERENCES))
         self.assertGreaterEqual(total["ok"] / den, RATE_MIN,
                                 "brief check 2 under D13: %d of %d references the geometry can decide matched automatically (%.1f%%)" % (
                                     total["ok"], den, 100.0 * total["ok"] / den))

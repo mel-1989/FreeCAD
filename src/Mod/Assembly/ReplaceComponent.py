@@ -155,6 +155,7 @@ RESIZE_TOL = 0.05       # relative radius change above which a feature counts as
 CLEAR_REL = 1.0         # a rival must beat a candidate by this fraction (plus AMBIG_ABS) to own it
 IN_PLACE_IOU = 0.02       # an in-place half turn is a candidate only when it overlaps the old part this close to identity
 IN_PLACE_MIN = 0.5        # ... and only when the new part still overlaps the old one this much as placed
+IN_PLACE_SKIP_NEAR_INERTIA = False  # mutant switch: drop an in-place turn that is near an inertia candidate
 IN_PLACE_TURNS = True  # also try the half turns about the old part's own axes as alignments (see _choose_alignment)
 NEAR_IOU = 0.1          # an alternative alignment this much below identity's overlap (or better) is compared by near twins
 NEAR_ANG = 0.02         # rad, largest direction difference of a near twin face (about 1 degree)
@@ -1156,15 +1157,34 @@ def _in_place_turns(so, sn, fo, iou_id, proper):
     for axis in axes_o:
         for pivot in pivots:
             plc = App.Placement(App.Vector(), App.Rotation(axis, 180.0), pivot)
-            if any(plc.isSame(c[1], NEAR_POS * diag_o) for c in proper + out):
+            # a turn about the old part's own axis is a candidate beside the inertia ones even when they are close: the
+            # inertia axes of a changed part are only approximate, so the nearby one can overlap worse than identity
+            # while the exact turn overlaps better
+            if any(plc.isSame(c[1], NEAR_POS * diag_o) for c in (proper if IN_PLACE_SKIP_NEAR_INERTIA else []) + out):
                 continue
             shp = sn.copy()
             shp.transformShape(plc.toMatrix())
+            if _iou(sn, shp) >= IOU_EXACT:
+                continue  # the new part is symmetric under this turn: turned and as placed are one body, nothing to ask
             iou_t = _iou(so, shp)
             if iou_t >= iou_id - IN_PLACE_IOU and not any(
                     abs(c[0] - iou_t) < 1e-4 and plc.isSame(c[1], 0.1 * diag_o) for c in proper + out):
                 out.append((iou_t, plc, shp))
     return out
+
+
+def _stand_is_final(so, sn, best_iou, iou_id):
+    """Does the symmetry rule's "stand" end the decision about the alignment?
+
+    It does when the new part is an ordinary resize of the old one (``_resize_stands``) and no turned reading
+    reproduces the old part exactly. A new part that is the old one turned (overlap IOU_EXACT, against less as placed)
+    is not a resize, whatever its topology says: position is free in a resize, but a turn that explains the whole part
+    beats identity, so the references decide in ``_alignment_conflict`` and the part is ambiguous when they land on
+    different places. The same goes for any "stand" that is not a resize: the old part's own symmetry turns agree
+    with identity, but the part may be turned by something that is not a symmetry of the old part (a box with an
+    off-centre hole turned about another axis), so a turned reading that fits as well as identity or better is judged
+    there, never skipped. A turned reading that fits only a little better than identity (a scaled plate) is a resize."""
+    return _resize_stands(so, sn) and best_iou < IOU_EXACT
 
 
 def _choose_alignment(old_shape, new_shape, forced=None, probe=None):
@@ -1224,10 +1244,11 @@ def _choose_alignment(old_shape, new_shape, forced=None, probe=None):
     if iou_id >= best[0] - IOU_MARGIN:
         sv = _symmetry_verdict(so, sn, new_shape, iou_id, probe)
         if sv is not None:
-            if sv[0] == "stand":
+            if sv[0] == "stand" and _stand_is_final(so, sn, best[0], iou_id):
                 return App.Placement(), info, new_shape.copy()
-            info.update(method="ambiguous", overlap=iou_id, note=sv[1][0], alternatives=sv[1][1])
-            return None, info, None
+            if sv[0] == "ambiguous":
+                info.update(method="ambiguous", overlap=iou_id, note=sv[1][0], alternatives=sv[1][1])
+                return None, info, None
         verdict = _alignment_conflict(old_shape, new_shape, iou_id, proper, probe)
         if verdict is None:
             # identity stands against the turns built from the new part's axes; the old part's own half turns may not
@@ -1346,6 +1367,8 @@ def _plan_ref(rf, mo, mn, cache, choices, shape_status):
 
 def _local_name(mn, face_name, edge_name):
     """The edge's number within the face (FreeCAD's convention for a face + edge reference)."""
+    if face_name is None:  # the face of the pair is not matched: the reference is reported by the face's status
+        return edge_name
     face = mn.shape.getElement(face_name)
     target = mn.shape.getElement(edge_name)
     for i, e in enumerate(face.Edges, 1):

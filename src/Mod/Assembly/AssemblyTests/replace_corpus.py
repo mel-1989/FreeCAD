@@ -1434,6 +1434,54 @@ def n21_bracket_turned_about_y_and_given_a_big_boss(doc):
     return scene(doc, BASE, new, [jspec("cylindrical", BR["cylindrical"], (AMB, AMB))])
 
 
+# --- r055 repair (run 041 verifier, second round): a turned reading that fits as well as identity or better is never skipped
+
+@case("alignment")
+def n22_bracket_turned_about_y_and_given_a_4mm_boss(doc):
+    # H1: the inertia candidate near the exact turn overlaps 0.9025 against 0.9075 for identity, and the exact half turn used to
+    # be dropped as a duplicate of it; the hole and the corner are 20 mm apart as placed and when turned, so the part is ambiguous
+    new = _turn_y(bracket(bosses=((2, 2, 4, 12, 4),)))
+    return scene(doc, BASE, new, [jspec("cylindrical", BR["cylindrical"], (AMB, AMB), name="Cyl"),
+                                  jspec("fixed", BR["fixed"], (AMB, AMB), name="Fix")])
+
+
+@case("alignment")
+def n23_bar_with_a_centreline_hole_turned_about_z(doc):
+    # P6: 60 x 10 x 10 with a hole at (15, 5) is symmetric under the half turn about X only; turned about Z it overlaps exactly
+    # (1.0) against 0.958 as placed and has the old part's topology, so the resize exemption used to keep identity and the
+    # corner (0, 0, 0) went to the opposite corner silently
+    old = solid(Part.makeBox(60, 10, 10).cut(Part.makeCylinder(2, 12, V(15, 5, -1))))
+    new = moved(old, App.Placement(V(0, 0, 0), App.Rotation(V(0, 0, 1), 180), V(30, 5, 5)))
+    return scene(doc, old, new, [jspec("fixed", (pl((0, 0, -1), 0), vx((0, 0, 0))), (AMB, AMB), name="Fix"),
+                                 jspec("revolute", (cy((15, 5, 0), (0, 0, 1), 2), ci((15, 5, 10), (0, 0, 1), 2)),
+                                       (AMB, AMB), name="Rev")])
+
+
+@case("alignment")
+def n24_control_bar_with_a_centreline_hole_hole_moved_not_turned(doc):
+    # the same bar with its hole moved 1 mm: nothing is turned, the joints stay matched
+    old = solid(Part.makeBox(60, 10, 10).cut(Part.makeCylinder(2, 12, V(15, 5, -1))))
+    new = solid(Part.makeBox(60, 10, 10).cut(Part.makeCylinder(2, 12, V(16, 5, -1))))
+    return scene(doc, old, new, [jspec("revolute", (cy((15, 5, 0), (0, 0, 1), 2), ci((15, 5, 10), (0, 0, 1), 2)),
+                                       (cy((16, 5, 0), (0, 0, 1), 2), ci((16, 5, 10), (0, 0, 1), 2)), name="Rev")])
+
+
+@case("alignment")
+def n25_bracket_turned_about_y_and_given_an_11mm_boss_face_and_edge_reference(doc):
+    # a face and edge reference whose face has no match used to raise in the planner (the edge's number within a face that is not matched)
+    new = _turn_y(bracket(bosses=((2, 2, 11, 12, 11),)))
+    return scene(doc, BASE, new, [jspec("revolute", BR["revolute"], (AMB, AMB))])
+
+
+@case("alignment")
+def n26_bracket_turned_about_y_and_lost_a_10mm_end(doc):
+    # overlap 0.71 as placed; the exact half turn about the old part's own axis fits no better than identity within 0.02, so only
+    # the near twin rule (which reaches 0.1 below identity) sees that the hole may have been turned
+    new = _turn_y(bracket(cut=Part.makeBox(10, 20, 10, V(30, 0, 0))))
+    return scene(doc, BASE, new, [jspec("cylindrical", BR["cylindrical"], (AMB, AMB), name="Cyl"),
+                                  jspec("fixed", BR["fixed"], (AMB, AMB), name="Fix")])
+
+
 # --- delete_old must not destroy what is still used --------------------------------------------
 
 def _other_user(doc, target, mode_name="Assembly2"):
