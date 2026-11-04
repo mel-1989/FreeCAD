@@ -4823,11 +4823,30 @@ SolveStatus System::solve(SubSystem* subsysA, SubSystem* subsysB, bool isRedunda
         subsysA->getParamList(plistA);
         subsysB->getParamList(plistB);
 
-        std::sort(plistA.begin(), plistA.end());
-        std::sort(plistB.begin(), plistB.end());
+        // Order the unknowns by their position in plist, not by address: the address order
+        // differs from process to process, which changed the SQP iteration (and so whether it
+        // converged) on ill-conditioned sketches.
+        auto position = [this](double* p) {
+            const auto found = pIndex.find(p);
+            return found == pIndex.end() ? std::numeric_limits<int>::max() : found->second;
+        };
+        auto byPosition = [&position](double* a, double* b) {
+            const int pa = position(a);
+            const int pb = position(b);
+            return pa != pb ? pa < pb : a < b;
+        };
+        std::sort(plistA.begin(), plistA.end(), byPosition);
+        std::sort(plistB.begin(), plistB.end(), byPosition);
 
         VEC_pD::const_iterator it;
-        it = std::set_union(plistA.begin(), plistA.end(), plistB.begin(), plistB.end(), plistAB.begin());
+        it = std::set_union(
+            plistA.begin(),
+            plistA.end(),
+            plistB.begin(),
+            plistB.end(),
+            plistAB.begin(),
+            byPosition
+        );
         plistAB.resize(it - plistAB.begin());
     }
     int xsize = plistAB.size();

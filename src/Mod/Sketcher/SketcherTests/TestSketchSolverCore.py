@@ -345,3 +345,22 @@ class TestSolverScale(_Base):
         # The two steps stop at different points inside the solver's convergence band: on the
         # quarter arc (a poorly conditioned fully constrained case) they end 2.8e-6 mm apart.
         self.assertEqual(Baseline.compare(dense_all, sparse_all, tol=1e-5), [])
+
+
+class TestSqpUnknownOrder(_Base):
+    def testDrillingSketchFirstSolveDoesNotDependOnTheProcess(self):
+        # The SQP step ordered its unknowns by address, which differs from process to process: on this
+        # sketch (DOF 21, no flagged constraints, DogLeg, LM and BFGS all fail from the stored geometry)
+        # the first solve gave -1 in 11 of 40 fresh processes and 0 in the rest.  A single process only
+        # catches that about one time in four, so this is a regression guard, not a proof.
+        path = os.path.join(FreeCAD.getHomePath(), "Mod", "CAM", "CAMTests", "Drilling_1.FCStd")
+        if not os.path.exists(path):
+            self.skipTest("Drilling_1.FCStd is not installed")
+        doc = FreeCAD.openDocument(path)
+        try:
+            sketch = doc.getObject("Sketch")
+            self.assertEqual(sketch.solve(), 0)
+            self.assertEqual(sketch.DoF, 21)
+            self.assertEqual(len(sketch.ConflictingConstraints), 0)
+        finally:
+            FreeCAD.closeDocument(doc.Name)
