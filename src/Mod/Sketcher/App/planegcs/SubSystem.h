@@ -28,6 +28,7 @@
 #undef max
 
 #include <Eigen/Core>
+#include <Eigen/Sparse>
 
 #include "Constraints.h"
 
@@ -79,6 +80,8 @@ public:
     void calcResidual(Eigen::VectorXd& r, double& err);
     void calcJacobi(VEC_pD& params, Eigen::MatrixXd& jacobi);
     void calcJacobi(Eigen::MatrixXd& jacobi);
+    // The same Jacobian with only the entries of the parameters each constraint uses.
+    void calcJacobiSparse(Eigen::SparseMatrix<double>& jacobi);
     void calcGrad(VEC_pD& params, Eigen::VectorXd& grad);
     void calcGrad(Eigen::VectorXd& grad);
 

@@ -1107,9 +1107,18 @@ def _real(out, doc_cache):
 # ---------------------------------------------------------------------------
 
 
-def build_scale(doc, name, n, planted=False):
+def build_scale(doc, name, n, planted=False, chained=True, plants=()):
     """A chain of constrained rectangles plus fillers, exactly `n` constraints
     (`n + 1` with a planted conflict), well constrained with DOF 0.
+
+    With ``chained=False`` every rectangle is placed from the origin on its
+    own, so the sketch falls apart into independent components (the
+    "decoupled" series); the chain is one long connected system (although the
+    horizontal and vertical constraints never meet, so PlaneGCS splits it in
+    two: the x and the y unknowns).  ``plants`` is a list of ``(rect, kind)``
+    with kind ``"conflict"`` (a second, different top width) or
+    ``"redundant"`` (the bottom width stated twice); each adds one constraint
+    and is described in ``info["plants"]``.
 
     Returns (sketch, info) where info holds the planted index and the known
     minimal conflict set."""
@@ -1133,8 +1142,8 @@ def build_scale(doc, name, n, planted=False):
         s.c("Vertical", l)
         s.c("DistanceX", b, 1, b, 2, 10.0)
         s.c("DistanceY", rt, 1, rt, 2, 5.0)
-        if prev_bottom is None:
-            s.c("DistanceX", -1, 1, b, 1, 0.0)
+        if prev_bottom is None or not chained:
+            s.c("DistanceX", -1, 1, b, 1, 0.0 if chained else x)
             s.c("DistanceY", -1, 1, b, 1, 0.0)
         else:
             s.c("DistanceX", prev_bottom, 2, b, 1, 2.0)
@@ -1156,6 +1165,16 @@ def build_scale(doc, name, n, planted=False):
             s.c("DistanceY", -1, 1, p, 1, -20.0)
             rest -= 2
         fx += 3.0
+    info["plants"] = []
+    for m, kind in plants:
+        start, ids = units[m]
+        if kind == "conflict":
+            j = s.c("DistanceX", ids[2], 2, ids[2], 1, 11.0)
+            members = sorted([start + o for o in (0, 1, 2, 3, 6, 7, 8)] + [j])
+        else:
+            j = s.c("DistanceX", ids[0], 1, ids[0], 2, 10.0)
+            members = sorted([start + 8, j])
+        info["plants"].append({"rect": m, "kind": kind, "index": j, "set": members})
     if planted and k > 0:
         m = k // 2
         start, ids = units[m]
@@ -1165,6 +1184,49 @@ def build_scale(doc, name, n, planted=False):
         info["conflict_set"] = sorted([start + o for o in (0, 1, 2, 3, 6, 7, 8)] + [j])
     s.finish()
     return s.o, info
+
+
+def build_coupled(doc, name, n, plants=(), omit=0):
+    """One connected system of exactly `n` constraints (n even, at least 6)
+    with DOF 0, in which x and y are coupled everywhere: a strip of equilateral
+    triangles made of points, every point after the second held at distance 1
+    from the two before it.  The first point is placed from the origin, the
+    second by one distance and one horizontal offset.  Each point is drawn a
+    little off its place so that a solve has to iterate.
+
+    ``plants`` is a list of ``(point, kind)``: kind ``"conflict"`` states the
+    distance to the point two before as 2 instead of 1, ``"redundant"``
+    repeats the distance to the point before.  Each adds one constraint.
+    ``omit`` leaves out the last `omit` constraints of the strip, which gives
+    the sketch that many degrees of freedom.
+
+    Returns (sketch, info) with the number of points."""
+    assert n % 2 == 0 and n >= 6
+    s = _Sk(doc, name, bulk=True)
+    count = n // 2
+    h = math.sqrt(3.0) / 2.0
+    pts = []
+    for i in range(count):
+        x = 0.5 * i + 0.03 * math.sin(1.7 * i)
+        y = h * (i % 2) + 0.03 * math.cos(2.3 * i)
+        pts.append(s.point(x, y))
+    s.c("DistanceX", -1, 1, pts[0], 1, 0.0)
+    s.c("DistanceY", -1, 1, pts[0], 1, 0.0)
+    s.c("Distance", pts[0], 1, pts[1], 1, 1.0)
+    s.c("DistanceX", pts[0], 1, pts[1], 1, 0.5)
+    for i in range(2, count):
+        s.c("Distance", pts[i - 1], 1, pts[i], 1, 1.0)
+        s.c("Distance", pts[i - 2], 1, pts[i], 1, 1.0)
+    if omit:
+        del s._cons[-omit:]
+        s._ncons -= omit
+    for k, kind in plants:
+        if kind == "conflict":
+            s.c("Distance", pts[k - 2], 1, pts[k], 1, 2.0)
+        else:
+            s.c("Distance", pts[k - 1], 1, pts[k], 1, 1.0)
+    s.finish()
+    return s.o, {"points": count}
 
 
 def _scale(doc_factory, out, sizes):

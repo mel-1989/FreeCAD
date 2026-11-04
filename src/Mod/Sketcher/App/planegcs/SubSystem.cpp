@@ -60,7 +60,6 @@ void SubSystem::initialize(VEC_pD& params, MAP_pD_pD& reductionmap)
     // relevant for the constraints listed in clist
     VEC_pD tmpplist;
     {
-        SET_pD s1(params.begin(), params.end());
         SET_pD s2;
         for (std::vector<Constraint*>::iterator constr = clist.begin(); constr != clist.end();
              ++constr) {
@@ -68,7 +67,15 @@ void SubSystem::initialize(VEC_pD& params, MAP_pD_pD& reductionmap)
             VEC_pD constr_params = (*constr)->params();
             s2.insert(constr_params.begin(), constr_params.end());
         }
-        std::set_intersection(s1.begin(), s1.end(), s2.begin(), s2.end(), std::back_inserter(tmpplist));
+        // Keep the order of `params`: an intersection of two pointer-ordered sets would order the
+        // unknowns by heap address, which differs between processes and changes pivoting and
+        // therefore the branch the solver picks on systems with more than one solution.
+        SET_pD seen;
+        for (double* p : params) {
+            if (s2.count(p) != 0 && seen.insert(p).second) {
+                tmpplist.push_back(p);
+            }
+        }
     }
 
     plist.clear();
@@ -262,6 +269,26 @@ void SubSystem::calcJacobi(VEC_pD& params, Eigen::MatrixXd& jacobi)
             }
         }
     }
+}
+
+void SubSystem::calcJacobiSparse(Eigen::SparseMatrix<double>& jacobi)
+{
+    std::vector<Eigen::Triplet<double>> entries;
+    entries.reserve(static_cast<std::size_t>(csize) * 4);
+    for (int i = 0; i < csize; i++) {
+        auto it = c2p.find(clist[i]);
+        if (it == c2p.end()) {
+            continue;
+        }
+        for (double* p : it->second) {
+            const double g = clist[i]->grad(p);
+            if (g != 0.0) {
+                entries.emplace_back(i, static_cast<int>(p - pvals.data()), g);
+            }
+        }
+    }
+    jacobi.resize(csize, psize);
+    jacobi.setFromTriplets(entries.begin(), entries.end());
 }
 
 void SubSystem::calcJacobi(Eigen::MatrixXd& jacobi)

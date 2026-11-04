@@ -150,6 +150,8 @@ private:
     SolveStatus solve_BFGS(SubSystem* subsys, bool isRedundantsolving = false);
     SolveStatus solve_LM(SubSystem* subsys, bool isRedundantsolving = false);
     SolveStatus solve_DL(SubSystem* subsys, bool isRedundantsolving = false);
+    SolveStatus solve_DL_sparse(SubSystem* subsys, bool isRedundantsolving = false);
+    Eigen::VectorXd gaussNewtonStepSparse(Eigen::SparseMatrix<double>& Jx, const Eigen::VectorXd& fx);
 
     void makeReducedJacobian(
         Eigen::MatrixXd& J,
@@ -188,6 +190,70 @@ private:
         int paramsNum,
         int rank
     );
+
+    // One connected component of a partitioned diagnosis: the driving constraints and the
+    // unknowns that belong together, and whether it holds conflict groups.
+    struct ConflictPart
+    {
+        std::vector<Constraint*> clist;
+        VEC_pD plist;
+        bool hasGroups = false;
+    };
+
+    // Dependent parameters found by the QR decomposition of one (sub)system.
+    struct DependentResult
+    {
+        VEC_pD params;
+        std::vector<VEC_pD> groups;
+        int rank = 0;
+    };
+
+    template<typename T>
+    void collectDependentParameters(
+        T& qrJ,
+        Eigen::MatrixXd& Rparams,
+        int rank,
+        const GCS::VEC_pD& pdiagnoselist,
+        DependentResult& out,
+        bool skipEliminationWhenFullRank
+    );
+
+    DependentResult dependentParametersDense(
+        const Eigen::MatrixXd& J,
+        const std::map<int, int>& jacobianconstraintmap,
+        const GCS::VEC_pD& pdiagnoselist
+    );
+#ifdef EIGEN_SPARSEQR_COMPATIBLE
+    DependentResult dependentParametersSparse(
+        const Eigen::MatrixXd& J,
+        const std::map<int, int>& jacobianconstraintmap,
+        const GCS::VEC_pD& pdiagnoselist
+    );
+#endif
+
+    template<typename T>
+    std::vector<std::vector<Constraint*>> extractConflictGroups(
+        const T& qrJT,
+        const std::map<int, int>& jacobianconstraintmap,
+        Eigen::MatrixXd& R,
+        int constrNum,
+        int rank
+    );
+
+    void finishConflictAnalysis(
+        Algorithm alg,
+        std::vector<std::vector<Constraint*>>& conflictGroups,
+        const std::map<int, int>& tagmultiplicity,
+        GCS::VEC_pD& pdiagnoselist,
+        int constrNum,
+        int& nonredundantconstrNum,
+        const std::vector<ConflictPart>* parts,
+        std::vector<std::size_t>* removedGroups
+    );
+
+    // Diagnosis one connected component at a time; false if it does not apply (small system,
+    // or a shape it does not handle), in which case nothing has been changed.
+    bool diagnosePartitioned(Algorithm alg);
 
     template<typename T>
     void identifyConflictingRedundantConstraints(
@@ -243,6 +309,13 @@ public:
     QRAlgorithm qrAlgorithm;
     bool autoChooseAlgorithm;
     int autoQRThreshold;
+    // Systems with at least this many unknowns are diagnosed one connected component at a time.
+    // 0 switches it off. The environment variable FREECAD_GCS_PARTITION_THRESHOLD overrides the
+    // default for tests.
+    int partitionThreshold;
+    // Dogleg subsystems with at least this many unknowns use a sparse Jacobian and a sparse
+    // Gauss-Newton step. 0 switches it off; FREECAD_GCS_SPARSE_THRESHOLD overrides it for tests.
+    int sparseSolveThreshold;
     DogLegGaussStep dogLegGaussStep;
     double qrpivotThreshold;
     DebugMode debugMode;
