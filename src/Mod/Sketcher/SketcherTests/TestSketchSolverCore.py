@@ -20,11 +20,18 @@
 # *   <https://www.gnu.org/licenses/>.                                      *
 # *                                                                         *
 
-"""Tests for the solver-core work of G10 slice 3a: deterministic unknown
-ordering, degenerate lines, partitioned diagnosis."""
+"""Tests for the solver-core work of G10 slice 3a (deterministic unknown
+ordering, degenerate lines, partitioned diagnosis) and 3b (the one-free-DOF
+cliff, the minimum norm step, the start value of a reduced slot)."""
 
 import contextlib
+import json
+import math
 import os
+import random
+import subprocess
+import sys
+import tempfile
 import time
 import unittest
 
@@ -412,3 +419,225 @@ class TestSqpUnknownOrder(_Base):
             self.assertEqual(len(sketch.ConflictingConstraints), 0)
         finally:
             FreeCAD.closeDocument(doc.Name)
+
+
+def _noisy_rects(doc, name, count, drop, seed, plant=None):
+    """A grid of `count` rectangles drawn off their place by up to 0.1 mm,
+    each with its corners joined by Coincident constraints (so the two ends of
+    a joint start apart), `drop` of the constraints left out at random from
+    the third rectangle on.  `plant` is None, "conflict" (the width of the
+    first rectangle stated as 11.5 as well as 10) or "redundant" (the width of
+    the second stated twice)."""
+    rng = random.Random(seed)
+
+    def n():
+        return rng.uniform(-0.1, 0.1)
+
+    sk = doc.addObject("Sketcher::SketchObject", name)
+    geo = []
+    cons = []
+    protected = 0
+    for r in range(count):
+        ox, oy = 30.0 * (r % 10), 20.0 * (r // 10)
+        corners = [(ox, oy), (ox + 10.0, oy), (ox + 10.0, oy + 6.0), (ox, oy + 6.0)]
+        base = len(geo)
+        for i in range(4):
+            a, b = corners[i], corners[(i + 1) % 4]
+            geo.append(Part.LineSegment(V(a[0] + n(), a[1] + n(), 0), V(b[0] + n(), b[1] + n(), 0)))
+        mine = [Sketcher.Constraint("Coincident", base + i, 2, base + (i + 1) % 4, 1) for i in range(4)]
+        mine += [
+            Sketcher.Constraint("Horizontal", base),
+            Sketcher.Constraint("Horizontal", base + 2),
+            Sketcher.Constraint("Vertical", base + 1),
+            Sketcher.Constraint("Vertical", base + 3),
+            Sketcher.Constraint("DistanceX", -1, 1, base, 1, ox),
+            Sketcher.Constraint("DistanceY", -1, 1, base, 1, oy),
+            Sketcher.Constraint("DistanceX", base, 1, base, 2, 10.0),
+            Sketcher.Constraint("DistanceY", base + 1, 1, base + 1, 2, 6.0),
+        ]
+        if r >= 2:
+            mine = [c for c in mine if rng.random() >= drop]
+        else:
+            protected += len(mine)
+        cons += mine
+    if plant == "conflict":
+        cons.append(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 11.5))
+    elif plant == "redundant":
+        cons.append(Sketcher.Constraint("DistanceX", 4, 1, 4, 2, 10.0))
+    sk.addGeometry(geo, False)
+    sk.addConstraint(cons)
+    return sk
+
+
+def _child_cases():
+    """The sketches the child processes of the determinism test solve; the
+    result of each is every coordinate and every list."""
+    doc = FreeCAD.newDocument("Child")
+    out = {}
+    fb, _ = _fourbar(doc, "fourbar")
+    out["fourbar"] = Baseline.record(fb)
+    for label, drop, plant in (
+        ("drop_5", 0.05, None),
+        ("drop_15", 0.15, None),
+        ("drop_40", 0.4, None),
+        ("conflict", 0.1, "conflict"),
+        ("redundant", 0.1, "redundant"),
+        ("both", 0.1, "conflict"),
+    ):
+        sk = _noisy_rects(doc, label, 40, drop, 7, plant)
+        if label == "both":
+            sk.addConstraint(Sketcher.Constraint("DistanceX", 4, 1, 4, 2, 10.0))
+        out[label] = Baseline.record(sk)
+    for rec in out.values():
+        rec["seconds"] = 0.0
+    return out
+
+
+def _round_all(x, places=9):
+    if isinstance(x, float):
+        return round(x, places) + 0.0
+    if isinstance(x, dict):
+        return {k: _round_all(v, places) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_round_all(v, places) for v in x]
+    return x
+
+
+class TestStartValues(_Base):
+    """Check 3 of slice 3b: the start value of a reduced slot is the kept
+    parameter's, not whichever entry of an address-ordered map came last."""
+
+    def test_coincident_pairs_start_from_the_first_point(self):
+        """Forty pairs of points, joined by Coincident and nothing else, each
+        pair drawn 3 mm or more apart: a solve starts at zero error and stays,
+        so the pair ends where the kept point began.  Before the fix the pair
+        ended at either point, depending on where the heap put the
+        parameters."""
+        sk = self.doc.addObject("Sketcher::SketchObject", "Pairs")
+        geo = []
+        for i in range(40):
+            geo.append(Part.Point(V(10.0 * i, 0.0, 0)))
+            geo.append(Part.Point(V(10.0 * i + 3.0 + 0.1 * i, 2.0, 0)))
+        sk.addGeometry(geo, False)
+        sk.addConstraint([Sketcher.Constraint("Coincident", 2 * i, 1, 2 * i + 1, 1) for i in range(40)])
+        self.assertEqual(sk.solve(), 0)
+        at_first = [i for i in range(40) if abs(sk.getPoint(2 * i, 1).x - 10.0 * i) < 1e-9]
+        self.assertEqual(len(at_first), 40)
+        for i in range(40):
+            self.assertAlmostEqual(sk.getPoint(2 * i + 1, 1).x, 10.0 * i, places=9)
+            self.assertAlmostEqual(sk.getPoint(2 * i + 1, 1).y, 0.0, places=9)
+
+    def test_twelve_fresh_processes_agree(self):
+        """The four-bar, three under-constrained grids of rectangles with
+        coincident corners (5, 15 and 40 percent of the constraints left out),
+        and three conflicting or redundant ones give identical coordinates and
+        lists in 12 fresh processes (this settles `conflictingMap`, a
+        pointer-keyed map: the popularity contest ends on the sketcher
+        constraint's tag, so its order cannot reach the result)."""
+        binary = os.path.join(FreeCAD.getHomePath(), "bin", "FreeCADCmd")
+        if not os.path.exists(binary):
+            self.skipTest("FreeCADCmd is not next to the home path")
+        with tempfile.TemporaryDirectory() as tmp:
+            script = os.path.join(tmp, "child.py")
+            with open(script, "w") as fh:
+                fh.write(
+                    "import json, os, sys\n"
+                    "from SketcherTests import TestSketchSolverCore as T\n"
+                    "res = T._round_all(T._child_cases())\n"
+                    "with open(os.environ['CHILD_OUT'], 'w') as fh:\n"
+                    "    json.dump(res, fh)\n"
+                    "sys.stdout.flush()\n"
+                    "os._exit(0)\n"
+                )
+            results = []
+            for batch in range(3):
+                procs = []
+                for k in range(4):
+                    out = os.path.join(tmp, "out_%d_%d.json" % (batch, k))
+                    env = dict(os.environ, CHILD_OUT=out)
+                    procs.append((out, subprocess.Popen([binary, script], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)))
+                for out, proc in procs:
+                    proc.wait(timeout=300)
+                    with open(out) as fh:
+                        results.append(json.load(fh))
+        self.assertEqual(len(results), 12)
+        for label in results[0]:
+            for other in results[1:]:
+                self.assertEqual(results[0][label], other[label], label)
+
+
+class TestSolverCliff(_Base):
+    """Checks 1 and 2 of slice 3b: a sketch of thousands of unknowns with a
+    few free degrees of freedom is solved quickly and by the minimum norm
+    step."""
+
+    def test_one_free_dof_strip_of_1500_points(self):
+        """3,000 constraints on 1,500 points with the last one removed: one
+        degree of freedom.  Stock took 32 s (SparseQR fill on a wide
+        Jacobian, a cubic Gauss-Jordan in the diagnosis)."""
+        sk, _ = Corpus.build_coupled(self.doc, "cliff", 3000, omit=1)
+        t0 = time.perf_counter()
+        self.assertEqual(sk.solve(), 0)
+        elapsed = time.perf_counter() - t0
+        self.assertEqual(sk.DoF, 1)
+        self.assertEqual(sorted(sk.getGeometryWithDependentParameters()), [(1499, 1)])
+        self.assertEqual(len(sk.ConflictingConstraints) + len(sk.RedundantConstraints), 0)
+        self.assertLess(elapsed, 5.0)
+        for i in range(2, 1500):
+            p, q, r = (sk.getPoint(j, 1) for j in (i - 2, i - 1, i))
+            self.assertAlmostEqual(math.hypot(q.x - r.x, q.y - r.y), 1.0, places=7)
+            if i < 1499:
+                self.assertAlmostEqual(math.hypot(p.x - r.x, p.y - r.y), 1.0, places=7)
+
+    def test_dependent_parameters_of_a_strip_with_free_points(self):
+        """The diagnosis of a strip with 1, 3 or 5 constraints removed names
+        the last 1, 2 or 3 points: the null space basis from back
+        substitution on the triangle (only the columns beyond the rank are
+        read)."""
+        for omit, expected in ((1, [(499, 1)]), (3, [(498, 1), (499, 1)]), (5, [(497, 1), (498, 1), (499, 1)])):
+            with partition_threshold(1):
+                doc = FreeCAD.newDocument("Dep%d" % omit, "Dep", True, True)
+                sk, _ = Corpus.build_coupled(doc, "dep", 1000, omit=omit)
+                self.assertEqual(sk.solve(), 0)
+                self.assertEqual(sk.DoF, omit)
+                self.assertEqual(sorted(sk.getGeometryWithDependentParameters()), expected, omit)
+                FreeCAD.closeDocument(doc.Name)
+
+    def _start(self, count):
+        h = math.sqrt(3.0) / 2.0
+        return [
+            (0.5 * i + 0.03 * math.sin(1.7 * i), h * (i % 2) + 0.03 * math.cos(2.3 * i)) for i in range(count)
+        ]
+
+    def test_minimum_norm_step_moves_no_farther_than_the_dense_step(self):
+        """An under-constrained connected strip (1,000 constraints, one
+        removed) solved by the sparse step (threshold 1) against the dense
+        one (threshold 0): the same code, DOF and lists, every driving
+        distance met, and the displacement from the start no larger than the
+        dense step's plus 1 percent."""
+        start = self._start(500)
+
+        def solved(threshold):
+            with sparse_threshold(threshold), partition_threshold(0):
+                doc = FreeCAD.newDocument("MinNorm%d" % threshold, "MinNorm", True, True)
+                sk, _ = Corpus.build_coupled(doc, "mn", 1000, omit=1)
+                rec = Baseline.record(sk)
+                pts = [(sk.getPoint(i, 1).x, sk.getPoint(i, 1).y) for i in range(500)]
+                worst = 0.0
+                for i in range(2, 500):
+                    q, r = pts[i - 1], pts[i]
+                    worst = max(worst, abs(math.hypot(q[0] - r[0], q[1] - r[1]) - 1.0))
+                    if i < 499:
+                        p = pts[i - 2]
+                        worst = max(worst, abs(math.hypot(p[0] - r[0], p[1] - r[1]) - 1.0))
+                disp = math.sqrt(sum((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 for a, b in zip(pts, start)))
+                FreeCAD.closeDocument(doc.Name)
+            return rec, worst, disp
+
+        dense, dense_resid, dense_disp = solved(0)
+        sparse, sparse_resid, sparse_disp = solved(1)
+        for key in ("code", "dof", "conflicting", "redundant", "partial", "malformed", "dependent"):
+            self.assertEqual(dense[key], sparse[key], key)
+        self.assertLess(dense_resid, 1e-8)
+        self.assertLess(sparse_resid, 1e-8)
+        self.assertLessEqual(sparse_disp, dense_disp * 1.01 + 1e-12)

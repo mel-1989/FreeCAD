@@ -39,6 +39,8 @@ from SketcherTests.TestSketchSolverCore import TestPartitionedDiagnosis
 from SketcherTests.TestSketchSolverCore import TestSubsystemStatus
 from SketcherTests.TestSketchSolverCore import TestSolverScale
 from SketcherTests.TestSketchSolverCore import TestSqpUnknownOrder
+from SketcherTests.TestSketchSolverCore import TestStartValues
+from SketcherTests.TestSketchSolverCore import TestSolverCliff
 
 # Path and PartDesign tests use these functions that used to live here
 # but moved to SketcherTests/TestSketcherSolver.py
