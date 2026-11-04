@@ -5415,6 +5415,7 @@ int Sketch::initMove(int geoId, PointPos pos)
 
 void Sketch::resetInitMove()
 {
+    GCSsys.dragReset();
     isInitMove = false;
 }
 
@@ -5493,6 +5494,7 @@ GCS::SolveStatus Sketch::moveGeometries(
     }
 
     if (!isInitMove) {
+        GCSsys.dragReset();
         initMove(geoEltIds);
         initToPoint = toPoint;
         moveStep = 0;

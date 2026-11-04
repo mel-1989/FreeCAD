@@ -69,6 +69,10 @@ MUTANTS = [
      "    if (false && dragStallCursor.size() == cursor.size()) {", "an escape that found nothing is searched for again on every move"),
     ("escape_accepts_any_result", GCS, "            if (ok && E < accept * Ebest) {", "            if (ok && E < (accept + 1e9) * Ebest) {",
      "a probe result is kept even when the gap did not fall"),
+    ("escape_ignores_sudden_gap", GCS, "        if (gap0 > 2. * dragPrevGap + std::sqrt(travel) + slack) {",
+     "        if (false) {", "an escape runs on a landing whose gap appeared at once, as S18 after its failed moves"),
+    ("escape_never_trusts_a_lock", GCS, "    if (reached) {\n        dragLockClean = true;",
+     "    if (false) {\n        dragLockClean = true;", "the escape stays off for the rest of the drag after one sudden gap"),
     ("escape_perturbs_nothing", GCS, "                xs[j] += fraction * extent * std::sin(2.399963229728653 * (j + 1));",
      "                xs[j] += 0. * fraction * extent * std::sin(2.399963229728653 * (j + 1));", "the probes do not move the unknowns"),
 ]

@@ -197,6 +197,13 @@ class TestDragEscape(unittest.TestCase):
             with self.subTest(scenario=prefix, step=step):
                 self.assertLess(_cell(prefix, step)["hys"], 0.01)
 
+    def test_s18_does_not_end_mirrored(self):
+        # S18 at 0.1 mm lands on another branch when its fillet line reaches zero length, and the
+        # landing is 9.7 mm from the cursor. A lock that opens at once is not a stall: the escape
+        # must not carry the sketch over to a third branch (it ended 20 mm from where it began)
+        cell = _cell("S18", 0.1)
+        self.assertLess(cell["hys"], 0.01, cell)
+
     def test_flat_valley_is_not_a_lock(self):
         # S01 on the return leg is a known open case; the outward leg must still follow
         cell = _cell("S01", 1.0)

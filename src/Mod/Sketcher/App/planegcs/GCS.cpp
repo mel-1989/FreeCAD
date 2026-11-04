@@ -1763,6 +1763,7 @@ void System::initSolution(Algorithm alg)
 
     isInit = false;
     dragStallValid = false;
+    dragCursorKnown = false;
     if (!hasUnknowns) {
         return;
     }
@@ -5043,6 +5044,15 @@ retry:
     return status;
 }
 
+// Start of a new drag: forget the stall memory and the history of the last landings.
+void System::dragReset()
+{
+    dragStallValid = false;
+    dragCursorKnown = false;
+    dragHistValid = false;
+    dragLockClean = true;
+}
+
 // A drag move that the SQP ended with A satisfied but the cursor not reached is either at the
 // constrained minimum of the cursor distance (an out-of-reach cursor: nothing to do), in a flat
 // valley where the SQP stopped early (S01), or at a stationary point that is not a minimum, such
@@ -5073,32 +5083,67 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
     const double gap0 = std::sqrt(2. * Ebest);
     // The size of the sketch, from its largest coordinate
     const double extent = std::max(1., xbest.lpNorm<Eigen::Infinity>());
-    // A cursor a hair off the locus of the dragged point leaves a small gap that is not a stall
-    if (!(gap0 > std::max(gapTol, gapFraction * extent))) {
-        return SolveStatus::Success;
-    }
-
     // The cursor is not an unknown: its coordinates are the parameters of B's constraints that
-    // are not among the unknowns.
-    std::vector<double> cursor;
-    {
+    // are not among the unknowns (found once per move session).
+    if (!dragCursorKnown) {
+        dragCursorParams.clear();
         const std::set<double*> unknowns(plist.begin(), plist.end());
         std::vector<Constraint*> clistB;
         subsysB->getConstraintList(clistB);
         for (Constraint* constr : clistB) {
             for (double* param : constr->params()) {
                 if (unknowns.find(param) == unknowns.end()) {
-                    cursor.push_back(*param);
+                    dragCursorParams.push_back(param);
                 }
             }
         }
+        dragCursorKnown = true;
     }
+    std::vector<double> cursor;
+    cursor.reserve(dragCursorParams.size());
+    for (const double* param : dragCursorParams) {
+        cursor.push_back(*param);
+    }
+
+    // A cursor a hair off the locus of the dragged point leaves a small gap that is not a stall
+    const double slack = std::max(gapTol, gapFraction * extent);
+    const bool reached = !(gap0 > slack);
+    // A stall is a lock that opens continuously: the gap grows from a reached cursor by about the
+    // distance the cursor travels (S06 and S08 at a dead point, S19, S01 in its valley), so the
+    // landing gap is at most twice the last landing's plus that distance. A gap that appears at
+    // once, as on S18 where the move after a run of failed moves lands on another branch of a
+    // line of zero length, is a landing on a branch from which the cursor is out of reach, and
+    // the escape would only carry the sketch over to a third one: it stays off until a move
+    // reaches the cursor again.
+    if (dragHistValid && dragPrevCursor.size() == cursor.size()) {
+        double travel = 0.;
+        for (size_t i = 0; i < cursor.size(); ++i) {
+            travel += (cursor[i] - dragPrevCursor[i]) * (cursor[i] - dragPrevCursor[i]);
+        }
+        if (gap0 > 2. * dragPrevGap + std::sqrt(travel) + slack) {
+            dragLockClean = false;
+        }
+    }
+    if (reached) {
+        dragLockClean = true;
+    }
+    auto record = [&](double gap) {
+        dragHistValid = true;
+        dragPrevGap = gap;
+        dragPrevCursor = cursor;
+    };
+    if (reached || !dragLockClean) {
+        record(gap0);
+        return SolveStatus::Success;
+    }
+
     if (dragStallValid && dragStallCursor.size() == cursor.size()) {
         double moved = 0.;
         for (size_t i = 0; i < cursor.size(); ++i) {
             moved += (cursor[i] - dragStallCursor[i]) * (cursor[i] - dragStallCursor[i]);
         }
         if (std::sqrt(moved) < std::max(0.25 * gap0, moveFraction * extent)) {
+            record(gap0);
             return SolveStatus::Success;
         }
     }
@@ -5156,6 +5201,7 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
 
     dragStallValid = !improved;
     dragStallCursor = cursor;
+    record(gap0);
 
     if (!pvalsHoldBest) {
         // Put the best solution, the move's own or the escape's, back where solve leaves it

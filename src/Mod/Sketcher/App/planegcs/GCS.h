@@ -332,6 +332,15 @@ public:
     VEC_pD dragPlistAB;
     double dragErrB = 0.;
     bool dragStallValid = false;
+    // The cursor's coordinates (found once per move session), and the gap and cursor at the end of
+    // the last successful drag move of the drag, which tell a lock that opens continuously from a
+    // landing on another branch (see System::dragEscape). dragReset starts a new drag.
+    bool dragCursorKnown = false;
+    std::vector<double*> dragCursorParams;
+    bool dragHistValid = false;
+    double dragPrevGap = 0.;
+    std::vector<double> dragPrevCursor;
+    bool dragLockClean = true;
     std::vector<double> dragStallCursor;
     double LM_eps;
     double LM_eps1;
@@ -702,6 +711,7 @@ public:
     SolveStatus solve(SubSystem* subsys, Algorithm alg = DogLeg, bool isRedundantsolving = false);
     SolveStatus solve(SubSystem* subsysA, SubSystem* subsysB, bool isRedundantsolving = false);
     SolveStatus dragEscape(SubSystem* subsysA, SubSystem* subsysB);
+    void dragReset();
 
     void applySolution();
     void evaluateDrivenConstraints();
