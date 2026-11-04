@@ -26,8 +26,10 @@ from SketcherTests import SketchDiagnosisCorpus as Corpus
 from SketcherTests.GuiTestCase import SketcherGuiTestCase
 
 COMMAND = "Sketcher_DiagnoseSketch"
-EVENT_GAP_BAR = 1.0  # seconds, check 7
-CANCEL_BAR = 1.0  # seconds, check 7
+# Check 7 bars: 1.5 s, moved from 1.0 s by the orchestrator (see the brief): one native solve of the 1000-constraint
+# sketch takes 1.2 s and the panel cannot hand control back from inside it, so 1.0 s could never hold.
+EVENT_GAP_BAR = 1.5  # seconds, check 7
+CANCEL_BAR = 1.5  # seconds, check 7
 TRANSACTION_NAME = "Apply sketch fix"
 V = FreeCAD.Vector
 
@@ -530,21 +532,33 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
             _pump(20)
 
     def testNoSideEffectsOnASketchDrawnOffItsConstraints(self):
-        """Solving would move the drawn points; diagnosing must not (a redundant but consistent sketch, drawn
-        slightly off, which the solver would pull into place)."""
+        """A clean, consistent sketch whose stored geometry sits off its constraints (an unmanaged ``Geometry``
+        write, no solve after it).  A diagnosis that solved the real sketch would pull the point onto the
+        constraints; the baseline is taken after the write and no recompute, so the pull would show."""
         d = FreeCAD.newDocument("PanelOffDrawn")
         self._extra_docs.append("PanelOffDrawn")
         sk = d.addObject("Sketcher::SketchObject", "S")
-        sk.addGeometry(Part.LineSegment(V(0, 0, 0), V(9.7, 0.3, 0)))
+        sk.addGeometry(Part.LineSegment(V(0, 0, 0), V(10, 0, 0)))
         sk.addConstraint(Sketcher.Constraint("Coincident", 0, 1, -1, 1))
         sk.addConstraint(Sketcher.Constraint("Horizontal", 0))
-        sk.addConstraint(Sketcher.Constraint("Distance", 0, 10.0))
-        sk.addConstraint(Sketcher.Constraint("Distance", 0, 10.0))
         d.recompute()
+        self.edit(sk)
+        sk.Geometry = [Part.LineSegment(V(0, 0, 0), V(9.7, 0.3, 0))]  # off the Horizontal constraint, unsolved
+        _pump(10)
         drawn = [str(g) for g in sk.Geometry]
-        b, a = self._browse_and_close(sk)
-        self.assertEqual(a, b)
+        self.assertIn("9.7", drawn[0])
+        self.assertIn("0.3", drawn[0])
+        before = _signature(sk)
+        Gui.runCommand(COMMAND)
+        import SketcherDiagnosisPanel as P
+
+        self.panel = P.current_panel()
+        self.assertTrue(_wait(lambda: self.panel.state in ("ready", "failed", "cancelled")))
+        self.assertEqual(self.panel.state, "ready", self.panel.status.text())
+        self.close_panel()
+        _pump(30)
         self.assertEqual([str(g) for g in sk.Geometry], drawn)
+        self.assertEqual(_signature(sk), before)
 
     def testNoSideEffectsWhenDiagnoseRaises(self):
         c = self.case("single_conflict")
@@ -835,21 +849,22 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
         self.assertEqual(seen["Over-constrained"], {True})
 
     def testPartiallyRedundantStateOffersTheLink(self):
+        """Two lines, PointOnObject on (0,2) and (1,1) to the x-axis, Coincident (0,2)-(1,1) and DistanceY 0 between them, in that order: the solver reports one constraint as partially redundant."""
         d = FreeCAD.newDocument("PanelPartial")
-        try:
-            sk = d.addObject("Sketcher::SketchObject", "S")
-            # two parallel lines at a stated distance, each also tied by an equal-angle-type duplicate: use the
-            # corpus's own redundant cases and pick one the solver reports as partially redundant
-            for c in self.rig.cases:
-                if c.truth.get("redundant") and c.sketch.PartiallyRedundantConstraints:
-                    text, visible = self._link_state(c.sketch)
-                    self.assertTrue(text.startswith("Partially redundant"))
-                    self.assertTrue(visible)
-                    return
-            self.skipTest("no partially redundant sketch in the synthetic corpus")
-        finally:
-            FreeCAD.closeDocument("PanelPartial")
-            FreeCAD.setActiveDocument(self.rig.doc.Name)
+        self._extra_docs.append("PanelPartial")
+        sk = d.addObject("Sketcher::SketchObject", "S")
+        sk.addGeometry(Part.LineSegment(V(1, 0, 0), V(5, 0.1, 0)))
+        sk.addGeometry(Part.LineSegment(V(5, 0, 0), V(9, 3, 0)))
+        sk.addConstraint(Sketcher.Constraint("PointOnObject", 0, 2, -1))
+        sk.addConstraint(Sketcher.Constraint("Coincident", 0, 2, 1, 1))
+        sk.addConstraint(Sketcher.Constraint("PointOnObject", 1, 1, -1))
+        sk.addConstraint(Sketcher.Constraint("DistanceY", 0, 2, 1, 1, 0.0))
+        d.recompute()
+        sk.solve()
+        self.assertEqual(list(sk.PartiallyRedundantConstraints), [2])
+        text, visible = self._link_state(sk)
+        self.assertTrue(text.startswith("Partially redundant"), text)
+        self.assertTrue(visible)
 
     def testLinkOpensThePanelAndStockLinksKeepTheirTooltips(self):
         c = self.case("single_conflict")

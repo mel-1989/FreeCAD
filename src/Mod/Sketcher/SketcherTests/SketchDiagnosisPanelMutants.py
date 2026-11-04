@@ -181,6 +181,14 @@ mutant(
     runner="cmd",
 )
 
+mutant(
+    "diagnosis_solves_the_real_sketch",
+    "diagnose solves the user's sketch before copying it, which pulls stored geometry onto its constraints",
+    API,
+    [("        self.scratch = _Scratch(self.user)\n", "        self.user.solve()  # MUTANT\n        self.scratch = _Scratch(self.user)\n")],
+    ["testNoSideEffectsOnASketchDrawnOffItsConstraints"],
+)
+
 
 def sha(b):
     return hashlib.sha256(b).hexdigest()[:12]
