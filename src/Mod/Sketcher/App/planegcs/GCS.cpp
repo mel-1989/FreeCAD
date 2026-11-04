@@ -104,6 +104,7 @@
 #include <FCConfig.h>
 
 #include <boost/graph/connected_components.hpp>
+#include <unordered_map>
 #include <boost_graph_adjacency_list.hpp>
 
 using MatrixIndexType = Eigen::FullPivHouseholderQR<Eigen::MatrixXd>::IntDiagSizeVectorType;
@@ -491,6 +492,8 @@ System::System()
     , qrAlgorithm(EigenSparseQR)
     , autoChooseAlgorithm(true)
     , autoQRThreshold(1000)
+    , partitionThreshold(2000)
+    , sparseSolveThreshold(2000)
     , dogLegGaussStep(FullPivLU)
     , qrpivotThreshold(1E-13)
     , debugMode(Minimal)
@@ -512,6 +515,12 @@ System::System()
 #ifdef EIGEN_SPARSEQR_COMPATIBLE
     Eigen::setNbThreads(1);
 #endif
+    if (const char* env = std::getenv("FREECAD_GCS_PARTITION_THRESHOLD")) {
+        partitionThreshold = std::atoi(env);
+    }
+    if (const char* env = std::getenv("FREECAD_GCS_SPARSE_THRESHOLD")) {
+        sparseSolveThreshold = std::atoi(env);
+    }
 }
 
 System::~System()
@@ -1920,14 +1929,20 @@ SolveStatus System::solve(Algorithm alg, bool isRedundantsolving)
             restoreReference();
             referenceRestored = true;
         }
+        auto subStatus = SolveStatus::Success;
         if (subSystems[cid] && subSystemsAux[cid]) {
-            status = solve(subSystems[cid], subSystemsAux[cid], isRedundantsolving);
+            subStatus = solve(subSystems[cid], subSystemsAux[cid], isRedundantsolving);
         }
         else if (subSystems[cid]) {
-            status = solve(subSystems[cid], alg, isRedundantsolving);
+            subStatus = solve(subSystems[cid], alg, isRedundantsolving);
         }
         else if (subSystemsAux[cid]) {
-            status = solve(subSystemsAux[cid], alg, isRedundantsolving);
+            subStatus = solve(subSystemsAux[cid], alg, isRedundantsolving);
+        }
+        // Report the first subsystem that did not succeed. Keeping only the last status let a
+        // system whose earlier component failed pass as solved when a later one converged.
+        if (subStatus != SolveStatus::Success && status == SolveStatus::Success) {
+            status = subStatus;
         }
     }
     if (status == SolveStatus::Success) {
@@ -2265,6 +2280,69 @@ SolveStatus System::solve_LM(SubSystem* subsys, bool isRedundantsolving)
     return (stop == 1) ? SolveStatus::Success : SolveStatus::Failed;
 }
 
+Eigen::VectorXd System::gaussNewtonStepSparse(Eigen::SparseMatrix<double>& Jx, const Eigen::VectorXd& fx)
+{
+    Jx.makeCompressed();
+    Eigen::VectorXd h_gn;
+    bool done = false;
+    // A wide Jacobian (fewer equations than unknowns) makes SparseQR fill the triangle almost
+    // completely (nnz(R) 2.3 million against 16 thousand when square, for 3,000 unknowns: 1.6 s
+    // a step against 1 ms), so take the minimum norm step through J J^T instead, which is the step
+    // the dense path takes for the same system.
+    const DogLegGaussStep stepKind = (Jx.rows() < Jx.cols()) ? LeastNormLdlt : dogLegGaussStep;
+    switch (stepKind) {
+        case FullPivLU: {
+            // least-squares solution of Jx h = -fx, rank revealing like the dense full pivoting LU
+            Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> qr;
+            qr.setPivotThreshold(qrpivotThreshold);
+            qr.compute(Jx);
+            if (qr.info() == Eigen::Success) {
+                h_gn = qr.solve(-fx);
+                done = h_gn.allFinite();
+            }
+            break;
+        }
+        case LeastNormFullPivLU: {
+            Eigen::SparseMatrix<double> JJt = Jx * Jx.adjoint();
+            JJt.makeCompressed();
+            Eigen::SparseLU<Eigen::SparseMatrix<double>> lu;
+            lu.compute(JJt);
+            if (lu.info() == Eigen::Success) {
+                h_gn = Jx.adjoint() * lu.solve(-fx);
+                done = h_gn.allFinite();
+            }
+            break;
+        }
+        case LeastNormLdlt: {
+            Eigen::SparseMatrix<double> JJt = Jx * Jx.adjoint();
+            JJt.makeCompressed();
+            Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> ldlt;
+            ldlt.compute(JJt);
+            if (ldlt.info() == Eigen::Success) {
+                h_gn = Jx.adjoint() * ldlt.solve(-fx);
+                done = h_gn.allFinite();
+            }
+            break;
+        }
+    }
+    if (!done) {
+        // the sparse factorisation gave up: take the dense step the small systems use
+        Eigen::MatrixXd Jd = Eigen::MatrixXd(Jx);
+        switch (stepKind) {
+            case FullPivLU:
+                h_gn = Jd.fullPivLu().solve(-fx);
+                break;
+            case LeastNormFullPivLU:
+                h_gn = Jd.adjoint() * (Jd * Jd.adjoint()).fullPivLu().solve(-fx);
+                break;
+            case LeastNormLdlt:
+                h_gn = Jd.adjoint() * (Jd * Jd.adjoint()).ldlt().solve(-fx);
+                break;
+        }
+    }
+    return h_gn;
+}
+
 SolveStatus System::solve_DL(SubSystem* subsys, bool isRedundantsolving)
 {
 #ifdef _GCS_EXTRACT_SOLVER_SUBSYSTEM_
@@ -2276,6 +2354,10 @@ SolveStatus System::solve_DL(SubSystem* subsys, bool isRedundantsolving)
 
     if (xsize == 0) {
         return SolveStatus::Success;
+    }
+
+    if (sparseSolveThreshold > 0 && xsize >= sparseSolveThreshold) {
+        return solve_DL_sparse(subsys, isRedundantsolving);
     }
 
     double tolg = DL_tolg;
@@ -2416,6 +2498,213 @@ SolveStatus System::solve_DL(SubSystem* subsys, bool isRedundantsolving)
         subsys->setParams(x_new);
         subsys->calcResidual(fx_new, err_new);
         subsys->calcJacobi(Jx_new);
+
+        // calculate the linear model and the update ratio
+        double dL = err - 0.5 * (fx + Jx * h_dl).squaredNorm();
+        double dF = err - err_new;
+        double rho = dL / dF;
+
+        if (dF > 0 && dL > 0) {
+            x = x_new;
+            Jx = Jx_new;
+            fx = fx_new;
+            err = err_new;
+
+            g = Jx.transpose() * (-fx);
+
+            // get infinity norms
+            g_inf = g.lpNorm<Eigen::Infinity>();
+            fx_inf = fx.lpNorm<Eigen::Infinity>();
+        }
+        else {
+            rho = -1;
+        }
+
+        // update delta
+        if (fabs(rho - 1.) < 0.2 && h_dl.norm() > delta / 3. && reduce <= 0) {
+            delta = 3 * delta;
+            nu = 2;
+            reduce = 0;
+        }
+        else if (rho < 0.25) {
+            delta = delta / nu;
+            nu = 2 * nu;
+            reduce = 2;
+        }
+        else {
+            reduce--;
+        }
+
+        if (debugMode == IterationLevel) {
+            std::stringstream stream;
+            // Iteration: 1, residual: 1e-3, tolg: 1e-5, tolx: 1e-3
+            stream << "DL, Iteration: " << iter << ", fx_inf(tolf): " << fx_inf
+                   << ", g_inf(tolg): " << g_inf << ", delta(f(tolx)): " << delta
+                   << ", err(divergingLim): " << err << "\n";
+
+            const std::string tmp = stream.str();
+            Base::Console().log("{}", tmp);
+        }
+
+        // count this iteration and start again
+        iter++;
+    }
+
+    subsys->revertParams();
+
+    if (debugMode == IterationLevel) {
+        std::stringstream stream;
+        stream << "DL: stopcode: " << stop << ((stop == 1) ? ", Success" : ", Failed") << "\n";
+
+        const std::string tmp = stream.str();
+        Base::Console().log("{}", tmp);
+    }
+
+    return (stop == 1) ? SolveStatus::Success : SolveStatus::Failed;
+}
+
+
+// The dogleg solver on a sparse Jacobian, for subsystems above sparseSolveThreshold unknowns.
+// Same iteration as solve_DL; only the Jacobian is sparse and the Gauss-Newton step comes from a
+// sparse factorisation chosen by dogLegGaussStep.
+SolveStatus System::solve_DL_sparse(SubSystem* subsys, bool isRedundantsolving)
+{
+    int xsize = subsys->pSize();
+    int csize = subsys->cSize();
+    (void)csize;
+
+    if (xsize == 0) {
+        return SolveStatus::Success;
+    }
+
+    double tolg = DL_tolg;
+    double tolx = DL_tolx;
+    double tolf = DL_tolf;
+
+    int maxIterNumber = (sketchSizeMultiplier ? maxIter * xsize : maxIter);
+    if (isRedundantsolving) {
+        tolg = DL_tolgRedundant;
+        tolx = DL_tolxRedundant;
+        tolf = DL_tolfRedundant;
+
+        maxIterNumber = (sketchSizeMultiplierRedundant ? maxIterRedundant * xsize : maxIterRedundant);
+    }
+
+    if (debugMode == IterationLevel) {
+        std::stringstream stream;
+        stream << "DL: tolg: " << tolg << ", tolx: " << tolx << ", tolf: " << tolf
+               << ", convergence: " << (isRedundantsolving ? convergenceRedundant : convergence)
+               << ", dogLegGaussStep: "
+               << (dogLegGaussStep == FullPivLU
+                       ? "FullPivLU"
+                       : (dogLegGaussStep == LeastNormFullPivLU ? "LeastNormFullPivLU"
+                                                                : "LeastNormLdlt"))
+               << ", xsize: " << xsize << ", csize: " << csize << ", maxIter: " << maxIterNumber
+               << "\n";
+
+        const std::string tmp = stream.str();
+        Base::Console().log("{}", tmp);
+    }
+
+    Eigen::VectorXd x(xsize), x_new(xsize);
+    Eigen::VectorXd fx(csize), fx_new(csize);
+    Eigen::SparseMatrix<double> Jx, Jx_new;
+    Eigen::VectorXd g(xsize), h_sd(xsize), h_gn(xsize), h_dl(xsize);
+
+    subsys->redirectParams();
+
+    double err;
+    subsys->getParams(x);
+    subsys->calcResidual(fx, err);
+    subsys->calcJacobiSparse(Jx);
+
+    g = Jx.transpose() * (-fx);
+
+    // get the infinity norm fx_inf and g_inf
+    double g_inf = g.lpNorm<Eigen::Infinity>();
+    double fx_inf = fx.lpNorm<Eigen::Infinity>();
+
+    double divergingLim = 1e6 * err + 1e12;
+
+    double delta = 0.1;
+    double alpha = 0.;
+    double nu = 2.;
+    int iter = 0, stop = 0, reduce = 0;
+    while (!stop) {
+        // check if finished
+        if (fx_inf <= tolf) {
+            // Success
+            stop = 1;
+            break;
+        }
+        else if (g_inf <= tolg) {
+            stop = 2;
+            break;
+        }
+        else if (delta <= tolx * (tolx + x.norm())) {
+            stop = 2;
+            break;
+        }
+        else if (iter >= maxIterNumber) {
+            stop = 4;
+            break;
+        }
+        else if (err > divergingLim || err != err) {
+            // check for diverging and NaN
+            stop = 6;
+            break;
+        }
+
+        // get the steepest descent direction
+        alpha = g.squaredNorm() / (Jx * g).squaredNorm();
+        h_sd = alpha * g;
+
+        // get the gauss-newton step
+        // https://forum.freecad.org/viewtopic.php?f=10&t=12769&start=50#p106220
+        // https://forum.kde.org/viewtopic.php?f=74&t=129439#p346104
+        h_gn = gaussNewtonStepSparse(Jx, fx);
+
+        double rel_error = (Jx * h_gn + fx).norm() / fx.norm();
+        if (rel_error > 1e15) {
+            break;
+        }
+
+        // compute the dogleg step
+        if (h_gn.norm() < delta) {
+            h_dl = h_gn;
+            if (h_dl.norm() <= tolx * (tolx + x.norm())) {
+                stop = 5;
+                break;
+            }
+        }
+        else if (alpha * g.norm() >= delta) {
+            h_dl = (delta / (alpha * g.norm())) * h_sd;
+        }
+        else {
+            // compute beta
+            double beta = 0;
+            Eigen::VectorXd b = h_gn - h_sd;
+            double bb = (b.transpose() * b).norm();
+            double gb = (h_sd.transpose() * b).norm();
+            double c = (delta + h_sd.norm()) * (delta - h_sd.norm());
+
+            if (gb > 0) {
+                beta = c / (gb + sqrt(gb * gb + c * bb));
+            }
+            else {
+                beta = (sqrt(gb * gb + c * bb) - gb) / bb;
+            }
+
+            // and update h_dl and dL with beta
+            h_dl = h_sd + beta * b;
+        }
+
+        // get the new values
+        double err_new;
+        x_new = x + h_dl;
+        subsys->setParams(x_new);
+        subsys->calcResidual(fx_new, err_new);
+        subsys->calcJacobiSparse(Jx_new);
 
         // calculate the linear model and the update ratio
         double dL = err - 0.5 * (fx + Jx * h_dl).squaredNorm();
@@ -4539,11 +4828,30 @@ SolveStatus System::solve(SubSystem* subsysA, SubSystem* subsysB, bool isRedunda
         subsysA->getParamList(plistA);
         subsysB->getParamList(plistB);
 
-        std::sort(plistA.begin(), plistA.end());
-        std::sort(plistB.begin(), plistB.end());
+        // Order the unknowns by their position in plist, not by address: the address order
+        // differs from process to process, which changed the SQP iteration (and so whether it
+        // converged) on ill-conditioned sketches.
+        auto position = [this](double* p) {
+            const auto found = pIndex.find(p);
+            return found == pIndex.end() ? std::numeric_limits<int>::max() : found->second;
+        };
+        auto byPosition = [&position](double* a, double* b) {
+            const int pa = position(a);
+            const int pb = position(b);
+            return pa != pb ? pa < pb : a < b;
+        };
+        std::sort(plistA.begin(), plistA.end(), byPosition);
+        std::sort(plistB.begin(), plistB.end(), byPosition);
 
         VEC_pD::const_iterator it;
-        it = std::set_union(plistA.begin(), plistA.end(), plistB.begin(), plistB.end(), plistAB.begin());
+        it = std::set_union(
+            plistA.begin(),
+            plistA.end(),
+            plistB.begin(),
+            plistB.end(),
+            plistAB.begin(),
+            byPosition
+        );
         plistAB.resize(it - plistAB.begin());
     }
     int xsize = plistAB.size();
@@ -4836,6 +5144,10 @@ int System::diagnose(Algorithm alg)
     // like 0 and -1.
     std::map<int, int> tagmultiplicity;
 
+    if (partitionThreshold > 0 && diagnosePartitioned(alg)) {
+        return dofs;
+    }
+
     makeReducedJacobian(J, jacobianconstraintmap, pdiagnoselist, tagmultiplicity);
 
     // this function will exit with a diagnosis and, unless overridden by functions below, with full
@@ -5073,6 +5385,279 @@ int System::diagnose(Algorithm alg)
     return dofs;
 }
 
+bool System::diagnosePartitioned(Algorithm alg)
+{
+    // The unknowns to diagnose, as in makeReducedJacobian: all but the values of driven
+    // constraints.
+    VEC_pD pdiag;
+    {
+        const std::set<double*> driven(pdrivenlist.begin(), pdrivenlist.end());
+        for (auto* param : plist) {
+            if (driven.count(param) == 0) {
+                pdiag.push_back(param);
+            }
+        }
+    }
+    if (static_cast<int>(pdiag.size()) < partitionThreshold) {
+        return false;
+    }
+
+    std::unordered_map<double*, int> pdIndex;
+    pdIndex.reserve(pdiag.size());
+    for (std::size_t i = 0; i < pdiag.size(); ++i) {
+        pdIndex[pdiag[i]] = static_cast<int>(i);
+    }
+
+    // Union-find over the unknowns: every driving constraint, whatever its tag, joins the
+    // unknowns it uses. The rows of the Jacobian are the driving constraints with tag >= 0.
+    std::vector<int> parent(pdiag.size());
+    for (std::size_t i = 0; i < parent.size(); ++i) {
+        parent[i] = static_cast<int>(i);
+    }
+    auto find = [&parent](int x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    };
+
+    struct Row
+    {
+        Constraint* constr;
+        int clistIndex;
+        std::vector<int> cols;  // distinct unknowns of the constraint, as indices into pdiag
+    };
+    std::vector<Row> rows;
+    std::vector<std::pair<Constraint*, int>> drivingFirstParam;  // constraint, first unknown
+    std::map<int, int> tagmultiplicity;
+    int allcount = 0;
+    for (auto* constr : clist) {
+        constr->revertParams();
+        ++allcount;
+        if (!constr->isDriving()) {
+            continue;
+        }
+        std::vector<int> cols;
+        for (auto* param : constr->params()) {
+            auto it = pdIndex.find(param);
+            if (it != pdIndex.end() && std::ranges::find(cols, it->second) == cols.end()) {
+                cols.push_back(it->second);
+            }
+        }
+        if (cols.empty()) {
+            if (constr->getTag() >= 0) {
+                return false;  // a row of zeros: the whole-system path decides what that means
+            }
+            continue;
+        }
+        for (std::size_t k = 1; k < cols.size(); ++k) {
+            parent[find(cols[k])] = find(cols[0]);
+        }
+        drivingFirstParam.emplace_back(constr, cols[0]);
+        if (constr->getTag() >= 0) {
+            rows.push_back({constr, allcount - 1, std::move(cols)});
+            if (tagmultiplicity.find(constr->getTag()) == tagmultiplicity.end()) {
+                tagmultiplicity[constr->getTag()] = 0;
+            }
+            else {
+                tagmultiplicity[constr->getTag()]++;
+            }
+        }
+    }
+    if (rows.empty()) {
+        return false;
+    }
+
+    // Components, numbered by their first unknown.
+    std::vector<int> compOfRoot(pdiag.size(), -1);
+    std::vector<int> compOf(pdiag.size());
+    int ncomp = 0;
+    for (std::size_t i = 0; i < pdiag.size(); ++i) {
+        int root = find(static_cast<int>(i));
+        if (compOfRoot[root] < 0) {
+            compOfRoot[root] = ncomp++;
+        }
+        compOf[i] = compOfRoot[root];
+    }
+    struct Component
+    {
+        std::vector<int> params;  // indices into pdiag
+        std::vector<int> rows;    // indices into rows
+        std::vector<Constraint*> driving;
+    };
+    std::vector<Component> comps(ncomp);
+    for (std::size_t i = 0; i < pdiag.size(); ++i) {
+        comps[compOf[i]].params.push_back(static_cast<int>(i));
+    }
+    for (std::size_t r = 0; r < rows.size(); ++r) {
+        comps[compOf[rows[r].cols[0]]].rows.push_back(static_cast<int>(r));
+    }
+    for (const auto& [constr, first] : drivingFirstParam) {
+        comps[compOf[first]].driving.push_back(constr);
+    }
+
+    // From here on the partitioned diagnosis owns the result.
+    hasDiagnosis = true;
+    emptyDiagnoseMatrix = false;
+    pDependentParameters.clear();
+    pDependentParametersGroups.clear();
+    dofs = static_cast<int>(pdiag.size());
+
+    struct Done
+    {
+        int paramsNum = 0;
+        int rank = 0;
+        int constrNum = 0;
+        std::size_t groupBegin = 0, groupEnd = 0;
+    };
+    std::vector<Done> done(ncomp);
+    std::vector<std::vector<Constraint*>> allGroups;
+    std::vector<int> groupComp;
+    std::vector<int> localCol(pdiag.size(), -1);
+    QRAlgorithm lastAlgorithm = qrAlgorithm;
+    int largest = -1;
+
+    for (int c = 0; c < ncomp; ++c) {
+        auto& comp = comps[c];
+        const int np = static_cast<int>(comp.params.size());
+        const int nr = static_cast<int>(comp.rows.size());
+        done[c].paramsNum = np;
+        done[c].groupBegin = done[c].groupEnd = allGroups.size();
+        if (nr == 0) {
+            // unknowns that no constraint uses: free, each its own dependent group
+            for (int i : comp.params) {
+                pDependentParameters.push_back(pdiag[i]);
+                pDependentParametersGroups.push_back(VEC_pD {pdiag[i]});
+            }
+            continue;
+        }
+
+        VEC_pD pdiagC;
+        pdiagC.reserve(np);
+        for (int k = 0; k < np; ++k) {
+            pdiagC.push_back(pdiag[comp.params[k]]);
+            localCol[comp.params[k]] = k;
+        }
+        Eigen::MatrixXd Jc = Eigen::MatrixXd::Zero(nr, np);
+        std::map<int, int> rowmap;
+        for (int r = 0; r < nr; ++r) {
+            const Row& row = rows[comp.rows[r]];
+            for (int col : row.cols) {
+                Jc(r, localCol[col]) = row.constr->grad(pdiag[col]);
+            }
+            rowmap[r] = row.clistIndex;
+        }
+
+        bool useSparse = qrAlgorithm == EigenSparseQR;
+        if (autoChooseAlgorithm) {
+            useSparse = np >= autoQRThreshold;
+        }
+#ifndef EIGEN_SPARSEQR_COMPATIBLE
+        useSparse = false;
+#endif
+        if (np > largest) {
+            largest = np;
+            lastAlgorithm = useSparse ? EigenSparseQR : EigenDenseQR;
+        }
+
+        int rank = 0;
+        int constrNum = 0;
+        DependentResult dep;
+        std::vector<std::vector<Constraint*>> groups;
+        if (!useSparse) {
+            dep = dependentParametersDense(Jc, rowmap, pdiagC);
+            Eigen::MatrixXd R;
+            Eigen::FullPivHouseholderQR<Eigen::MatrixXd> qrJT;
+            makeDenseQRDecomposition(Jc, rowmap, qrJT, rank, R);
+            constrNum = qrJT.cols();
+            if (constrNum > rank) {
+                groups = extractConflictGroups(qrJT, rowmap, R, constrNum, rank);
+            }
+        }
+#ifdef EIGEN_SPARSEQR_COMPATIBLE
+        else {
+            dep = dependentParametersSparse(Jc, rowmap, pdiagC);
+            if (dep.rank == nr) {
+                // The rows are independent, so there is nothing for the decomposition of the
+                // transposed Jacobian to find: no conflict, no redundancy.
+                rank = nr;
+                constrNum = nr;
+            }
+            else {
+                Eigen::MatrixXd R;
+                Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> SqrJT;
+                makeSparseQRDecomposition(Jc, rowmap, SqrJT, rank, R, true, true);
+                constrNum = SqrJT.cols();
+                if (constrNum > rank) {
+                    groups = extractConflictGroups(SqrJT, rowmap, R, constrNum, rank);
+                }
+            }
+        }
+#endif
+        pDependentParameters.insert(pDependentParameters.end(), dep.params.begin(), dep.params.end());
+        for (auto& g : dep.groups) {
+            pDependentParametersGroups.push_back(std::move(g));
+        }
+        done[c].rank = rank;
+        done[c].constrNum = constrNum;
+        for (auto& g : groups) {
+            allGroups.push_back(std::move(g));
+            groupComp.push_back(c);
+        }
+        done[c].groupEnd = allGroups.size();
+    }
+    qrAlgorithm = lastAlgorithm;
+
+    // dofs: unknowns minus rank, summed over the components (free unknowns count one each)
+    dofs = 0;
+    for (int c = 0; c < ncomp; ++c) {
+        dofs += done[c].paramsNum - done[c].rank;
+    }
+
+    if (!allGroups.empty()) {
+        std::vector<ConflictPart> parts(ncomp);
+        for (int c = 0; c < ncomp; ++c) {
+            if (done[c].groupEnd > done[c].groupBegin) {
+                parts[c].hasGroups = true;
+                parts[c].clist = comps[c].driving;
+                for (int i : comps[c].params) {
+                    parts[c].plist.push_back(pdiag[i]);
+                }
+            }
+        }
+        int total = 0;
+        for (int c = 0; c < ncomp; ++c) {
+            total += done[c].constrNum;
+        }
+        std::vector<std::size_t> removed;
+        int nonredundantTotal = 0;
+        finishConflictAnalysis(
+            alg,
+            allGroups,
+            tagmultiplicity,
+            pdiag,
+            total,
+            nonredundantTotal,
+            &parts,
+            &removed
+        );
+        // as for the whole system: only a system whose unknowns are all ranked reports a negative
+        // count of degrees of freedom when over-constrained
+        int totalParams = 0, totalRank = 0, totalConstr = 0;
+        for (int c = 0; c < ncomp; ++c) {
+            totalParams += done[c].paramsNum;
+            totalRank += done[c].rank;
+            totalConstr += done[c].constrNum;
+        }
+        if (totalConstr > totalRank && totalParams == totalRank && nonredundantTotal > totalRank) {
+            dofs = totalParams - nonredundantTotal;
+        }
+    }
+
+    return true;
+}
+
 void System::makeDenseQRDecomposition(
     const Eigen::MatrixXd& J,
     const std::map<int, int>& jacobianconstraintmap,
@@ -5295,6 +5880,54 @@ void System::identifyDependentParametersSparseQR(
 #endif
 
 template<typename T>
+void System::collectDependentParameters(
+    T& qrJ,
+    Eigen::MatrixXd& Rparams,
+    int rank,
+    const GCS::VEC_pD& pdiagnoselist,
+    DependentResult& out,
+    bool skipEliminationWhenFullRank,
+    bool backSubstitute
+)
+{
+    // With no column beyond the rank the eliminated entries are never read.
+    if (!(skipEliminationWhenFullRank && rank == qrJ.cols())) {
+        if (backSubstitute) {
+            // Only the columns at or beyond the rank are read below, and they need the pivot block
+            // inverted against them: R11^-1 R12 by back substitution on the triangle, O(rank^2 k)
+            // where the Gauss-Jordan sweep of the pivot columns is O(rank^3). Behaviour from the
+            // standard definition of the null space basis of a triangular factor; used only on the
+            // sparse branch so the dense path keeps its bit-identical result.
+            const int extra = static_cast<int>(Rparams.cols()) - rank;
+            if (rank > 0 && extra > 0) {
+                Rparams.topLeftCorner(rank, rank)
+                    .triangularView<Eigen::Upper>()
+                    .solveInPlace(Rparams.block(0, rank, rank, extra));
+            }
+        }
+        else {
+            eliminateNonZerosOverPivotInUpperTriangularMatrix(Rparams, rank);
+        }
+    }
+
+    out.groups.resize(qrJ.cols() - rank);
+    for (int j = rank; j < qrJ.cols(); j++) {
+        for (int row = 0; row < rank; row++) {
+            if (fabs(Rparams(row, j)) > 1e-10) {
+                int origCol = qrJ.colsPermutation().indices()[row];
+
+                out.groups[j - rank].push_back(pdiagnoselist[origCol]);
+                out.params.push_back(pdiagnoselist[origCol]);
+            }
+        }
+        int origCol = qrJ.colsPermutation().indices()[j];
+
+        out.groups[j - rank].push_back(pdiagnoselist[origCol]);
+        out.params.push_back(pdiagnoselist[origCol]);
+    }
+}
+
+template<typename T>
 void System::identifyDependentParameters(
     T& qrJ,
     Eigen::MatrixXd& Rparams,
@@ -5306,10 +5939,8 @@ void System::identifyDependentParameters(
     (void)silent;  // silent is only used in debug code, but it is important as Base::Console is not
                    // thread-safe. Removes warning in non Debug mode.
 
-    // int constrNum = SqrJ.rows(); // this is the other way around than for the transposed J
-    // int paramsNum = SqrJ.cols();
-
-    eliminateNonZerosOverPivotInUpperTriangularMatrix(Rparams, rank);
+    DependentResult out;
+    collectDependentParameters(qrJ, Rparams, rank, pdiagnoselist, out, false, false);
 
 #ifdef _GCS_DEBUG
     if (!silent) {
@@ -5318,20 +5949,10 @@ void System::identifyDependentParameters(
 #endif
 
     pDependentParametersGroups.resize(qrJ.cols() - rank);
-    for (int j = rank; j < qrJ.cols(); j++) {
-        for (int row = 0; row < rank; row++) {
-            if (fabs(Rparams(row, j)) > 1e-10) {
-                int origCol = qrJ.colsPermutation().indices()[row];
-
-                pDependentParametersGroups[j - rank].push_back(pdiagnoselist[origCol]);
-                pDependentParameters.push_back(pdiagnoselist[origCol]);
-            }
-        }
-        int origCol = qrJ.colsPermutation().indices()[j];
-
-        pDependentParametersGroups[j - rank].push_back(pdiagnoselist[origCol]);
-        pDependentParameters.push_back(pdiagnoselist[origCol]);
+    for (std::size_t g = 0; g < out.groups.size(); ++g) {
+        pDependentParametersGroups[g] = out.groups[g];
     }
+    pDependentParameters.insert(pDependentParameters.end(), out.params.begin(), out.params.end());
 
 #ifdef _GCS_DEBUG
     if (!silent) {
@@ -5348,6 +5969,40 @@ void System::identifyDependentParameters(
 
 #endif
 }
+
+System::DependentResult System::dependentParametersDense(
+    const Eigen::MatrixXd& J,
+    const std::map<int, int>& jacobianconstraintmap,
+    const GCS::VEC_pD& pdiagnoselist
+)
+{
+    Eigen::FullPivHouseholderQR<Eigen::MatrixXd> qrJ;
+    Eigen::MatrixXd Rparams;
+    int rank = 0;
+    makeDenseQRDecomposition(J, jacobianconstraintmap, qrJ, rank, Rparams, false, true);
+    DependentResult out;
+    out.rank = rank;
+    collectDependentParameters(qrJ, Rparams, rank, pdiagnoselist, out, true, false);
+    return out;
+}
+
+#ifdef EIGEN_SPARSEQR_COMPATIBLE
+System::DependentResult System::dependentParametersSparse(
+    const Eigen::MatrixXd& J,
+    const std::map<int, int>& jacobianconstraintmap,
+    const GCS::VEC_pD& pdiagnoselist
+)
+{
+    Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> SqrJ;
+    Eigen::MatrixXd Rparams;
+    int rank = 0;
+    makeSparseQRDecomposition(J, jacobianconstraintmap, SqrJ, rank, Rparams, false, true);
+    DependentResult out;
+    out.rank = rank;
+    collectDependentParameters(SqrJ, Rparams, rank, pdiagnoselist, out, true, true);
+    return out;
+}
+#endif
 
 void System::identifyDependentGeometryParametersInTransposedJacobianDenseQRDecomposition(
     const Eigen::FullPivHouseholderQR<Eigen::MatrixXd>& qrJT,
@@ -5456,16 +6111,12 @@ void System::eliminateNonZerosOverPivotInUpperTriangularMatrix(Eigen::MatrixXd& 
 }
 
 template<typename T>
-void System::identifyConflictingRedundantConstraints(
-    Algorithm alg,
+std::vector<std::vector<Constraint*>> System::extractConflictGroups(
     const T& qrJT,
     const std::map<int, int>& jacobianconstraintmap,
-    const std::map<int, int>& tagmultiplicity,
-    GCS::VEC_pD& pdiagnoselist,
     Eigen::MatrixXd& R,
     int constrNum,
-    int rank,
-    int& nonredundantconstrNum
+    int rank
 )
 {
     eliminateNonZerosOverPivotInUpperTriangularMatrix(R, rank);
@@ -5484,6 +6135,46 @@ void System::identifyConflictingRedundantConstraints(
         conflictGroups[j - rank].push_back(clist[jacobianconstraintmap.at(origCol)]);
     }
 
+    return conflictGroups;
+}
+
+template<typename T>
+void System::identifyConflictingRedundantConstraints(
+    Algorithm alg,
+    const T& qrJT,
+    const std::map<int, int>& jacobianconstraintmap,
+    const std::map<int, int>& tagmultiplicity,
+    GCS::VEC_pD& pdiagnoselist,
+    Eigen::MatrixXd& R,
+    int constrNum,
+    int rank,
+    int& nonredundantconstrNum
+)
+{
+    auto conflictGroups = extractConflictGroups(qrJT, jacobianconstraintmap, R, constrNum, rank);
+    finishConflictAnalysis(
+        alg,
+        conflictGroups,
+        tagmultiplicity,
+        pdiagnoselist,
+        constrNum,
+        nonredundantconstrNum,
+        nullptr,
+        nullptr
+    );
+}
+
+void System::finishConflictAnalysis(
+    Algorithm alg,
+    std::vector<std::vector<Constraint*>>& conflictGroups,
+    const std::map<int, int>& tagmultiplicity,
+    GCS::VEC_pD& pdiagnoselist,
+    int constrNum,
+    int& nonredundantconstrNum,
+    const std::vector<ConflictPart>* parts,
+    std::vector<std::size_t>* removedGroups
+)
+{
     // Augment the information regarding the group of constraints that are conflicting or redundant.
     if (debugMode == IterationLevel) {
         SolverReportingManager::Manager().LogGroupOfConstraints(
@@ -5587,14 +6278,38 @@ void System::identifyConflictingRedundantConstraints(
         SolverReportingManager::Manager().LogSetOfConstraints("Chosen redundants", skipped);
     }
 
-    std::vector<Constraint*> clistTmp;
-    clistTmp.reserve(clist.size());
-    std::ranges::copy_if(clist, std::back_inserter(clistTmp), [&skipped](const auto& constr) {
-        return (constr->isDriving() && skipped.count(constr) == 0);
-    });
+    // The whole system minus the skipped constraints is solved as one subsystem. With a
+    // partitioned diagnosis (`parts`), each component that holds a conflict group is solved on
+    // its own instead; the other components are not touched by the skipped constraints.
+    std::vector<SubSystem*> subSystems_;
+    auto status = SolveStatus::Success;
+    if (parts == nullptr) {
+        std::vector<Constraint*> clistTmp;
+        clistTmp.reserve(clist.size());
+        std::ranges::copy_if(clist, std::back_inserter(clistTmp), [&skipped](const auto& constr) {
+            return (constr->isDriving() && skipped.count(constr) == 0);
+        });
 
-    SubSystem* subSysTmp = new SubSystem(clistTmp, pdiagnoselist);
-    auto status = solve(subSysTmp, alg, true);
+        subSystems_.push_back(new SubSystem(clistTmp, pdiagnoselist));
+        status = solve(subSystems_.back(), alg, true);
+    }
+    else {
+        for (const auto& part : *parts) {
+            if (!part.hasGroups) {
+                continue;
+            }
+            std::vector<Constraint*> clistTmp;
+            std::ranges::copy_if(part.clist, std::back_inserter(clistTmp), [&skipped](const auto& constr) {
+                return (constr->isDriving() && skipped.count(constr) == 0);
+            });
+            VEC_pD plistTmp = part.plist;
+            subSystems_.push_back(new SubSystem(clistTmp, plistTmp));
+            status = solve(subSystems_.back(), alg, true);
+            if (status != SolveStatus::Success) {
+                break;
+            }
+        }
+    }
 
     if (debugMode == Minimal || debugMode == IterationLevel) {
         std::string solvername;
@@ -5614,7 +6329,9 @@ void System::identifyConflictingRedundantConstraints(
     }
 
     if (status == SolveStatus::Success) {
-        subSysTmp->applySolution();
+        for (auto* sub : subSystems_) {
+            sub->applySolution();
+        }
         std::ranges::copy_if(
             skipped,
             std::inserter(redundant, redundant.begin()),
@@ -5653,9 +6370,14 @@ void System::identifyConflictingRedundantConstraints(
             }
 
             constrNum--;
+            if (removedGroups != nullptr) {
+                removedGroups->push_back(static_cast<std::size_t>(i));
+            }
         }
     }
-    delete subSysTmp;
+    for (auto* sub : subSystems_) {
+        delete sub;
+    }
 
     // simplified output of conflicting tags
     SET_I conflictingTagsSet;

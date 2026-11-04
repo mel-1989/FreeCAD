@@ -29,6 +29,10 @@ from AssemblyTests.TestCommandCreateView import TestCommandCreateView
 from AssemblyTests.TestSimulationExport import TestSimulationExport
 from AssemblyTests.TestInterference import TestInterference
 from AssemblyTests.TestReplaceComponent import TestReplaceComponent
+from AssemblyTests.TestAssemblyFeature import TestAssemblyFeature
+from AssemblyTests.TestConfigurations import TestConfigurations
+from AssemblyTests.TestSkeleton import TestSkeleton
+from AssemblyTests.TestMotion import TestMotion
 
 # Use the modules so that code checkers don't complain (flake8)
 True if TestCore else False
@@ -37,3 +41,7 @@ True if TestCommandCreateView else False
 True if TestSimulationExport else False
 True if TestInterference else False
 True if TestReplaceComponent else False
+True if TestAssemblyFeature else False
+True if TestConfigurations else False
+True if TestSkeleton else False
+True if TestMotion else False

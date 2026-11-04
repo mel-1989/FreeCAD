@@ -227,7 +227,7 @@ class Resolved:
         self.hidden = 0     # hidden leaves holding solids
 
 
-def resolve(assembly, include_hidden=False):
+def resolve(assembly, include_hidden=False, apply_features=True):
     res = Resolved()
     for inst in _walk(assembly):
         kind, why = _leaf_kind(inst)
@@ -258,7 +258,38 @@ def resolve(assembly, include_hidden=False):
         inst.box = App.BoundBox(shp.BoundBox)
         inst.idx = len(res.insts)
         res.insts.append(inst)
+    if apply_features:
+        _apply_assembly_features(assembly, res)
     return res
+
+
+def _apply_assembly_features(assembly, res):
+    """Swap in the shape an active assembly feature (G06 slice 4a) leaves of a component.
+
+    A component a feature removes entirely is listed in ``skipped_non_solid`` as ``Empty``.
+    """
+    if not any(o.TypeId == "App::FeaturePython" and getattr(o, "Kind", None) in ("cut", "hole")
+               and not o.Suppressed for o in assembly.Group):
+        return
+    import AssemblyFeature
+    eff = AssemblyFeature.apply_to_instances(assembly, res.insts)
+    if not eff:
+        return
+    kept = []
+    for inst in res.insts:
+        shp = eff.get(inst.key)
+        if shp is not None:
+            if shp.isNull() or not shp.Solids:
+                rec = inst.describe(assembly)
+                rec["shape_type"] = "Empty"
+                res.skipped.append(rec)
+                continue
+            inst.shape = shp
+            inst.box = App.BoundBox(shp.BoundBox)
+        kept.append(inst)
+    for n, inst in enumerate(kept):
+        inst.idx = n
+    res.insts = kept
 
 
 def instances(assembly, include_hidden=False):

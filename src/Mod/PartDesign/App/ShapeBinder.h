@@ -172,6 +172,10 @@ protected:
     using Connection = fastsignals::scoped_connection;
     Connection connRecomputedObj;
     App::Document* contextDoc = nullptr;
+    // What Support pointed at the last time it changed (resolved objects and subnames). A Frozen binder keeps its shape
+    // when the same target is merely re-attached (an external document loaded later), but a retarget updates it.
+    std::string boundKey;
+    std::string supportKey() const;
 
     std::vector<Connection> copyOnChangeConns;
     bool hasCopyOnChange = true;

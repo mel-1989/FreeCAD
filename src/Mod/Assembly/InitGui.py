@@ -23,6 +23,10 @@
 
 FreeCAD.__unit_test__ += ["TestAssemblyInterferenceGui"]
 FreeCAD.__unit_test__ += ["TestAssemblyReplaceComponentGui"]
+FreeCAD.__unit_test__ += ["TestAssemblyFeatureGui"]
+FreeCAD.__unit_test__ += ["TestAssemblyConfigurationsGui"]
+FreeCAD.__unit_test__ += ["TestAssemblySkeletonGui"]
+FreeCAD.__unit_test__ += ["TestAssemblyMotionGui"]
 
 
 class AssemblyCommandGroup:
@@ -77,6 +81,10 @@ class AssemblyWorkbench(Workbench):
         import CommandCreateBom
         import CommandCheckInterference
         import CommandReplaceComponent
+        import CommandCreateAssemblyFeature
+        import CommandConfigurations
+        import CommandSkeleton
+        import CommandMotion
         import Preferences
 
         FreeCADGui.addLanguagePath(":/translations")
@@ -98,6 +106,19 @@ class AssemblyWorkbench(Workbench):
             "Assembly_CreateBom",
             "Assembly_CheckInterference",
             "Assembly_ReplaceComponent",
+            "Assembly_CreateAssemblyCut",
+            "Assembly_CreateAssemblyHole",
+            "Assembly_Configurations",
+            "Assembly_PublishSkeletonGeometry",
+            "Assembly_SubscribeSkeleton",
+            "Assembly_CreateMotionStudy",
+            "Assembly_EditMotionStudy",
+            "Assembly_AddMotionGravity",
+            "Assembly_AddMotionForce",
+            "Assembly_AddMotionTorque",
+            "Assembly_AddMotionSpring",
+            "Assembly_AddMotionDamper",
+            "Assembly_AddMotionContact",
         ]
 
         cmdListMenuOnly = [
@@ -105,6 +126,7 @@ class AssemblyWorkbench(Workbench):
             "Assembly_LinkSelectLinked",
             "Assembly_ExportASMT",
             "Assembly_SelectJointsOfComponent",
+            "Assembly_EditAssemblyFeature",
         ]
 
         cmdListJoints = [

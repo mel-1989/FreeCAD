@@ -38,13 +38,31 @@ set(Assembly_Scripts
     SoSwitchMarker.py
     UtilsAssembly.py
     Interference.py
+    AssemblyFeature.py
     InterferencePanel.py
     ReplaceComponent.py
+    AssemblyConfiguration.py
+    AssemblySkeleton.py
+    AssemblyMotion.py
     TestAssemblyInterferenceGui.py
     CommandCheckInterference.py
     CommandReplaceComponent.py
     ReplacePanel.py
     TestAssemblyReplaceComponentGui.py
+    CommandCreateAssemblyFeature.py
+    AssemblyFeaturePanel.py
+    ViewProviderAssemblyFeature.py
+    TestAssemblyFeatureGui.py
+    CommandConfigurations.py
+    ConfigurationsPanel.py
+    ViewProviderAssemblyConfiguration.py
+    TestAssemblyConfigurationsGui.py
+    CommandSkeleton.py
+    SkeletonPanel.py
+    TestAssemblySkeletonGui.py
+    CommandMotion.py
+    MotionStudyPanel.py
+    TestAssemblyMotionGui.py
 )
 
 if(BUILD_GUI)
@@ -67,6 +85,20 @@ SET(Assembly_Icons
     icons/Assembly_CheckInterference.svg
     icons/Assembly_ReplaceComponent.svg
     icons/Assembly_RepairJointReference.svg
+    icons/Assembly_CreateAssemblyCut.svg
+    icons/Assembly_CreateAssemblyHole.svg
+    icons/Assembly_EditAssemblyFeature.svg
+    icons/Assembly_Configurations.svg
+    icons/Assembly_PublishSkeletonGeometry.svg
+    icons/Assembly_SubscribeSkeleton.svg
+    icons/Assembly_CreateMotionStudy.svg
+    icons/Assembly_EditMotionStudy.svg
+    icons/Assembly_AddMotionGravity.svg
+    icons/Assembly_AddMotionForce.svg
+    icons/Assembly_AddMotionTorque.svg
+    icons/Assembly_AddMotionSpring.svg
+    icons/Assembly_AddMotionDamper.svg
+    icons/Assembly_AddMotionContact.svg
 )
 
 
@@ -80,10 +112,26 @@ SET(AssemblyTests_SRCS
     AssemblyTests/interference_corpus.py
     AssemblyTests/TestReplaceComponent.py
     AssemblyTests/replace_corpus.py
+    AssemblyTests/TestAssemblyFeature.py
+    AssemblyTests/feature_corpus.py
+    AssemblyTests/TestConfigurations.py
+    AssemblyTests/configuration_corpus.py
+    AssemblyTests/TestSkeleton.py
+    AssemblyTests/TestMotion.py
+    AssemblyTests/motion_corpus.py
+    AssemblyTests/skeleton_corpus.py
     AssemblyTests/interference_gui_fixture.py
     AssemblyTests/TestInterferenceGui.py
     AssemblyTests/replace_gui_fixture.py
     AssemblyTests/TestReplaceComponentGui.py
+    AssemblyTests/feature_gui_fixture.py
+    AssemblyTests/TestFeatureGui.py
+    AssemblyTests/configuration_gui_fixture.py
+    AssemblyTests/TestConfigurationsGui.py
+    AssemblyTests/skeleton_gui_fixture.py
+    AssemblyTests/TestSkeletonGui.py
+    AssemblyTests/motion_gui_fixture.py
+    AssemblyTests/TestMotionGui.py
     AssemblyTests/mocks/__init__.py
     AssemblyTests/mocks/MockGui.py
 )

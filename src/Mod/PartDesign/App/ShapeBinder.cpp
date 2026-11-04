@@ -998,7 +998,8 @@ void SubShapeBinder::update(SubShapeBinder::UpdateOption options)
 
 void SubShapeBinder::slotRecomputedObject(const App::DocumentObject& Obj)
 {
-    if (Context.getValue() == &Obj && !this->testStatus(App::ObjectStatus::Recompute2)) {
+    // Frozen: disable auto update, also when the context (the part holding the binder) is recomputed.
+    if (Context.getValue() == &Obj && BindMode.getValue() != 1 && !this->testStatus(App::ObjectStatus::Recompute2)) {
         try {
             update();
         }
@@ -1020,8 +1021,28 @@ App::DocumentObjectExecReturn* SubShapeBinder::execute()
     return inherited::execute();
 }
 
+std::string SubShapeBinder::supportKey() const
+{
+    // Object names and subnames, taken from the link itself so that a target in a document that is not loaded (yet)
+    // still has a key.
+    std::string key;
+    for (const auto& l : Support.getSubListValues()) {
+        const auto* obj = l.getValue();
+        key += obj ? obj->getNameInDocument() : l.getObjectName();
+        for (const auto& sub : l.getSubValues()) {
+            key += "|" + sub;
+        }
+        key += ";";
+    }
+    return key;
+}
+
 void SubShapeBinder::onDocumentRestored()
 {
+    // What the stored Support points at, resolved or not. An external document that loads while this one is restored may
+    // already have re-attached the link (the first Support change, adopted in onChanged without an update); this sets the
+    // key for every other load, so that the first change the user makes afterwards is judged against it.
+    boundKey = supportKey();
     if (_Version.getValue() < 2) {
         update(UpdateInit);
     }
@@ -1120,7 +1141,15 @@ void SubShapeBinder::onChanged(const App::Property* prop)
             collapseGeoChildren();
             clearCopiedObjects();
             setupCopyOnChange();
-            if (!Support.getSubListValues().empty()) {
+            // Frozen means "disable auto update": a link that is merely re-attached (an external document
+            // loaded after this one) must not refresh a binder that already holds its frozen shape.
+            const std::string key = supportKey();
+            const bool keepFrozen = BindMode.getValue() == 1 && !Shape.getValue().IsNull() && !key.empty()
+                && (boundKey.empty() || key == boundKey);
+            if (!key.empty()) {
+                boundKey = key;
+            }
+            if (!Support.getSubListValues().empty() && !keepFrozen) {
                 update();
                 if (BindMode.getValue() == 2) {
                     Support.setValue(nullptr);

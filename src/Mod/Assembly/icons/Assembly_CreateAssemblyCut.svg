@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Assembly_CreateAssemblyCut</title>
+  <path d="M6 22 L26 22 L26 36 L42 36 L42 22 L58 22 L58 52 L6 52 Z" fill="#b9d6f2" stroke="#1d5a96" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="26" y="22" width="16" height="14" fill="none" stroke="#d32f2f" stroke-width="2.5" stroke-dasharray="4 3"/>
+  <path d="M34 8 L34 26 M28 20 L34 27 L40 20" stroke="#d32f2f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

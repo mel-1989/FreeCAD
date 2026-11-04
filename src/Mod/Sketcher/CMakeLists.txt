@@ -12,6 +12,8 @@ set(Sketcher_Scripts
     SketcherExample.py
     TestSketcherApp.py
     Profiles.py
+    SketcherDiagnosis.py
+    SketcherAutoDefine.py
 )
 
 set(Sketcher_TestScripts
@@ -24,6 +26,18 @@ set(Sketcher_TestScripts
     SketcherTests/TestSketchCarbonCopyReverseMapping.FCStd
     SketcherTests/TestSketchInternalFaces.py
     SketcherTests/TestSketcherEllipse.py
+    SketcherTests/TestSketchDiagnosis.py
+    SketcherTests/SketchDiagnosisCorpus.py
+    SketcherTests/SketchBenchmark.py
+    SketcherTests/TestSketchAutoDefine.py
+    SketcherTests/SketchAutoDefineCorpus.py
+    SketcherTests/SketchAutoDefineOracle.py
+    SketcherTests/SketchAutoDefineRun.py
+    SketcherTests/SketchAutoDefineMutants.py
+    SketcherTests/TestSketchSolverCore.py
+    SketcherTests/SketchSolverBaseline.py
+    SketcherTests/SolverCoreMutants.py
+    SketcherTests/SketchPlantedScale.py
 )
 
 if(BUILD_GUI)

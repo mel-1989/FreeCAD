@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Assembly_AddMotionGravity</title>
+  <circle cx="32" cy="20" r="11" fill="#b9d6f2" stroke="#1d5a96" stroke-width="3"/>
+  <path d="M32 36 L32 58 M24 50 L32 58 L40 50" fill="none" stroke="#1d5a96" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
