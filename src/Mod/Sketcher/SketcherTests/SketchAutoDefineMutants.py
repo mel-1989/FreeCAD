@@ -55,9 +55,9 @@ def mutant(name, desc, old, new):
     M.append((name, desc, old, new))
 
 
-GOOD_FACTS = '{"max_move": 0.0, "dof": 0, "batches": list(b.batches), "runs": 1}'
+GOOD_FACTS = '{"max_move": 0.0, "dof": 0, "batches": list(b.batches), "runs": 1, "gate": "full", "gate_reason": None}'
 
-mutant("unverified_candidate", "a candidate is returned without the fresh-copy verification", "facts = _verify(scratch, b.specs, b.batches, keep)", "facts = " + GOOD_FACTS)
+mutant("unverified_candidate", "a candidate is returned without the fresh-copy verification", "facts = _verify(scratch, b.specs, b.batches, keep, stability_budget)", "facts = " + GOOD_FACTS)
 mutant(
     "verified_on_real_sketch",
     "the verification runs on the user's sketch instead of a fresh copy",
@@ -65,7 +65,7 @@ mutant(
     ["    fresh = scratch._source\n    try:\n        start = list(fresh.Geometry)", "    finally:\n        pass\n"],
 )
 mutant("lock_every_point", "no relations are added, so dimensions pin every point", "            b.add_relations(rel[phase])", "            pass")
-mutant("keep_constraint_dropped", "applying a candidate deletes the first existing constraint", '            return {"dof": st.dof, "added": len(specs)}', '            if n0 > 0:\n                sketch.delConstraint(0)\n            return {"dof": st.dof, "added": len(specs)}')
+mutant("keep_constraint_dropped", "applying a candidate deletes the first existing constraint", '            if cheap:\n                return {"dof": st.dof, "added": len(specs), "gate": "full"', '            if n0 > 0:\n                sketch.delConstraint(0)\n            if cheap:\n                return {"dof": st.dof, "added": len(specs), "gate": "full"')
 mutant("tangent_across_a_gap", "line-circle tangency is claimed up to 1e-5 mm", "if abs(_dist(foot, A.c) - A.r) <= LENGTH_TOLERANCE and", "if abs(_dist(foot, A.c) - A.r) <= 1e-5 and")
 mutant(
     "redundant_relation_left_in",
@@ -118,12 +118,17 @@ mutant("apply_retry_not_nudged", "the retry in apply_candidate starts from the s
 mutant(
     "verify_nudge_fallback_restored",
     "verification again accepts a plan that only solves from a nudged start",
-    '    facts = _verify_once(scratch, specs, batches, keep, 0.0)\n    if facts is not None:\n        facts["nudge"] = 0.0\n    return facts',
-    '    for nudge in (0.0, NUDGE):\n        facts = _verify_once(scratch, specs, batches, keep, nudge)\n        if facts is not None:\n            facts["nudge"] = nudge\n            return facts\n    return None',
+    '    facts = _verify_once(scratch, specs, batches, keep, 0.0, budget)\n    if facts is not None:\n        facts["nudge"] = 0.0\n    return facts',
+    '    for nudge in (0.0, NUDGE):\n        facts = _verify_once(scratch, specs, batches, keep, nudge, budget)\n        if facts is not None:\n            facts["nudge"] = nudge\n            return facts\n    return None',
 )
 mutant("verify_gate_removed", "verification skips the re-solve gate", "        if cheap and not (_stable(fresh) and _serialised_stable(fresh)):\n            return None", "        if False:\n            return None")
 mutant("apply_gate_removed", "apply_candidate skips the re-solve gate", "            if ok and cheap:", "            if False:")
 mutant("gate_serialised_copy_dropped", "the gate solves only the sketch itself, not a serialised copy", "ok = _stable(sketch) and _serialised_stable(sketch)", "ok = _stable(sketch)")
+mutant("skip_unreported", "a skipped gate is reported as a full one on the candidate", 'facts["gate"] = "skipped" if reasons else "full"', 'facts["gate"] = "full"')
+mutant("apply_slow_unvetted", "a slow apply_candidate applies its result with no gate at all", "            elif ok:  # too slow for 20 solves: a reduced gate on the real sketch, never none\n                ok = _stable(sketch, REDUCED_GATE_RUNS)", "            elif ok:\n                pass")
+mutant("apply_reduced_unreported", "a reduced gate in apply_candidate is reported as full", '"gate": "reduced", "gate_runs": REDUCED_GATE_RUNS', '"gate": "full", "gate_runs": GATE_RUNS')
+mutant("stability_budget_ignored", "the stability_budget argument of propose is ignored", "facts = _verify(scratch, b.specs, b.batches, keep, stability_budget)", "facts = _verify(scratch, b.specs, b.batches, keep)")
+mutant("apply_budget_ignored", "the stability_budget argument of apply_candidate is ignored", "    budget = STABILITY_BUDGET if stability_budget is None else stability_budget\n    specs = ", "    budget = STABILITY_BUDGET\n    specs = ")
 mutant("gate_single_solve", "the gate asks for one clean solve only", "GATE_RUNS = 10", "GATE_RUNS = 1")
 mutant("gate_always_passes", "the gate accepts a -1 on any solve", "        if not (_clean(st) and st.dof == 0):\n            return False\n    return True", "        pass\n    return True")
 mutant("nudge_not_applied", "the nudge moves nothing", "            g.translate(FreeCAD.Vector(dx, dy, 0))", "            pass")
