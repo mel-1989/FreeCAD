@@ -147,6 +147,13 @@ void SubSystem::redirectParams()
     for (MAP_pD_pD::const_iterator p = pmap.begin(); p != pmap.end(); ++p) {
         *(p->second) = *(p->first);
     }
+    // Reduced parameters share one slot of pvals with the parameter that is kept, and pmap is
+    // ordered by heap address, so the loop above leaves in that slot the value of whichever entry
+    // sorts last: a start value that changes from one process to the next when the values differ.
+    // Take the slot from the kept parameter, which is what plist holds.
+    for (std::size_t j = 0; j < plist.size(); ++j) {
+        pvals[j] = *plist[j];
+    }
 
     // redirect constraints to point to pvals
     for (std::vector<Constraint*>::iterator constr = clist.begin(); constr != clist.end(); ++constr) {
