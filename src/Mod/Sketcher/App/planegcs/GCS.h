@@ -25,6 +25,7 @@
 #pragma once
 
 #include <Eigen/QR>
+#include <map>
 
 #include "../../SketcherGlobal.h"
 #include "SubSystem.h"
@@ -355,6 +356,18 @@ public:
     Eigen::VectorXd dragEscapeX;
     double dragFailGap = 0.;
     std::vector<double> dragStallCursor;
+    // The cursor distance left when the escape's probes last ran (negative before any did)
+    double dragProbeGap = -1.;
+    // The unknowns at the start of the last drag move's solve (the state the drag began in), and
+    // whether the escape is running its own solves
+    Eigen::VectorXd dragStartX;
+    // The unknowns as they were when the drag began (set by Sketch::initMove when it starts a
+    // drag, which raises dragOriginPending before initSolution), and whether the escape tried
+    // them without success since a move last reached the cursor
+    bool dragOriginPending = false;
+    std::map<double*, double> dragOrigin;
+    bool dragOriginFailed = false;
+    bool dragInEscape = false;
     double LM_eps;
     double LM_eps1;
     double LM_tau;

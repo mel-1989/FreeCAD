@@ -5437,7 +5437,11 @@ int Sketch::initMove(const std::vector<GeoElementId>& geoEltIds)
         GCSsys.dragExtent = std::max(hi[0] - lo[0], hi[1] - lo[1]);
     }
 
+    // a drag that starts here keeps the state it began in (the stock re-initialisation while
+    // dragging, and the drag's own restarts, are not starts)
+    GCSsys.dragOriginPending = !isInitMove;
     GCSsys.initSolution();
+    GCSsys.dragOriginPending = false;
     isInitMove = true;
 
     // the state the reference holds is the last state of the drag that met the cursor

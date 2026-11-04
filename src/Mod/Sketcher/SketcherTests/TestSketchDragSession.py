@@ -239,6 +239,17 @@ class TestDragEscape(unittest.TestCase):
             with self.subTest(scenario=prefix, step=step):
                 self.assertLess(_cell(prefix, step)["hys"], 0.01)
 
+    def test_a_cursor_that_comes_back_over_a_dead_point_goes_back_the_way_it_came(self):
+        # S08 at 0.1 mm: the slider is dragged to the end of its stroke and back, then through the
+        # other end and back. The crank is at a dead point at each end, and either branch after it
+        # is valid, but the baseline returns on the branch it left by (0.000 mm) and a probe that
+        # picks the mirror one ends 29.9 mm from the start. The state the drag began in is tried
+        # before the probes (run 055; the editor's own re-initialisation while dragging must not
+        # replace it).
+        cell = _cell("S08", 0.1)
+        self.assertLess(cell["hys"], 0.01, cell)
+        self.assertEqual(cell["lockups_out"] + cell["lockups_ret"], 0, cell)
+
     def test_cells_clean_in_the_baseline_stay_clean(self):
         # S09 ends where they began on the editor path; an escape that keeps a
         # worse result (a different branch) breaks that
@@ -263,6 +274,35 @@ class TestDragEscape(unittest.TestCase):
         # S01 on the return leg is a known open case; the outward leg must still follow
         cell = _cell("S01", 1.0)
         self.assertEqual(cell["lockups_out"], 0, cell)
+
+    @staticmethod
+    def _s19_move_times(runs=3):
+        name, builder = _scenario("S19")
+        best = None
+        for _ in range(runs):
+            tr = Measure.run_cell(name, builder, 0.1, True)["trace"]
+            best = [t[9] for t in tr] if best is None else [min(a, t[9]) for a, t in zip(best, tr)]
+        return tr, best
+
+    def test_a_cursor_coming_back_into_reach_is_followed_again(self):
+        # S19 at 0.1 mm, moves 1540 to 1600: the cursor has run past the small circle's far side
+        # and the circle can follow it again (gap 0.000 in the stored run). The probes that
+        # follow a settled escape are held back while the gap stays as large as when they last
+        # found nothing, and must run again once it has halved, or the circle is left behind
+        # by up to 2.9 mm.
+        tr, _ = self._s19_move_times(1)
+        self.assertLess(max(t[6] for t in tr[1539:1600]), 0.01)
+
+    def test_a_cursor_running_away_costs_no_search_on_each_move(self):
+        # S19, moves 1245 to 1286: the cursor leaves the circle's reach along a line and the main
+        # solve lands on the far branch every move, which the escape's stored sketch repairs. The
+        # probes found nothing the first time and are not run again while the gap grows (2
+        # solves a move, 6 when they are). Wall time, since the solver exposes no count: about
+        # 0.4 times a move in reach with the probes held back, 3.8 times when they run.
+        tr, best = self._s19_move_times()
+        away = sum(best[1244:1286]) / 42
+        in_reach = sum(best[99:800]) / 701
+        self.assertLess(away, 1.5 * in_reach)
 
     def test_unreachable_cursor_is_searched_once(self):
         """A cursor held beyond the slider's stroke costs no more than one

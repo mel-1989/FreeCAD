@@ -1770,6 +1770,14 @@ void System::initSolution(Algorithm alg)
 
     // storing reference configuration
     saveReference();
+    if (dragOriginPending) {
+        dragOrigin.clear();
+        for (size_t i = 0; i < plist.size(); ++i) {
+            dragOrigin[plist[i]] = reference[i];
+        }
+        dragOriginFailed = false;
+        dragOriginPending = false;
+    }
 
     // diagnose conflicting or redundant constraints
     if (!hasDiagnosis) {
@@ -4893,6 +4901,9 @@ SolveStatus System::solve(SubSystem* subsysA, SubSystem* subsysB, bool isRedunda
     // is never lost to the guard. An ordinary solve (the last-resort SQP) runs the stock one.
     bool guarded = dragSolve;
     const Eigen::VectorXd xStart = x;
+    if (dragSolve && !dragInEscape && !isRedundantsolving) {
+        dragStartX = xStart;
+    }
 
 retry:
     x = xStart;
@@ -5062,6 +5073,8 @@ void System::dragReset()
     dragLockClean = true;
     dragFailStreak = 0;
     dragEscapeValid = false;
+    dragProbeGap = -1.;
+    dragOriginFailed = false;
 }
 
 // A drag move that the SQP ended with A satisfied but the cursor not reached is either at the
@@ -5140,6 +5153,7 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
     if (reached) {
         dragLockClean = true;
         dragFailStreak = 0;
+        dragOriginFailed = false;
     }
     auto record = [&](double gap) {
         dragHistValid = true;
@@ -5191,6 +5205,19 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
         }
         return st;
     };
+    struct EscapeScope
+    {
+        explicit EscapeScope(bool& f)
+            : flag(f)
+        {
+            flag = true;
+        }
+        ~EscapeScope()
+        {
+            flag = false;
+        }
+        bool& flag;
+    } escapeScope(dragInEscape);
     bool improved = false;
     bool pvalsHoldBest = true;
     auto converge = [&]() {
@@ -5207,9 +5234,43 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
         }
     };
 
+    // The state the drag began in comes first when the drag has since been continued from another
+    // one (the editor starts the reference again when the cursor has gone far from where it
+    // began): a cursor that comes back over a dead point (S08) is then taken along the branch it
+    // left by, which is where the drag began, instead of the branch the escape found last time or
+    // the probes find first. It is tried once for each lock: after a failure not again until a
+    // move has reached the cursor.
+    bool viaOrigin = false;
+    if (!dragOriginFailed && !dragOrigin.empty()
+        && dragStartX.size() == static_cast<Eigen::Index>(n)) {
+        Eigen::VectorXd xo(n);
+        bool complete = true;
+        for (int j = 0; j < n && complete; ++j) {
+            const auto it = dragOrigin.find(plist[j]);
+            complete = it != dragOrigin.end();
+            if (complete) {
+                xo[j] = it->second;
+            }
+        }
+        if (complete && (xo - dragStartX).lpNorm<Eigen::Infinity>() > 1e-6 * extent) {
+            const bool ok = solveFrom(xo) == SolveStatus::Success;
+            pvalsHoldBest = false;
+            if (ok && E < accept * Ebest) {
+                xbest = xr;
+                Ebest = E;
+                improved = true;
+                pvalsHoldBest = true;
+                viaOrigin = true;
+            }
+            else {
+                dragOriginFailed = true;
+            }
+        }
+    }
     // A lock that the escape released on the last move is released the same way on this one: try
     // the sketch it found first, which costs one solve where the probes below cost up to five.
-    if (dragEscapeValid && dragEscapeX.size() == static_cast<Eigen::Index>(n)) {
+    bool viaShortcut = false;
+    if (!viaOrigin && dragEscapeValid && dragEscapeX.size() == static_cast<Eigen::Index>(n)) {
         const bool ok = solveFrom(dragEscapeX) == SolveStatus::Success;
         pvalsHoldBest = false;
         if (ok && E < accept * Ebest) {
@@ -5217,15 +5278,43 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
             Ebest = E;
             improved = true;
             pvalsHoldBest = true;
+            viaShortcut = true;
         }
     }
+    const double Eshortcut = Ebest;
     converge();
-    if (std::sqrt(2. * Ebest) > gapTol) {
-        static const double fractions[] = {1e-3, -1e-3, 1e-2, -1e-2};
+    // A shortcut that landed on the sketch of the last escape and that a restart does not improve
+    // is that sketch's minimum again, with the cursor moved. While the cursor stays as far from
+    // it as when the probes last searched there, or farther, they would find nothing again
+    // (S19 with the cursor running away from its circle: 6 solves a move, 2 here); once the gap
+    // has halved, as the cursor comes back toward reach, they run again.
+    const double gapNow = std::sqrt(2. * Ebest);
+    const bool settled = viaShortcut && Ebest == Eshortcut && dragProbeGap >= 0.
+        && gapNow > 0.5 * dragProbeGap;
+    if (!settled && gapNow > gapTol) {
+        // the gap the probes found nothing at, or none when they find a way on
+        dragProbeGap = gapNow;
+        // The first probe tilts the sketch toward the state the drag began in, so that a cursor
+        // coming back over a dead point (S08) goes on along the branch it came by; the others
+        // are along a fixed pseudo-random direction, both ways, at two sizes.
+        static const double fractions[] = {0., 1e-3, -1e-3, 1e-2, -1e-2};
         for (const double fraction : fractions) {
             Eigen::VectorXd xs = xbest;
-            for (int j = 0; j < n; ++j) {
-                xs[j] += fraction * extent * std::sin(2.399963229728653 * (j + 1));
+            if (fraction == 0.) {
+                if (dragStartX.size() != static_cast<Eigen::Index>(n)) {
+                    continue;
+                }
+                const Eigen::VectorXd toStart = dragStartX - xbest;
+                const double dist = toStart.norm();
+                if (!(dist > 1e-9 * extent)) {
+                    continue;
+                }
+                xs += toStart * (1e-3 * extent * std::sqrt(0.5 * n) / dist);
+            }
+            else {
+                for (int j = 0; j < n; ++j) {
+                    xs[j] += fraction * extent * std::sin(2.399963229728653 * (j + 1));
+                }
             }
             const bool ok = solveFrom(xs) == SolveStatus::Success;
             pvalsHoldBest = false;
@@ -5234,6 +5323,7 @@ SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
                 Ebest = E;
                 improved = true;
                 pvalsHoldBest = true;
+                dragProbeGap = -1.;
                 converge();
                 break;
             }

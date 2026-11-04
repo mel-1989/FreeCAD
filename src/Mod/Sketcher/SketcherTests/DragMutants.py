@@ -90,6 +90,20 @@ MUTANTS = [
      "    if (false) {\n        for (size_t i = 0; i < Parameters.size(); ++i) {\n            *Parameters[i] = before[i];", "a failed move leaves the unknowns at the reference, not at the state before the move"),
     ("extent_is_largest_coordinate", SKETCH, "        GCSsys.dragExtent = std::max(hi[0] - lo[0], hi[1] - lo[1]);", "        GCSsys.dragExtent = std::max(std::abs(hi[0]), std::abs(hi[1]));",
      "the sketch's size is its largest coordinate, which a sketch far from the origin overstates"),
+    ("origin_never_tried", GCS, "    if (!dragOriginFailed && !dragOrigin.empty()\n",
+     "    if (false && !dragOriginFailed && !dragOrigin.empty()\n", "the state the drag began in is never tried before the probes"),
+    # Dropped, run 055: "dragOriginFailed = true" after a failed try of the drag's first state
+    # only saves one solve per search of a lock (a version that retried it as the cursor moved ran
+    # S06 at 1.7 times the baseline's time per move, this one at 0.7); the trajectories are identical, so no test short of a
+    # timing bar sees it, and the timing bars of check 10 are measured in the Exhibit 1 run.
+    ("origin_replaced_by_every_init", SKETCH, "    GCSsys.dragOriginPending = !isInitMove;", "    GCSsys.dragOriginPending = true;",
+     "the editor's re-initialisation while dragging replaces the state the drag began in"),
+    ("origin_never_captured", SKETCH, "    GCSsys.dragOriginPending = !isInitMove;", "    GCSsys.dragOriginPending = false;",
+     "the state the drag began in is never saved"),
+    ("probes_held_back_whatever_the_gap", GCS, "    const bool settled = viaShortcut && Ebest == Eshortcut && dragProbeGap >= 0.\n        && gapNow > 0.5 * dragProbeGap;",
+     "    const bool settled = viaShortcut && Ebest == Eshortcut;", "the probes stay off after a settled shortcut even when the cursor comes back toward reach"),
+    ("probes_never_held_back", GCS, "    const bool settled = viaShortcut && Ebest == Eshortcut && dragProbeGap >= 0.\n        && gapNow > 0.5 * dragProbeGap;",
+     "    const bool settled = false && viaShortcut && Ebest == Eshortcut;", "the probes run on every move after a shortcut, as before run 055"),
     ("escape_perturbs_nothing", GCS, "                xs[j] += fraction * extent * std::sin(2.399963229728653 * (j + 1));",
      "                xs[j] += 0. * fraction * extent * std::sin(2.399963229728653 * (j + 1));", "the probes do not move the unknowns"),
 ]
