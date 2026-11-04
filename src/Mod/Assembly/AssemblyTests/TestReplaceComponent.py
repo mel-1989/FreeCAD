@@ -24,6 +24,15 @@ from AssemblyTests import replace_corpus as C
 POS_TOL = 1e-6   # brief check 3, mm
 ANG_TOL = 1e-9   # brief check 3, rad
 RATE_MIN = 0.85  # brief check 2
+# D13: the known references whose readings of the alignment land on different places, out of check 2's denominator (r055 repair:
+# the set is unchanged by the symmetric-turn fix; the cases added then have ambiguous truths and are not in it)
+D13_REFERENCES = sorted([
+    "array_elements_hole_moved:Rev0.Reference2", "array_elements_hole_moved:Rev1.Reference2",
+    "array_elements_hole_moved:Rev2.Reference2", "d1_both_holes_referenced_first_gone_second_shifted:J1.Reference2",
+    "d2_both_holes_referenced_both_shifted:J0.Reference2", "d2_both_holes_referenced_both_shifted:J1.Reference2",
+    "hole_moved_cylindrical:Cylindrical.Reference2", "hole_moved_revolute:Revolute.Reference2",
+    "t10_delete_old_body_nobody_else_uses:Planar.Reference2", "t11_delete_old_body_whose_pad_is_linked_elsewhere:Planar.Reference2",
+    "two_holes_second_removed_still_first_matches:Cylindrical.Reference2"])
 
 
 # ------------------------------------------------------------------ evaluation
@@ -309,6 +318,40 @@ def run_case(name, checks=("plan", "apply", "undo")):
         if R.signature(doc) != before_sig:
             res["problems"].append("plan changed the document")
         stats, probs = classify(rep, b.truth, C.CASES[name].opts.get("reported_ok", False))
+        # a reference that matches only because the caller passed an alignment is reported (needs alignment), not
+        # matched: the default plan (no alignment) is what counts for matched, the hinted plan must give the truth
+        stats["hinted_ok"] = stats["ok"]
+        stats["needs_alignment"] = 0
+        if "alignment" in b.kwargs:
+            known = {k: tl for k, tl in b.truth.items() if all(t[0] == "el" for t in tl)}
+            rep_d = R.plan(asm, b.old, b.new, **{k: v for k, v in b.kwargs.items() if k != "alignment"})
+            st_d, pr_d = classify(rep_d, known, allow_reported=True)
+            stats["wrong"] += st_d["wrong"]
+            res["problems"] += [x for x in pr_d if "remapped to" in x]
+            stats["ok"] = st_d["ok"]
+            stats["reported"] = st_d["reported"]
+            stats["needs_alignment"] = st_d["reported"]
+            res["default_plan"] = rep_d
+        # D13: a known reference that the default plan did not match and whose readings of the alignment land on
+        # different places is ambiguous by geometry. The plan itself says which (alignment.readings_differ), so a
+        # future case cannot leave the denominator by being listed here
+        dflt = res.get("default_plan", rep)
+        differ = {d["reference"] for d in dflt["alignment"].get("readings_differ", [])}
+        stats["geometry_ambiguous"] = 0
+        stats["reported_undecidable"] = 0
+        for jr in dflt["joints"]:
+            for rr in jr["references"]:
+                key = "%s.%s" % (jr["joint"], rr["reference"])
+                tl = b.truth.get(key)
+                if not tl or not all(t[0] == "el" for t in tl) or rr["status"] == "matched":
+                    continue
+                if any(e["status"] == "matched" and e["new_element"] != t[1] for e, t in zip(rr["elements"], tl)):
+                    continue  # a silent pick: already counted wrong
+                if key in differ:
+                    stats["geometry_ambiguous"] += 1
+                    res.setdefault("geometry_ambiguous", []).append(key)
+                else:
+                    stats["reported_undecidable"] += 1
         res["stats"] = stats
         res["problems"] += probs
         if C.CASES[name].opts.get("renumbers"):
@@ -404,7 +447,48 @@ def broken_machinery():
     return problems
 
 
-DEDICATED = {"broken_machinery": broken_machinery}
+def suppression_and_offset_machinery():
+    """A joint the user had suppressed stays suppressed through break and repair; editing the offset of a
+    broken joint is a console message, not a traceback (updateJCSPlacements, which raises, is not called)."""
+    problems = []
+    for was in (True, False):
+        doc = App.newDocument("Rc_supp")
+        try:
+            b = C.build_case(doc, "sym_two_holes_cylindrical")
+            plan = R.plan(b.asm, b.old, b.new)
+            cands = [c["element"] for c in plan["joints"][0]["references"][0]["elements"][0]["candidates"]]
+            j = doc.getObject("Cylindrical")
+            j.Suppressed = was
+            R.apply(b.asm, b.old, b.new)
+            if not (R.is_broken(j) and j.Suppressed):
+                problems.append("joint (suppressed=%s) not broken and suppressed after the replace" % was)
+            calls = []
+            orig = JointObject.Joint.updateJCSPlacements
+            JointObject.Joint.updateJCSPlacements = lambda self, joint: calls.append(1) or orig(self, joint)
+            try:
+                want = App.Placement(App.Vector(1, 2, 3), App.Rotation())
+                j.Offset1 = want
+            finally:
+                JointObject.Joint.updateJCSPlacements = orig
+            if calls:
+                problems.append("an Offset edit on a broken joint went on to the placement update (a traceback)")
+            if not j.Offset1.isSame(want, 1e-9):
+                problems.append("the offset edit on a broken joint was not kept")
+            R.repair(j, "Reference2", cands[1])
+            if R.is_broken(j) or j.Suppressed != was:
+                problems.append("repair left suppressed=%s for a joint that was suppressed=%s" % (j.Suppressed, was))
+            doc.undo()
+            if not (R.is_broken(j) and j.Suppressed):
+                problems.append("undo of the repair did not bring the broken state back (was=%s)" % was)
+        except Exception:
+            import traceback
+            problems.append("exception: " + traceback.format_exc()[-500:])
+        finally:
+            App.closeDocument(doc.Name)
+    return problems
+
+
+DEDICATED = {"broken_machinery": broken_machinery, "suppression_and_offset": suppression_and_offset_machinery}
 
 
 # ----------------------------------------------------------------- mutants
@@ -540,6 +624,43 @@ def _mut_alignment_check_off():
     R._alignment_conflict = lambda *a, **k: None
 
 
+def _mut_near_check_off():
+    R._near_conflict = lambda *a, **k: []
+
+
+def _mut_symmetry_rule_off():
+    R._symmetry_verdict = lambda *a, **k: None
+
+
+def _mut_in_place_turns_off():
+    R.IN_PLACE_TURNS = False
+
+
+def _mut_agreement_check_blind():
+    # the comparison of two readings finds no difference: every ambiguous alignment "agrees" and the part stands as placed
+    R._readings_differ = lambda first, second, both=False, tol=None: []
+
+
+def _mut_near_twin_shortcut():
+    # the old shortcut: a turned reading that recognises no old face identity does not is dropped without asking where
+    # the references land (a new part symmetric under the turn recognises the same faces turned and as placed)
+    orig = R._near_conflict
+    R._near_conflict = lambda mo, new_shape, comp, probe=None: orig(mo, new_shape, comp, None)
+
+
+def _mut_resize_exemption_off():
+    R._same_topology = lambda *a, **k: False
+
+
+def _mut_suppression_forgotten():
+    orig = R._break_joint
+
+    def f(doc, joint, reason=""):
+        orig(doc, joint, reason)
+        setattr(joint, R.WAS_SUPPRESSED_PROP, False)
+    R._break_joint = f
+
+
 def _mut_delete_ignores_users():
     R._outside_users = lambda members: []
 
@@ -589,6 +710,14 @@ def _mut_repair_unchecked():
     R._check_element = lambda *a, **k: None
 
 
+def _mut_stand_final():
+    R._stand_is_final = lambda *a, **k: True
+
+
+def _mut_in_place_near_inertia():
+    R.IN_PLACE_SKIP_NEAR_INERTIA = True
+
+
 MUTANTS = {
     "match_by_element_index_only": (_mut_index_only, "renumber_revolute"),
     "alignment_ignored_placement_and_origin": (_mut_ignore_alignment, "origin_rot_x_fixed"),
@@ -606,6 +735,15 @@ MUTANTS = {
     "one_to_one_assignment_off": (_mut_one_to_one_off, "d1_both_holes_referenced_first_gone_second_shifted"),
     "moved_and_resized_allowed": (_mut_move_and_resize_allowed, "c2_hole_gone_wider_hole_nearby"),
     "alignment_conflict_check_off": (_mut_alignment_check_off, "e3_bar_turned_about_z_boss_top_and_end"),
+    "near_twin_alignment_check_off": (_mut_near_check_off, "n26_bracket_turned_about_y_and_lost_a_10mm_end"),
+    "symmetry_rule_off": (_mut_symmetry_rule_off, "n20_square_plate_turned_a_quarter_and_gained_an_offcentre_hole"),
+    "in_place_turn_candidates_off": (_mut_in_place_turns_off, "n21_bracket_turned_about_y_and_given_a_big_boss"),
+    "stand_verdict_final_over_a_better_turn": (_mut_stand_final, "n23_bar_with_a_centreline_hole_turned_about_z"),
+    "in_place_turn_dropped_near_inertia_candidate": (_mut_in_place_near_inertia, "n22_bracket_turned_about_y_and_given_a_4mm_boss"),
+    "resize_exemption_off": (_mut_resize_exemption_off, "core_resize_cube_to_flat_plate"),
+    "agreement_check_treats_differing_as_agreeing": (_mut_agreement_check_blind, "n5_symmetric_plate_turned_and_gained_an_offcentre_hole"),
+    "near_twin_shortcut_drops_a_reading_unasked": (_mut_near_twin_shortcut, "n17_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_y"),
+    "user_suppression_forgotten_by_repair": (_mut_suppression_forgotten, "@suppression_and_offset"),
     "delete_old_ignores_other_users": (_mut_delete_ignores_users, "t6_delete_old_direct_part_used_by_another_assembly"),
     "body_features_orphaned": (_mut_body_features_orphaned, "t10_delete_old_body_nobody_else_uses"),
     "marker_not_set_on_broken_joint": (_mut_marker_not_set, "removed_hole_revolute"),
@@ -621,8 +759,8 @@ MUTANTS = {
 def mutated(name):
     saved = {k: getattr(R, k) for k in ("_match_element", "_choose_alignment", "_decide", "_new_link_placement",
                                         "_write_ref", "_break_joint", "_collect_refs", "_solve", "_new_ref_value", "apply",
-                                        "ADJ_MIN", "RADIUS_ADAPT", "SIZE_RATIO_MAX", "_claims", "MOVE_TOL",
-                                        "_alignment_conflict", "_outside_users", "_deletion_set", "repair",
+                                        "ADJ_MIN", "IN_PLACE_TURNS", "IN_PLACE_SKIP_NEAR_INERTIA", "_stand_is_final", "RADIUS_ADAPT", "SIZE_RATIO_MAX", "_claims", "MOVE_TOL",
+                                        "_alignment_conflict", "_near_conflict", "_readings_differ", "_symmetry_verdict", "_same_topology", "_outside_users", "_deletion_set", "repair",
                                         "_check_element")}
     saved_u = U.findPlacement
     saved_j = JointObject.Joint.onChanged
@@ -682,17 +820,37 @@ class TestReplaceComponent(unittest.TestCase):
                 total[k] = total.get(k, 0) + v
                 pc = per_class.setdefault(r["klass"], {})
                 pc[k] = pc.get(k, 0) + v
-        print("\n  per class (known refs: matched ok / reported not matched / wrong), unmatchable and ambiguous truths ok/total:")
-        for k, v in sorted(per_class.items()):
-            print("    %-16s known %2d  ok %2d  reported %2d  wrong %d   unmatchable %d/%d   ambiguous %d/%d"
-                  % (k, v["known"], v["ok"], v["reported"], v["wrong"], v["unmatchable_ok"], v["unmatchable"],
-                     v["ambiguous_ok"], v["ambiguous"]))
-        print("    %-16s known %2d  ok %2d  reported %2d  wrong %d   unmatchable %d/%d   ambiguous %d/%d"
-              % ("TOTAL", total["known"], total["ok"], total["reported"], total["wrong"], total["unmatchable_ok"],
-                 total["unmatchable"], total["ambiguous_ok"], total["ambiguous"]))
+        print("\n  per class (known refs: matched automatically / reported (needs alignment) / matched with the alignment given / wrong), unmatchable and ambiguous truths ok/total:")
+        for k, v in sorted(per_class.items()) + [("TOTAL", total)]:
+            print("    %-16s known %2d  automatic %2d  reported %2d  with hint %2d  wrong %d   unmatchable %d/%d   ambiguous %d/%d"
+                  % (k, v["known"], v["ok"], v["reported"], v["hinted_ok"], v["wrong"], v["unmatchable_ok"],
+                     v["unmatchable"], v["ambiguous_ok"], v["ambiguous"]))
+        print("    matched automatically / known: %d/%d = %.1f%%;  matched with the alignment given / known: %d/%d = %.1f%%;  "
+              "needing an alignment: %d;  wrong: %d" % (
+                  total["ok"], total["known"], 100.0 * total["ok"] / total["known"], total["hinted_ok"], total["known"],
+                  100.0 * total["hinted_ok"] / total["known"], total["needs_alignment"], total["wrong"]))
+        print("    cases whose known references need an alignment to match (%d references): %s" % (
+            total["needs_alignment"], ", ".join(sorted(n for n, r in self.results.items()
+                                                       if r["stats"] and r["stats"]["needs_alignment"]))))
+        print("    other known references reported, not matched, with no alignment hint: %s" % ", ".join(
+            "%s(%d)" % (n, r["stats"]["reported"]) for n, r in sorted(self.results.items())
+            if r["stats"] and r["stats"]["reported"] and not r["stats"]["needs_alignment"]))
+        den = total["known"] - total["geometry_ambiguous"]
+        print("    D13: references whose readings land on different places, ambiguous by geometry and out of the denominator "
+              "(%d): %s" % (total["geometry_ambiguous"], ", ".join(sorted(
+                  "%s:%s" % (n, k) for n, r in self.results.items() for k in r.get("geometry_ambiguous", [])))))
+        print("    matched automatically / (known - ambiguous by geometry): %d/%d = %.1f%% (old count %d/%d = %.1f%%);  "
+              "reported although the readings agree: %d;  wrong: %d" % (
+                  total["ok"], den, 100.0 * total["ok"] / den, total["ok"], total["known"],
+                  100.0 * total["ok"] / total["known"], total["reported_undecidable"], total["wrong"]))
         self.assertEqual(failures, [])
         self.assertEqual(total["wrong"], 0, "silent wrong remaps")
-        self.assertGreaterEqual(total["ok"] / total["known"], RATE_MIN)
+        named = sorted("%s:%s" % (n, k) for n, r in self.results.items() for k in r.get("geometry_ambiguous", []))
+        self.assertEqual(named, D13_REFERENCES, "the references D13 names, by name: a new one is a decision, not a count")
+        self.assertEqual(total["geometry_ambiguous"], len(D13_REFERENCES))
+        self.assertGreaterEqual(total["ok"] / den, RATE_MIN,
+                                "brief check 2 under D13: %d of %d references the geometry can decide matched automatically (%.1f%%)" % (
+                                    total["ok"], den, 100.0 * total["ok"] / den))
         self.assertEqual(total["unmatchable_ok"], total["unmatchable"])
         self.assertEqual(total["ambiguous_ok"], total["ambiguous"])
 
@@ -882,6 +1040,9 @@ class TestReplaceComponent(unittest.TestCase):
     def test_broken_joint_marker_findplacement_unsuppress_and_repair(self):
         self.assertEqual(broken_machinery(), [])
 
+    def test_user_suppression_survives_break_and_repair_and_offset_edit_is_quiet(self):
+        self.assertEqual(suppression_and_offset_machinery(), [])
+
     def test_ambiguous_alignment_is_resolved_by_giving_one(self):
         doc = App.newDocument("Rc_align")
         try:
@@ -907,6 +1068,118 @@ class TestReplaceComponent(unittest.TestCase):
         finally:
             App.closeDocument(doc.Name)
 
+    def test_alignment_candidates_contract(self):
+        def counts_of(r):
+            return r["references"]
+
+        def plc_of(d):
+            return App.Placement(App.Vector(*d["base"]), App.Rotation(*d["rotation"]))
+
+        for name, turned_label in (("n1_bracket_turned_and_gained_a_small_hole", "turned 180\u00b0 about Y"),
+                                   ("n2_bracket_turned_and_gained_a_boss", "turned 180\u00b0 about Y"),
+                                   ("n5_symmetric_plate_turned_and_gained_an_offcentre_hole", "turned 180\u00b0 about Y"),
+                                   ("n6_symmetric_plate_turned_about_y_edge_only_reference", "turned 180\u00b0 about Y"),
+                                   ("n7_symmetric_plate_turned_about_x_edge_only_reference", "turned 180\u00b0 about X"),
+                                   ("n8_symmetric_plate_turned_vertex_only_reference", "turned 180\u00b0 about Y"),
+                                   ("n11_bracket_turned_and_lost_a_chamfered_end", "turned 178\u00b0 about Y"),   # an inertia alignment, not exact
+                                   ("n17_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_y", "turned 180\u00b0 about Y"),
+                                   ("n18_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_x", "turned 180\u00b0 about X"),
+                                   ("e3_bar_turned_about_z_boss_top_and_end", "turned 180\u00b0 about Z")):
+            with self.subTest(case=name):
+                doc = App.newDocument("Rc_cand")
+                try:
+                    b = C.build_case(doc, name)
+                    rep = R.plan(b.asm, b.old, b.new)
+                    json.dumps(rep)
+                    al = rep["alignment"]
+                    self.assertEqual(al["method"], "ambiguous")
+                    cands = al["candidates"]
+                    self.assertEqual(cands[0]["label"], "as placed")
+                    self.assertEqual(cands[0]["placement"], R._plc_json(App.Placement()))
+                    self.assertIn(turned_label, [c["label"] for c in cands])
+                    self.assertGreaterEqual(len(cands), 2)
+                    for c in cands:
+                        self.assertEqual(set(c), {"label", "placement", "counts", "error"})
+                        self.assertEqual(set(c["counts"]), {"matched", "ambiguous", "unmatched"})
+                        again = R.plan(b.asm, b.old, b.new, alignment=plc_of(c["placement"]))
+                        self.assertEqual(again["alignment"]["method"], "given")
+                        self.assertEqual(again["alignment"]["candidates"], [])
+                        self.assertEqual(counts_of(again), c["counts"], c["label"])
+                    # the readings differ: the turned one resolves what as placed does not (or resolves it differently)
+                    news = lambda r: [e["new_element"] for j in r["joints"] for rr in j["references"] for e in rr["elements"]]
+                    self.assertNotEqual(news(R.plan(b.asm, b.old, b.new, alignment=plc_of(cands[0]["placement"]))),
+                                        news(R.plan(b.asm, b.old, b.new, alignment=plc_of(cands[1]["placement"]))))
+                    # apply with the turned candidate reproduces its counts too
+                    done = R.apply(b.asm, b.old, b.new, alignment=plc_of(cands[1]["placement"]))
+                    self.assertEqual(counts_of(done), cands[1]["counts"])
+                    # a given alignment is never reported as ambiguous
+                    self.assertEqual(done["alignment"]["method"], "given")
+                finally:
+                    App.closeDocument(doc.Name)
+
+    def test_readings_differ_rules(self):
+        V = App.Vector
+        a = {"r": ("matched", "Face7", V(30, 6, 5))}
+        self.assertEqual(R._readings_differ(a, {"r": ("matched", "Face7", V(30, 6, 5))}), [])
+        # the same name at another place differs only when a tolerance is asked for
+        far = {"r": ("matched", "Face7", V(10, 6, 5))}
+        self.assertEqual(R._readings_differ(a, far), [])
+        self.assertEqual(len(R._readings_differ(a, far, tol=1.0)), 1)
+        self.assertEqual(R._readings_differ(a, {"r": ("matched", "Face7", V(30.5, 6, 5))}, tol=1.0), [])
+        # another element differs
+        self.assertEqual(len(R._readings_differ(a, {"r": ("matched", "Face8", V(30, 6, 5))})), 1)
+        # matched against not matched differs, unless only references both readings match count
+        gone = {"r": ("unmatched", None, None)}
+        self.assertEqual(len(R._readings_differ(a, gone)), 1)
+        self.assertEqual(R._readings_differ(a, gone, both=True), [])
+        self.assertEqual(len(R._readings_differ(a, {"r": ("matched", "Face8", V(30, 6, 5))}, both=True)), 1)
+        # neither matched: nothing to tell apart
+        self.assertEqual(R._readings_differ(gone, {"r": ("ambiguous", None, None)}), [])
+
+    def test_unambiguous_alignment_has_no_candidates(self):
+        for name, method in (("n3_control_plain_revision_gained_a_small_hole", "identity"),
+                             ("n4_control_plain_revision_gained_a_boss", "identity"),
+                             ("n13_control_symmetric_plate_gained_a_hole_reference_is_the_centre_hole", "identity"),
+                             ("n14_control_asymmetric_bracket_gained_a_tiny_hole_far_away", "identity"),
+                             ("n15_control_symmetric_plate_resized_keeping_the_symmetry", "identity"),   # a resize: as placed (was inertia before the resize exemption)
+                             ("n16_control_symmetric_plate_made_thicker", "identity"),
+                             ("n19_control_plate_with_two_holes_replaced_by_the_plain_plate_reference_is_the_centre_hole", "identity")):
+            with self.subTest(case=name):
+                doc = App.newDocument("Rc_ctl")
+                try:
+                    b = C.build_case(doc, name)
+                    rep = R.plan(b.asm, b.old, b.new)
+                    self.assertEqual(rep["alignment"]["method"], method)
+                    self.assertEqual(rep["alignment"]["candidates"], [])
+                    self.assertEqual(rep["references"]["matched"], 1)
+                finally:
+                    App.closeDocument(doc.Name)
+
+    def test_choices_dict_shape_and_candidate_basis(self):
+        doc = App.newDocument("Rc_choices")
+        try:
+            b = C.build_case(doc, "sym_two_holes_revolute")
+            plan = R.plan(b.asm, b.old, b.new)
+            ref = plan["joints"][0]["references"][0]
+            amb = [e for e in ref["elements"] if e["status"] == "ambiguous"]
+            self.assertTrue(amb)
+            cands = amb[0]["candidates"]
+            self.assertGreaterEqual(len(cands), 2)
+            self.assertEqual(set(cands[0]), {"element", "entity", "cost", "basis"})
+            key = "%s.%s" % (plan["joints"][0]["joint"], ref["reference"])
+            pick = {amb[0]["old_element"]: cands[1]["element"]}
+            rep = R.plan(b.asm, b.old, b.new, choices={key: pick})
+            e = [x for x in element_reports(rep, key)["elements"] if x["old_element"] == amb[0]["old_element"]][0]
+            self.assertEqual((e["status"], e["new_element"], e["basis"]), ("matched", cands[1]["element"], "user"))
+            # a choice for a reference that is not ambiguous is ignored
+            self.assertEqual(R.plan(b.asm, b.old, b.new, choices={"Nope.Reference1": "Face1"})["references"],
+                             plan["references"])
+            rep = R.apply(b.asm, b.old, b.new, choices={key: pick})
+            j = doc.getObject(plan["joints"][0]["joint"])
+            self.assertIn(cands[1]["element"], getattr(j, ref["reference"])[1][0])
+        finally:
+            App.closeDocument(doc.Name)
+
     def test_delete_old_keeps_an_object_linked_from_another_document(self):
         tmp = tempfile.mkdtemp(prefix="rc")
         doc = App.newDocument("Rc_xdoc")
@@ -927,6 +1200,73 @@ class TestReplaceComponent(unittest.TestCase):
             App.closeDocument(other.Name)
             App.closeDocument(doc.Name)
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_importing_a_part_from_another_document_leaves_that_document_as_it_was(self):
+        # Document.copyObject marks the objects it copies from with a hidden _ObjectUUID that the next save of their document
+        # would write; a part taken from a document the user has open is used as it is
+        doc = App.newDocument("Rc_imp")
+        other = App.newDocument("Rc_imp_src")
+        try:
+            b = C.build_case(doc, "renumber_revolute")
+            src = other.addObject("Part::Feature", "SrcPart")
+            src.Shape = b.new.Shape
+            other.recompute()
+            before = (R.signature(other), other.isTouched(), other.UndoCount)
+            rep = R.apply(b.asm, b.old, src, import_foreign=True)
+            self.assertTrue(rep["imported"], rep)
+            self.assertNotIn("_ObjectUUID", src.PropertiesList)
+            self.assertEqual((R.signature(other), other.isTouched(), other.UndoCount), before)
+            # a source object that carried the mark already keeps it
+            src2 = other.addObject("Part::Feature", "SrcPart2")
+            src2.Shape = b.new.Shape
+            src2.addProperty("App::PropertyUUID", "_ObjectUUID", "Base", "", 0, False, True)
+            R._forget_copy_marks(other, {"SrcPart2"})
+            self.assertIn("_ObjectUUID", src2.PropertiesList)
+        finally:
+            App.closeDocument(other.Name)
+            App.closeDocument(doc.Name)
+
+    def test_grounded_part_under_every_alignment_case(self):
+        """r055 probe: the agreement check compares element and place, not the part's pose. Every alignment-class case is rebuilt
+        with the replaced part grounded (direct mode) and must still show no silent wrong remap and no moved frame."""
+        orig = C.scene
+
+        def grounded(doc, old_shape, new_shape, joints, **kw):
+            kw.update(mode="direct", ground_old=True, array=False, new_is_link=False)
+            return orig(doc, old_shape, new_shape, joints, **kw)
+
+        C.scene = grounded
+        try:
+            bad = {}
+            for name, cs in C.CASES.items():
+                if cs.klass != "alignment":
+                    continue
+                r = run_case(name)
+                if r["problems"] or (r["stats"] and r["stats"]["wrong"]):
+                    bad[name] = r["problems"][:2]
+        finally:
+            C.scene = orig
+        self.assertEqual(bad, {})
+
+    def test_thicker_symmetric_plate_keeps_its_elements(self):
+        """r055: run 041's verifier case A6 was an oracle artefact. The joint holds the hole's wall and a corner edge of a plate;
+        a plate 14 mm thick (grown upward or downward) keeps both, at the same place in the plan view, and Edge1 stays the
+        same corner edge, only longer."""
+        S = C.bracket(holes=((20, 10, 3),))
+        sd = (C.cy((20, 10, 0), (0, 0, 1), 3), C.ci((20, 10, 10), (0, 0, 1), 3))
+        for dz in (0, -4):
+            doc = App.newDocument("Rc_a6")
+            try:
+                new = C.moved(C.bracket(40, 20, 14, holes=((20, 10, 3),)), App.Placement(App.Vector(0, 0, dz), App.Rotation()))
+                b = C.scene(doc, S, new, [C.jspec("revolute", sd, (C.AMB, C.AMB))])
+                rep = R.plan(b.asm, b.old, b.new)
+                els = [e for j in rep["joints"] for r in j["references"] for e in r["elements"]]
+                self.assertEqual([(e["status"], e["old_element"], e["new_element"]) for e in els],
+                                 [("matched", "Face7", "Face7"), ("matched", "Edge1", "Edge1")])
+                oc, nc = S.getElement("Edge1").CenterOfMass, new.getElement("Edge1").CenterOfMass
+                self.assertAlmostEqual((oc.x - nc.x) ** 2 + (oc.y - nc.y) ** 2, 0.0, places=6)
+            finally:
+                App.closeDocument(doc.Name)
 
     def test_two_runs_identical(self):
         a = run_case("resize_slider", checks=("plan",))["plan"]

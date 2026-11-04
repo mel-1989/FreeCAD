@@ -31,6 +31,11 @@ V = App.Vector
 Z = V(0, 0, 1)
 
 
+def given_identity():
+    """The caller's answer for a part that was not turned: pass it as the alignment."""
+    return {"alignment": App.Placement()}
+
+
 class Case:
     def __init__(self, name, klass, fn, **opts):
         self.name = name
@@ -756,7 +761,9 @@ def two_holes_first_removed_cylindrical(doc):
     # the hole at x = 10 is gone; the one at x = 30 stays and is not a moved copy of it
     old = bracket(holes=((10, 6, 3), (30, 6, 3)))
     new = bracket(holes=((30, 6, 3),))
-    return scene(doc, old, new, [jspec("cylindrical", (cy((10, 6, 0), (0, 0, 1), 3),) * 2, UN)])
+    # the part is symmetric under a half turn about Y (the two holes swap): a changed part may have been turned,
+    # so the caller says it was not; two_holes_first_removed_open leaves the alignment open
+    return scene(doc, old, new, [jspec("cylindrical", (cy((10, 6, 0), (0, 0, 1), 3),) * 2, UN)], kwargs=given_identity())
 
 
 @case("hole_moved")
@@ -764,13 +771,33 @@ def two_holes_second_removed_still_first_matches(doc):
     old = bracket(holes=((10, 6, 3), (30, 6, 3)))
     new = bracket(holes=((10, 6, 3),))
     d = (cy((10, 6, 0), (0, 0, 1), 3),) * 2
-    return scene(doc, old, new, [jspec("cylindrical", d, d)])
+    return scene(doc, old, new, [jspec("cylindrical", d, d)], kwargs=given_identity())
+
+
+# The same two parts without the caller's answer: the old part is symmetric under the half turn, the new part is
+# not, so "hole at x = 30 removed" and "turned, hole at x = 10 removed" read the same: ambiguous.
+@case("hole_moved")
+def two_holes_first_removed_open(doc):
+    old = bracket(holes=((10, 6, 3), (30, 6, 3)))
+    new = bracket(holes=((30, 6, 3),))
+    return scene(doc, old, new, [jspec("cylindrical", (cy((10, 6, 0), (0, 0, 1), 3),) * 2, (AMB, AMB))])
+
+
+@case("hole_moved")
+def two_holes_second_removed_open(doc):
+    old = bracket(holes=((10, 6, 3), (30, 6, 3)))
+    new = bracket(holes=((10, 6, 3),))
+    d = (cy((10, 6, 0), (0, 0, 1), 3),) * 2
+    return scene(doc, old, new, [jspec("cylindrical", d, (AMB, AMB))])
 
 
 # --- from the Assembly workbench's own tests (TestCore) ---------------------------------------
 
 def _core_boxes(doc, old_dims, new_dims, ref_old, ref_new, jtype_index=0, rack=False):
-    """TestCore.test_solve_assembly: two Part::Box in an assembly, Face6 + Vertex7 fixed joint."""
+    """TestCore.test_solve_assembly: two Part::Box in an assembly, Face6 + Vertex7 fixed joint.
+
+    A box is symmetric under half turns (a cube under quarter turns too), but a resize keeps the topology,
+    so the part stands as placed with the default alignment (``_same_topology``)."""
     b = Built()
     asm = doc.addObject("Assembly::AssemblyObject", "Assembly")
     jg = asm.newObject("Assembly::JointGroup", "Joints")
@@ -806,6 +833,30 @@ def core_solve_assembly_resized(doc):
     L, W, H = 10, 10, 10
     return _core_boxes(doc, (L, W, H), (20, 14, 10), (pl((0, 0, 1), H), vx((L, W, H))),
                        (pl((0, 0, 1), 10), vx((20, 14, 10))))
+
+
+# Resize controls: an ordinary resize keeps the topology, so it matches on the default alignment even though the
+# old part is symmetric under a turn that the new part is not (a bar lengthened, a cube made a flat plate).
+@case("workbench_tests")
+def core_resize_square_bar_lengthened(doc):
+    return _core_boxes(doc, (10, 10, 40), (10, 10, 60), (pl((0, 0, 1), 40), vx((10, 10, 40))),
+                       (pl((0, 0, 1), 60), vx((10, 10, 60))))
+
+
+@case("workbench_tests")
+def core_resize_cube_to_flat_plate(doc):
+    return _core_boxes(doc, (10, 10, 10), (15, 15, 4), (pl((0, 0, 1), 10), vx((10, 10, 10))),
+                       (pl((0, 0, 1), 4), vx((15, 15, 4))))
+
+
+@case("workbench_tests")
+def core_resize_two_hole_plate_scaled(doc):
+    # the two-hole bracket is symmetric under a half turn about Y; scaled uniformly by 1.05 it still has its two
+    # holes, each where it was in proportion, so no feature was added, removed or moved: placed, not turned
+    old = bracket(holes=((10, 6, 3), (30, 6, 3)))
+    new = bracket(w=42, d=21, h=10.5, holes=((10.5, 6.3, 3.15), (31.5, 6.3, 3.15)))
+    return scene(doc, old, new, [jspec("cylindrical", (cy((10, 6, 0), (0, 0, 1), 3),) * 2,
+                                       (cy((10.5, 6.3, 0), (0, 0, 1), 3.15),) * 2)])
 
 
 @case("workbench_tests")
@@ -893,6 +944,7 @@ def core_generated_array_joint(doc):
     assert one(source.Shape, pl((-1, 0, 0), 0)) == "Face1"
     b.truth["Joint.Reference1"] = [t]
     b.truth["Joint.Reference2"] = [t]
+    # the source is a cube: symmetric under quarter turns, but 10 x 10 x 10 to 12 x 10 x 10 is a resize: placed
     return b
 
 
@@ -1126,13 +1178,13 @@ def c2_hole_gone_wider_hole_nearby(doc):
 def c4_first_of_two_holes_gone_second_shifted(doc):
     # the hole at x = 10 is gone and the one at x = 30 moved by 0.5: the survivor is not the removed hole
     return scene(doc, _TWO_HOLES, bracket(holes=((30.5, 6, 3),)),
-                 [jspec("cylindrical", (cy((10, 6, 0), (0, 0, 1), 3),) * 2, UN)])
+                 [jspec("cylindrical", (cy((10, 6, 0), (0, 0, 1), 3),) * 2, UN)], kwargs=given_identity())
 
 
 @case("one_to_one")
 def c5_second_of_two_holes_gone_first_shifted(doc):
     return scene(doc, _TWO_HOLES, bracket(holes=((10.5, 6, 3),)),
-                 [jspec("cylindrical", (cy((30, 6, 0), (0, 0, 1), 3),) * 2, UN)])
+                 [jspec("cylindrical", (cy((30, 6, 0), (0, 0, 1), 3),) * 2, UN)], kwargs=given_identity())
 
 
 _H = lambda x, r=3: (cy((x, 6, 0), (0, 0, 1), r),) * 2
@@ -1141,19 +1193,26 @@ _H = lambda x, r=3: (cy((x, 6, 0), (0, 0, 1), r),) * 2
 @case("one_to_one")
 def d1_both_holes_referenced_first_gone_second_shifted(doc):
     js = [jspec("cylindrical", _H(10), UN, name="J0"), jspec("cylindrical", _H(30), _H(30.5), name="J1")]
-    return scene(doc, _TWO_HOLES, bracket(holes=((30.5, 6, 3),)), js, mode="two", plate_n=2)
+    return scene(doc, _TWO_HOLES, bracket(holes=((30.5, 6, 3),)), js, mode="two", plate_n=2, kwargs=given_identity())
 
 
 @case("one_to_one")
 def d2_both_holes_referenced_both_shifted(doc):
     js = [jspec("cylindrical", _H(10), _H(10.5), name="J0"), jspec("cylindrical", _H(30), _H(30.5), name="J1")]
+    return scene(doc, _TWO_HOLES, bracket(holes=((10.5, 6, 3), (30.5, 6, 3))), js, mode="two", plate_n=2, kwargs=given_identity())
+
+
+@case("one_to_one")
+def d2_both_holes_referenced_both_shifted_open(doc):
+    # both holes moved by 0.5 the same way: as placed each hole follows itself, turned each follows the other
+    js = [jspec("cylindrical", _H(10), (AMB, AMB), name="J0"), jspec("cylindrical", _H(30), (AMB, AMB), name="J1")]
     return scene(doc, _TWO_HOLES, bracket(holes=((10.5, 6, 3), (30.5, 6, 3))), js, mode="two", plate_n=2)
 
 
 @case("one_to_one")
 def d3_both_holes_referenced_radii_changed(doc):
     js = [jspec("cylindrical", _H(10), _H(10, 3.5), name="J0"), jspec("cylindrical", _H(30), _H(30, 2.9), name="J1")]
-    return scene(doc, _TWO_HOLES, bracket(holes=((10, 6, 3.5), (30, 6, 2.9))), js, mode="two", plate_n=2)
+    return scene(doc, _TWO_HOLES, bracket(holes=((10, 6, 3.5), (30, 6, 2.9))), js, mode="two", plate_n=2, kwargs=given_identity())
 
 
 # a near-symmetric bar: the part as placed and the part turned fit about equally, so the alignment is ambiguous
@@ -1202,6 +1261,225 @@ def e7_boss_moved_to_the_other_end(doc):
     # the same shape as e3: indistinguishable from a turned part
     js = [jspec("slider", pl((0, 0, 1), 11), AMB, name="J0"), jspec("slider", _XEND, AMB, name="J1")]
     return scene(doc, _BAR_BOSS, _bar(2), js)
+
+
+# --- a part turned and also changed (carried MEDIUM of run 040): no exact twins, near twins say "turned" ---
+
+_SMALL_HOLE = bracket(holes=((10, 6, 3), (25, 14, 2)))
+_SMALL_BOSS = bracket(bosses=((30, 5, 4, 6, 2),))
+
+
+def _turn_y(shape):
+    return moved(shape, App.Placement(V(0, 0, 0), App.Rotation(V(0, 1, 0), 180), V(20, 10, 5)))
+
+
+@case("alignment")
+def n1_bracket_turned_and_gained_a_small_hole(doc):
+    # the hole at x = 10 of the old part is at x = 30 once the new part is turned back and as placed: ambiguous
+    return scene(doc, BASE, _turn_y(_SMALL_HOLE), [jspec("revolute", BR["revolute"], (AMB, AMB))])
+
+
+@case("alignment")
+def n2_bracket_turned_and_gained_a_boss(doc):
+    return scene(doc, BASE, _turn_y(_SMALL_BOSS), [jspec("cylindrical", BR["cylindrical"], (AMB, AMB))])
+
+
+@case("alignment")
+def n3_control_plain_revision_gained_a_small_hole(doc):
+    # not turned: the same revolute joint must stay unambiguous
+    return scene(doc, BASE, _SMALL_HOLE, [jspec("revolute", BR["revolute"], BR["revolute"])], still=True)
+
+
+@case("alignment")
+def n4_control_plain_revision_gained_a_boss(doc):
+    return scene(doc, BASE, _SMALL_BOSS, [jspec("cylindrical", BR["cylindrical"], BR["cylindrical"])], still=True)
+
+
+# --- the same question asked of the referenced elements (r041): a symmetric plate turned 180 degrees about Y that gained an
+# off-centre hole. Faces are explained alike as placed and as turned, but the hole's rim edge goes to opposite rims.
+
+_PLATE = bracket(holes=((20, 10, 3),))
+_PLATE_HOLE = bracket(holes=((20, 10, 3), (8, 4, 1.5)))
+_PLATE_JOINT = (cy((20, 10, 0), (0, 0, 1), 3), ci((20, 10, 10), (0, 0, 1), 3))
+
+
+@case("alignment")
+def n5_symmetric_plate_turned_and_gained_an_offcentre_hole(doc):
+    # as placed the joint's rim edge goes to one rim, turned back to the opposite one (10 mm apart): ambiguous
+    return scene(doc, _PLATE, _turn_y(_PLATE_HOLE), [jspec("revolute", _PLATE_JOINT, (AMB, AMB))])
+
+
+# --- the symmetry rule (r041, second repair): a part symmetric under a proper turn that is replaced by a changed version may
+# have been placed or turned, whatever kind of element the joint holds. Every reference is planned under both readings;
+# if they differ the alignment is ambiguous, unless every referenced element is the same under both.
+
+def _turn_x(shape):
+    return moved(shape, App.Placement(V(0, 0, 0), App.Rotation(V(1, 0, 0), 180), V(20, 10, 5)))
+
+
+_RIM = ci((20, 10, 10), (0, 0, 1), 3)
+_CORNER = vx((40, 20, 10))
+
+
+@case("alignment")
+def n6_symmetric_plate_turned_about_y_edge_only_reference(doc):
+    # the rim edge alone, no face: as placed it is the top rim, turned the other one
+    return scene(doc, _PLATE, _turn_y(_PLATE_HOLE), [jspec("revolute", (_RIM, _RIM), (AMB, AMB))])
+
+
+@case("alignment")
+def n7_symmetric_plate_turned_about_x_edge_only_reference(doc):
+    return scene(doc, _PLATE, _turn_x(_PLATE_HOLE), [jspec("revolute", (_RIM, _RIM), (AMB, AMB))])
+
+
+@case("alignment")
+def n8_symmetric_plate_turned_vertex_only_reference(doc):
+    # the corner (40, 20, 10) goes to the opposite corner when turned: 41 mm apart
+    return scene(doc, _PLATE, _turn_y(_PLATE_HOLE), [jspec("ball", (_CORNER, _CORNER), (AMB, AMB))])
+
+
+@case("alignment")
+def n9_symmetric_plate_turned_face_and_vertex_reference(doc):
+    top = pl((0, 0, 1), 10)
+    return scene(doc, _PLATE, _turn_y(_PLATE_HOLE), [jspec("ball", (top, _CORNER), (AMB, AMB))])
+
+
+@case("alignment")
+def n10_symmetric_plate_turned_and_gained_an_offcentre_hole_of_the_same_radius(doc):
+    # the new hole has the radius of the joint's hole: the faces trade places under the turn, the rule still asks
+    new = _turn_y(bracket(holes=((20, 10, 3), (8, 4, 3))))
+    return scene(doc, _PLATE, new, [jspec("revolute", _PLATE_JOINT, (AMB, AMB))])
+
+
+@case("alignment")
+def n11_bracket_turned_and_lost_a_chamfered_end(doc):
+    # not symmetric, overlap 0.81 as placed and 0.78 turned: the near twin check has to reach that far
+    return scene(doc, BASE, _turn_y(bracket(chamfer_end=True)), [jspec("revolute", BR["revolute"], (AMB, AMB))])
+
+
+@case("alignment")
+def n12_symmetric_plate_gained_an_offcentre_hole_not_turned(doc):
+    # not turned, but the plate is symmetric and the hole's rim edge is not invariant: nothing in the geometry
+    # says it was not turned, so it is reported
+    return scene(doc, _PLATE, _PLATE_HOLE, [jspec("revolute", _PLATE_JOINT, (AMB, AMB))])
+
+
+@case("alignment")
+def n13_control_symmetric_plate_gained_a_hole_reference_is_the_centre_hole(doc):
+    # every turn of the plate maps the centre hole's cylinder onto itself: the readings agree, matched
+    d = (cy((20, 10, 0), (0, 0, 1), 3),) * 2
+    return scene(doc, _PLATE, _PLATE_HOLE, [jspec("cylindrical", d, d)], still=True)
+
+
+@case("alignment")
+def n14_control_asymmetric_bracket_gained_a_tiny_hole_far_away(doc):
+    return scene(doc, BASE, bracket(holes=((10, 6, 3), (36, 16, 1))), [jspec("revolute", BR["revolute"], BR["revolute"])],
+                 still=True)
+
+
+@case("alignment")
+def n15_control_symmetric_plate_resized_keeping_the_symmetry(doc):
+    # 40 x 20 becomes 50 x 25 about the same corner, the hole stays at the new centre: the new plate is symmetric under every
+    # turn too, so placed and turned are the same body
+    new = bracket(50, 25, 10, holes=((25, 12.5, 3),))
+    return scene(doc, _PLATE, new, [jspec("revolute", _PLATE_JOINT, (cy((25, 12.5, 0), (0, 0, 1), 3), ci((25, 12.5, 10), (0, 0, 1), 3)))])
+
+
+@case("alignment")
+def n16_control_symmetric_plate_made_thicker(doc):
+    # 10 becomes 14 thick, hole still centred: the new plate is symmetric under every turn about its own centre, so placed
+    # and turned are the same body and the rim edge follows the top face
+    new = bracket(40, 20, 14, holes=((20, 10, 3),))
+    return scene(doc, _PLATE, new, [jspec("revolute", _PLATE_JOINT, (cy((20, 10, 0), (0, 0, 1), 3), ci((20, 10, 14), (0, 0, 1), 3)))])
+
+
+# --- the near twin path asks the references too (r042): a part that is not symmetric (a second, off-centre hole) is replaced by
+# the plain plate turned 180 degrees. The new plate is symmetric, so as placed and as turned it is the same body and explains the
+# same old faces; the joint's rim edge still goes to the top rim as placed and to the bottom rim turned (10 mm apart).
+
+@case("alignment")
+def n17_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_y(doc):
+    return scene(doc, _PLATE_HOLE, _turn_y(_PLATE), [jspec("revolute", _PLATE_JOINT, (AMB, AMB))])
+
+
+@case("alignment")
+def n18_plate_with_two_holes_replaced_by_the_plain_plate_turned_about_x(doc):
+    return scene(doc, _PLATE_HOLE, _turn_x(_PLATE), [jspec("revolute", _PLATE_JOINT, (AMB, AMB))])
+
+
+@case("alignment")
+def n19_control_plate_with_two_holes_replaced_by_the_plain_plate_reference_is_the_centre_hole(doc):
+    # the same parts, but the joint holds only the centre hole's cylinder, which every turn maps onto itself: matched
+    d = (cy((20, 10, 0), (0, 0, 1), 3),) * 2
+    return scene(doc, _PLATE_HOLE, _turn_y(_PLATE), [jspec("cylindrical", d, d)], still=True)
+
+
+@case("alignment")
+def n20_square_plate_turned_a_quarter_and_gained_an_offcentre_hole(doc):
+    # a 20 x 20 plate has no principal axes to align by (equal moments in the plane): only the symmetry rule sees that the
+    # new plate may be the old one turned a quarter about Z, which sends the corner (20, 20, 10) to the corner (0, 20, 10)
+    old = bracket(20, 20, 10, holes=((10, 10, 3),))
+    new = moved(bracket(20, 20, 10, holes=((10, 10, 3), (4, 4, 1.5))),
+                App.Placement(V(0, 0, 0), App.Rotation(V(0, 0, 1), 90), V(10, 10, 5)))
+    corner = vx((20, 20, 10))
+    return scene(doc, old, new, [jspec("ball", (corner, corner), (AMB, AMB))])
+
+
+@case("alignment")
+def n21_bracket_turned_about_y_and_given_a_big_boss(doc):
+    # r055 (run 041 verifier case 19): the new part's own axes of inertia move with the big boss, so only the half turn about the
+    # old part's own axis (not one of the new part's candidates) sees that the hole may have been turned: the hole is 20 mm
+    # away as placed and in place when turned, so the reference is ambiguous (before, it was matched as placed, silently)
+    new = _turn_y(bracket(bosses=((25, 2, 14, 16, 8),)))
+    return scene(doc, BASE, new, [jspec("cylindrical", BR["cylindrical"], (AMB, AMB))])
+
+
+# --- r055 repair (run 041 verifier, second round): a turned reading that fits as well as identity or better is never skipped
+
+@case("alignment")
+def n22_bracket_turned_about_y_and_given_a_4mm_boss(doc):
+    # H1: the inertia candidate near the exact turn overlaps 0.9025 against 0.9075 for identity, and the exact half turn used to
+    # be dropped as a duplicate of it; the hole and the corner are 20 mm apart as placed and when turned, so the part is ambiguous
+    new = _turn_y(bracket(bosses=((2, 2, 4, 12, 4),)))
+    return scene(doc, BASE, new, [jspec("cylindrical", BR["cylindrical"], (AMB, AMB), name="Cyl"),
+                                  jspec("fixed", BR["fixed"], (AMB, AMB), name="Fix")])
+
+
+@case("alignment")
+def n23_bar_with_a_centreline_hole_turned_about_z(doc):
+    # P6: 60 x 10 x 10 with a hole at (15, 5) is symmetric under the half turn about X only; turned about Z it overlaps exactly
+    # (1.0) against 0.958 as placed and has the old part's topology, so the resize exemption used to keep identity and the
+    # corner (0, 0, 0) went to the opposite corner silently
+    old = solid(Part.makeBox(60, 10, 10).cut(Part.makeCylinder(2, 12, V(15, 5, -1))))
+    new = moved(old, App.Placement(V(0, 0, 0), App.Rotation(V(0, 0, 1), 180), V(30, 5, 5)))
+    return scene(doc, old, new, [jspec("fixed", (pl((0, 0, -1), 0), vx((0, 0, 0))), (AMB, AMB), name="Fix"),
+                                 jspec("revolute", (cy((15, 5, 0), (0, 0, 1), 2), ci((15, 5, 10), (0, 0, 1), 2)),
+                                       (AMB, AMB), name="Rev")])
+
+
+@case("alignment")
+def n24_control_bar_with_a_centreline_hole_hole_moved_not_turned(doc):
+    # the same bar with its hole moved 1 mm: nothing is turned, the joints stay matched
+    old = solid(Part.makeBox(60, 10, 10).cut(Part.makeCylinder(2, 12, V(15, 5, -1))))
+    new = solid(Part.makeBox(60, 10, 10).cut(Part.makeCylinder(2, 12, V(16, 5, -1))))
+    return scene(doc, old, new, [jspec("revolute", (cy((15, 5, 0), (0, 0, 1), 2), ci((15, 5, 10), (0, 0, 1), 2)),
+                                       (cy((16, 5, 0), (0, 0, 1), 2), ci((16, 5, 10), (0, 0, 1), 2)), name="Rev")])
+
+
+@case("alignment")
+def n25_bracket_turned_about_y_and_given_an_11mm_boss_face_and_edge_reference(doc):
+    # a face and edge reference whose face has no match used to raise in the planner (the edge's number within a face that is not matched)
+    new = _turn_y(bracket(bosses=((2, 2, 11, 12, 11),)))
+    return scene(doc, BASE, new, [jspec("revolute", BR["revolute"], (AMB, AMB))])
+
+
+@case("alignment")
+def n26_bracket_turned_about_y_and_lost_a_10mm_end(doc):
+    # overlap 0.71 as placed; the exact half turn about the old part's own axis fits no better than identity within 0.02, so only
+    # the near twin rule (which reaches 0.1 below identity) sees that the hole may have been turned
+    new = _turn_y(bracket(cut=Part.makeBox(10, 20, 10, V(30, 0, 0))))
+    return scene(doc, BASE, new, [jspec("cylindrical", BR["cylindrical"], (AMB, AMB), name="Cyl"),
+                                  jspec("fixed", BR["fixed"], (AMB, AMB), name="Fix")])
 
 
 # --- delete_old must not destroy what is still used --------------------------------------------
@@ -1265,7 +1543,9 @@ def _body_scene(doc, other_user):
     doc.recompute()
     old_shape = solid(body.Shape)
     new = bracket(holes=(), bosses=((0, 5, 5, 10, 4),))
-    b = scene(doc, old_shape, new, [jspec("planar", BR["planar"], BR["planar"])], mode="direct", still=True, old_obj=body)
+    # the body is a plain plate, symmetric under half turns: the caller says the revision kept its frame
+    b = scene(doc, old_shape, new, [jspec("planar", BR["planar"], BR["planar"])], mode="direct", still=True, old_obj=body,
+              kwargs=given_identity())
     if other_user:
         lk = doc.addObject("App::Link", "PadUser")
         lk.LinkedObject = pad

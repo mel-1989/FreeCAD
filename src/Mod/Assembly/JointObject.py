@@ -811,6 +811,15 @@ class Joint:
         ):
             return
 
+        if (prop == "Offset1" or prop == "Offset2") and (
+            UtilsAssembly.hasBrokenMarker(joint.Reference1) or UtilsAssembly.hasBrokenMarker(joint.Reference2)
+        ):
+            # a reference a replace could not remap has no placement to offset: keep the value, say so once
+            App.Console.PrintWarning(
+                joint.Label + ": a reference is broken, the offset is kept but not applied until the joint is repaired\n"
+            )
+            return
+
         if prop == "Offset1" or prop == "Offset2":
             self.updateJCSPlacements(joint)
 
@@ -951,10 +960,11 @@ class Joint:
 
         isAssembly = assembly is not None and assembly.Type == "Assembly"
         if isAssembly:
+            suppressed_backup = joint.Suppressed   # the user may have suppressed this joint on purpose
             joint.Suppressed = True
             part1Connected = assembly.isPartConnected(part1)
             part2Connected = assembly.isPartConnected(part2)
-            joint.Suppressed = False
+            joint.Suppressed = suppressed_backup
         else:
             part1Connected = True
             part2Connected = False

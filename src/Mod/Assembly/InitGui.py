@@ -22,6 +22,7 @@
 # **************************************************************************/
 
 FreeCAD.__unit_test__ += ["TestAssemblyInterferenceGui"]
+FreeCAD.__unit_test__ += ["TestAssemblyReplaceComponentGui"]
 FreeCAD.__unit_test__ += ["TestAssemblyFeatureGui"]
 FreeCAD.__unit_test__ += ["TestAssemblyConfigurationsGui"]
 FreeCAD.__unit_test__ += ["TestAssemblySkeletonGui"]
@@ -79,6 +80,7 @@ class AssemblyWorkbench(Workbench):
         import CommandCreateSnapshot
         import CommandCreateBom
         import CommandCheckInterference
+        import CommandReplaceComponent
         import CommandCreateAssemblyFeature
         import CommandConfigurations
         import CommandSkeleton
@@ -103,6 +105,7 @@ class AssemblyWorkbench(Workbench):
             "Assembly_CreateSimulation",
             "Assembly_CreateBom",
             "Assembly_CheckInterference",
+            "Assembly_ReplaceComponent",
             "Assembly_CreateAssemblyCut",
             "Assembly_CreateAssemblyHole",
             "Assembly_Configurations",
@@ -119,6 +122,7 @@ class AssemblyWorkbench(Workbench):
         ]
 
         cmdListMenuOnly = [
+            "Assembly_RepairJointReference",
             "Assembly_LinkSelectLinked",
             "Assembly_ExportASMT",
             "Assembly_SelectJointsOfComponent",
@@ -169,6 +173,11 @@ class AssemblyWorkbench(Workbench):
         assembly = UtilsAssembly.activeAssembly()
         if assembly is None:
             return
+
+        import CommandReplaceComponent
+
+        if CommandReplaceComponent._broken_joint_selected()[1] is not None:
+            self.appendContextMenu("", ["Assembly_RepairJointReference"])
 
         selection = Gui.Selection.getSelectionEx("*", 0)
         if not selection:

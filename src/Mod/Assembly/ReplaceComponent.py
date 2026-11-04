@@ -19,13 +19,45 @@ Matching. Every reference names one or two elements (face, edge, vertex) of the 
 matched to elements of the new part by geometry in the part's local frame, after aligning the new
 part to the old one. The alignment is one decision per part, never mixed: identity unless the
 principal axes of inertia and the centre of mass, tried in all four proper sign combinations,
-overlap the old part better by 0.1 of the union volume; a tie between two such alignments, a part
-that fits exactly only when mirrored, and a part that fits about as well as placed as turned (an
-alternative whose overlap is at least identity's and less than 0.1 above it, which would otherwise
-let identity stand, and which explains a different set of the old faces by exact twins while
-identity explains some too) are reported (ambiguous
-alignment, or mirrored) and not matched: every reference of that part is then ambiguous or
-unmatched, and the caller resolves it by passing the alignment. Within the aligned frame:
+overlap the old part better by 0.1 of the union volume; a tie between two such alignments and a part
+that fits exactly only when mirrored are reported (ambiguous alignment, or mirrored) and not matched:
+every reference of that part is then ambiguous or unmatched, and the caller resolves it by passing
+the alignment. Two more situations make the alignment ambiguous although identity would fit.
+
+The symmetry rule (``_symmetry_verdict``). If the old part is symmetric under a proper turn T (its
+overlap with itself turned is at least 1 - 1e-6; T is a 180 degree turn about a principal axis of
+inertia through the centre of mass, or a 90, 120, 180, 240 or 270 degree turn about the distinct axis
+where two moments are equal, or a quarter or half turn about a world axis where all three are) and the
+new part is not geometrically the old one, geometry alone cannot say whether the new part is placed as
+it is or turned by T: the old part cannot tell the two readings apart, so any change (a hole added off
+centre, a face moved, a feature removed) reads either way. Every reference of the part is planned under
+identity and under T applied to the alignment. If the two readings send a reference to different new
+elements, or one matches it and the other does not, the reference is ambiguous and so is the part's
+alignment, with "as placed" and the turned reading as candidates; if every reference goes to the same
+new element under both (a face the turn maps onto itself, such as the cylinder of a centred hole), the
+part stays matched as placed. That includes a doubly symmetric plate that gains an off-centre hole
+without being turned: nothing in the geometry says it was not, so it is reported unless every referenced
+element is invariant. This is the D6 rule: ambiguous is reported, never picked silently, whatever kind
+of element the reference holds (face, edge, vertex, face and edge, face and vertex). A turn under which
+the new part is symmetric about its own centre of mass is left out: the new part as placed and turned
+is then one body, and the joint ends up on the same place of the assembly either way (a resize that
+keeps the symmetry, from any corner, stays matched). A resize that keeps the topology (same face, edge
+and vertex counts and adjacency, every face with a twin of the same type and normal or axis as placed)
+stands as placed whatever the symmetry: position and size are free, features are not.
+
+The near twin rule, for parts that are not symmetric. A part turned and also changed (a bracket turned
+180 degrees that gains a small hole or boss, or loses an end) has no exact twins left, so the question is
+asked with near twins: a face is a near twin of an old face when it has the same kind,
+surface type and concavity, a direction within 0.02 rad, a radius within 10 percent, an area within
+25 percent and a centre within 3 percent of the old part's diagonal. An alternative that overlaps the
+old part within 0.1 of identity (or better) and recognises by near twins an old face that identity
+does not (for instance the hole the joint is on), at least as many faces in all, makes the alignment
+ambiguous; one that recognises only faces identity recognises too, or fewer, does not, so a plain
+revision with a small added feature stays unambiguous. A part that fits about as well as placed as
+turned and explains a different set of the old faces by exact twins is ambiguous too. The
+alternatives are the four proper inertia sign combinations; their translation comes
+from the centre of mass, so it is approximate when the part changed, and the elements are then
+matched by the adapted rules. Within the aligned frame:
 
 1. exact: same kind, same surface or curve type, same normal or axis (sign-free for axes), same
    radius, same size and a centre within 1e-6 mm; exactly one such element is a match (basis
@@ -48,12 +80,36 @@ unmatched, and the caller resolves it by passing the alignment. Within the align
    makes it ``unmatched`` with the reason, naming the old element that owns the candidates that
    dropped out.
 
+Report contract for a panel (JSON, ``plan()`` and ``apply()`` return it). ``alignment`` always has
+``method`` ("identity", "inertia", "given", "ambiguous" or "mirrored"), ``overlap``, ``placement``
+(the chosen placement, or null), ``note`` and ``alternatives`` (placements). When ``method`` is
+"ambiguous", ``alignment.candidates`` lists the readings the user can pick, "as placed" first:
+``{"label": "as placed" | "turned 180\u00b0 about Y" | ..., "placement": {"base": [x, y, z], "rotation":
+[qx, qy, qz, qw]}, "counts": {"matched": n, "ambiguous": n, "unmatched": n}, "error": ""}``. ``counts``
+counts references (not elements) and come from re-planning with that placement as ``alignment=``, so
+``plan(..., alignment=App.Placement(App.Vector(*p["base"]), App.Rotation(*p["rotation"])))`` (and
+``apply`` with the same) reproduces them exactly; ``counts`` is null and ``error`` set when the
+alignment cannot be used (a link array needs identity). A mirrored part has
+only the "as placed" candidate (or none). While the alignment is ambiguous every
+reference is ambiguous with no element candidates: pick an alignment first, re-plan, then resolve
+the remaining ambiguous references. Each element of an ambiguous reference carries ``candidates``:
+``[{"element": "Face7", "entity": ..., "cost": 0.12, "basis": "adapted"}]``, element names being
+the new part's own numbering (``Face``, ``Edge`` or ``Vertex`` of the whole shape, also for the
+edge of a face and edge reference). To pick one, pass ``choices={"<Joint>.<Reference1|Reference2>":
+choice}`` to ``plan`` or ``apply``, where ``choice`` is either one element name, applied to every
+ambiguous element of that reference, or a dict ``{"<old element>": "<new element>"}`` (the old
+element as reported in ``old_element``) for a reference with several. A choice must be an element of
+the same kind on the new part (any, not only the listed candidates; otherwise ``ValueError``); the
+element then reports status "matched" with basis "user". A choice for a reference that is not
+ambiguous is ignored.
+
 Broken joints. A joint with a reference that was not matched is never deleted and never solved
 against a guess: it is suppressed, its unmatched sub-names get FreeCAD's broken-link marker (a leading
 "?", which Joint.execute turns into a recompute error and UtilsAssembly.findPlacement into a
 BrokenReferenceError instead of an identity placement), and it carries a persistent string property
 ``ReplaceBroken`` that says what the matcher found (empty when the joint is sound; ``is_broken(joint)``
-reads it). Unsuppressing such a joint is refused with a console error (JointObject.Joint.onChanged) because
+reads it). The suppression the user had set is remembered in ``ReplaceWasSuppressed`` and given back by ``repair``.
+Unsuppressing such a joint is refused with a console error (JointObject.Joint.onChanged) because
 the solver would skip it without a word. ``repair(joint, reference, elements)`` sets the chosen elements
 (checked against the part), clears the marker, unsuppresses and solves.
 
@@ -97,6 +153,15 @@ IOU_MARGIN = 0.1        # another alignment must overlap this much better than i
 MOVE_TOL = 0.02         # axis shift (fraction of the part's diagonal) above which a feature counts as moved
 RESIZE_TOL = 0.05       # relative radius change above which a feature counts as resized
 CLEAR_REL = 1.0         # a rival must beat a candidate by this fraction (plus AMBIG_ABS) to own it
+IN_PLACE_IOU = 0.02       # an in-place half turn is a candidate only when it overlaps the old part this close to identity
+IN_PLACE_MIN = 0.5        # ... and only when the new part still overlaps the old one this much as placed
+IN_PLACE_SKIP_NEAR_INERTIA = False  # mutant switch: drop an in-place turn that is near an inertia candidate
+IN_PLACE_TURNS = True  # also try the half turns about the old part's own axes as alignments (see _choose_alignment)
+NEAR_IOU = 0.1          # an alternative alignment this much below identity's overlap (or better) is compared by near twins
+NEAR_ANG = 0.02         # rad, largest direction difference of a near twin face (about 1 degree)
+NEAR_SIZE = 0.25        # relative, largest area difference of a near twin face
+NEAR_RADIUS = 0.10      # relative, largest radius difference of a near twin face
+NEAR_POS = 0.03         # largest distance between the centres of near twin faces, as a fraction of the part's diagonal
 
 _ELEMENT_RE = re.compile(r"^(Face|Edge|Vertex)(\d+)$")
 _SKIP_GROUPS = ("App::Origin", "App::Line", "App::Plane", "App::Point", "Assembly::JointGroup",
@@ -761,7 +826,79 @@ def _face_twins(mo, shape):
     return out
 
 
-def _alignment_conflict(old_shape, new_shape, iou_id, proper):
+def _is_near(o, n, diag):
+    """Are two faces the same face of a part that gained or lost a small feature elsewhere?
+
+    Same kind and surface type, direction within NEAR_ANG, same concavity, radius within NEAR_RADIUS,
+    area within NEAR_SIZE and centres within NEAR_POS of the old part's diagonal. The tolerances are
+    loose on purpose: an alternative alignment comes from the inertia frame, which a small added hole
+    or boss shifts by a fraction of a millimetre."""
+    if o.kind != n.kind or o.cls != n.cls or o.concave != n.concave:
+        return False
+    if _angle(o.dir, n.dir, not o.signed) > NEAR_ANG:
+        return False
+    if o.radius is not None and n.radius is not None and _rel(o.radius, n.radius) > NEAR_RADIUS:
+        return False
+    if _rel(o.size, n.size) > NEAR_SIZE:
+        return False
+    return (o.center - n.center).Length <= NEAR_POS * diag
+
+
+def _near_twins(mo, shape):
+    """The old faces that have a near twin (``_is_near``) among the faces of ``shape``."""
+    mn = _Model(shape)
+    return frozenset(on for on in mo.order["Face"]
+                     if any(_is_near(mo.els[on], mn.els[nn], mo.diag) for nn in mn.order["Face"]))
+
+
+def _readings_agree(probe, readings, tol=None):
+    """Do all readings, [(shape, placement)], send every reference to the same new element?
+
+    With no ``probe`` (no reference to ask about) nothing is known and the answer is False, so the
+    caller keeps its ambiguous verdict. The first reading is the one the others are compared with."""
+    if probe is None:
+        return False
+    first = probe(*readings[0])
+    return all(not _readings_differ(first, probe(*r), tol=tol) for r in readings[1:])
+
+
+def _near_conflict(mo, new_shape, comp, probe=None):
+    """Alternatives in ``comp`` that may be the reading the designer meant, as [(candidate, faces)].
+
+    Without ``probe``: the part fits as placed and as turned, and the turned reading recognises faces
+    (for instance the hole the joint is on) that the unturned reading sees changed or gone, and
+    recognises at least as many faces in all (a turned reading that recognises other faces than
+    identity, as many or more, is as good an explanation as identity: nothing says which one is meant).
+    An alternative that explains only faces identity explains too, or fewer faces than identity does,
+    is no conflict: identity stays.
+
+    With ``probe`` the references decide: an alternative that recognises at least as many old faces as
+    identity is a candidate when it sends some reference to another new element than identity does
+    (``_readings_differ``), whether or not the faces it recognises are the same ones (a new part that
+    is symmetric under the turn recognises the same old faces turned and as placed, and still puts the
+    top rim of a hole on the bottom one), and is no candidate when every reference lands on the same
+    element. Parts that are symmetric under a turn never get here (``_symmetry_verdict`` decides them):
+    this is the rule for parts that are not."""
+    near_id = _near_twins(mo, new_shape)
+    ref_id = probe(new_shape, App.Placement()) if probe is not None else None
+    out, seen = [], []
+    for c in comp:
+        near_c = _near_twins(mo, c[2])
+        extra = near_c - near_id
+        if len(near_c) < len(near_id):
+            continue
+        if probe is not None:
+            # a reading that recognises faces identity does not is a candidate when any reference differs;
+            # one that recognises the same faces only when a reference both readings match goes to two places
+            if _readings_differ(ref_id, probe(c[2], c[1]), both=not extra, tol=None if not extra else NEAR_POS * mo.diag):
+                out.append((c, extra))
+        elif extra and extra not in seen:
+            seen.append(extra)
+            out.append((c, extra))
+    return out
+
+
+def _alignment_conflict(old_shape, new_shape, iou_id, proper, probe=None):
     """Is identity, which the overlap alone would keep, contradicted by an alternative alignment?
 
     The alternatives that count overlap the old part at least as well as identity does (within
@@ -770,21 +907,40 @@ def _alignment_conflict(old_shape, new_shape, iou_id, proper):
     faces exactly but by different new faces, the part fits as placed and as turned and nothing in
     the geometry says which one the designer meant: ("ambiguous", (note, alternatives)). If identity
     explains no old face and an alternative explains some, the alternative is adopted:
-    ("adopt", (overlap, placement, shape)). Otherwise None. A part that is the same under both
-    (the same twins) is not a conflict."""
+    ("adopt", (overlap, placement, shape)). A part that is the same under both (the same twins) is not
+    a conflict. Last, near twins (``_near_conflict``): an alternative that overlaps within NEAR_IOU of
+    identity (or better) and recognises, by near twins, an old face that identity does not is also
+    ambiguous; this is the part turned that also gained or lost a small hole or boss, whose exact twins
+    are gone. Otherwise None. A part symmetric under a proper turn is decided before this, by
+    ``_symmetry_verdict``.
+
+    With ``probe`` every reference to the part is planned under each reading and compared by
+    ``_readings_differ``, the comparison ``_symmetry_verdict`` uses. A reading that explains the same
+    faces as one kept (the same twins; a new part that is symmetric under the turn) is dropped only when
+    no reference that both match lands on different new elements; an alternative that no reference
+    tells from identity is no conflict.
+    If no reference goes to a different element under any reading, the alignment does not matter for any
+    joint: identity stands (None), or for several turned alignments that tie, the first. A single
+    reference that lands on different elements keeps the verdict ambiguous. A reading is never preferred
+    on a tie."""
     comp = [c for c in proper if c[0] >= iou_id - IOU_SAME]
-    if not comp:
-        return None
     mo = _Model(old_shape)
     twins_id = _face_twins(mo, new_shape)
-    amb, adopt = [], []
+    amb, adopt, rest = [], [], []
     seen = []
     for c in comp:
         tw = _face_twins(mo, c[2])
-        if tw == twins_id or not tw or tw in seen:
+        if not tw:
+            continue
+        if tw == twins_id or tw in seen:
+            rest.append((c, tw))
             continue
         seen.append(tw)
         (adopt if not twins_id else amb).append((c, tw))
+    if twins_id and probe is not None:
+        ref_id = probe(new_shape, App.Placement())
+        amb = [(c, tw) for c, tw in amb if _readings_differ(ref_id, probe(c[2], c[1]), tol=NEAR_POS * mo.diag)] + [
+            (c, tw) for c, tw in rest if _readings_differ(ref_id, probe(c[2], c[1]), both=True)]
     if amb:
         alts = [_plc_json(c[1]) for c, _tw in amb]
         return "ambiguous", ("the new part overlaps the old one about as well as placed (%.4f) as turned (%.4f), "
@@ -792,17 +948,246 @@ def _alignment_conflict(old_shape, new_shape, iou_id, proper):
                              "%d when turned): pass the alignment" % (iou_id, max(c[0] for c, _t in amb),
                                                                       len(twins_id), len(amb[0][1])), alts)
     if adopt:
-        adopt.sort(key=lambda x: -x[0][0])
-        if len(adopt) > 1 and adopt[0][0][0] - adopt[1][0][0] <= IOU_SAME:
-            alts = [_plc_json(c[1]) for c, _tw in adopt]
+        pool = sorted(adopt + (rest if probe is not None else []), key=lambda x: -x[0][0])
+        tied = [x for x in pool if pool[0][0][0] - x[0][0] <= IOU_SAME]
+        if len(tied) > 1 and not _readings_agree(probe, [(c[2], c[1]) for c, _tw in tied],
+                                                           NEAR_POS * mo.diag):
+            alts = [_plc_json(c[1]) for c, _tw in tied]
             return "ambiguous", ("several turned alignments explain faces exactly and overlap equally well: "
                                  "pass the alignment", alts)
-        c = adopt[0][0]
+        c = pool[0][0]
         return "adopt", (c[0], c[1], c[2])
+    near = _near_conflict(mo, new_shape, [c for c in proper if c[0] >= iou_id - NEAR_IOU], probe)
+    if near:
+        alts = [_plc_json(c[1]) for c, _f in near]
+        faces = max(len(f) for _c, f in near)
+        why = ("turned it recognises %d old faces (within %d%% of the part's diagonal, same type, direction and "
+               "size) that it does not as placed, so it may have been turned and changed" % (faces, int(NEAR_POS * 100))
+               if faces else "turned it recognises the same old faces but sends a referenced element to another "
+               "place of the new part, so it may have been turned and changed")
+        return "ambiguous", ("the new part overlaps the old one about as well as placed (%.4f) as turned (%.4f), "
+                             "and %s: pass the alignment" % (iou_id, max(c[0] for c, _f in near), why), alts)
     return None
 
 
-def _choose_alignment(old_shape, new_shape, forced=None):
+def _symmetry_turns(so, sn, old_only=False):
+    """The proper turns T (placements about the old part's centre of mass) under which the old solid
+    ``so`` is its own image (overlap with itself turned at least IOU_EXACT) and the new solid ``sn`` is
+    not (so the part turned by T is a different body from the part as placed), each with the new part
+    turned: [(Placement, shape)].
+
+    The turns tried are the 180 degree turns about the three principal axes of inertia; where two
+    moments are equal, the turns by 90, 120, 180, 240 and 270 degrees about the distinct axis and the
+    180 degree turns about axes in the plane of the equal moments (the world axes projected into it,
+    and those turned by 45 degrees); where all three are equal, the quarter and half turns about the
+    world axes. A candidate is kept only if the overlap test says the old part really has it. With
+    ``old_only`` the new part is not looked at: the turns of the old part alone, [(Placement, None)]."""
+    pp = so.PrincipalProperties
+    com = so.CenterOfMass
+    mom = pp["Moments"]
+    ax = [_unit(pp["FirstAxisOfInertia"]), _unit(pp["SecondAxisOfInertia"]), _unit(pp["ThirdAxisOfInertia"])]
+    eq = [(i, j) for i, j in ((0, 1), (0, 2), (1, 2))
+          if abs(mom[i] - mom[j]) <= 1e-5 * max(abs(mom[i]), abs(mom[j]), 1e-300)]
+    world = [App.Vector(1, 0, 0), App.Vector(0, 1, 0), App.Vector(0, 0, 1)]
+    cands = []
+    if not eq:
+        cands = [(a, 180.0) for a in ax]
+    elif len(eq) == 1:
+        a = ax[({0, 1, 2} - set(eq[0])).pop()]
+        cands = [(a, ang) for ang in (90.0, 120.0, 180.0, 240.0, 270.0)]
+        for w in world:
+            d = w - a * w.dot(a)
+            if d.Length > 1e-6:
+                d = _unit(d)
+                cands.append((d, 180.0))
+                cands.append((App.Rotation(a, 45.0).multVec(d), 180.0))
+    else:
+        cands = [(w, ang) for w in world for ang in (90.0, 180.0, 270.0)]
+    out = []
+    for axis, ang in cands:
+        plc = App.Placement(App.Vector(0, 0, 0), App.Rotation(axis, ang), com)
+        if any(plc.isSame(o[0], 1e-6) for o in out):
+            continue
+        so_t = so.copy()
+        so_t.transformShape(plc.toMatrix())
+        if _iou(so, so_t) < IOU_EXACT:
+            continue
+        if old_only:
+            out.append((plc, None))
+            continue
+        # the new part turned in place (about its own centre of mass): if that is the same body, the part
+        # as placed and the part turned are one reading (a resize that keeps the symmetry, from any corner)
+        in_place = sn.copy()
+        in_place.transformShape(App.Placement(App.Vector(0, 0, 0), plc.Rotation, sn.CenterOfMass).toMatrix())
+        if _iou(sn, in_place) >= IOU_EXACT:
+            continue
+        sn_t = sn.copy()
+        sn_t.transformShape(plc.toMatrix())
+        out.append((plc, sn_t))
+    return out
+
+
+SAME_POS_N = 1e-3   # bounding-box-relative position of interchangeable faces under a resize (fraction of the extent)
+
+
+def _same_topology(old_shape, new_shape):
+    """Is the new part the old one resized: the same faces, edges and vertices in the same adjacency?
+
+    Equal face, edge and vertex counts, and every old face has a twin of the same surface type, concavity
+    and normal or axis (as placed, no turn tried) with the same set of neighbouring faces, matched one to
+    one (position and size, radius included, may differ; faces that look alike, the holes of a plate, must
+    also keep their place in the bounding box to within SAME_POS_N). Features added or removed change the counts or
+    the adjacency, so they never pass; a bar lengthened, a cube made a plate, a plate scaled all do."""
+    mo, mn = _Model(old_shape), _Model(new_shape)
+    if any(len(mo.order[k]) != len(mn.order[k]) for k in ("Face", "Edge", "Vertex")):
+        return False
+
+    def key(m, n):
+        return (m._desc(n), m.els[n].concave is True, m.els[n].adj)
+    groups = {}
+    for n in mo.order["Face"]:
+        groups.setdefault(key(mo, n), []).append(mo.els[n])
+    new_groups = {}
+    for n in mn.order["Face"]:
+        new_groups.setdefault(key(mn, n), []).append(mn.els[n])
+    if {k: len(v) for k, v in groups.items()} != {k: len(v) for k, v in new_groups.items()}:
+        return False
+    # faces that cannot be told apart by type and direction (the two holes of a plate) are paired by where they
+    # sit in the part's bounding box, which a resize keeps and a feature moved against its twin does not
+    for k, olds in groups.items():
+        if len(olds) > 1:
+            for o in olds:
+                if min((o.pos_n - n.pos_n).Length for n in new_groups[k]) > SAME_POS_N:
+                    return False
+    return True
+
+
+def _resize_stands(so, sn):
+    """The old part is symmetric under a proper turn and the new part is an ordinary resize of it.
+
+    An ordinary resize is "as placed": the new part keeps the old part's topology (``_same_topology``) and
+    stays where the old one was (the bounding boxes overlap; a copy moved elsewhere or turned onto another
+    axis away from the old place is not a resize). Then neither the symmetry rule nor the near twin rule
+    has anything to ask: identity stands."""
+    if not so.BoundBox.intersect(sn.BoundBox):
+        return False
+    if not _symmetry_turns(so, sn, old_only=True):
+        return False
+    return _same_topology(so, sn)
+
+
+def _readings_differ(first, second, both=False, tol=None):
+    """The references that two readings of the alignment send to different places.
+
+    ``first`` and ``second`` are probe results ({(reference key, position): (status, new element,
+    its centre in the old part's frame)}), one per reading. A reference differs when either reading
+    matches it and the statuses or the new elements are not the same, or, with ``tol`` (mm), the two
+    elements' centres are further apart than that. Returns [(key, element under first, element under second)]. Empty means
+    the alignment does not matter for any joint: whichever reading was meant, every reference lands
+    on the same new element (or neither reading matches it). With ``both`` only a reference that
+    both readings match, to different elements, counts: a reading that finds no match for a reference
+    that the other matches explains the part worse, which is no reason to doubt the other."""
+    moved = []
+    for k in sorted(first):
+        (s0, n0, p0), (s1, n1, p1) = first[k], second[k]
+        # the same element name is not the same place: an adapted match (a hole moved) can put one new
+        # face at two places of the old part's frame
+        far = tol is not None and p0 is not None and p1 is not None and (p0 - p1).Length > tol
+        if (s0 == "matched" and s1 == "matched" and (n0 != n1 or far)) if both else (
+                (s0 == "matched" or s1 == "matched") and (s0 != s1 or n0 != n1 or far)):
+            moved.append((k, n0, n1))
+    return moved
+
+
+def _symmetry_verdict(so, sn, new_shape, iou_id, probe):
+    """The symmetry rule: None when it does not apply, ("stand",) or ("ambiguous", note, alternatives).
+
+    If the old part is symmetric under a proper turn T and the new part is not geometrically the old
+    one, geometry alone cannot say whether the new part was placed as it is or turned by T: the old
+    part cannot tell the two apart, so any difference between them (a hole added off centre, a face
+    moved) reads either way. Every reference to the part is therefore planned under identity and under
+    T applied to the alignment. If the two readings send a reference to different new elements, or one
+    matches it and the other does not, the reference is ambiguous and so is the part's alignment, with
+    "as placed" and the turned reading as candidates. If every reference goes to the same element under
+    both (for instance a face the turn maps onto itself) the part stays matched as placed. This
+    includes the doubly symmetric plate that gains an off-centre hole without being turned: nothing in
+    the geometry says it was not, unless every referenced element is invariant. A turn under which the
+    new part is symmetric too is left out (both readings give the same body), which keeps a resize that
+    keeps the symmetry matched. A new part with the old part's topology (``_same_topology``: an ordinary
+    resize) is no change of the kind the rule is about: it stands as placed."""
+    if probe is None:
+        return None
+    if _resize_stands(so, sn):
+        return ("stand",)
+    turns = _symmetry_turns(so, sn)
+    if not turns:
+        return None
+    as_placed = probe(new_shape, App.Placement())
+    diff = []
+    for plc, shp in turns:
+        other = probe(shp, plc)
+        moved = _readings_differ(as_placed, other, tol=NEAR_POS * so.BoundBox.DiagonalLength)
+        if moved:
+            diff.append((plc, moved))
+    if not diff:
+        return ("stand",)
+    alts = [_plc_json(plc) for plc, _m in diff]
+    (key, _pos), a, b = diff[0][1][0]
+    return "ambiguous", ("the old part is symmetric under a turn of %s, so the new part, which is changed, may "
+                         "have been placed as it is or turned: the reference %s goes to %s as placed and to %s "
+                         "when turned (%d referenced elements differ): pass the alignment" % (
+                             _turn_label(_plc_json(diff[0][0])), key, a, b, max(len(m) for _p, m in diff)), alts)
+
+
+def _in_place_turns(so, sn, fo, iou_id, proper):
+    """Half turns of the new part about the old part's own axes, as alignment candidates [(overlap, placement, shape)].
+
+    The new part's own axes of inertia move when a big feature is added, so the turn it was given may not be among the
+    candidates built from them (a bracket turned and then given a big boss). These turns are tried about the centre of mass
+    and the centre of the bounding box of the old part (a feature on one side moves the first, not the second), with its
+    inertia axes and the world axes. A turn is kept only when it explains the new part as well as identity does
+    (``IN_PLACE_IOU``), the new part still overlaps the old one as placed (``IN_PLACE_MIN``), and it is not the same
+    reading as a candidate already there (the same overlap, about the same turn)."""
+    out = []
+    if not IN_PLACE_TURNS or iou_id < IN_PLACE_MIN:
+        return out
+    diag_o = so.BoundBox.DiagonalLength
+    pivots = (so.CenterOfMass, App.Vector(so.BoundBox.Center))
+    axes_o = list(fo[1]) + [App.Vector(1, 0, 0), App.Vector(0, 1, 0), App.Vector(0, 0, 1)]
+    for axis in axes_o:
+        for pivot in pivots:
+            plc = App.Placement(App.Vector(), App.Rotation(axis, 180.0), pivot)
+            # a turn about the old part's own axis is a candidate beside the inertia ones even when they are close: the
+            # inertia axes of a changed part are only approximate, so the nearby one can overlap worse than identity
+            # while the exact turn overlaps better
+            if any(plc.isSame(c[1], NEAR_POS * diag_o) for c in (proper if IN_PLACE_SKIP_NEAR_INERTIA else []) + out):
+                continue
+            shp = sn.copy()
+            shp.transformShape(plc.toMatrix())
+            if _iou(sn, shp) >= IOU_EXACT:
+                continue  # the new part is symmetric under this turn: turned and as placed are one body, nothing to ask
+            iou_t = _iou(so, shp)
+            if iou_t >= iou_id - IN_PLACE_IOU and not any(
+                    abs(c[0] - iou_t) < 1e-4 and plc.isSame(c[1], 0.1 * diag_o) for c in proper + out):
+                out.append((iou_t, plc, shp))
+    return out
+
+
+def _stand_is_final(so, sn, best_iou, iou_id):
+    """Does the symmetry rule's "stand" end the decision about the alignment?
+
+    It does when the new part is an ordinary resize of the old one (``_resize_stands``) and no turned reading
+    reproduces the old part exactly. A new part that is the old one turned (overlap IOU_EXACT, against less as placed)
+    is not a resize, whatever its topology says: position is free in a resize, but a turn that explains the whole part
+    beats identity, so the references decide in ``_alignment_conflict`` and the part is ambiguous when they land on
+    different places. The same goes for any "stand" that is not a resize: the old part's own symmetry turns agree
+    with identity, but the part may be turned by something that is not a symmetry of the old part (a box with an
+    off-centre hole turned about another axis), so a turned reading that fits as well as identity or better is judged
+    there, never skipped. A turned reading that fits only a little better than identity (a scaled plate) is a resize."""
+    return _resize_stands(so, sn) and best_iou < IOU_EXACT
+
+
+def _choose_alignment(old_shape, new_shape, forced=None, probe=None):
     """(Placement taking new-local to old-local, info dict, aligned new shape).
 
     The placement is None when no alignment can be chosen (info["method"] is "ambiguous" or
@@ -824,7 +1209,14 @@ def _choose_alignment(old_shape, new_shape, forced=None):
         return App.Placement(), info, new_shape.copy()
     fo, fn = _frame(so), _frame(sn)
     if fo is None or fn is None:
+        if _resize_stands(so, sn):
+            info["note"] = "same topology (a resize), identity kept"
+            return App.Placement(), info, new_shape.copy()
         if iou_id >= IOU_FIT:
+            sv = _symmetry_verdict(so, sn, new_shape, iou_id, probe)
+            if sv is not None and sv[0] == "ambiguous":
+                info.update(method="ambiguous", overlap=iou_id, note=sv[1][0], alternatives=sv[1][1])
+                return None, info, None
             info["note"] = "no principal axes (symmetric inertia), identity kept"
             return App.Placement(), info, new_shape.copy()
         info.update(method="ambiguous",
@@ -850,7 +1242,19 @@ def _choose_alignment(old_shape, new_shape, forced=None):
                 info.update(method="mirrored", overlap=1.0)
                 return None, info, None
     if iou_id >= best[0] - IOU_MARGIN:
-        verdict = _alignment_conflict(old_shape, new_shape, iou_id, proper)
+        sv = _symmetry_verdict(so, sn, new_shape, iou_id, probe)
+        if sv is not None:
+            if sv[0] == "stand" and _stand_is_final(so, sn, best[0], iou_id):
+                return App.Placement(), info, new_shape.copy()
+            if sv[0] == "ambiguous":
+                info.update(method="ambiguous", overlap=iou_id, note=sv[1][0], alternatives=sv[1][1])
+                return None, info, None
+        verdict = _alignment_conflict(old_shape, new_shape, iou_id, proper, probe)
+        if verdict is None:
+            # identity stands against the turns built from the new part's axes; the old part's own half turns may not
+            extra = _in_place_turns(so, sn, fo, iou_id, proper)
+            if extra:
+                verdict = _alignment_conflict(old_shape, new_shape, iou_id, proper + extra, probe)
         if verdict is None:
             return App.Placement(), info, new_shape.copy()
         kind, payload = verdict
@@ -862,7 +1266,7 @@ def _choose_alignment(old_shape, new_shape, forced=None):
         return None, info, None
     close = [c for c in proper if c[0] >= best[0] - IOU_SAME]
     if len(close) > 1:
-        info.update(method="ambiguous", overlap=best[0],
+        info.update(method="ambiguous", overlap=best[0], alternatives=[_plc_json(c[1]) for c in close],
                     note="%d inertia alignments overlap equally well" % len(close))
         return None, info, None
     info.update(method="inertia", overlap=best[0])
@@ -963,6 +1367,8 @@ def _plan_ref(rf, mo, mn, cache, choices, shape_status):
 
 def _local_name(mn, face_name, edge_name):
     """The edge's number within the face (FreeCAD's convention for a face + edge reference)."""
+    if face_name is None:  # the face of the pair is not matched: the reference is reported by the face's status
+        return edge_name
     face = mn.shape.getElement(face_name)
     target = mn.shape.getElement(edge_name)
     for i, e in enumerate(face.Edges, 1):
@@ -1019,6 +1425,67 @@ def plan(assembly, old, new, choices=None, alignment=None):
     return _plan(assembly, old, new, choices, alignment)[0]
 
 
+def _plc_from_json(d):
+    return App.Placement(App.Vector(*d["base"]), App.Rotation(*d["rotation"]))
+
+
+def _turn_label(d):
+    """A short human label for a placement taking the new part's frame to the old part's.
+
+    The rotation of an inertia alignment is not exact when the part changed, so an axis within 3
+    degrees of X, Y or Z is named by it and the angle is rounded to whole degrees."""
+    plc = _plc_from_json(d)
+    if plc.isSame(App.Placement(), 1e-9):
+        return "as placed"
+    axis, ang = plc.Rotation.Axis, math.degrees(plc.Rotation.Angle)
+    if ang < 1e-6:
+        return "shifted by %.3g mm" % plc.Base.Length
+    for name, v in (("X", App.Vector(1, 0, 0)), ("Y", App.Vector(0, 1, 0)), ("Z", App.Vector(0, 0, 1))):
+        if abs(axis.dot(v)) > math.cos(math.radians(3.0)):
+            sign = 1 if axis.dot(v) > 0 or abs(ang - 180.0) < 3.0 else -1
+            return "turned %.0f\u00b0 about %s%s" % (ang, "" if sign > 0 else "-", name)
+    return "turned %.0f\u00b0 about (%.2f, %.2f, %.2f)" % (ang, axis.x, axis.y, axis.z)
+
+
+def _alignment_candidates(assembly, old, new, ainfo, choices):
+    """The candidate alignments of a part whose alignment is ambiguous, each with the counts it gives.
+
+    "As placed" (identity) comes first, then the alternatives the check found. The counts come from
+    re-planning with the candidate placement as ``alignment=`` (after a round trip through its JSON
+    form), so passing that placement back to plan or apply gives exactly these counts."""
+    entries = [("as placed", _plc_json(App.Placement()))]
+    for d in ainfo.get("alternatives", []):
+        if not any(d == e[1] for e in entries):
+            entries.append((_turn_label(d), d))
+    out = []
+    for label, d in entries:
+        try:
+            rep = _plan(assembly, old, new, choices, _plc_from_json(d))[0]
+            counts, err = rep["references"], ""
+        except ReplaceError as e:
+            counts, err = None, str(e)
+        out.append({"label": label, "placement": d, "counts": counts, "error": err})
+    return out
+
+
+def _reading_differences(new_shape, ainfo, probe, diag):
+    """The referenced elements that the readings of an ambiguous alignment send to different places.
+
+    Compares "as placed" with each alternative reading by element and by place (the comparison the symmetry
+    rule uses), and returns [{"reference": "Joint.Reference1", "index": k, "as_placed": element, "alternative":
+    element}], one per differing reference element and alternative. A reference not listed lands on the same
+    element, at the same place, under every reading."""
+    base = probe(new_shape, App.Placement())
+    out = []
+    for d in ainfo.get("alternatives", []):
+        plc_ = _plc_from_json(d)
+        shp = new_shape.copy()
+        shp.transformShape(plc_.toMatrix())
+        for (key, k), a, b in _readings_differ(base, probe(shp, plc_), tol=NEAR_POS * diag):
+            out.append({"reference": key, "index": k, "as_placed": a, "alternative": b})
+    return out
+
+
 def _plan(assembly, old, new, choices=None, alignment=None):
     hosts = _find_hosts(assembly, old)
     new_leaf, new_tokens, new_top = _resolve_new(new)
@@ -1026,7 +1493,20 @@ def _plan(assembly, old, new, choices=None, alignment=None):
     old_shape, new_shape = _local_shape(old_leaf), _local_shape(new_leaf)
     if old_shape.isNull() or new_shape.isNull():
         raise ReplaceError("the old or the new part has no shape (recompute the document first)")
-    plc, ainfo, aligned = _choose_alignment(old_shape, new_shape, alignment)
+    refs = _collect_refs(assembly, hosts)
+    mo = _Model(old_shape)
+
+    def probe(shape, plc_):
+        """{(reference key, position): (status, new element)} of every referenced element if ``shape``
+        (the new part placed by ``plc_``) were the aligned new part."""
+        mn_, cache_, out = _Model(shape), {}, {}
+        for rf_ in refs:
+            for k, e in enumerate(_plan_ref(rf_, mo, mn_, cache_, None, None)):
+                g = e["new_global"]
+                out[(rf_.key, k)] = (e["status"], g, mn_.els[g].center if g in mn_.els else None)
+        return out
+
+    plc, ainfo, aligned = _choose_alignment(old_shape, new_shape, alignment, probe if refs else None)
     shape_status = None
     if plc is None:
         if ainfo["method"] == "mirrored":
@@ -1037,9 +1517,8 @@ def _plan(assembly, old, new, choices=None, alignment=None):
                             "pass an explicit alignment" % ainfo.get("note", ""))
     if plc is not None and any(h.array_elements for h in hosts) and not plc.isSame(App.Placement(), 1e-9):
         raise ReplaceError("a link array can only be repointed to a part with the old part's origin and orientation")
-    refs = _collect_refs(assembly, hosts)
-    mo = _Model(old_shape)
     mn = _Model(aligned) if aligned is not None else None
+    differ = _reading_differences(new_shape, ainfo, probe, mo.diag) if refs and plc is None else []
     cache = {}
     joints = {}
     for rf in refs:
@@ -1060,7 +1539,7 @@ def _plan(assembly, old, new, choices=None, alignment=None):
                  "new_entity": _entity(new_leaf, s["new_global"]) if s["new_global"] else "",
                  "status": s["status"], "basis": s["basis"], "reason": s["reason"],
                  "candidates": [{"element": c["element"], "entity": _entity(new_leaf, c["element"]),
-                                 "cost": c["cost"]} for c in s["candidates"]]}
+                                 "cost": c["cost"], "basis": s["basis"]} for c in s["candidates"]]}
                 for s in rf.result],
         })
     for j in joints.values():
@@ -1078,7 +1557,10 @@ def _plan(assembly, old, new, choices=None, alignment=None):
         "alignment": {"method": ainfo["method"], "overlap": ainfo.get("overlap"),
                       "placement": _plc_json(plc) if plc is not None else None,
                       "note": ainfo.get("note", ""),
-                      "alternatives": ainfo.get("alternatives", [])},
+                      "alternatives": ainfo.get("alternatives", []),
+                      "readings_differ": differ,
+                      "candidates": _alignment_candidates(assembly, old, new, ainfo, choices)
+                      if ainfo["method"] == "ambiguous" else []},
         "tolerances": {"position_mm": POS_TOL, "size_rel": SIZE_TOL, "angle_exact_rad": ANG_EXACT,
                        "angle_adapted_rad": ANG_ADAPT, "radius_change_max": RADIUS_ADAPT,
                        "size_ratio_max": SIZE_RATIO_MAX, "neighbours_min": ADJ_MIN,
@@ -1173,6 +1655,7 @@ def _write_ref(joint, prop, comp, subs):
 
 
 BROKEN_PROP = "ReplaceBroken"
+WAS_SUPPRESSED_PROP = "ReplaceWasSuppressed"
 
 
 def is_broken(joint):
@@ -1188,6 +1671,12 @@ def _break_joint(doc, joint, reason=""):
         joint.addProperty("App::PropertyString", BROKEN_PROP, "Replace",
                           "Set by Replace component when a reference could not be remapped; "
                           "empty when the joint is sound. Repair it with ReplaceComponent.repair.")
+    if not hasattr(joint, WAS_SUPPRESSED_PROP):
+        joint.addProperty("App::PropertyBool", WAS_SUPPRESSED_PROP, "Replace",
+                          "Whether the joint was suppressed by the user before Replace component broke it; "
+                          "ReplaceComponent.repair restores that state.")
+    if not is_broken(joint):
+        setattr(joint, WAS_SUPPRESSED_PROP, bool(getattr(joint, "Suppressed", False)))
     setattr(joint, BROKEN_PROP, reason or "a reference could not be remapped")
     if hasattr(joint, "Suppressed"):
         joint.Suppressed = True
@@ -1231,6 +1720,21 @@ def _apply_ref(rf, new_comp, new_tokens):
     return ok
 
 
+def _forget_copy_marks(src_doc, had_uuid):
+    """Take back the hidden ``_ObjectUUID`` that ``Document.copyObject`` writes onto the objects it copies from.
+
+    FreeCAD marks the source objects of any copy with a UUID so that the copy can say where it came from; the
+    property is saved with the source document, so copying out of a document the user has open would change what
+    their next save writes. A part taken from another document is to be used as it is: remove the mark from the
+    objects that did not carry one before (removing it touches nothing and leaves no undo step)."""
+    for o in src_doc.Objects:
+        if o.Name not in had_uuid and "_ObjectUUID" in o.PropertiesList:
+            try:
+                o.removeProperty("_ObjectUUID")
+            except Exception:
+                pass
+
+
 def _tree_path(assembly, obj):
     """The instance path of ``obj`` in ``assembly`` ("Sub.Old"): object names from the top group down."""
     names = [obj.Name]
@@ -1241,19 +1745,51 @@ def _tree_path(assembly, obj):
     return ".".join(names)
 
 
-def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
+def apply(assembly, old, new, choices=None, delete_old=False, alignment=None, import_foreign=False):
     """Replace ``old`` by ``new`` in one undo transaction and return the report.
 
     Joints whose references could not all be matched are kept, suppressed and left with a
     ``?``-marked reference (FreeCAD's broken-link marker, a leading "?" on the sub-name); they are
     never solved against a guessed element. The old part's document object is kept unless ``delete_old``.
+
+    ``new`` may belong to another document (a vault revision, a file). By default the links then point into that
+    document (a cross-document link, the slice 2a behaviour). With ``import_foreign=True`` the part is instead copied
+    with what it depends on into the assembly's document inside the same transaction (hidden, listed in the report's
+    ``imported``), planned again, and the copy must give the same remap as the original or ``ReplaceError`` is raised
+    and nothing changes; the panel uses this so that a temporary document can be closed afterwards.
     """
     doc = assembly.Document
     report, ctx = _plan(assembly, old, new, choices=choices, alignment=alignment)
-    refs, hosts, plc = ctx["refs"], ctx["hosts"], ctx["plc"]
+    foreign = import_foreign and new.Document is not doc
     doc.openTransaction("Replace component")
     deleted, kept = [], []
     try:
+        imported = []
+        if foreign:
+            # a part of another document (a file, a vault revision) is copied into this one inside the same
+            # transaction, so one undo takes the copy and the replacement away together; the copy is then
+            # planned again and must read exactly as the original did
+            src_doc = new.Document
+            had_uuid = {o.Name for o in src_doc.Objects if "_ObjectUUID" in o.PropertiesList}
+            try:
+                copied = doc.copyObject(ctx["new_top"], True, True)
+            finally:
+                _forget_copy_marks(src_doc, had_uuid)
+            imported = list(copied) if isinstance(copied, (list, tuple)) else [copied]
+            roots = [o for o in imported if not any(u in imported for u in o.InList)]   # nothing copied depends on the copy of the part itself
+            if len(roots) != 1:
+                raise ReplaceError("could not tell which copied object is the new part")
+            top_copy = roots[0]
+            for o in imported:
+                o.Visibility = False
+            doc.recompute()
+            again, ctx2 = _plan(assembly, old, top_copy, choices=choices, alignment=alignment)
+            if _readout(again) != _readout(report):
+                raise ReplaceError("the copy of the new part in this document does not read as the original did; "
+                                   "nothing was changed")
+            report, ctx = again, ctx2
+            report["imported"] = [o.Name for o in imported]
+        refs, hosts, plc = ctx["refs"], ctx["hosts"], ctx["plc"]
         new_comp = {}
         paths = {h.obj.Name: _tree_path(assembly, h.obj) for h in hosts if h.mode == "adopt"}
         for h in hosts:
@@ -1313,6 +1849,13 @@ def apply(assembly, old, new, choices=None, delete_old=False, alignment=None):
     report["new_components"] = {k: v.Name for k, v in new_comp.items()}
     report["feature_updates"] = retargeted
     return _json_safe(report)
+
+
+def _readout(report):
+    """What a remap decided, without the names of the new part: for comparing two plans of the same part."""
+    return (report["alignment"]["method"], report["references"],
+            [(j["joint"], r["reference"], [(e["old_element"], e["status"], e["new_element"]) for e in r["elements"]])
+             for j in report["joints"] for r in j["references"]])
 
 
 def _deletion_set(obj):
@@ -1418,7 +1961,8 @@ def repair(joint, reference, elements):
     sub-name of the reference (a string), or a list with one name per sub-name (a face and an edge:
     the edge is numbered within the face, as FreeCAD holds it). The names are checked against the part
     the reference reaches. When no reference of the joint is broken any more the ``ReplaceBroken`` text is
-    cleared, the joint is unsuppressed and the assembly solved; otherwise the text is rewritten to
+    cleared, the joint gets back the suppression state it had before the replace broke it (a joint the user had
+    suppressed on purpose stays suppressed) and the assembly is solved; otherwise the text is rewritten to
     name what is left. One undo transaction. Returns ``{"joint", "reference", "subs", "still_broken", "solve"}``."""
     if reference not in _JOINT_PROPS:
         raise ValueError("reference must be Reference1 or Reference2, not %r" % (reference,))
@@ -1449,7 +1993,7 @@ def repair(joint, reference, elements):
             setattr(joint, BROKEN_PROP, "%s still broken (repaired %s)" % (", ".join(left), reference))
         else:
             setattr(joint, BROKEN_PROP, "")
-            joint.Suppressed = False
+            joint.Suppressed = bool(getattr(joint, WAS_SUPPRESSED_PROP, False))   # the user's own choice, not always False
             doc.recompute()
             asm = joint.Proxy.getAssembly(joint) if hasattr(joint.Proxy, "getAssembly") else None
             if asm is not None:
