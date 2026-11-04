@@ -50,8 +50,10 @@
 
 #include <algorithm>
 #include <future>
+#include <cmath>
 #include <iostream>
 #include <limits>
+#include <set>
 #include <numbers>
 #include <utility>
 
@@ -1760,6 +1762,7 @@ void System::initSolution(Algorithm alg)
     //   system reduction specified in the previous step
 
     isInit = false;
+    dragStallValid = false;
     if (!hasUnknowns) {
         return;
     }
@@ -1932,6 +1935,9 @@ SolveStatus System::solve(Algorithm alg, bool isRedundantsolving)
         auto subStatus = SolveStatus::Success;
         if (subSystems[cid] && subSystemsAux[cid]) {
             subStatus = solve(subSystems[cid], subSystemsAux[cid], isRedundantsolving);
+            if (dragSolve && !isRedundantsolving && subStatus == SolveStatus::Success) {
+                subStatus = dragEscape(subSystems[cid], subSystemsAux[cid]);
+            }
         }
         else if (subSystems[cid]) {
             subStatus = solve(subSystems[cid], alg, isRedundantsolving);
@@ -5025,8 +5031,139 @@ retry:
         goto retry;
     }
 
+    dragPlistAB = plistAB;
+    dragErrB = subsysB->error();
     subsysA->revertParams();
     subsysB->revertParams();
+    return status;
+}
+
+// A drag move that the SQP ended with A satisfied but the cursor not reached is either at the
+// constrained minimum of the cursor distance (an out-of-reach cursor: nothing to do), in a flat
+// valley where the SQP stopped early (S01), or at a stationary point that is not a minimum, such
+// as a dead point of a mechanism when the cursor has come back within reach (S06, S08). The
+// first is told from the others by trying: restart the SQP from the result with a fresh Hessian
+// while the gap shrinks, then perturb the unknowns of A along a fixed pseudo-random direction
+// and solve again. A result is kept only when A is satisfied and the gap has at least halved.
+// Nothing here is random and nothing depends on addresses: the unknowns are in plist order. A
+// move that finds nothing is remembered with its cursor position, and not tried again until the
+// cursor has moved by a quarter of the gap, so an out-of-reach cursor costs the search once.
+SolveStatus System::dragEscape(SubSystem* subsysA, SubSystem* subsysB)
+{
+    VEC_pD plist = dragPlistAB;
+    const int n = static_cast<int>(plist.size());
+    constexpr double gapTol = 1e-5;
+    constexpr double gapFraction = 1e-3;
+    constexpr double moveFraction = 2e-2;
+    constexpr double accept = 0.25;
+    constexpr int maxRestarts = 12;
+
+    Eigen::VectorXd xorig(n), xbest(n), xr(n);
+    for (int j = 0; j < n; ++j) {
+        xorig[j] = *plist[j];
+    }
+    subsysB->getParams(plist, xbest);
+    subsysA->getParams(plist, xbest);
+    double Ebest = dragErrB;
+    const double gap0 = std::sqrt(2. * Ebest);
+    // The size of the sketch, from its largest coordinate
+    const double extent = std::max(1., xbest.lpNorm<Eigen::Infinity>());
+    // A cursor a hair off the locus of the dragged point leaves a small gap that is not a stall
+    if (!(gap0 > std::max(gapTol, gapFraction * extent))) {
+        return SolveStatus::Success;
+    }
+
+    // The cursor is not an unknown: its coordinates are the parameters of B's constraints that
+    // are not among the unknowns.
+    std::vector<double> cursor;
+    {
+        const std::set<double*> unknowns(plist.begin(), plist.end());
+        std::vector<Constraint*> clistB;
+        subsysB->getConstraintList(clistB);
+        for (Constraint* constr : clistB) {
+            for (double* param : constr->params()) {
+                if (unknowns.find(param) == unknowns.end()) {
+                    cursor.push_back(*param);
+                }
+            }
+        }
+    }
+    if (dragStallValid && dragStallCursor.size() == cursor.size()) {
+        double moved = 0.;
+        for (size_t i = 0; i < cursor.size(); ++i) {
+            moved += (cursor[i] - dragStallCursor[i]) * (cursor[i] - dragStallCursor[i]);
+        }
+        if (std::sqrt(moved) < std::max(0.25 * gap0, moveFraction * extent)) {
+            return SolveStatus::Success;
+        }
+    }
+
+    // Solve from xs. The result is in xr and its cursor objective in E when A is satisfied.
+    double E = 0.;
+    auto solveFrom = [&](const Eigen::VectorXd& xs) {
+        for (int j = 0; j < n; ++j) {
+            *plist[j] = xs[j];
+        }
+        const SolveStatus st = solve(subsysA, subsysB, false);
+        if (st == SolveStatus::Success) {
+            subsysB->getParams(plist, xr);
+            subsysA->getParams(plist, xr);
+            E = dragErrB;
+        }
+        return st;
+    };
+    bool improved = false;
+    bool pvalsHoldBest = true;
+    auto converge = [&]() {
+        for (int r = 0; r < maxRestarts && std::sqrt(2. * Ebest) > gapTol; ++r) {
+            const bool ok = solveFrom(xbest) == SolveStatus::Success;
+            pvalsHoldBest = false;
+            if (!ok || !(E < Ebest * (1. - 1e-3))) {
+                break;
+            }
+            xbest = xr;
+            Ebest = E;
+            improved = true;
+            pvalsHoldBest = true;
+        }
+    };
+
+    converge();
+    if (std::sqrt(2. * Ebest) > gapTol) {
+        static const double fractions[] = {1e-3, -1e-3, 1e-2, -1e-2};
+        for (const double fraction : fractions) {
+            Eigen::VectorXd xs = xbest;
+            for (int j = 0; j < n; ++j) {
+                xs[j] += fraction * extent * std::sin(2.399963229728653 * (j + 1));
+            }
+            const bool ok = solveFrom(xs) == SolveStatus::Success;
+            pvalsHoldBest = false;
+            if (ok && E < accept * Ebest) {
+                xbest = xr;
+                Ebest = E;
+                improved = true;
+                pvalsHoldBest = true;
+                converge();
+                break;
+            }
+        }
+    }
+
+    dragStallValid = !improved;
+    dragStallCursor = cursor;
+
+    SolveStatus status = SolveStatus::Success;
+    if (!pvalsHoldBest) {
+        // Put the solution of the move itself back where solve leaves it: the escape's result
+        // when there was one, otherwise the plain solve of the move again, which is identical.
+        status = solveFrom(improved ? xbest : xorig);
+        if (status != SolveStatus::Success && improved) {
+            status = solveFrom(xorig);
+        }
+    }
+    for (int j = 0; j < n; ++j) {
+        *plist[j] = xorig[j];
+    }
     return status;
 }
 

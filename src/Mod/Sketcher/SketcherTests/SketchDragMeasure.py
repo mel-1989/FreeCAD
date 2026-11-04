@@ -321,6 +321,7 @@ def _worker():
             c["scenario"] = name
             c["step"] = st
             c["dof"] = r["dof"]
+            c["nout"] = r["nout"]
             c["total_s"] = r["total_s"]
             if os.environ.get("FDM_TRACE"):
                 c["trace"] = r["trace"]

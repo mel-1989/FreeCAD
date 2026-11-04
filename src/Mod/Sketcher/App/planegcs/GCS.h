@@ -325,6 +325,13 @@ public:
     // also serves the last-resort "augmented system" solve of an ordinary sketch, which keeps
     // the stock iteration.
     bool dragSolve = false;
+    // Drag escape state (see System::dragEscape): the unknowns and the cursor objective of the
+    // last two-subsystem solve, and the memory of a move that ended at a stationary point from
+    // which no escape was found, which lasts until the next initSolution.
+    VEC_pD dragPlistAB;
+    double dragErrB = 0.;
+    bool dragStallValid = false;
+    std::vector<double> dragStallCursor;
     double LM_eps;
     double LM_eps1;
     double LM_tau;
@@ -693,6 +700,7 @@ public:
     SolveStatus solve(VEC_pD& params, Algorithm alg = DogLeg, bool isRedundantsolving = false);
     SolveStatus solve(SubSystem* subsys, Algorithm alg = DogLeg, bool isRedundantsolving = false);
     SolveStatus solve(SubSystem* subsysA, SubSystem* subsysB, bool isRedundantsolving = false);
+    SolveStatus dragEscape(SubSystem* subsysA, SubSystem* subsysB);
 
     void applySolution();
     void evaluateDrivenConstraints();

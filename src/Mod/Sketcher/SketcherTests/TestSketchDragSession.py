@@ -24,6 +24,7 @@
 BFGS guard, the stall escape, silent success."""
 
 import math
+import time
 import unittest
 
 import FreeCAD
@@ -153,3 +154,121 @@ class TestDragBfgsGuard(unittest.TestCase):
         sk.endMoveSession()
         self.assertAlmostEqual(sk.getPoint(geo, pos).x, 69.0, delta=0.01)
         self.assertTrue(_all_finite(sk))
+
+
+def _cell(prefix, step, session=True):
+    """Trace one scenario at one step length and return its cell statistics."""
+    name, builder = _scenario(prefix)
+    r = Measure.run_cell(name, builder, step, session)
+    return Measure.cell_stats(r, Measure.load_held())
+
+
+class TestDragEscape(unittest.TestCase):
+    """The drag escape: a cursor that comes back within reach of a mechanism
+    stopped at a dead point is followed again, and a cursor that stays out of
+    reach is not searched for on every move (checks 6, 7 and 10)."""
+
+    def test_dead_point_locks_are_released(self):
+        for prefix, step in (("S06", 1.0), ("S06", 0.1), ("S08", 1.0), ("S08", 0.1), ("S19", 0.1)):
+            with self.subTest(scenario=prefix, step=step):
+                cell = _cell(prefix, step)
+                self.assertEqual(cell["lockups_out"] + cell["lockups_ret"], 0, cell)
+                self.assertEqual(cell["fails"], 0, cell)
+
+    def test_out_and_back_returns_to_the_start(self):
+        for prefix, step in (("S06", 1.0), ("S06", 0.1)):
+            with self.subTest(scenario=prefix, step=step):
+                self.assertLess(_cell(prefix, step)["hys"], 0.01)
+
+    def test_flat_valley_is_not_a_lock(self):
+        # S01 on the return leg is a known open case; the outward leg must still follow
+        cell = _cell("S01", 1.0)
+        self.assertEqual(cell["lockups_out"], 0, cell)
+
+    def test_unreachable_cursor_is_searched_once(self):
+        """A cursor held beyond the slider's stroke costs no more than one
+        reachable move once the first move has failed to escape."""
+        doc = FreeCAD.newDocument("EscapeCost")
+        try:
+            name, builder = _scenario("S08")
+            sk, (geo, pos), wp, spec = builder(doc)
+            sk.solve()
+            sk.moveGeometry(geo, pos, V(65, 0, 0), False, True)
+
+            def mean_ms(x, n):
+                t0 = time.perf_counter()
+                for _ in range(n):
+                    sk.moveGeometry(geo, pos, V(x, 0, 0), False, True)
+                return (time.perf_counter() - t0) / n
+
+            reachable = min(mean_ms(66.0, 200), mean_ms(66.0, 200))
+            sk.moveGeometry(geo, pos, V(80, 0, 0), False, True)
+            blocked = min(mean_ms(80.0, 200), mean_ms(80.0, 200))
+            sk.endMoveSession()
+            self.assertLess(blocked, 3.0 * reachable + 0.02)
+        finally:
+            FreeCAD.closeDocument(doc.Name)
+
+
+class TestDragSilentSuccess(unittest.TestCase):
+    """A move that ends with its constraints unmet never reports success, and a
+    failed move leaves every parameter unchanged (check 9)."""
+
+    def setUp(self):
+        self.doc = FreeCAD.newDocument("DragSilent")
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.doc.Name)
+
+    def _holds(self, sk):
+        """The sketch satisfies its constraints: a fresh copy solves in place."""
+        copy = self.doc.addObject("Sketcher::SketchObject", "Copy")
+        copy.addGeometry(sk.Geometry, False)
+        copy.addConstraint(list(sk.Constraints))
+        verts = Measure._verts(sk)
+        before = Measure._pts(copy, verts)
+        ok = copy.solve() == 0
+        after = Measure._pts(copy, verts)
+        self.doc.removeObject(copy.Name)
+        shift = max(math.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(before, after))
+        return ok and shift < 1e-6
+
+    def _drive(self, prefix, step, session, first, last):
+        name, builder = _scenario(prefix)
+        sk, (geo, pos), wp, spec = builder(self.doc)
+        sk.solve()
+        st = sk.getPoint(geo, pos)
+        wp = [(st.x, st.y)] + list(wp[1:])
+        path = Measure.resample(wp + wp[-2::-1], step)
+        verts = Measure._verts(sk)
+        failed = succeeded = 0
+        for k, (x, y) in enumerate(path[1:], 1):
+            before = Measure._pts(sk, verts)
+            try:
+                sk.moveGeometry(geo, pos, V(x, y, 0), False, session)
+                ok = True
+            except Exception:
+                ok = False
+            after = Measure._pts(sk, verts)
+            if not ok:
+                failed += 1
+                self.assertEqual(before, after, "a failed move changed the sketch at move %d" % k)
+            elif first <= k <= last and k % 3 == 0:
+                succeeded += 1
+                self.assertTrue(self._holds(sk), "move %d reported success with a constraint unmet" % k)
+            if k > last:
+                break
+        if session:
+            sk.endMoveSession()
+        return failed, succeeded
+
+    def test_s18_past_its_zero_length_line(self):
+        for session in (False, True):
+            failed, succeeded = self._drive("S18", 0.1, session, 2120, 2200)
+            self.assertGreater(failed, 0)
+            self.assertGreater(succeeded, 0)
+
+    def test_s03_across_the_axis_in_a_session(self):
+        failed, succeeded = self._drive("S03", 1.0, True, 1, 120)
+        self.assertGreater(failed, 0)
+        self.assertGreater(succeeded, 0)
