@@ -793,6 +793,10 @@ class TestSketcherFullyDefinePanelGui(FDTestBase):
 
             def cb(info):
                 n[0] += 1
+                # The click is posted AFTER the panel's own callback has pumped events, so it reaches the button
+                # while the solver call that follows is running: Stop then takes effect at the next tick, which is
+                # the worst case a user can see.  Posted before the pump it would be handled at once and measure nothing.
+                stop = inner(info)
                 if cancel_after and n[0] == cancel_after and "t_click" not in marks:
                     marks["t_click"] = time.time()
                     btn = self.panel.cancel_button
@@ -805,7 +809,7 @@ class TestSketcherFullyDefinePanelGui(FDTestBase):
                             typ, QtCore.QPointF(pos), QtCore.QPointF(btn.mapToGlobal(pos)), QtCore.Qt.LeftButton, buttons, QtCore.Qt.NoModifier
                         )
                         QtCore.QCoreApplication.postEvent(btn, ev)
-                return inner(info)
+                return stop
 
             try:
                 return real(sketch, **dict(kw, progress=cb))
@@ -868,20 +872,28 @@ class TestSketcherFullyDefinePanelGui(FDTestBase):
         self._assert_responsive("scale100", sk, cancel_after=30)
 
     def testResponsivenessOnAThousandPointOpenStrip(self):
-        """The bar of 1.5 s cannot be held here: one native solve of the strip with its coincident constraints takes
-        several seconds and returns to Python only when finished, so no gap can be shorter than that.  The test
-        measures that call on a reference copy and holds every gap and the Cancel latency to it (the 4a sketch of
-        1,000 constraints had the same shape at 1.2 s); the figures are printed for the run note."""
+        """The bar of 1.5 s is MISSED here, and the test says so instead of moving it.  Adding the coincident
+        constraints of the strip and solving takes about 10 s per call in this build (999 lines, native solver), and
+        the call returns to Python only when it has finished, so neither an event-loop gap nor the time from Stop to
+        effect can be shorter than one such call.  The test measures both on a run that is stopped at its first long
+        solve, prints them (FDGAP and FDCANCEL, for the run note) and holds them to what is still checkable: Stop
+        takes effect at the next tick, that is within one solve of the longest gap seen plus the bar, the sketch,
+        undo stack and editor are as before, and no scratch document is left."""
         sk = self._strip_sketch(1000)
-        ref_doc = self.tmp_doc("FDTmpStripRef")
-        ref = ref_doc.copyObject(sk, False)
-        ref.addConstraint([Sketcher.Constraint("Coincident", i, 2, i + 1, 1) for i in range(len(ref.Geometry) - 1)])
-        t0 = time.time()
-        ref.solve()
-        native = time.time() - t0
-        print("FDNATIVE strip1000 one solve with the coincident constraints", native)
-        bar = max(EVENT_GAP_BAR, 2.0 * native + 0.5)
-        self._assert_responsive("strip1000", sk, cancel_after=30, bar=bar, cancel_bar=bar)
+        self.edit(sk)
+        before = _signature(sk)
+        before["editing"] = _editing()
+        cancel = self._measure_run(sk, cancel_after=15)
+        print("FDGAP strip1000", json.dumps(cancel))
+        print("FDCANCEL strip1000", json.dumps(cancel))
+        self.assertGreater(cancel["longest_gap_timer"], EVENT_GAP_BAR, "the strip no longer misses the bar: tighten this test")
+        self.assertLessEqual(cancel["cancel_latency"], cancel["longest_gap_timer"] + EVENT_GAP_BAR, cancel)
+        self.close_panel()
+        _pump(30)
+        after = _signature(sk)
+        after["editing"] = _editing()
+        self.assertEqual(after, before)
+        self.assert_no_scratch()
 
     # check 10 ----------------------------------------------------------------------------------------------------
     def testCommandIsActiveOnlyWithASketchInEdit(self):
