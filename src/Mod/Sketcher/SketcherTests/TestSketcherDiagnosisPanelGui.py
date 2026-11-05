@@ -1019,6 +1019,69 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
         self.assertTrue(_wait(lambda: p.state == "closed"))
         self.assertIsNone(self.P.current_panel())
 
+    def testUsersTabChoiceDuringARunIsNotUndoneWhenTheRunEnds(self):
+        """The panel pumps events while it diagnoses.  A document tab clicked meanwhile stays the active document
+        after the run: the scratch document's close puts back only a change that was its own doing."""
+        other = self.fresh_sketch("PanelTabB").sketch
+        b = other.Document.Name
+        c = self.fresh_sketch("PanelTabA")
+        a = c.sketch.Document.Name
+        p = self.open_panel(c.sketch)
+        fired = []
+        orig = p._on_progress
+
+        def hook(info):
+            if not fired:
+                fired.append(1)
+                Gui.setActiveDocument(b)
+            return orig(info)
+
+        p._on_progress = hook
+        p.diagnose_now()
+        self.assertTrue(_wait(lambda: p.state in ("ready", "failed", "closed")))
+        self.assertTrue(fired)
+        self.assertEqual(Gui.ActiveDocument.Document.Name, b)
+        self.assertEqual(_active_name(), b)
+        self.assertNotEqual(a, b)
+        self.assertFalse([n for n in FreeCAD.listDocuments() if "Scratch" in n])
+
+    def testAResultArrivingWhileThePanelWaitsIsHeldBackAndShownOnReturn(self):
+        """The guard in ``_show``: a diagnosis that finishes while the sketch's document is out of view fills the
+        tree but leaves it disabled and the status line saying why; coming back shows the result."""
+        other = self.fresh_sketch("PanelLateB").sketch
+        b = other.Document.Name
+        c = self.fresh_sketch("PanelLateA")
+        a = c.sketch.Document.Name
+        p = self.open_panel(c.sketch)
+        self.choose(self.fix_rows()[0][2])
+        real = self.P.SD.diagnose
+
+        def late(*args, **kw):
+            r = real(*args, **kw)
+            Gui.setActiveDocument(b)  # the click lands after the scratch document is gone
+            return r
+
+        self.P.SD.diagnose = late
+        try:
+            p.diagnose_now()
+            self.assertTrue(_wait(lambda: p.state in ("ready", "failed", "closed")))
+        finally:
+            self.P.SD.diagnose = real
+        self.assertEqual(p.state, "ready")
+        self.assertTrue(p._dormant)
+        self.assertFalse(p.apply_button.isEnabled())
+        self.assertFalse(p.refresh_button.isEnabled())
+        self.assertFalse(p.tree.isEnabled())
+        self.assertIn("not the active one", p.status.text())
+        self.assertTrue(self.fix_rows())
+        self._look_at(a)
+        self.assertNotIn("not the active one", p.status.text())
+        self.assertIn("Found", p.status.text())
+        self.assertTrue(p.refresh_button.isEnabled())
+        self.assertTrue(p.tree.isEnabled())
+        self.choose(self.fix_rows()[0][2])
+        self.assertTrue(p.apply_button.isEnabled())
+
     # check 6, the user's selection -----------------------------------------------------------------------------
     def testClosingThePanelPutsTheUsersSelectionBack(self):
         c = self.case("two_overlapping_conflicts")
