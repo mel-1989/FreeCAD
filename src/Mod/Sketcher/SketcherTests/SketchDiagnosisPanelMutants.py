@@ -20,11 +20,14 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
 
 SUITE = "TestSketcherDiagnosisPanelGui.TestSketcherDiagnosisPanelGui"
+API_SUITE = "SketcherTests.TestSketchDiagnosis.TestSketchDiagnosis"
+HANG_BOUND = 120
 APP_SUITE = "SketcherTests.TestSketchDiagnosis.TestSketchDiagnosisProgress"
 SURVEY = {"PANEL_SURVEY_CASES": "single_conflict,two_overlapping_conflicts,rectangle_width_conflict"}
 PANEL = "SketcherDiagnosisPanel.py"
@@ -34,8 +37,16 @@ CPP = "TaskSketcherMessages.cpp"
 M = []
 
 
-def mutant(name, desc, file, patches, tests, env=None, runner="gui"):
-    M.append(dict(name=name, desc=desc, file=file, patches=patches, tests=tests, env=env or {}, runner=runner))
+def mutant(name, desc, file, patches, tests, env=None, runner="gui", suite=None, hang_catches=False):
+    """``hang_catches``: a mutant whose defect shows as a GUI process that never finishes.  Its tests are bounded by
+    HANG_BOUND seconds, and a timeout counts as caught only if the same tests, unmutated, finish well inside the
+    bound (a third of it), so that a slow machine cannot turn a pass into a catch."""
+    M.append(
+        dict(
+            name=name, desc=desc, file=file, patches=patches, tests=tests, env=env or {}, runner=runner,
+            suite=suite, hang_catches=hang_catches,
+        )
+    )
 
 
 mutant(
@@ -187,6 +198,51 @@ mutant(
     API,
     [("        self.scratch = _Scratch(self.user)\n", "        self.user.solve()  # MUTANT\n        self.scratch = _Scratch(self.user)\n")],
     ["testNoSideEffectsOnASketchDrawnOffItsConstraints"],
+    hang_catches=True,
+)
+mutant(
+    "removal_row_not_applicable",
+    "the panel offers no Apply on a redundancy removal (the API's fix is ignored), so a redundant sketch cannot be repaired",
+    PANEL,
+    [('            return self.result["redundancy_groups"][data["group"]].get("fix")', "            return None")],
+    ["testARedundantSketchIsRepairedFromThePanel", "testApplyingEveryOfferedFix"],
+)
+mutant(
+    "removal_applied_outside_a_transaction",
+    "a redundancy removal (a fix that resolves no conflict) is applied without a transaction, so it leaves no undo entry",
+    PANEL,
+    [
+        ("            doc.openTransaction(name)\n", "            if fix['resolves']:\n                doc.openTransaction(name)\n"),
+        ("            doc.commitTransaction()\n", "            if fix['resolves']:\n                doc.commitTransaction()\n"),
+    ],
+    ["testEveryApplyIsOneNamedUndoStepAndUndoRedoAreExact", "testARedundantSketchIsRepairedFromThePanel"],
+    SURVEY,
+)
+mutant(
+    "preexisting_redundancy_vetoes_every_fix",
+    "the solver code of a sketch with redundancy is not accepted for a fix, so a conflict next to an unrelated redundancy gets no fix",
+    API,
+    [("        self.base_red_code = first[0] if (first and groups) else None", "        self.base_red_code = None")],
+    ["testConflictWithAnUnrelatedRedundancyStillOffersFixes"],
+    runner="cmd",
+    suite=API_SUITE,
+)
+mutant(
+    "expression_fix_certified_without_recompute",
+    "a fix is certified without asking whether a recompute undoes it, so a reference read by an expression is offered",
+    API,
+    [("    return not _same_datum_state(before, _datum_state(sk))", "    return False")],
+    ["testExpressionReaderMadeNonDrivingIsNotOffered", "testEveryOfferedFixSurvivesARecompute"],
+    runner="cmd",
+    suite=API_SUITE,
+)
+
+mutant(
+    "users_selection_dropped_by_diagnosis",
+    "the panel does not put the user's own selection back after a diagnosis, which clears it",
+    PANEL,
+    [("        self._restore_selection(kept)\n", "        pass\n")],
+    ["testOpeningThePanelKeepsTheUsersSelection"],
 )
 
 
@@ -222,15 +278,37 @@ def patched(raw, m):
 
 def run_tests(m, build, runner):
     env = dict(os.environ, **m["env"])
+    suite = m.get("suite") or (APP_SUITE if m["runner"] == "cmd" else SUITE)
     if m["runner"] == "cmd":
-        cmd = [os.path.join(build, "bin", "FreeCADCmd"), "-t"] + ["%s.%s" % (APP_SUITE, t) for t in m["tests"]]
+        cmd = [os.path.join(build, "bin", "FreeCADCmd"), "-t"] + ["%s.%s" % (suite, t) for t in m["tests"]]
         env["QT_QPA_PLATFORM"] = "offscreen"
     else:
-        cmd = [sys.executable, "-I", runner, "exec", "--timeout", "300", "--", "-t"] + [
-            "%s.%s" % (SUITE, t) for t in m["tests"]
+        bound = HANG_BOUND if m["hang_catches"] else 300
+        cmd = [sys.executable, "-I", runner, "exec", "--timeout", str(bound), "--", "-t"] + [
+            "%s.%s" % (suite, t) for t in m["tests"]
         ]
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-    return p.stdout
+    # own process group, so that a run that has to be stopped takes its children with it
+    p = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True
+    )
+    try:
+        out, _ = p.communicate(timeout=HANG_BOUND + 60 if m["hang_catches"] else 3600)
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL)
+        out, _ = p.communicate()
+        out += "\n[mutants] killed the process group\ntimed_out=True\n"
+    return out
+
+
+def hang_verdict(m, build, runner, out):
+    """A mutant that hangs is caught only when the unmutated tests finish well inside the bound."""
+    if "timed_out=True" not in out:
+        return None
+    t0 = time.time()
+    base = run_tests(m, build, runner)
+    took = time.time() - t0
+    ok = verdict(base)[0] == "survived" and "timed_out=True" not in base and took < HANG_BOUND / 3
+    return ("caught", ["(hang; unmutated run finished in %.0fs)" % took]) if ok else ("no-result", [])
 
 
 def verdict(out):
@@ -287,7 +365,7 @@ def main():
             if m["runner"] == "gui+build":
                 rebuild(ctl)
             out = run_tests(m, build, runner)
-            if verdict(out)[0] == "no-result":  # a GUI process that does not exit loses its buffered output: once more
+            if verdict(out)[0] == "no-result" and not m["hang_catches"]:  # a GUI process that does not exit loses its buffered output: once more
                 out = run_tests(m, build, runner)
         finally:
             with open(path, "wb") as f:
@@ -296,6 +374,8 @@ def main():
                 rebuild(ctl)
         assert sha(open(path, "rb").read()) == sha(original), "restore failed for %s" % path
         status, failed = verdict(out)
+        if m["hang_catches"] and status == "no-result":
+            status, failed = hang_verdict(m, build, runner, out) or (status, failed)  # runs the tests unmutated
         if status == "no-result":
             print("\n".join("    | " + ln for ln in out.splitlines()[-8:]))
         rows.append((m["name"], status, failed))

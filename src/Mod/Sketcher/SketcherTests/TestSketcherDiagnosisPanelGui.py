@@ -854,6 +854,22 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
             self.choose((base + k, len(g["members"])))
             self.assertEqual(_selected_names(), [_sub(g["suggested_removal"])])
 
+    def testOpeningThePanelKeepsTheUsersSelection(self):
+        c = self.case("two_overlapping_conflicts")
+        self.edit(c.sketch)
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(c.sketch.Document.Name, c.sketch.Name, "Constraint1")
+        Gui.Selection.addSelection(c.sketch.Document.Name, c.sketch.Name, "Constraint3")
+        self.assertEqual(_selected_names(), ["Constraint1", "Constraint3"])
+        Gui.runCommand(COMMAND)  # not open_panel(): that enters edit mode again, which is not what is under test
+        import SketcherDiagnosisPanel as P
+
+        self.P = P
+        self.panel = P.current_panel()
+        self.wait_ready()
+        self.assertEqual(self.panel.state, "ready")
+        self.assertEqual(_selected_names(), ["Constraint1", "Constraint3"])
+
     def testChoosingNothingClearsOnlyWhatThePanelSelected(self):
         c = self.case("single_conflict")
         p = self.open_panel(c.sketch)

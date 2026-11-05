@@ -358,6 +358,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         result = None
         fp = None
         error = None
+        kept = self._user_selection()
         try:
             fp = self._fingerprint()
             result = SD.diagnose(self.sketch, progress=self._on_progress)
@@ -366,6 +367,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         except Exception as e:  # shown, not raised: a failed diagnosis must not take the editor down
             error = "failed"
             self.last_error = "%s: %s" % (type(e).__name__, e)
+        self._restore_selection(kept)
         if self.state == "closed":
             return
         self._set_running(False)
@@ -495,6 +497,29 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
             name = constraint_name(i)
             Gui.Selection.addSelection(self.doc_name, self.sketch_name, name)
             self._owned.append(name)
+
+    @staticmethod
+    def _user_selection():
+        """The selection now, as (document, object, sub-element) triples.  The diagnosis opens and closes a scratch
+        document, which clears the 3D selection; the user's own selection is put back afterwards."""
+        try:
+            return [
+                (s.DocumentName, s.ObjectName, sub)
+                for s in Gui.Selection.getSelectionEx("*")
+                for sub in (s.SubElementNames or [""])
+            ]
+        except Exception:
+            return []
+
+    def _restore_selection(self, kept):
+        if not kept or kept == self._user_selection():
+            return
+        try:
+            Gui.Selection.clearSelection()
+            for doc, obj, sub in kept:
+                Gui.Selection.addSelection(doc, obj, sub)
+        except Exception:
+            pass
 
     def _deselect_owned(self):
         """Remove what the panel selected, and nothing else."""
