@@ -110,6 +110,18 @@ mutant(
     [OBSERVERS],
 )
 mutant(
+    "document_observer_left_on_close",
+    "closing the panel leaves its document observer registered",
+    [(RP, '(App.removeDocumentObserver, "_dw"), ', "")],
+    [OBSERVERS],
+)
+mutant(
+    "editor_observer_left_on_close",
+    "closing the panel leaves its editor observer registered",
+    [(RP, '(Gui.removeDocumentObserver, "_gw"), ', "")],
+    [OBSERVERS],
+)
+mutant(
     "point_lists_whole_element_constraints",
     "a vertex lists the constraints on its whole element",
     [(RP, "        if pos:\n            return self.by_point.get((geo, pos), [])\n        return self.by_geo.get(geo, [])\n", "        return self.by_geo.get(geo, [])\n")],
@@ -168,7 +180,7 @@ mutant(
 mutant(
     "mask_forgotten_by_a_rebuild",
     "rebuilding the constraint nodes clears the filter",
-    [(ECC, "void EditModeConstraintCoinManager::rebuildConstraintNodes()\r\n{\r\n", "void EditModeConstraintCoinManager::rebuildConstraintNodes()\r\n{\r\n    clearConstraintFilter();\r\n")],
+    [(ECC, "rebuildConstraintNodes(const GeoListFacade& geolistfacade)\r\n{\r\n    const std::vector<Sketcher::Constraint*>& constrlist\r\n", "rebuildConstraintNodes(const GeoListFacade& geolistfacade)\r\n{\r\n    clearConstraintFilter();\r\n    const std::vector<Sketcher::Constraint*>& constrlist\r\n")],
     [PICK],
     runner="gui+build",
 )

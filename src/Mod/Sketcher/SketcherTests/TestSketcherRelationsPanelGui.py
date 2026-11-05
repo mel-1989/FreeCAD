@@ -611,21 +611,28 @@ class TestSketcherRelationsPanelGui(RelationsTestBase):
         FreeCAD.setActiveDocument(self.rig.doc.Name)
 
     def testObserversAreRemovedOnClose(self):
+        """FreeCAD keeps an observer's methods as they were when it was registered, so the spies sit on the panel, which
+        every observer calls into (selection -> on_selection, document -> on_property and reset, editor -> invalidate),
+        and a spy that never fires while the panel is open fails the test."""
         sk = self.new_sketch("RelObservers", self.corner)
         p = self.open_rel(sk)
         calls = []
-        spies = (
-            (p._dw, ("slotChangedObject", "slotUndoDocument", "slotRedoDocument", "slotDeletedObject", "slotDeletedDocument")),
-            (p._sw, ("addSelection", "removeSelection", "clearSelection", "setSelection")),
-            (p._gw, ("slotResetEdit", "slotInEdit", "slotActivateDocument", "slotDeletedDocument")),
-        )
-        for obj, names in spies:
-            for n in names:
-                setattr(obj, n, lambda *a, _n=n, **k: calls.append(_n))
+        for n in ("on_selection", "on_property", "reset", "invalidate", "sync_activation"):
+            setattr(p, n, lambda *a, _n=n, **k: calls.append(_n))
+        doc = sk.Document
+        Gui.Selection.addSelection(doc.Name, sk.Name, "Edge1")
+        doc.openTransaction("spy change")
+        sk.addConstraint(Sketcher.Constraint("Distance", 0, 20.0))
+        doc.commitTransaction()
+        doc.undo()
+        _pump(40)
+        self.assertTrue({"on_selection", "on_property", "reset"} <= set(calls), calls)
         self.close_panel()
         calls.clear()
-        sk.addConstraint(Sketcher.Constraint("Distance", 0, 20.0))
-        Gui.Selection.addSelection(sk.Document.Name, sk.Name, "Edge1")
+        doc.openTransaction("spy change")
+        sk.addConstraint(Sketcher.Constraint("Distance", 1, 20.0))
+        doc.commitTransaction()
+        Gui.Selection.addSelection(sk.Document.Name, sk.Name, "Edge2")
         Gui.Selection.clearSelection()
         sk.Document.undo()
         Gui.ActiveDocument.resetEdit()
