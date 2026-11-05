@@ -939,6 +939,86 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
         self.assertEqual(_content(c.sketch), before)
         self.assertEqual(_content(other), before_other)
 
+    # looking at another document while the sketch stays in edit in its own -------------------------------------
+    def _look_elsewhere_setup(self, tag):
+        """The panel's sketch in edit in document A with a fix chosen; document B exists and has no edit going.
+        Returns (c, p, b_document_name, rows) with the user still on A."""
+        other = self.fresh_sketch("PanelLookB" + tag).sketch
+        c, p = self._stale_setup("PanelLookA" + tag)
+        return c, p, other.Document.Name, _rows(p.tree)
+
+    def _look_at(self, docname):
+        """What clicking the document's tab does: the real activation, which tells the observers (assigning
+        ``Gui.ActiveDocument`` only rebinds the module attribute)."""
+        Gui.setActiveDocument(docname)
+        _pump(30)
+        self.assertEqual(Gui.ActiveDocument.Document.Name, docname)
+
+    def testLookingAtAnotherDocumentAndComingBackKeepsThePanel(self):
+        c, p, b, rows = self._look_elsewhere_setup("1")
+        before = _content(c.sketch)
+        a = c.sketch.Document.Name
+        self._look_at(b)
+        self.assertNotEqual(p.state, "closed")
+        self.assertEqual(p.state, "ready")
+        self.assertFalse(p.apply_button.isEnabled())
+        self.assertFalse(p.refresh_button.isEnabled())
+        self.assertIn("not the active one", p.status.text())
+        self.assertEqual(_rows(p.tree), rows)
+        self._look_at(a)
+        self.assertEqual(p.state, "ready")
+        self.assertTrue(p.apply_button.isEnabled())
+        self.assertTrue(p.refresh_button.isEnabled())
+        self.assertNotIn("not the active one", p.status.text())
+        self.assertEqual(_rows(p.tree), rows)
+        self.assertEqual(_content(c.sketch), before)
+        self.assertTrue(p.apply_chosen())  # and it works without a click
+
+    def testApplyIsRefusedWhileLookingAtAnotherDocument(self):
+        for watched in (True, False):
+            c, p, b, rows = self._look_elsewhere_setup("2%s" % watched)
+            before = _signature(c.sketch)
+            if not watched:
+                p._unwatch()  # no event arrives: Apply must look at the editor itself
+            self._look_at(b)
+            before_b = _signature(c.sketch)
+            self.assertFalse(p.apply_chosen())
+            self.assertEqual(_signature(c.sketch)["content"], before["content"])
+            self.assertEqual(_signature(c.sketch)["undo"], before["undo"])
+            self.assertNotEqual(p.state, "closed")
+            self.assertEqual(p.state, "ready")
+            self.assertEqual(_rows(p.tree), rows)
+            self.assertNotIn("changed", p.status.text())
+            self.assertIn("not the active one", p.status.text())
+            self.assertEqual(_signature(c.sketch), before_b)
+            self.close_panel()
+            self._look_at(c.sketch.Document.Name)
+
+    def testRefreshIsRefusedWhileLookingAtAnotherDocument(self):
+        c, p, b, rows = self._look_elsewhere_setup("3")
+        self._look_at(b)
+        generation = p._generation
+        p.diagnose_now()
+        _pump(50)
+        self.assertEqual(p.state, "ready")
+        self.assertEqual(p._generation, generation)
+        self.assertEqual(_rows(p.tree), rows)
+        self.assertIn("not the active one", p.status.text())
+        self.assertNotIn("no longer being edited", p.status.text())
+        self._look_at(c.sketch.Document.Name)
+        self.assertEqual(p.state, "ready")
+        self.assertTrue(p.refresh_button.isEnabled())
+
+    def testEditingASketchInTheOtherDocumentStillClosesThePanel(self):
+        c, p, b, rows = self._look_elsewhere_setup("4")
+        self._look_at(b)
+        self.assertEqual(p.state, "ready")
+        sk = FreeCAD.getDocument(b).getObject("S")
+        Gui.ActiveDocument.setEdit(sk.Name)
+        _pump(30)
+        self.assertTrue(_wait(lambda: p.state == "closed"))
+        self.assertIsNone(self.P.current_panel())
+
     # check 6, the user's selection -----------------------------------------------------------------------------
     def testClosingThePanelPutsTheUsersSelectionBack(self):
         c = self.case("two_overlapping_conflicts")

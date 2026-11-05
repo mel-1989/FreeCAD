@@ -226,6 +226,10 @@ class _GuiWatch:
         except Exception:
             self.panel.invalidate(tr("The document was closed."), close=True)
 
+    def slotActivateDocument(self, gdoc):
+        """The user looked at another document's tab, or came back to this one."""
+        self.panel.sync_activation(gdoc)
+
 
 def sketch_in_edit(sketch):
     """True when `sketch` is the object the editor has open now: in the active document, which is where the editor
@@ -240,6 +244,26 @@ def sketch_in_edit(sketch):
         )
     except Exception:
         return False
+
+
+def edit_state(sketch, active=None):
+    """Where the panel's sketch stands in the editor:
+    ``"editing"``: open in the active document, which is where the editor is;
+    ``"inactive"``: still in edit in its own document, but the user is looking at another document that has no
+    edit going, so the panel is only waiting for the user to come back;
+    ``"gone"``: not in edit any more, or another sketch is being edited in the active document."""
+    try:
+        own = Gui.getDocument(sketch.Document.Name)
+        vp = own.getInEdit() if own is not None else None
+        if vp is None or vp.Object.Name != sketch.Name:
+            return "gone"
+        if active is None:
+            active = Gui.ActiveDocument  # an activation event passes its document: the module attribute lags it
+        if active is None or active.Document.Name == sketch.Document.Name:
+            return "editing"
+        return "gone" if active.getInEdit() is not None else "inactive"
+    except Exception:
+        return "gone"
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +294,8 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         self.max_gap = 0.0
         self.last_error = None
         self._closing = False
+        self._dormant = False  # the sketch is still in edit, but its document is not the active one
+        self._status_when_active = ""
         self._build()
         self._watch()
         if auto_run:
@@ -370,6 +396,57 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         except Exception:
             return False
 
+    def _edit_now(self, active=None):
+        """``edit_state`` of the panel's sketch, "gone" also when the document or the object is."""
+        try:
+            if self.doc_name not in App.listDocuments() or App.getDocument(self.doc_name).getObject(self.sketch_name) is None:
+                return "gone"
+        except Exception:
+            return "gone"
+        return edit_state(self.sketch, active)
+
+    def _editing_here(self):
+        """True when the panel may act on its sketch now.  Otherwise it has dealt with it: waiting for the user to
+        return to the sketch's document, or invalidated and closing because the sketch is gone from the editor."""
+        self.sync_activation()
+        return not self._dormant and self.state != "closed" and not self._closing
+
+    def sync_activation(self, active=None):
+        """Bring the panel in line with where the editor is: go quiet while the sketch's document is out of view,
+        pick up again when it returns (the same rows, nothing to click), close if the sketch is gone from the
+        editor."""
+        if self.state == "closed" or self._closing:
+            return
+        state = self._edit_now(active)
+        if state == "inactive":
+            self._go_dormant()
+        elif state == "gone":
+            self.invalidate(tr("The sketch is no longer being edited."), close=True)
+        elif self._dormant:
+            self._wake()
+
+    def _go_dormant(self):
+        if self._dormant:
+            return
+        self._dormant = True
+        self._status_when_active = self.status.text()
+        self.status.setText(
+            tr("This sketch's document is not the active one. Switch back to it to apply a fix or diagnose again.")
+        )
+        self.apply_button.setEnabled(False)
+        self.refresh_button.setEnabled(False)
+        self.tree.setEnabled(False)
+
+    def _wake(self):
+        self._dormant = False
+        running = self.state == "running"
+        self.status.setText(self._status_when_active)
+        self.refresh_button.setEnabled(not running)
+        self.tree.setEnabled(not running)
+        self.apply_button.setEnabled(not running and self.state == "ready" and self.chosen_fix() is not None)
+        if self.state in ("stale", "cancelled"):
+            self._schedule_rediagnose()  # the sketch changed while the user was away
+
     def _on_progress(self, info):
         """Called by ``diagnose`` before every solver call; keeps the interface alive and notices Cancel."""
         now = time.time()
@@ -387,9 +464,9 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
     def _set_running(self, running):
         self.progress.setVisible(running)
         self.cancel_button.setVisible(running)
-        self.refresh_button.setEnabled(not running)
+        self.refresh_button.setEnabled(not running and not self._dormant)
         self.apply_button.setEnabled(False)
-        self.tree.setEnabled(not running)
+        self.tree.setEnabled(not running and not self._dormant)
         self.close_button.setEnabled(True)
 
     def diagnose_now(self, *_):
@@ -401,8 +478,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
             self._cancel = True
             self._rerun = True
             return
-        if not self._alive():
-            self.invalidate(tr("The sketch is no longer being edited."), close=True)
+        if not self._editing_here():
             return
         self._clear_tree()
         self._generation += 1
@@ -530,7 +606,11 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         line = not_offered_line(r)
         if line:
             text += "\n" + line
-        self.status.setText(text)
+        if self._dormant:  # the result came in while the user was looking at another document
+            self._status_when_active = text
+            self.tree.setEnabled(False)
+        else:
+            self.status.setText(text)
         self.apply_button.setEnabled(False)
 
     # -- choosing rows selects constraints ------------------------------------
@@ -631,7 +711,9 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         fix = self.chosen_fix()
         if fix is None or self.state != "ready":
             return False
-        if not self._alive() or self._fingerprint() != self.fingerprint:
+        if not self._editing_here():
+            return False
+        if self._fingerprint() != self.fingerprint:
             self.invalidate(tr("The sketch changed."))
             return False
         doc = self.sketch.Document
@@ -680,7 +762,10 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         self.tree.clear()
         self.tree.blockSignals(False)
         self._owned = []
-        self.status.setText(reason + " " + tr("Diagnosing again."))
+        if self._dormant:
+            self._status_when_active = reason + " " + tr("Diagnosing again.")  # shown when the user comes back
+        else:
+            self.status.setText(reason + " " + tr("Diagnosing again."))
         if self._cancel:
             return  # the running diagnosis stops at its next tick and starts again
         self._schedule_rediagnose()

@@ -64,7 +64,7 @@ mutant(
     [
         ('                p.invalidate(tr("The sketch changed."))\n', "                pass\n"),
         ('self.panel.invalidate(tr("Undo changed the document."))', "pass"),
-        ("if not self._alive() or self._fingerprint() != self.fingerprint:", "if not self._alive():"),
+        ("        if self._fingerprint() != self.fingerprint:\n            self.invalidate(", "        if False:\n            self.invalidate("),
     ],
     ["testStaleAfterAConstraintIsAdded", "testStaleAfterADatumChanges", "testStaleAfterUndo"],
 )
@@ -289,6 +289,44 @@ mutant(
     ["testAFixThatBreaksAnotherObjectsExpressionIsNotOffered"],
     runner="cmd",
     suite=REPAIR_SUITE,
+)
+mutant(
+    "spreadsheet_cells_not_read",
+    "formulas in spreadsheet cells are not looked at for readers of the sketch's constraints, so a fix that breaks a cell is offered",
+    API,
+    [('        if obj.TypeId == "Spreadsheet::Sheet":', "        if False:")],
+    ["testAFixThatBreaksASpreadsheetCellIsNotOffered"],
+    runner="cmd",
+    suite=REPAIR_SUITE,
+)
+mutant(
+    "other_documents_not_searched_for_readers",
+    "only the sketch's own document is searched for readers, so an expression in another open document that reads the sketch goes unseen",
+    API,
+    [("        docs = list(FreeCAD.listDocuments().values())", "        docs = [mydoc]")],
+    ["testAFixThatBreaksAnExpressionInAnotherDocumentIsNotOffered"],
+    runner="cmd",
+    suite=REPAIR_SUITE,
+)
+mutant(
+    "bare_name_in_another_document_counted_as_this_sketch",
+    "a bare Sk.Constraints.x in another document is counted as a read of this sketch, though it means that document's own Sk",
+    API,
+    [("                    elif not same:\n                        continue\n", "")],
+    ["testABareNameInAnotherDocumentMeansThatDocumentsOwnSketch"],
+    runner="cmd",
+    suite=REPAIR_SUITE,
+)
+mutant(
+    "looking_at_another_document_closes_the_panel",
+    "the user merely looking at another document counts as the sketch leaving the editor, so Apply and Refresh invalidate and close the panel instead of waiting",
+    PANEL,
+    [('        return "gone" if active.getInEdit() is not None else "inactive"', '        return "gone"')],
+    [
+        "testLookingAtAnotherDocumentAndComingBackKeepsThePanel",
+        "testApplyIsRefusedWhileLookingAtAnotherDocument",
+        "testRefreshIsRefusedWhileLookingAtAnotherDocument",
+    ],
 )
 mutant(
     "editor_switch_to_another_document_not_noticed",

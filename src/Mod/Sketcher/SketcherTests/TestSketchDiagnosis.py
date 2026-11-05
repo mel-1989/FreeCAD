@@ -1131,6 +1131,95 @@ class TestSketchDiagnosisRepairs(unittest.TestCase):
             self.assertTrue(listed, (expr, r["not_offered"]))
             self.assertTrue(all(n["reason_text"] for n in listed))
 
+    def reader_in_cell(self, doc, cell):
+        s, s2 = self.other_sketch_reads(doc, "5 mm")
+        sh = doc.addObject("Spreadsheet::Sheet", "Sheet")
+        sh.set("A1", cell)
+        doc.recompute()
+        self.assertEqual(sh.State.count("Invalid"), 0, cell)
+        return s, sh
+
+    def testAFixThatBreaksASpreadsheetCellIsNotOffered(self):
+        # a cell formula is not in the sheet's ExpressionEngine; the sheet goes Invalid if the constraint goes
+        cases = (
+            ("=Sk.Constraints.w2", lambda o: o["index"] == 3),
+            ("=<<Sk>>.Constraints.w2 * 2", lambda o: o["index"] == 3),
+            ("=Sk.Constraints[4]", lambda o: o["index"] == 4 or (o["op"] == "delete" and o["index"] < 4)),
+        )
+        for cell, breaks in cases:
+            doc = self.newdoc("RepairCell")
+            s, sh = self.reader_in_cell(doc, cell)
+            r = SD.diagnose(s)
+            fixes = [f for cs in r["conflict_sets"] for f in cs["fixes"]]
+            self.assertTrue(fixes, "nothing is offered at all: " + str(r["not_offered"]))
+            for f in fixes:
+                self.assertFalse([o for o in f["ops"] if breaks(o)], (cell, f["description"]))
+                d2 = self.newdoc("RepairCellApply")
+                s_b, sh_b = self.reader_in_cell(d2, cell)
+                SD.apply_fix(s_b, f)
+                d2.recompute()
+                self.assertNotIn("Invalid", sh_b.State, (cell, f["description"]))
+            self.assertTrue([n for n in r["not_offered"] if n["reason"] == "read_by_another_object"], cell)
+
+    def other_document_reads(self, expr_for, bare=False):
+        """(sketch, reader) where the reader lives in another open document and `expr_for(doc)` reads the sketch's constraint w2.  With
+        `bare`, the other document has a sketch of its own called Sk that the reader means."""
+        import os
+        import tempfile
+
+        tmp = tempfile.mkdtemp()  # a cross-document expression needs both documents saved
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        doc = self.newdoc("RepairXdocA")
+        s, _s2 = self.other_sketch_reads(doc, "5 mm")
+        doc.saveAs(os.path.join(tmp, "a.FCStd"))
+        doc.Label = "Pretty label of " + doc.Name  # unique: an ambiguous label does not resolve
+        d2 = self.newdoc("RepairXdocB")
+        d2.saveAs(os.path.join(tmp, "b.FCStd"))
+        if bare:
+            _own, s2 = self.other_sketch_reads(d2, expr_for(doc))
+        else:
+            s2 = d2.addObject("Sketcher::SketchObject", "Rd")
+            s2.addGeometry(Part.LineSegment(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(5, 0, 0)))
+            s2.addConstraint(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 5.0))
+            s2.renameConstraint(0, "k")
+            s2.setExpression("Constraints.k", expr_for(doc))
+        doc.recompute()
+        d2.recompute()
+        return doc, s, d2, s2
+
+    def testAFixThatBreaksAnExpressionInAnotherDocumentIsNotOffered(self):
+        forms = (
+            lambda d: "%s#Sk.Constraints.w2 + 1 mm" % d.Name,
+            lambda d: "<<%s>>#Sk.Constraints.w2 + 1 mm" % d.Label,
+            lambda d: "%s#Sk.Constraints[4] + 1 mm" % d.Name,
+        )
+        for k, form in enumerate(forms):
+            doc, s, d2, s2 = self.other_document_reads(form)
+            self.assertTrue(s2.isValid(), k)
+            r = SD.diagnose(s)
+            fixes = [f for cs in r["conflict_sets"] for f in cs["fixes"]]
+            self.assertTrue(fixes, "nothing is offered at all: " + str(r["not_offered"]))
+            for f in fixes:
+                if k < 2:
+                    self.assertFalse([o for o in f["ops"] if o["index"] == 3], (k, f["description"]))
+                else:
+                    self.assertFalse(
+                        [o for o in f["ops"] if o["index"] == 4 or (o["op"] == "delete" and o["index"] < 4)],
+                        (k, f["description"]),
+                    )
+                doc_b, s_b, d2_b, s2_b = self.other_document_reads(form)
+                SD.apply_fix(s_b, f)
+                doc_b.recompute()
+                d2_b.recompute()
+                self.assertTrue(s2_b.isValid(), (k, f["description"]))
+            self.assertTrue([n for n in r["not_offered"] if n["reason"] == "read_by_another_object"], k)
+
+    def testABareNameInAnotherDocumentMeansThatDocumentsOwnSketch(self):
+        doc, s, d2, s2 = self.other_document_reads(lambda d: "Sk.Constraints.w2 + 1 mm", bare=True)
+        r = SD.diagnose(s)
+        self.assertFalse([n for n in r["not_offered"] if n["reason"] == "read_by_another_object"], r["not_offered"])
+        self.assertTrue(any(o["index"] == 3 for cs in r["conflict_sets"] for f in cs["fixes"] for o in f["ops"]))
+
     def testADatumBoundOutsideTheSketchIsNotTreatedAsFree(self):
         doc = self.newdoc("RepairSheet")
         V = FreeCAD.Vector

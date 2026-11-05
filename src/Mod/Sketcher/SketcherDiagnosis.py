@@ -749,35 +749,69 @@ def _apply_ops(sk, ops):
 _READ = None
 
 
+def _expression_texts(obj):
+    """Every expression text an object carries: its expression engine, and for a spreadsheet the formulas in its
+    cells, which the engine does not list."""
+    out = []
+    try:
+        out += [str(expr) for _path, expr in obj.ExpressionEngine]
+    except Exception:
+        pass
+    try:
+        if obj.TypeId == "Spreadsheet::Sheet":
+            for addr in obj.getUsedCells():
+                text = str(obj.getContents(addr))
+                if text.startswith("="):
+                    out.append(text[1:])
+    except Exception:
+        pass
+    return out
+
+
 def _external_readers(sketch):
     """Which of this sketch's constraints other objects' expressions read:
-    (names, indices).  An expression that reads ``Sketch.Constraints.name`` or
-    ``Sketch.Constraints[3]`` breaks, or changes its value, when the fix
-    deletes or re-values what it reads, and the throwaway copy carries no
-    other object to show that."""
+    (names, indices; indices count from 0).  An expression that reads
+    ``Sketch.Constraints.name`` or ``Sketch.Constraints[3]`` breaks, or changes
+    its value, when the fix deletes or re-values what it reads, and the
+    throwaway copy carries no other object to show that.  Looked at: the
+    expressions of every object in every open document, and spreadsheet cells.
+    ``Doc#Sketch.Constraints.name`` names the sketch's document by name or
+    label; without ``Doc#`` the sketch is looked up in the reader's own
+    document, so a bare name in another document is that document's sketch."""
     global _READ
     import re
 
     if _READ is None:
         _READ = re.compile(
-            r"(?<![\w.>])(<<[^>]+>>|[A-Za-z_]\w*)\s*\.\s*Constraints\s*(?:\.\s*([A-Za-z_]\w*)|\[\s*(\d+)\s*\])"
+            r"(?<![\w.>#])(?:(<<[^>]+>>|[A-Za-z_]\w*)\s*#\s*)?(<<[^>]+>>|[A-Za-z_]\w*)"
+            r"\s*\.\s*Constraints\s*(?:\.\s*([A-Za-z_]\w*)|\[\s*(\d+)\s*\])"
         )
     names, indices = set(), set()
     me = {sketch.Name, sketch.Label}
     try:
-        others = list(sketch.Document.Objects)
+        mydoc = sketch.Document
+        mydoc_ids = {mydoc.Name, mydoc.Label}
+        docs = list(FreeCAD.listDocuments().values())
     except Exception:
         return names, indices
-    for obj in others:
-        if obj.Name == sketch.Name:
-            continue
+    for doc in docs:
         try:
-            engine = obj.ExpressionEngine
+            objects = list(doc.Objects)
+            same = doc.Name == mydoc.Name
         except Exception:
             continue
-        for _path, expr in engine:
-            for tok, name, idx in _READ.findall(str(expr)):
-                if tok.strip("<>") in me:
+        for obj in objects:
+            if same and obj.Name == sketch.Name:
+                continue
+            for text in _expression_texts(obj):
+                for dtok, tok, name, idx in _READ.findall(text):
+                    if tok.strip("<>") not in me:
+                        continue
+                    if dtok:
+                        if dtok.strip("<>") not in mydoc_ids:
+                            continue
+                    elif not same:
+                        continue
                     if name:
                         names.add(name)
                     else:
