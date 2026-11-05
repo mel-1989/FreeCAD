@@ -60,8 +60,9 @@ QApp = QtWidgets.QApplication
 
 class Frame:
     swaps = []
-    starts = []
-    ends = []
+    spans = []
+    start = None
+    unpaired = 0
 
 
 def pump():
@@ -128,19 +129,19 @@ def parse_timers(lines):
 def step(send, wait_ms=0):
     """Run send(); return the step record (see the module docstring)."""
     quiet()
-    Frame.swaps, Frame.starts, Frame.ends = [], [], []
+    Frame.swaps, Frame.spans, Frame.start, Frame.unpaired = [], [], None, 0
     before = len(timer_lines())
     t0 = ns()
     send()
     t1 = ns()
     quiet(min_ns=int(wait_ms * 1e6))
     swaps = [s for s in Frame.swaps if s >= t0]
-    ends = Frame.ends[:]
     rec = {
         "call_ms": (t1 - t0) / 1e6,
         "frame_ms": (max(swaps) - t0) / 1e6 if swaps else None,
-        "render_ms": sum((e - s) for s, e in zip(Frame.starts, ends)) / 1e6 if ends else None,
-        "renders": len(ends),
+        "render_ms": sum(Frame.spans) / 1e6 if Frame.spans else None,
+        "renders": len(Frame.spans),
+        "renders_unpaired": Frame.unpaired,   # traversals that began and never reached the last node: not counted
         "swaps": len(swaps),
     }
     if TIMING_FILE:
@@ -182,6 +183,7 @@ def centre_on(view, p, height):
 def drag_step(gl, view, sk, p):
     """Press on the start point of geometry 0, one move past the drag threshold (untimed), the timed move, the release."""
     L, N = QtCore.Qt.LeftButton, QtCore.Qt.NoButton
+    start = sk.getPoint(0, 1)
     x, y = [int(round(v)) for v in view.getPointOnViewport(p)]
     QApp.sendEvent(gl, mouse(gl, QtCore.QEvent.MouseMove, x, y, N, N))
     quiet()
@@ -195,6 +197,7 @@ def drag_step(gl, view, sk, p):
     rec["preselection"] = pre_names
     QApp.sendEvent(gl, mouse(gl, QtCore.QEvent.MouseButtonRelease, x + 14, y + 6, L, N))
     quiet(min_ns=int(0.3e9))
+    rec["moved_mm"] = sk.getPoint(0, 1).distanceToPoint(start)
     return rec
 
 
@@ -216,11 +219,14 @@ def setup_view(mw, doc):
 
     def cb_start(_d, action):
         if action.isOfType(coin.SoGLRenderAction.getClassTypeId()):
-            Frame.starts.append(ns())
+            Frame.unpaired += Frame.start is not None
+            Frame.start = ns()
 
     def cb_end(_d, action):
         if action.isOfType(coin.SoGLRenderAction.getClassTypeId()):
-            Frame.ends.append(ns())
+            if Frame.start is not None:
+                Frame.spans.append(ns() - Frame.start)
+                Frame.start = None
 
     first.setCallback(cb_start)
     last.setCallback(cb_end)
@@ -233,7 +239,12 @@ def setup_view(mw, doc):
 
 def run_size(n, mw, warm=False):
     doc = App.newDocument("RenderBench%d" % n)
-    sk, _ = Corpus.build_scale(doc, "S", n, chained=False)
+    sk, _ = Corpus.build_scale(doc, "S", n + 2, chained=False)
+    # The corpus sketch has DOF 0, where a drag cannot move anything. Free the first rectangle from the origin: exactly n constraints, DOF 2.
+    free = [i for i, c in enumerate(sk.Constraints) if c.First == -1 and c.Second == 0]
+    if len(free) != 2:
+        raise RuntimeError("expected two origin datums on the first rectangle, got %s" % free)
+    sk.delConstraints(free, True)
     doc.recompute()
     cons = sk.ConstraintCount
     solves = []
@@ -260,6 +271,9 @@ def run_size(n, mw, warm=False):
     p, _, _ = drag_target(sk, view)
     centre_on(view, p, 30.0)   # zoomed on the first rectangle so the press certainly lands on its vertex
     out["steps"]["drag"] = drag_step(gl, view, sk, p)
+    fit(view)   # again with the whole sketch in view: the rendered scene is the large one, the pick less certain
+    p, _, _ = drag_target(sk, view)
+    out["steps"]["drag_fit"] = drag_step(gl, view, sk, p)
     fit(view)
 
     def add():
