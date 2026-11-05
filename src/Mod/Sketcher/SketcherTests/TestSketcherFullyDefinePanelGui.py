@@ -117,12 +117,12 @@ def _labels(name):
     return [w for w in QtWidgets.QApplication.allWidgets() if w.objectName() == name and isinstance(w, QtWidgets.QLabel)]
 
 
-_LABEL = re.compile(rb' (LabelDistance|LabelPosition)="[^"]*"')
+_LABEL = re.compile(rb' (LabelDistance)="[^"]*"')
 
 
 def _masked(content):
-    """The serialised sketch without the datum labels' placement.  The editor places the label of a dimension it
-    receives (LabelDistance, LabelPosition) to keep it clear of the geometry; that is presentation, not solver data,
+    """The serialised sketch without the datum labels' distance.  The editor places the label of a dimension it
+    receives (LabelDistance; measured on 14 cases, it is the only attribute that differs) to keep it clear of the geometry; that is presentation, not solver data,
     and a copy in a hidden document has no editor to place it."""
     out = dict(content)
     out["Constraints"] = {n: _LABEL.sub(b"", v) for n, v in content["Constraints"].items()}
