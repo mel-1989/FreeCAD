@@ -329,7 +329,9 @@ class PanelTestBase(SketcherGuiTestCase):
         """Choose a row of the tree by index path, like a click."""
         item = self.panel.tree.topLevelItem(row_path[0])
         for i in row_path[1:]:
+            self.assertIsNotNone(item, "no row at %s: the tree is not what the test expects" % (row_path,))
             item = item.child(i)
+        self.assertIsNotNone(item, "no row at %s: the tree is not what the test expects" % (row_path,))
         self.panel.tree.setCurrentItem(item)
         _pump()
         return item
