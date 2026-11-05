@@ -635,6 +635,7 @@ inline void SketcherAddWorkbenchVisual<Gui::MenuItem>(Gui::MenuItem& visual)
            << "Sketcher_SelectElementsAssociatedWithConstraints"
            << "Sketcher_SelectRedundantConstraints"
            << "Sketcher_SelectConflictingConstraints"
+           << "Sketcher_DiagnoseSketch"
            << "Separator"
            << "Sketcher_ArcOverlay"
            << "Sketcher_RestoreInternalAlignmentGeometry"

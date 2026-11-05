@@ -1286,3 +1286,43 @@ def build_corpus(doc, doc_factory=None, scale_sizes=(10, 100, 1000, 5000), real=
     if real:
         _real(cases, extra)
     return cases, extra
+
+
+def repair_equal_distances(doc, name="S", n=2, expr=False):
+    """Two lines; line 0 carries `n + 1` equal Distance constraints (so every pair is redundant: overlapping groups)
+    and line 1 a Distance c, optionally bound to read the last b constraint."""
+    V = FreeCAD.Vector
+    C = Sketcher.Constraint
+    s = doc.addObject("Sketcher::SketchObject", name)
+    s.addGeometry(Part.LineSegment(V(0, 0, 0), V(10, 0, 0)))
+    s.addGeometry(Part.LineSegment(V(0, 5, 0), V(7, 5, 0)))
+    s.addConstraint(C("Horizontal", 0))
+    s.addConstraint(C("Horizontal", 1))
+    for label in ["a"] + ["b%d" % k for k in range(n)]:
+        s.renameConstraint(s.addConstraint(C("Distance", 0, 10.0)), label)
+    s.renameConstraint(s.addConstraint(C("Distance", 1, 7.0)), "c")
+    if expr:
+        s.setExpression("Constraints.c", "Constraints.b%d + 0 mm" % (n - 1))
+    doc.recompute()
+    return s
+
+
+def repair_reader_pair(doc, expr, name_of_reader="Sk2"):
+    """A conflicted sketch Sk (w, w2 conflict; v) and a second sketch whose constraint k reads `expr` of it."""
+    V = FreeCAD.Vector
+    C = Sketcher.Constraint
+    s = doc.addObject("Sketcher::SketchObject", "Sk")
+    s.addGeometry(Part.LineSegment(V(0, 0, 0), V(10, 0, 0)))
+    s.addGeometry(Part.LineSegment(V(0, 5, 0), V(10, 5, 0)))
+    s.addConstraint(C("Horizontal", 0))
+    s.addConstraint(C("Horizontal", 1))
+    s.renameConstraint(s.addConstraint(C("DistanceX", 0, 1, 0, 2, 10.0)), "w")
+    s.renameConstraint(s.addConstraint(C("DistanceX", 0, 1, 0, 2, 12.0)), "w2")
+    s.renameConstraint(s.addConstraint(C("DistanceX", 1, 1, 1, 2, 20.0)), "v")
+    s2 = doc.addObject("Sketcher::SketchObject", name_of_reader)
+    s2.addGeometry(Part.LineSegment(V(0, 0, 0), V(5, 0, 0)))
+    s2.addConstraint(C("DistanceX", 0, 1, 0, 2, 5.0))
+    s2.renameConstraint(0, "k")
+    s2.setExpression("Constraints.k", expr)
+    doc.recompute()
+    return s, s2

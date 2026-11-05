@@ -25,6 +25,7 @@
 #include <QAction>
 #include <QMenu>
 #include <QCheckBox>
+#include <QLabel>
 
 #include <Gui/Application.h>
 #include <Gui/BitmapFactory.h>
@@ -51,11 +52,37 @@ TaskSketcherMessages::TaskSketcherMessages(ViewProviderSketch* sketchView)
     connectionSetUp = sketchView->signalSetUp.connect(std::bind(
         &SketcherGui::TaskSketcherMessages::slotSetUp, this, sp::_1, sp::_2, sp::_3, sp::_4));
     //NOLINTEND
+
+    // Link to the diagnosis panel (G10 slice 4a), hidden until the sketch has a
+    // conflict or a redundancy. The stock select link keeps its own label.
+    labelDiagnose = new QLabel(this);
+    labelDiagnose->setObjectName(QStringLiteral("labelDiagnose"));
+    labelDiagnose->setTextFormat(Qt::RichText);
+    labelDiagnose->setText(QStringLiteral("<a href=\"#diagnose\">%1</a>").arg(tr("Diagnose and fix...")));
+    labelDiagnose->setToolTip(tr("Opens the diagnosis panel: which constraints conflict and fixes the solver has tested"));
+    labelDiagnose->setAccessibleName(tr("Diagnose and fix"));
+    labelDiagnose->setVisible(false);
+    connect(labelDiagnose, &QLabel::linkActivated, this, [](const QString&) {
+        Gui::Application::Instance->commandManager().runCommandByName("Sketcher_DiagnoseSketch");
+    });
+    groupLayout()->addWidget(labelDiagnose);
+    connectionDiagnoseLink = sketchView->signalSetUp.connect(std::bind(
+        &SketcherGui::TaskSketcherMessages::slotDiagnoseLink, this, sp::_1, sp::_2, sp::_3, sp::_4));
 }
 
 TaskSketcherMessages::~TaskSketcherMessages()
 {
     connectionSetUp.disconnect();
+    connectionDiagnoseLink.disconnect();
+}
+
+void TaskSketcherMessages::slotDiagnoseLink(
+    const QString& state, const QString&, const QString&, const QString&)
+{
+    labelDiagnose->setVisible(
+        state == QStringLiteral("conflicting_constraints")
+        || state == QStringLiteral("redundant_constraints")
+        || state == QStringLiteral("partially_redundant_constraints"));
 }
 
 void TaskSketcherMessages::updateToolTip(const QString& link)

@@ -26,6 +26,8 @@
 
 #include <Gui/TaskView/TaskSolverMessages.h>
 
+class QLabel;
+
 namespace SketcherGui
 {
 
@@ -45,8 +47,14 @@ private:
 
     void updateToolTip(const QString& link) override;
 
+    // The diagnosis link (G10 slice 4a): shown in the conflicting, redundant and
+    // partially redundant states only, next to the stock select link.
+    void slotDiagnoseLink(const QString& state, const QString& msg, const QString& link, const QString& linkText);
+
 protected:
     ViewProviderSketch* sketchView;
+    QLabel* labelDiagnose = nullptr;
+    fastsignals::connection connectionDiagnoseLink;
 };
 
 }  // namespace SketcherGui
