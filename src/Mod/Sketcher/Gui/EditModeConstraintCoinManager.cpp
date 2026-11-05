@@ -58,6 +58,7 @@
 #include <Gui/BitmapFactory.h>
 #include <Gui/Inventor/SmSwitchboard.h>
 #include <Gui/SoDatumLabel.h>
+#include "RenderTiming.h"
 #include <Gui/Tools.h>
 #include <Gui/Utilities.h>
 #include <Mod/Part/App/Geometry.h>
@@ -99,6 +100,7 @@ EditModeConstraintCoinManager::~EditModeConstraintCoinManager() = default;
 
 void EditModeConstraintCoinManager::updateVirtualSpace()
 {
+    SKETCHER_RENDER_TIMER(timer, "updateVirtualSpace");
     const std::vector<Sketcher::Constraint*>& constrlist
         = ViewProviderSketchCoinAttorney::getConstraints(viewProvider);
 
@@ -122,6 +124,7 @@ void EditModeConstraintCoinManager::updateVirtualSpace()
 
 void EditModeConstraintCoinManager::processConstraints(const GeoListFacade& geolistfacade)
 {
+    SKETCHER_RENDER_TIMER(timer, "processConstraints");
     using Part::GeomCircle;
     using std::numbers::pi;
 
@@ -1929,6 +1932,7 @@ void EditModeConstraintCoinManager::setConstraintSelectability(bool enabled /* =
 
 void EditModeConstraintCoinManager::rebuildConstraintNodes(const GeoListFacade& geolistfacade)
 {
+    SKETCHER_RENDER_TIMER(timer, "rebuildConstraintNodes");
     const std::vector<Sketcher::Constraint*>& constrlist
         = ViewProviderSketchCoinAttorney::getConstraints(viewProvider);
 
@@ -2449,6 +2453,7 @@ void EditModeConstraintCoinManager::drawConstraintIcons()
 
 void EditModeConstraintCoinManager::drawConstraintIcons(const GeoListFacade& geolistfacade)
 {
+    SKETCHER_RENDER_TIMER(timer, "drawConstraintIcons");
     const std::vector<Sketcher::Constraint*>& constraints
         = ViewProviderSketchCoinAttorney::getConstraints(viewProvider);
 
@@ -2618,6 +2623,7 @@ void EditModeConstraintCoinManager::drawConstraintIcons(const GeoListFacade& geo
 
 void EditModeConstraintCoinManager::combineConstraintIcons(IconQueue iconQueue)
 {
+    SKETCHER_RENDER_TIMER(timer, "combineConstraintIcons");
     // getScaleFactor gives us a ratio of pixels per some kind of real units
     float scale = ViewProviderSketchCoinAttorney::getScaleFactor(viewProvider);
     float maxDistSquared = pow(scale, 2);

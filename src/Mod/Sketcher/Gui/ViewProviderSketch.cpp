@@ -86,6 +86,7 @@
 #include "EditDatumDialog.h"
 #include "EditTextDialog.h"
 #include "EditModeCoinManager.h"
+#include "RenderTiming.h"
 #include "SnapManager.h"
 #include "StyleParameters.h"
 #include "TaskDlgEditSketch.h"
@@ -2197,7 +2198,12 @@ bool ViewProviderSketch::doDragStep(double x, double y)
         }
     }
 
-    if (getSketchObject()->moveGeometriesTemporary(drag.Dragged, vec, drag.relative) == GCS::SolveStatus::Success) {
+    GCS::SolveStatus dragStatus;
+    {
+        SKETCHER_RENDER_TIMER(timer, "dragSolve");
+        dragStatus = getSketchObject()->moveGeometriesTemporary(drag.Dragged, vec, drag.relative);
+    }
+    if (dragStatus == GCS::SolveStatus::Success) {
         setPositionText(Base::Vector2d(x, y));
         draw(true, false);
         return true;
@@ -3735,6 +3741,7 @@ void ViewProviderSketch::scaleBSplinePoleCirclesAndUpdateSolverAndSketchObjectGe
 
 void ViewProviderSketch::draw(bool temp /*=false*/, bool rebuildinformationoverlay /*=true*/)
 {
+    SKETCHER_RENDER_TIMER(timer, "draw");
     assert(isInEditMode());
 
     // ============== Retrieve geometry to be represented =================================

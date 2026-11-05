@@ -130,6 +130,7 @@ SET(SketcherGui_SRCS
     EditModeGeometryCoinManager.h
     EditModeConstraintCoinManager.cpp
     EditModeConstraintCoinManager.h
+    RenderTiming.h
     ViewProviderSketchCoinAttorney.cpp
     ViewProviderSketchCoinAttorney.h
     ViewProviderSketch.cpp
