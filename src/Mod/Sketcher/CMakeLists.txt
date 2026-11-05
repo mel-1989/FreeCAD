@@ -39,6 +39,8 @@ set(Sketcher_TestScripts
     SketcherTests/SketchSolverBaseline.py
     SketcherTests/SolverCoreMutants.py
     SketcherTests/SketchPlantedScale.py
+    SketcherTests/TestSketchBlocks.py
+    SketcherTests/SketchBlocksCorpus.py
 )
 
 if(BUILD_GUI)
