@@ -150,6 +150,11 @@ public:
 
     /** @name coin nodes creation*/
     void rebuildConstraintNodes();
+    /// true once constraint nodes have been built for the sketch in edit
+    bool hasConstraintNodes() const
+    {
+        return !vConstrType.empty();
+    }
     //@}
 
     /** @name change constraints selectability*/

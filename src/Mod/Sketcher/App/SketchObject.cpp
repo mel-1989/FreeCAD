@@ -59,6 +59,7 @@
 
 #include "GeoEnum.h"
 #include "SketchObject.h"
+#include "../Gui/RenderTiming.h"
 #include "Constraint.h"
 #include "SketchObjectPy.h"
 #include "ExternalGeometryFacade.h"
@@ -317,6 +318,7 @@ GCS::Algorithm getDefaultSolver()
 
 App::DocumentObjectExecReturn* SketchObject::execute()
 {
+    SKETCHER_RENDER_TIMER(timer, "execute");
     try {
         App::DocumentObjectExecReturn* rtn = Part2DObject::execute();// to positionBySupport
         if (rtn != App::DocumentObject::StdReturn)
@@ -330,6 +332,9 @@ App::DocumentObjectExecReturn* SketchObject::execute()
     // setup and diagnose the sketch
     try {
         rebuildExternalGeometry();
+        // solve() below sets the sketch up from the same geometry and constraints, so the set-up that
+        // Constraints.acceptGeometry() would trigger through onChanged() is skipped as a managed change.
+        Base::StateLocker lock(managedoperation, true);
         Constraints.acceptGeometry(getCompleteGeometry());
     }
     catch (const Base::Exception&) {

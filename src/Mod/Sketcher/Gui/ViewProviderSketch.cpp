@@ -3892,6 +3892,7 @@ void ViewProviderSketch::updateData(const App::Property* prop) {
 
 void ViewProviderSketch::slotSolverUpdate()
 {
+    SKETCHER_RENDER_TIMER(timer, "slotSolverUpdate");
     if (!isInEditMode()) {
         return;
     }
@@ -4165,6 +4166,7 @@ void ViewProviderSketch::setupContextMenu(QMenu* menu, QObject* receiver, const 
 
 bool ViewProviderSketch::setEdit(int ModNum)
 {
+    SKETCHER_RENDER_TIMER(timer, "setEdit");
     if (ModNum != ViewProviderSketch::Default) {
         return PartGui::ViewProvider2DObject::setEdit(ModNum);
     }
@@ -4302,7 +4304,10 @@ bool ViewProviderSketch::setEdit(int ModNum)
 
     connectionToolWidget = sketchDlg->registerToolWidgetChanged(std::bind(&SketcherGui::ViewProviderSketch::slotToolWidgetChanged, this, sp::_1));
 
-    Gui::Control().showDialog(sketchDlg);
+    {
+        SKETCHER_RENDER_TIMER(dtimer, "showDialog");
+        Gui::Control().showDialog(sketchDlg);
+    }
 
     // This call to the solver is needed to initialize the DoF and solve time controls
     // The false parameter indicates that the geometry of the SketchObject shall not be updateData
@@ -4527,6 +4532,7 @@ void ViewProviderSketch::UpdateSolverInformation()
 
 void ViewProviderSketch::unsetEdit(int ModNum)
 {
+    SKETCHER_RENDER_TIMER(timer, "unsetEdit");
     if (ModNum != ViewProviderSketch::Default) {
         return PartGui::ViewProvider2DObject::unsetEdit(ModNum);
     }
@@ -4671,6 +4677,7 @@ void ViewProviderSketch::setEditViewer(Gui::View3DInventorViewer* viewer, int Mo
     if (getSketchObject()->Geometry.getSize() > 0 || getSketchObject()->ExternalGeometry.getSize() > 0) {
         std::vector<App::SubObjectT> objs;
         objs.emplace_back(getObject(), "");
+        SKETCHER_RENDER_TIMER(vtimer, "viewObjects");
         viewer->viewObjects(objs);
     }
 

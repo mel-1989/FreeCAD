@@ -334,6 +334,9 @@ public:
      * returns the DoF of such a geometry.
      */
     int setUpSketch();
+    /// Touch the Constraints property to inform the views of new solver information, without the
+    /// sketch being set up again (the caller has just done that)
+    void touchConstraintsAfterSetUp();
 
     /** Performs a full analysis of the addition of additional constraints without adding them to
      * the sketch object */

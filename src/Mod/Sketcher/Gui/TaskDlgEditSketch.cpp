@@ -26,6 +26,7 @@
 #include <Gui/Command.h>
 
 #include "TaskDlgEditSketch.h"
+#include "RenderTiming.h"
 #include "ViewProviderSketch.h"
 
 
@@ -42,6 +43,7 @@ TaskDlgEditSketch::TaskDlgEditSketch(ViewProviderSketch* sketchView)
     : TaskDialog()
     , sketchView(sketchView)
 {
+    SKETCHER_RENDER_TIMER(timer, "taskDlgCtor");
     assert(sketchView);
     roleOnEscape = QDialogButtonBox::ButtonRole::AcceptRole;
 

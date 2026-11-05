@@ -56,6 +56,7 @@
 #include "EditDatumDialog.h"
 #include "EditTextDialog.h"
 #include "TaskSketcherConstraints.h"
+#include "RenderTiming.h"
 #include "Utils.h"
 #include "ViewProviderSketch.h"
 #include "ui_TaskSketcherConstraints.h"
@@ -1687,6 +1688,12 @@ void TaskSketcherConstraints::change3DViewVisibilityToTrackFilter(bool filterEna
         ConstraintItem* it = static_cast<ConstraintItem*>(ui->listWidgetConstraints->item(i));
         bool visible = !filterEnabled || !isConstraintFiltered(it);
 
+        // Only constraints whose visibility actually changes are sent to the sketch: writing the whole
+        // list back when nothing changes rewrote the Constraints property and redrew the sketch for no effect.
+        if (vals[it->ConstraintNbr]->isVisible == visible) {
+            continue;
+        }
+
         // If the constraint is filteredout and it was previously shown in 3D view
         if (!visible) {
             constrIdsToSetHidden.push_back(it->ConstraintNbr);
@@ -1886,6 +1893,7 @@ bool TaskSketcherConstraints::isConstraintFiltered(QListWidgetItem* item)
 
 void TaskSketcherConstraints::slotConstraintsChanged()
 {
+    SKETCHER_RENDER_TIMER(timer, "constraintsList");
     assert(sketchView);
 
     constraintMap.clear();

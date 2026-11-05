@@ -42,6 +42,7 @@
 
 #include "GeoEnum.h"
 #include "SketchObject.h"
+#include "../Gui/RenderTiming.h"
 
 
 #undef DEBUG
@@ -77,6 +78,7 @@ void SketchObject::retrieveSolverDiagnostics()
 
 SketchSolveStatus SketchObject::solve(bool updateGeoAfterSolving /*=true*/)
 {
+    SKETCHER_RENDER_TIMER(timer, "solve");
     // no need to check input data validity as this is an sketchobject managed operation.
     Base::StateLocker lock(managedoperation, true);
 
@@ -247,8 +249,14 @@ int SketchObject::setDriving(int ConstrId, bool isdriving)
 
     this->Constraints.setValues(std::move(newVals));
 
-    if (!isdriving)
-        setExpression(Constraints.createPath(ConstrId), std::shared_ptr<App::Expression>());
+    if (!isdriving) {
+        // Removing an expression that is not there did nothing, but setExpression() solves the sketch
+        // when there is no recompute, and the solve below then repeated it on the same state.
+        const auto path = Constraints.createPath(ConstrId);
+        if (getExpression(path).expression) {
+            setExpression(path, std::shared_ptr<App::Expression>());
+        }
+    }
 
     // if we do not have a recompute, the sketch must be solved to update the DoF of the solver
     if (noRecomputes)
@@ -782,6 +790,14 @@ int SketchObject::setUpSketch()
         Constraints.touch();
 
     return lastDoF;
+}
+
+void SketchObject::touchConstraintsAfterSetUp()
+{
+    // The touch only informs the views: as an unmanaged change it would set the sketch up a second time
+    // on the same geometry and constraints.
+    Base::StateLocker lock(managedoperation, true);
+    Constraints.touch();
 }
 
 int SketchObject::diagnoseAdditionalConstraints(

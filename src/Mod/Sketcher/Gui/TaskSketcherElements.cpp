@@ -53,6 +53,7 @@
 #include <Mod/Sketcher/App/SketchObject.h>
 
 #include "TaskSketcherElements.h"
+#include "RenderTiming.h"
 #include "EditTextDialog.h"
 #include <Mod/Sketcher/App/ExternalGeometryFacade.h>
 #include "Utils.h"
@@ -1996,6 +1997,7 @@ void TaskSketcherElements::leaveEvent(QEvent* event)
 
 void TaskSketcherElements::slotElementsChanged()
 {
+    SKETCHER_RENDER_TIMER(timer, "elementsList");
     assert(sketchView);
     // Build up ListView with the elements
     Sketcher::SketchObject* sketch = sketchView->getSketchObject();

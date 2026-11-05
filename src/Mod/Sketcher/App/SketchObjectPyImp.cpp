@@ -402,7 +402,7 @@ PyObject* SketchObjectPy::addConstraint(PyObject* args)
         // exist. this forces recalculation of the initial solution (not a full solve)
         if (this->getSketchObjectPtr()->noRecomputes) {
             this->getSketchObjectPtr()->setUpSketch();
-            this->getSketchObjectPtr()->Constraints.touch();  // update solver information
+            this->getSketchObjectPtr()->touchConstraintsAfterSetUp();  // update solver information
         }
         return Py::new_reference_to(Py::Long(ret));
     }

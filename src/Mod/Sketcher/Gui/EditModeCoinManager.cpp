@@ -2245,7 +2245,11 @@ void EditModeCoinManager::updateInventorNodeSizes()
 
     editModeScenegraphNodes.textFont->size.setValue(drawingParameters.coinFontSize);
 
-    pEditModeConstraintCoinManager->rebuildConstraintNodes();
+    // Nothing built yet (the manager is being constructed): processConstraints builds the nodes on the first
+    // draw, so rebuilding them here as well only does the same work twice.
+    if (pEditModeConstraintCoinManager->hasConstraintNodes()) {
+        pEditModeConstraintCoinManager->rebuildConstraintNodes();
+    }
 }
 
 void EditModeCoinManager::updateInventorWidths()

@@ -57,6 +57,7 @@
 #include "Constraint.h"
 #include "GeometryFacade.h"
 #include "Sketch.h"
+#include "../Gui/RenderTiming.h"
 #include "SolverGeometryExtension.h"
 
 
@@ -260,6 +261,7 @@ int Sketch::setUpSketch(
     int extGeoCount
 )
 {
+    SKETCHER_RENDER_TIMER(timer, "setUpSketch");
     Base::TimeElapsed start_time;
 
     clear();
