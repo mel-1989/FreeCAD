@@ -293,6 +293,7 @@ class TestSketcherRelationsPanelGui(RelationsTestBase):
         item = self.panel.tree.topLevelItem(i)
         self.panel.tree.setCurrentItem(item)
         _pump()
+        self.assertGreater(self.panel.tree.topLevelItemCount(), i, "choosing a row emptied the list")
         return item
 
     @staticmethod
@@ -351,8 +352,12 @@ class TestSketcherRelationsPanelGui(RelationsTestBase):
         p = self.open_rel(sk)
         self.select(sk, "Edge1")
         n = len(sk.Constraints)
-        self.assertFalse(p.focus(n))
-        self.assertFalse(p.focus(n + 50))
+        for gone in (n, n + 50):
+            try:
+                refused = p.focus(gone)
+            except Exception as e:  # a refusal is a False, not an exception
+                self.fail("focus on constraint %d of %d raised %r" % (gone, n, e))
+            self.assertFalse(refused)
         self.assertNotIn("Constraint%d" % (n + 1), _selected_names())
 
     # -- check 7: the filter ---------------------------------------------------------------------------------------------

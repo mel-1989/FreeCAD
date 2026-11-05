@@ -46,6 +46,13 @@ OBSERVERS = "testObserversAreRemovedOnClose"
 POINTS = "testPointsAndEdgesAreDifferentElements"
 CHAIN = "testCoincidentChainsShowOnlyWhatTheDataSays"
 THIRD = "testThirdSlotsAndInternalAlignmentAreFound"
+FREEZE = "testClearingALongListWithARowChosenIsFastAndLeavesTheSelectionRight"
+SWITCH = "testSwitchVirtualSpaceWithTheFilterOnInEveryOrder"
+SWITCH_CONTROL = "testSwitchVirtualSpaceControlsWithNoFilter"
+UNDO = "testStaleAfterUndoAndRedo"
+IDS = "testTheFilterTakesOnlyTrueIntsAndSaysWhatAnEmptyListMeans"
+WEIGHT = "testAWeightRowHasNoUnit"
+VSP = "ViewProviderSketch.cpp"
 
 M = []
 
@@ -58,7 +65,7 @@ def mutant(name, desc, patches, tests, runner="gui"):
 mutant(
     "stale_index_after_a_change",
     "after a constraint is added or deleted the panel keeps reading its old index, so rows name constraints that moved",
-    [(RP, "        self.index = None\n        self.source = None\n        self._rows_current = False\n        self.tree.blockSignals(True)\n        self.tree.clear()", "        self.source = None\n        self._rows_current = False\n        self.tree.blockSignals(True)\n        self.tree.clear()")],
+    [(RP, "        self.index = None\n        self.source = None\n        self._rows_current = False\n        self._empty_tree()", "        self.source = None\n        self._rows_current = False\n        self._empty_tree()")],
     [ADDED, DELETED],
 )
 mutant(
@@ -189,6 +196,40 @@ mutant(
     "updating the virtual space clears the filter",
     [(ECC, "    bool isshownvirtualspace = ViewProviderSketchCoinAttorney::isShownVirtualSpace(viewProvider);\r\n\r\n    if (constrlist.size() == vConstrType.size()) {\r\n", "    bool isshownvirtualspace = ViewProviderSketchCoinAttorney::isShownVirtualSpace(viewProvider);\r\n    clearConstraintFilter();\r\n\r\n    if (constrlist.size() == vConstrType.size()) {\r\n")],
     [PIXELS, PICK],
+    runner="gui+build",
+)
+
+
+mutant(
+    "clearing_the_list_with_a_row_current_freezes",
+    "the list is emptied with a row still current, which takes time that grows with the square of the row count",
+    [(RP, "            self.tree.setCurrentItem(None)\n            self.tree.clear()", "            self.tree.clear()")],
+    [FREEZE],
+)
+mutant(
+    "undo_clears_the_filter_silently",
+    "a filter cleared by undo, redo or an element change is not announced",
+    [(RP, "            self._filter_dropped = True  # _resync says so once the status line is rebuilt\n", "            pass\n")],
+    [UNDO],
+)
+mutant(
+    "weight_shown_in_millimetres",
+    "a Weight row carries the unit mm",
+    [(RP, '_UNITLESS = ("Weight", "SnellsLaw")', '_UNITLESS = ("SnellsLaw",)')],
+    [WEIGHT],
+)
+mutant(
+    "switching_virtual_space_does_not_draw_the_icons",
+    "the switch of the shown space only flips the node flags, so icons cleared while the other space was shown stay blank",
+    [(VSP, "    editCoinManager->drawConstraintIcons();\n\n    signalConstraintsChanged();", "    signalConstraintsChanged();")],
+    [SWITCH, SWITCH_CONTROL],
+    runner="gui+build",
+)
+mutant(
+    "filter_ids_truncated_not_refused",
+    "setConstraintFilter turns a float or an oversize id into an int instead of refusing it",
+    [("AppSketcherGui.cpp", "            if (!PyLong_Check(item)) {\r\n", "            if (false) {\r\n")],
+    [IDS],
     runner="gui+build",
 )
 
