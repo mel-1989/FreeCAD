@@ -141,6 +141,89 @@ void ConstraintEqual::evaluate()
 }
 
 // --------------------------------------------------------
+// Block placement
+ConstraintBlockPlacement::ConstraintBlockPlacement(
+    Mode m,
+    double* member,
+    double* X,
+    double* Y,
+    double* angle,
+    double lx_,
+    double ly_,
+    double c_
+)
+    : mode(m)
+    , lx(lx_)
+    , ly(ly_)
+    , c(c_)
+{
+    pvec.push_back(member);
+    if (mode != Mode::Constant) {
+        pvec.push_back(X);
+        pvec.push_back(Y);
+        pvec.push_back(angle);
+    }
+    origpvec = pvec;
+    rescale();
+}
+
+ConstraintType ConstraintBlockPlacement::getTypeId()
+{
+    return BlockPlacement;
+}
+
+double ConstraintBlockPlacement::error()
+{
+    switch (mode) {
+        case Mode::X:
+            return scale * (*p() - (*px() + lx * std::cos(*pa()) - ly * std::sin(*pa())));
+        case Mode::Y:
+            return scale * (*p() - (*py() + lx * std::sin(*pa()) + ly * std::cos(*pa())));
+        case Mode::Angle:
+            return scale * (*p() - (*pa() + c));
+        case Mode::Constant:
+            return scale * (*p() - c);
+    }
+    return 0.;
+}
+
+double ConstraintBlockPlacement::grad(double* param)
+{
+    double deriv = 0.;
+    if (param == p()) {
+        deriv += 1.;
+    }
+    if (mode != Mode::Constant) {
+        switch (mode) {
+            case Mode::X:
+                if (param == px()) {
+                    deriv -= 1.;
+                }
+                if (param == pa()) {
+                    deriv += lx * std::sin(*pa()) + ly * std::cos(*pa());
+                }
+                break;
+            case Mode::Y:
+                if (param == py()) {
+                    deriv -= 1.;
+                }
+                if (param == pa()) {
+                    deriv -= lx * std::cos(*pa()) - ly * std::sin(*pa());
+                }
+                break;
+            case Mode::Angle:
+                if (param == pa()) {
+                    deriv -= 1.;
+                }
+                break;
+            case Mode::Constant:
+                break;
+        }
+    }
+    return scale * deriv;
+}
+
+// --------------------------------------------------------
 // Weighted Linear Combination
 ConstraintWeightedLinearCombination::ConstraintWeightedLinearCombination(
     size_t givennumpoles,

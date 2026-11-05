@@ -26,6 +26,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <numbers>
 
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRep_Builder.hxx>
@@ -198,6 +199,7 @@ void Sketch::clear()
     GCSsys.clear();
     isInitMove = false;
     ConstraintsCounter = 0;
+    blockInstancesUsed = 0;
     Conflicting.clear();
     Redundant.clear();
     PartiallyRedundant.clear();
@@ -252,6 +254,134 @@ bool Sketch::analyseBlockedGeometry(
     }
 
     return doesBlockAffectOtherConstraints;
+}
+
+void Sketch::addBlockInstances()
+{
+    using Mode = GCS::ConstraintBlockPlacement::Mode;
+    constexpr double twoPi = 2.0 * std::numbers::pi;
+
+    for (const auto& inst : blockInstances) {
+        // resolve the members to the solver's parameters
+        struct Resolved
+        {
+            const BlockMember* m;
+            GCS::Point p0, p1;  // point, line ends, or arc/circle centre
+            GCS::Point arcStart;
+            double* rad = nullptr;
+            double* ang0 = nullptr;
+            double* ang1 = nullptr;
+        };
+        std::vector<Resolved> res;
+        bool ok = !inst.members.empty();
+        for (const auto& m : inst.members) {
+            if (m.geoId < 0 || m.geoId >= static_cast<int>(Geoms.size())) {
+                ok = false;
+                break;
+            }
+            const GeoDef& g = Geoms[m.geoId];
+            Resolved r;
+            r.m = &m;
+            if (m.type == 'p' && g.type == Point) {
+                r.p0 = Points[g.startPointId];
+            }
+            else if (m.type == 'l' && g.type == Line) {
+                r.p0 = Lines[g.index].p1;
+                r.p1 = Lines[g.index].p2;
+            }
+            else if (m.type == 'c' && g.type == Circle) {
+                r.p0 = Circles[g.index].center;
+                r.rad = Circles[g.index].rad;
+            }
+            else if (m.type == 'a' && g.type == Arc) {
+                r.p0 = Arcs[g.index].center;
+                r.arcStart = Arcs[g.index].start;
+                r.rad = Arcs[g.index].rad;
+                r.ang0 = Arcs[g.index].startAngle;
+                r.ang1 = Arcs[g.index].endAngle;
+            }
+            else {
+                ok = false;
+                break;
+            }
+            res.push_back(r);
+        }
+        if (!ok) {
+            continue;
+        }
+
+        // the member points as (local, world) pairs, to seed the placement from the geometry
+        struct Pair
+        {
+            double lx, ly, wx, wy;
+        };
+        std::vector<Pair> pairs;
+        for (const auto& r : res) {
+            pairs.push_back({r.m->x0, r.m->y0, *r.p0.x, *r.p0.y});
+            if (r.m->type == 'l') {
+                pairs.push_back({r.m->x1, r.m->y1, *r.p1.x, *r.p1.y});
+            }
+            else if (r.m->type == 'a') {
+                pairs.push_back(
+                    {r.m->x0 + r.m->r * std::cos(r.m->a0),
+                     r.m->y0 + r.m->r * std::sin(r.m->a0),
+                     *r.arcStart.x,
+                     *r.arcStart.y}
+                );
+            }
+        }
+        // the angle comes from the point farthest from the first one in the definition: the error of a
+        // direction grows with the inverse of the distance, so the longest baseline is the best
+        double angle = 0.0;
+        const Pair q0 = pairs.front();
+        double far = 1e-6;
+        for (const auto& q : pairs) {
+            double d = std::hypot(q.lx - q0.lx, q.ly - q0.ly);
+            if (d > far) {
+                far = d;
+                angle = std::atan2(q.wy - q0.wy, q.wx - q0.wx)
+                    - std::atan2(q.ly - q0.ly, q.lx - q0.lx);
+            }
+        }
+        double X = q0.wx - (q0.lx * std::cos(angle) - q0.ly * std::sin(angle));
+        double Y = q0.wy - (q0.lx * std::sin(angle) + q0.ly * std::cos(angle));
+
+        Parameters.push_back(new double(X));
+        double* pX = Parameters.back();
+        Parameters.push_back(new double(Y));
+        double* pY = Parameters.back();
+        Parameters.push_back(new double(angle));
+        double* pA = Parameters.back();
+
+        auto point = [&](GCS::Point& p, double lx, double ly) {
+            GCSsys.addConstraintBlockPlacement(Mode::X, p.x, pX, pY, pA, lx, ly, 0.0);
+            GCSsys.addConstraintBlockPlacement(Mode::Y, p.y, pX, pY, pA, lx, ly, 0.0);
+        };
+        // the angle parameters keep the branch they have: a whole number of turns is added
+        auto angleTie = [&](double* p, double local) {
+            double k = std::round((*p - (angle + local)) / twoPi);
+            GCSsys.addConstraintBlockPlacement(
+                Mode::Angle, p, pX, pY, pA, 0.0, 0.0, local + k * twoPi
+            );
+        };
+        for (auto& r : res) {
+            point(r.p0, r.m->x0, r.m->y0);
+            if (r.m->type == 'l') {
+                point(r.p1, r.m->x1, r.m->y1);
+            }
+            if (r.rad) {
+                GCSsys.addConstraintBlockPlacement(
+                    Mode::Constant, r.rad, nullptr, nullptr, nullptr, 0.0, 0.0, r.m->r
+                );
+            }
+            if (r.m->type == 'a') {
+                // the end points are tied by the arc rules, they are not tied again
+                angleTie(r.ang0, r.m->a0);
+                angleTie(r.ang1, r.m->a1);
+            }
+        }
+        ++blockInstancesUsed;
+    }
 }
 
 int Sketch::setUpSketch(
@@ -355,6 +485,9 @@ int Sketch::setUpSketch(
         addConstraints(ConstraintList, unenforceableConstraints);
     }
     clearTemporaryConstraints();
+    if (!blockInstances.empty()) {
+        addBlockInstances();
+    }
     GCSsys.declareUnknowns(Parameters);
     GCSsys.declareDrivenParams(DrivenParameters);
     GCSsys.initSolution(defaultSolverRedundant);

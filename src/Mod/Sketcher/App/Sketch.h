@@ -82,6 +82,32 @@ public:
         const std::vector<Constraint*>& ConstraintList,
         int extGeoCount = 0
     );
+    /** one member of a block instance, with its fixed coordinates in the block's own frame
+     *
+     * type is 'p' (point: x0, y0), 'l' (line: x0, y0 to x1, y1), 'c' (circle: centre x0, y0 and
+     * radius r) or 'a' (arc: centre x0, y0, radius r, start angle a0, end angle a1)
+     */
+    struct BlockMember
+    {
+        int geoId = -1;
+        char type = 'p';
+        double x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0, r = 0.0, a0 = 0.0, a1 = 0.0;
+        bool construction = false;  ///< the definition's construction flag, kept by every instance
+    };
+    struct BlockInstance
+    {
+        std::vector<BlockMember> members;
+    };
+    /// the block instances the next setUpSketch ties to a rigid placement (X, Y, angle) each
+    void setBlockInstances(std::vector<BlockInstance> instances)
+    {
+        blockInstances = std::move(instances);
+    }
+    /// number of instances the last setUpSketch tied; 0 when the block code was not entered
+    int getBlockInstanceCount() const
+    {
+        return blockInstancesUsed;
+    }
     /// return the actual geometry of the sketch a TopoShape
     Part::TopoShape toShape() const;
     /// add unspecified geometry
@@ -610,6 +636,9 @@ private:
     std::vector<ConstrDef> Constrs;
     GCS::System GCSsys;
     int ConstraintsCounter;
+    std::vector<BlockInstance> blockInstances;
+    int blockInstancesUsed = 0;
+    void addBlockInstances();
     std::vector<int> Conflicting;
     std::vector<int> Redundant;
     std::vector<int> PartiallyRedundant;

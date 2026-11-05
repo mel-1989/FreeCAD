@@ -1023,3 +1023,16 @@ class SketchObject(Part2DObject):
         Gets the GeometryId of the SketchGeometryExtension of the geometry with the provided GeoId
         """
         ...
+
+    @no_args
+    def getBlockInstanceCount(self) -> int:
+        """
+        Number of block instances the solver tied in its last set up; 0 when no block code ran.
+        """
+        ...
+
+    def setBlockGuard(self, on: bool, /) -> None:
+        """
+        Internal to SketcherBlocks; callers must not use it. While on, the rule that explodes block instances whose members no longer fit their definition is off, until cleared with False.
+        """
+        ...

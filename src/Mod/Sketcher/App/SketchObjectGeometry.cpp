@@ -346,6 +346,8 @@ int SketchObject::delGeometriesExclusiveList(const std::vector<int>& GeoIds, Del
         this->Geometry.setValues(newVals);
         this->Constraints.setValues(std::move(constraints));
     }
+    // a block instance that lost a member becomes plain geometry
+    pruneBlocks();
     // Update geometry indices and rebuild vertexindex now via onChanged, so that
     // ViewProvider::UpdateData is triggered.
     Geometry.touch();
@@ -372,6 +374,7 @@ int SketchObject::deleteAllGeometry(DeleteOptions options)
         this->Geometry.setValues(newVals);
         this->Constraints.setValues(newConstraints);
     }
+    pruneBlocks();
     // Update geometry indices and rebuild vertexindex now via onChanged, so that
     // ViewProvider::UpdateData is triggered.
     Geometry.touch();

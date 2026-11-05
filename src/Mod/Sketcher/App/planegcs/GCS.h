@@ -486,6 +486,19 @@ public:
     int addConstraintCoordinateX(Point& p, double* x, int tagId = 0, bool driving = true);
     int addConstraintCoordinateY(Point& p, double* y, int tagId = 0, bool driving = true);
     int addConstraintArcRules(Arc& a, int tagId = 0, bool driving = true);
+    // one equation tying `member` to the placement (X, Y, angle) of a block instance, see
+    // ConstraintBlockPlacement
+    int addConstraintBlockPlacement(
+        ConstraintBlockPlacement::Mode mode,
+        double* member,
+        double* X,
+        double* Y,
+        double* angle,
+        double lx,
+        double ly,
+        double c,
+        int tagId = 0
+    );
     int addConstraintPointOnCircle(Point& p, Circle& c, int tagId = 0, bool driving = true);
     int addConstraintPointOnEllipse(Point& p, Ellipse& e, int tagId = 0, bool driving = true);
     int addConstraintPointOnHyperbolicArc(Point& p, ArcOfHyperbola& e, int tagId = 0, bool driving = true);

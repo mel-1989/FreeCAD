@@ -229,6 +229,11 @@ SketchObject::SketchObject() : geoLastId(0)
                       "Internal Geometry",
                       App::Prop_None,
                       "Enables selection of closed profiles within a sketch as input for operations");
+    ADD_PROPERTY_TYPE(BlockData,
+                      (""),
+                      "Blocks",
+                      (App::PropertyType)(App::Prop_Hidden),
+                      "Sketch block definitions and instances (JSON), see Sketcher.SketcherBlocks");
     ADD_PROPERTY_TYPE(_InternalFaceVersion,
                       (0),
                       "Base",
@@ -1009,6 +1014,10 @@ void SketchObject::onChanged(const App::Property* prop)
     else if (prop == &Constraints) {
         onConstraintsChanged();
     }
+    else if (prop == &BlockData && !isRestoring()) {
+        // hand-written data that does not fit the geometry is exploded at once, with one message
+        explodeInvalidBlocks();
+    }
     else if (prop == &ExternalGeo && !prop->testStatus(App::Property::User3)) {
         onExternalGeoChanged();
     }
@@ -1033,6 +1042,13 @@ void SketchObject::onChanged(const App::Property* prop)
 
 void SketchObject::onGeometryChanged()
 {
+    // a block instance that lost a member becomes plain geometry; not while a transaction or a
+    // restore is putting properties back one by one, when the data may be momentarily out of step
+    if (!isRestoring() && !BlockData.getStrValue().empty() && getDocument()
+        && !getDocument()->isPerformingTransaction()) {
+        pruneBlocks();
+    }
+
     if (isRestoring() && checkMigration(Geometry)) {
         // Construction migration to extension
         for (auto geometryValue : Geometry.getValues()) {
@@ -1408,6 +1424,10 @@ void SketchObject::onSketchRestore()
         migrateSketch();
 
         updateGeometryRefs();
+
+        restoreChecksBlocks = true;
+        pruneBlocks();
+        restoreChecksBlocks = false;
 
         fixMissingAxisInExternalGeo();
 

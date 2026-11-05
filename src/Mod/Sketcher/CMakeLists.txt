@@ -14,6 +14,7 @@ set(Sketcher_Scripts
     Profiles.py
     SketcherDiagnosis.py
     SketcherAutoDefine.py
+    SketcherBlocks.py
 )
 
 set(Sketcher_TestScripts
@@ -38,6 +39,9 @@ set(Sketcher_TestScripts
     SketcherTests/SketchSolverBaseline.py
     SketcherTests/SolverCoreMutants.py
     SketcherTests/SketchPlantedScale.py
+    SketcherTests/TestSketchBlocks.py
+    SketcherTests/SketchBlocksCorpus.py
+    SketcherTests/SketchBlocksMutants.py
 )
 
 if(BUILD_GUI)
