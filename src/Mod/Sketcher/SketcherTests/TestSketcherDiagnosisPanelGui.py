@@ -302,7 +302,11 @@ class PanelTestBase(SketcherGuiTestCase):
         panel = panel or self.panel
         for _ in range(20):
             _wait(lambda: panel.state in ("ready", "failed", "closed"))
-            self.assertEqual(panel.state, "ready", panel.status.text())
+            try:
+                said = panel.status.text()
+            except RuntimeError:  # the panel closed itself and its widgets are gone: the assertion below says so
+                said = "(the panel closed and was deleted)"
+            self.assertEqual(panel.state, "ready", said)
             if panel._fingerprint() == panel.fingerprint:
                 return
             _pump(100)

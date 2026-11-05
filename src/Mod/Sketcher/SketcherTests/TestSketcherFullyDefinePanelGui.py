@@ -742,7 +742,7 @@ class TestSketcherFullyDefinePanelGui(FDTestBase):
         self.addCleanup(setattr, P.AD, "propose", real)
         p = self.open_fd(sk)
         self.assertEqual(p.result["status"], "cannot_close")
-        self.assertTrue(p.result["out_of_time"])
+        self.assertTrue(p.result.get("out_of_time"))
         text = p.status.text()
         self.assertIn("ran out of time", text)
         self.assertNotIn("No tested way", text)
