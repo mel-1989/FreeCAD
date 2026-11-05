@@ -709,3 +709,42 @@ class TestSketcherRelationsPanelGui(RelationsTestBase):
         )
         for k, v in worst.items():
             self.assertLess(v, RESPONSE_BAR, "%s took %.0f ms" % (k, v * 1000))
+
+    # -- check 9, the freeze found by the second verifier: clearing a long list with a row chosen ------------------------------
+    @staticmethod
+    def _hub(sk, n):
+        """One line with n points on it and n DistanceX datums: the line holds n or more constraints."""
+        sk.addGeometry(Part.LineSegment(V(0, 0, 0), V(1000, 0, 0)))
+        ids = sk.addGeometry([Part.Point(V(i * 0.3 + 1, 5, 0)) for i in range(n)])
+        sk.addConstraint([Sketcher.Constraint("PointOnObject", g, 1, 0) for g in ids])
+        sk.addConstraint([Sketcher.Constraint("DistanceX", g, 1, -1, 1, -(i * 0.3 + 1)) for i, g in enumerate(ids)])
+
+    def testClearingALongListWithARowChosenIsFastAndLeavesTheSelectionRight(self):
+        n = 2500
+        sk = self.new_sketch("RelFreeze", lambda s: self._hub(s, n))
+        p = self.open_rel(sk)
+        doc = sk.Document.Name
+        for how in ("clear", "other element"):
+            self.select(sk, "Edge1")
+            self.assertGreaterEqual(p.tree.topLevelItemCount(), n)
+            self._row(p.tree.topLevelItemCount() - 1)
+            self.assertTrue(any(s.startswith("Constraint") for s in _selected_names()), "no row was chosen")
+            t = time.time()
+            Gui.Selection.clearSelection()
+            if how == "other element":
+                Gui.Selection.addSelection(doc, sk.Name, "Vertex3")
+            took = time.time() - t
+            print("RELATIONS %s with %d rows and a row chosen: %.0f ms" % (how, n, took * 1000))
+            self.assertLess(took, 2.0, "%s with %d rows and a row chosen took %.0f ms" % (how, n, took * 1000))
+            _pump(30)
+            self.assertEqual(p._owned, [], "the panel kept names it had added to the selection")
+            self.assertEqual(
+                _selected_names(), [] if how == "clear" else ["Vertex3"], "the user's selection is not what they left"
+            )
+            self.assertIsNone(p.tree.currentItem())
+            self.assertEqual(p.tree.selectedItems(), [])
+            if how == "clear":
+                self.assertEqual(p.tree.topLevelItemCount(), 0)
+            else:
+                self.assertEqual(_panel_rows(p), expected_rows(sk, 1, 1))
+        self.close_panel()

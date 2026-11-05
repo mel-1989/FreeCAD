@@ -445,13 +445,21 @@ class RelationsPanel(QtWidgets.QDockWidget):
         self._drop_focus()
         self.source = None
         self._rows_current = False
-        self.tree.blockSignals(True)
-        self.tree.clear()
-        self.tree.blockSignals(False)
+        self._empty_tree()
         self.only_button.setEnabled(False)
         self.status.setText(tr("Select an element of the sketch."))
 
     _rows_current = False
+
+    def _empty_tree(self):
+        """Remove every row without telling anyone.  The current item goes first: while a row is current, clear() updates
+        it once per removed row and takes time that grows with the square of the row count (2,500 rows: 47 s)."""
+        self.tree.blockSignals(True)
+        try:
+            self.tree.setCurrentItem(None)
+            self.tree.clear()
+        finally:
+            self.tree.blockSignals(False)
 
     def show_element(self, geo, pos=None):
         """List the relations of an element (also what a selection does)."""
@@ -459,8 +467,8 @@ class RelationsPanel(QtWidgets.QDockWidget):
         idx = self._ensure_index()
         self.source = (geo, pos)
         ids = idx.ids_on(geo, pos)
+        self._empty_tree()
         self.tree.blockSignals(True)
-        self.tree.clear()
         for i in ids:
             on, tied = idx.row(i, geo, pos)
             head = constraint_label(i + 1, idx.types[i], idx.names[i], self._value_text(i))
@@ -675,9 +683,7 @@ class RelationsPanel(QtWidgets.QDockWidget):
         self.index = None
         self.source = None
         self._rows_current = False
-        self.tree.blockSignals(True)
-        self.tree.clear()
-        self.tree.blockSignals(False)
+        self._empty_tree()
         self.only_button.setEnabled(False)
         self.status.setText(reason)
         if not self._resync_pending:
