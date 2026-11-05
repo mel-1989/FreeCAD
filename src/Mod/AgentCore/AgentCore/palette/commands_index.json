@@ -810,6 +810,7 @@
 {"key": "Ctrl+V", "menu": "Paste Elements", "name": "Sketcher_Paste", "tip": "Pastes the geometries and constraints from the clipboard into the sketch", "wb": "SketcherWorkbench"},
 {"key": "G, X", "menu": "External Projection", "name": "Sketcher_Projection", "tip": "Creates the projection of external geometry in the sketch plane", "wb": "SketcherWorkbench"},
 {"menu": "Rectangular Array", "name": "Sketcher_RectangularArray", "tip": "Creates a rectangular array pattern of the geometry taking as reference the last selected point", "wb": "SketcherWorkbench"},
+{"menu": "Sketch relations", "name": "Sketcher_Relations", "tip": "Lists the constraints on the selected element and the elements each one ties it to. Choosing a constraint highlights it and its elements; the panel can also hide the other constraints in the view. The sketch is not changed.", "wb": "SketcherWorkbench"},
 {"key": "Z, R", "menu": "Remove Axes Alignment", "name": "Sketcher_RemoveAxesAlignment", "tip": "Modifies the constraints to remove axes alignment while trying to preserve the constraint relationship of the selection", "wb": "SketcherWorkbench"},
 {"menu": "Rendering Order", "name": "Sketcher_RenderingOrder", "tip": "Reorders items in the rendering order", "wb": "SketcherWorkbench"},
 {"menu": "Reorient Sketch", "name": "Sketcher_ReorientSketch", "tip": "Places the selected sketch on one of the global coordinate planes. This will clear the AttachmentSupport property.", "wb": "SketcherWorkbench"},
