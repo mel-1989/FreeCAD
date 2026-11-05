@@ -98,6 +98,7 @@ FreeCAD.__unit_test__ += [
     "GuiDocument",
     "TestGraphicsViewWrapping",
     "TestMDIView",
+    "TestQuitPySide",
     "TestRubberbandSelection",
     "TestSelectionVisual",
     "TestCornerAxisCrossVisual",

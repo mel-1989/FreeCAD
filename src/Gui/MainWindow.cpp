@@ -21,6 +21,7 @@
  ***************************************************************************/
 
 
+#include <QAbstractEventDispatcher>
 #include <QActionGroup>
 #include <QApplication>
 #include <QByteArray>
@@ -1816,6 +1817,20 @@ void MainWindow::closeEvent(QCloseEvent* e)
             // the process on a destroyed mutex (crash reports of TestCAMGui, 2026-11-04).
             QCoreApplication::sendPostedEvents();
             QCoreApplication::removePostedEvents(nullptr);
+            // PySide tags each QObject it wraps with a dynamic property that holds a deleter for
+            // the wrapper. Left alive, libc exit() destroys it after Shiboken's statics are gone
+            // and the process aborts (any macro that wraps the main thread's event dispatcher,
+            // e.g. through qApp->children()). Dropping the property here runs the deleter while
+            // Shiboken is intact; the deleter takes the GIL itself and returns early once Python
+            // is finalised. Name: invalidatePropertyName in libpyside/pyside.cpp of Qt for Python.
+            const char* pysideTag = "_PySideInvalidatePtr";
+            QList<QObject*> tagged {QAbstractEventDispatcher::instance(), qApp, QThread::currentThread()};
+            tagged += qApp->children();
+            for (QObject* obj : std::as_const(tagged)) {
+                if (obj && obj->dynamicPropertyNames().contains(pysideTag)) {
+                    obj->setProperty(pysideTag, QVariant());
+                }
+            }
 #endif
             qApp->quit();           // stop the event loop
         }
