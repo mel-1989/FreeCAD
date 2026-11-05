@@ -341,10 +341,19 @@ def insert(sk, name, x=0.0, y=0.0, angle=0.0):
     if not all(map(math.isfinite, (x, y, angle))):
         raise SketchBlockError("the placement must be finite numbers")
     defn = data["defs"][name]
+    try:
+        _check_distinct(list(defn["members"].values()))
+    except SketchBlockError:
+        raise SketchBlockError("block '%s' has a degenerate definition and cannot be placed" % name)
     data["n"] += 1
     iname = "%s_%d" % (name, data["n"])
     with _transaction(sk, "Insert block"):
-        ids = _add_instance_geometry(sk, defn, x, y, angle)
+        try:
+            ids = _add_instance_geometry(sk, defn, x, y, angle)
+        except SketchBlockError:
+            raise
+        except Exception as exc:
+            raise SketchBlockError("block '%s' cannot be placed (%s)" % (name, exc))
         data["inst"][iname] = {"def": name, "m": ids}
         sk.BlockData = _dump(data)
         sk.solve()
@@ -395,7 +404,9 @@ def update_definition(sk, name, changes):
     not in the definition adds a member (a new key of your choosing); ``None``
     removes the member.  Each instance keeps its placement.  Constraints on
     surviving members survive on the same element; constraints on removed
-    members are removed and returned by name, never retargeted.  Returns
+    members are removed and returned by name, never retargeted.  The construction
+    flag is part of the definition: an instance member whose flag differs from
+    the definition's is a misfit, and the instance explodes like any other.  Returns
     {'removed_constraints': [names], 'instances': [names]}."""
     data = _load(sk)
     if name not in data["defs"]:
@@ -503,4 +514,4 @@ def _reshape(geo, t, g):
     else:
         geo.Center, geo.Radius = V(g[0], g[1], 0), g[2]
         if t == "a":
-            geo.FirstParameter, geo.LastParameter = g[3], g[4]
+            geo.setParameterRange(g[3], g[4])

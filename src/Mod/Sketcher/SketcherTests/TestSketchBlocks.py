@@ -1108,6 +1108,80 @@ class TestBlockGuard(BlocksCase):
         self.assertAlmostEqual(g.StartPoint.x, 51.0, delta=MM)
         self.assertAlmostEqual(g.StartPoint.y, 50.0, delta=MM)
 
+    def test_long_baselines_do_not_falsely_explode_under_drags(self):
+        # (first member length, far member length, coordinate offset): the fit angle comes from the farthest point
+        for tiny, extent, off in ((1e-4, 3e4, 0.0), (1e-5, 1e3, 1e5), (1e-3, 1e3, 1e7), (1e-2, 1e3, 1e8)):
+            doc_sk = self.doc.addObject("Sketcher::SketchObject", "Far%g" % off)
+            sk = doc_sk
+            sk.addGeometry(
+                [Part.LineSegment(V(0, 0, 0), V(tiny, 0, 0)), Part.LineSegment(V(0, 0, 0), V(0, extent, 0)), Part.LineSegment(V(0, extent, 0), V(extent / 2, extent / 2, 0))],
+                False,
+            )
+            B.define(sk, "F", [0, 1, 2])
+            sk.delGeometries([0, 1, 2])
+            name = B.insert(sk, "F", off, off, 0.4)
+            sk.solve()
+            ids = B.blocks(sk)["instances"][name]["geo_ids"]
+            rng = random.Random(3)
+            for k in range(12):
+                cur = sk.Geometry[ids[1]].EndPoint
+                try:
+                    sk.moveGeometry(ids[1], 2, V(cur.x + rng.uniform(-1, 1), cur.y + rng.uniform(-1, 1), 0), False)
+                except ValueError:
+                    pass
+                self.assertEqual(list(B.blocks(sk)["instances"]), [name], "tiny %g offset %g drag %d" % (tiny, off, k))
+
+    def test_mirrored_arrangements_explode(self):
+        # a chiral L and a half disc with its chord, each written mirrored over the instance's geometry
+        sk = self.doc.addObject("Sketcher::SketchObject", "Chiral")
+        sk.addGeometry([Part.LineSegment(V(0, 0, 0), V(4, 0, 0)), Part.LineSegment(V(4, 0, 0), V(4, 2, 0))], False)
+        sk.addGeometry([Part.ArcOfCircle(Part.Circle(V(20, 0, 0), V(0, 0, 1), 2.0), 0.0, math.pi), Part.LineSegment(V(18, 0, 0), V(22, 0, 0))], False)
+        B.define(sk, "L", [0, 1])
+        B.define(sk, "H", [2, 3])
+        sk.delGeometries([0, 1, 2, 3])
+        a = B.insert(sk, "L", 0, 0, 0.0)
+        b = B.insert(sk, "H", 20, 0, 0.0)
+        sk.solve()
+        ga = B.blocks(sk)["instances"][a]["geo_ids"]
+        geo = sk.Geometry
+        geo[ga[1]].EndPoint = V(4, -2, 0)  # the L written upside down: a mirror image, not a rotation
+        sk.Geometry = geo
+        self.assertEqual(list(B.blocks(sk)["instances"]), [b])
+        gb = B.blocks(sk)["instances"][b]["geo_ids"]
+        geo = sk.Geometry
+        geo[gb[0]].setParameterRange(-math.pi, 0.0)  # the half disc mirrored in x
+        sk.Geometry = geo
+        self.assertEqual(B.blocks(sk)["instances"], {})
+
+    def test_update_definition_can_move_an_arc(self):
+        sk = self.doc.addObject("Sketcher::SketchObject", "ArcUpd")
+        sk.addGeometry([Part.ArcOfCircle(Part.Circle(V(0, 0, 0), V(0, 0, 1), 2.0), 0.0, 2.0), Part.LineSegment(V(0, 0, 0), V(5, 0, 0))], False)
+        B.define(sk, "A", [0, 1])
+        sk.delGeometries([0, 1])
+        name = B.insert(sk, "A", 10, 10, 0.5)
+        B.update_definition(sk, "A", {"m0000": Part.ArcOfCircle(Part.Circle(V(0, 0, 0), V(0, 0, 1), 3.0), 0.0, 2.5)})
+        arc = sk.Geometry[B.blocks(sk)["instances"][name]["geo_ids"][0]]
+        self.assertAlmostEqual(arc.Radius, 3.0, delta=MM)
+        self.assertAlmostEqual(arc.Center.x, 10.0, delta=MM)
+        self.assertAlmostEqual(math.remainder(arc.LastParameter - arc.FirstParameter - 2.5, 2 * math.pi), 0.0, delta=1e-9)
+
+    def test_construction_mismatch_explodes_that_instance(self):
+        sk = self.instance_sketch("Constr", two=True)
+        g = B.blocks(sk)["instances"]["R_1"]["geo_ids"]
+        sk.setConstruction(g[0], True)
+        self.assertEqual(list(B.blocks(sk)["instances"]), ["R_2"])
+
+    def test_insert_on_a_degenerate_definition_is_a_block_error(self):
+        sk = self.instance_sketch("Deg")
+        d = json.loads(sk.BlockData)
+        for m in d["defs"]["R"]["members"].values():
+            m["g"] = [3.0, 3.0, 3.0, 3.0]
+        sk.BlockData = json.dumps(d, sort_keys=True, separators=(",", ":"))
+        snap = sk.dumpPropertyContent("Geometry")
+        with self.assertRaises(B.SketchBlockError):
+            B.insert(sk, "R", 1, 1, 0.0)
+        self.assertEqual(sk.dumpPropertyContent("Geometry"), snap)
+
 
 if __name__ == "__main__":
     unittest.main()

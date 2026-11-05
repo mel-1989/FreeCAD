@@ -91,6 +91,12 @@ MUTANTS = [
     ("misfit_member_not_detected", "cpp", BLOCKS, [
         ("            good = fitsDefinition(d.inst.members, cur);", "            good = fitsDefinition(d.inst.members, cur) || true;"),
     ], "an instance whose member was edited keeps its cluster, so the solver pulls the edit back"),
+    ("fit_angle_from_first_distinct_point", "cpp", BLOCKS, [
+        ("        if (d > far) {\n            far = d;\n            th = std::atan2(q.wy - q0.wy, q.wx - q0.wx) - std::atan2(q.ly - q0.ly, q.lx - q0.lx);\n            distinct = true;\n        }", "        if (d > far && !distinct) {\n            th = std::atan2(q.wy - q0.wy, q.wx - q0.wx) - std::atan2(q.ly - q0.ly, q.lx - q0.lx);\n            distinct = true;\n        }"),
+    ], "the fit angle is taken from the first point apart from the origin, not the farthest"),
+    ("construction_mismatch_ignored", "cpp", BLOCKS, [
+        ("                && GeometryFacade::getFacade(geos[it->second])->getConstruction() == d.inst.members[k].construction;", ";"),
+    ], "a member whose construction flag differs from the definition is kept"),
     ("shared_id_accepted", "cpp", BLOCKS, [
         ("!used.count(d.ids[k]) && ", ""),
         ("            good = fitsDefinition(d.inst.members, cur);", "            good = fitsDefinition(d.inst.members, cur) || true;"),

@@ -330,13 +330,17 @@ void Sketch::addBlockInstances()
                 );
             }
         }
+        // the angle comes from the point farthest from the first one in the definition: the error of a
+        // direction grows with the inverse of the distance, so the longest baseline is the best
         double angle = 0.0;
         const Pair q0 = pairs.front();
+        double far = 1e-6;
         for (const auto& q : pairs) {
-            if (std::hypot(q.lx - q0.lx, q.ly - q0.ly) > 1e-6) {
+            double d = std::hypot(q.lx - q0.lx, q.ly - q0.ly);
+            if (d > far) {
+                far = d;
                 angle = std::atan2(q.wy - q0.wy, q.wx - q0.wx)
                     - std::atan2(q.ly - q0.ly, q.lx - q0.lx);
-                break;
             }
         }
         double X = q0.wx - (q0.lx * std::cos(angle) - q0.ly * std::sin(angle));

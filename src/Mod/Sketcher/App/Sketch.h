@@ -92,6 +92,7 @@ public:
         int geoId = -1;
         char type = 'p';
         double x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0, r = 0.0, a0 = 0.0, a1 = 0.0;
+        bool construction = false;  ///< the definition's construction flag, kept by every instance
     };
     struct BlockInstance
     {

@@ -55,6 +55,7 @@ bool memberFromJson(const nlohmann::json& d, Sketch::BlockMember& m)
         return false;
     }
     m.type = t[0];
+    m.construction = d.contains("c") && d["c"].is_boolean() && d["c"].get<bool>();
     size_t need = m.type == 'p' ? 2 : m.type == 'l' ? 4 : m.type == 'c' ? 3 : m.type == 'a' ? 5 : 0;
     if (need == 0 || g.size() != need) {
         return false;
@@ -196,11 +197,13 @@ bool fitsDefinition(const std::vector<Sketch::BlockMember>& members, const std::
     const Pt q0 = pts.front();
     bool distinct = false;
     double th = 0.0;
+    double far = 1e-6;  // the farthest point gives the longest baseline and so the smallest angle error
     for (const auto& q : pts) {
-        if (std::hypot(q.lx - q0.lx, q.ly - q0.ly) > 1e-6) {
+        double d = std::hypot(q.lx - q0.lx, q.ly - q0.ly);
+        if (d > far) {
+            far = d;
             th = std::atan2(q.wy - q0.wy, q.wx - q0.wx) - std::atan2(q.ly - q0.ly, q.lx - q0.lx);
             distinct = true;
-            break;
         }
     }
     if (!distinct) {
@@ -264,7 +267,8 @@ std::vector<bool> SketchObject::validBlockInstances()
         std::vector<Numbers> cur(d.ids.size());
         for (size_t k = 0; k < d.ids.size() && good; ++k) {
             auto it = idToGeo.find(d.ids[k]);
-            good = it != idToGeo.end() && !used.count(d.ids[k]) && numbersOf(geos[it->second], cur[k]);
+            good = it != idToGeo.end() && !used.count(d.ids[k]) && numbersOf(geos[it->second], cur[k])
+                && GeometryFacade::getFacade(geos[it->second])->getConstruction() == d.inst.members[k].construction;
         }
         if (good) {
             good = fitsDefinition(d.inst.members, cur);

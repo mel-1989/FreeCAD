@@ -1033,6 +1033,6 @@ class SketchObject(Part2DObject):
 
     def setBlockGuard(self, on: bool, /) -> None:
         """
-        While on, block data is not checked against the geometry; SketcherBlocks sets it around its own multi-step edits.
+        Internal to SketcherBlocks; callers must not use it. While on, the rule that explodes block instances whose members no longer fit their definition is off, until cleared with False.
         """
         ...
