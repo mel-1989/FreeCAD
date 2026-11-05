@@ -91,6 +91,7 @@ SketchSolveStatus SketchObject::solve(bool updateGeoAfterSolving /*=true*/)
     // happened therefore we update our sketch solver geometry with the SketchObject one.
     //
     // set up a sketch (including dofs counting and diagnosing of conflicts)
+    syncBlocks();
     lastDoF = solvedSketch.setUpSketch(
         getCompleteGeometry(), Constraints.getValues(), getExternalGeometryCount());
 
@@ -772,6 +773,7 @@ int SketchObject::setVisibility(int ConstrId, bool isVisible)
 
 int SketchObject::setUpSketch()
 {
+    syncBlocks();
     lastDoF = solvedSketch.setUpSketch(
         getCompleteGeometry(), Constraints.getValues(), getExternalGeometryCount());
 
@@ -795,6 +797,7 @@ int SketchObject::diagnoseAdditionalConstraints(
     std::ranges::copy(objectconstraints, back_inserter(allconstraints));
     std::ranges::copy(additionalconstraints, back_inserter(allconstraints));
 
+    syncBlocks();
     lastDoF =
         solvedSketch.setUpSketch(getCompleteGeometry(), allconstraints, getExternalGeometryCount());
 

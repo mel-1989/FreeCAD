@@ -264,7 +264,7 @@ class _Scratch:
         _tick("copy")
         n = self.doc.addObject("Sketcher::SketchObject", "Copy")
         n.Placement = src.Placement
-        for prop in ("Geometry", "ExternalGeo", "Constraints"):
+        for prop in ("Geometry", "ExternalGeo", "Constraints", "BlockData"):
             n.restorePropertyContent(prop, src.dumpPropertyContent(prop))
         for path, expr in src.ExpressionEngine:
             try:

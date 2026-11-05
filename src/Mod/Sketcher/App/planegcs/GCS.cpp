@@ -967,6 +967,24 @@ int System::addConstraintCoordinateY(Point& p, double* y, int tagId, bool drivin
     return addConstraintEqual(p.y, y, tagId, driving);
 }
 
+int System::addConstraintBlockPlacement(
+    ConstraintBlockPlacement::Mode mode,
+    double* member,
+    double* X,
+    double* Y,
+    double* angle,
+    double lx,
+    double ly,
+    double c,
+    int tagId
+)
+{
+    Constraint* constr = new ConstraintBlockPlacement(mode, member, X, Y, angle, lx, ly, c);
+    constr->setTag(tagId);
+    constr->setDriving(true);
+    return addConstraint(constr);
+}
+
 int System::addConstraintArcRules(Arc& a, int tagId, bool driving)
 {
     addConstraintCurveValue(a.start, a, a.startAngle, tagId, driving);

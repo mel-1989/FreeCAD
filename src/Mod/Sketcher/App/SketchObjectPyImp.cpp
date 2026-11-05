@@ -2692,6 +2692,11 @@ PyObject* SketchObjectPy::getGeometryId(PyObject* args)
     return Py::new_reference_to(Py::Long(Id));
 }
 
+PyObject* SketchObjectPy::getBlockInstanceCount()
+{
+    return Py::new_reference_to(Py::Long(getSketchObjectPtr()->getBlockInstanceCount()));
+}
+
 PyObject* SketchObjectPy::setGeometryId(PyObject* args)
 {
     int Index;

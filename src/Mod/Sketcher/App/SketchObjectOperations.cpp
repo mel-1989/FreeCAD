@@ -61,6 +61,7 @@ SketchSolveStatus SketchObject::moveGeometries(
 
 
     if (updateGeoBeforeMoving || solverNeedsUpdate) {
+        syncBlocks();
         lastDoF = solvedSketch.setUpSketch(
             getCompleteGeometry(),
             Constraints.getValues(),

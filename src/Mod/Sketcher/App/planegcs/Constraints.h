@@ -85,6 +85,7 @@ enum ConstraintType
     AngleViaPointAndTwoParams = 34,
     AngleViaTwoPoints = 35,
     ArcLength = 36,
+    BlockPlacement = 37,
 };
 
 enum InternalAlignmentType
@@ -238,6 +239,49 @@ public:
     double error() override;
     double grad(double*) override;
     void evaluate() override;
+};
+
+// Block placement: ties one parameter of a block member to the rigid placement (X, Y, angle) of
+// its instance. Linear in the member's parameter, so an instance can neither reflect nor degenerate.
+class ConstraintBlockPlacement: public Constraint
+{
+public:
+    enum class Mode
+    {
+        X,       // p = X + lx cos(a) - ly sin(a)
+        Y,       // p = Y + lx sin(a) + ly cos(a)
+        Angle,   // p = a + c
+        Constant // p = c
+    };
+
+private:
+    Mode mode;
+    double lx;
+    double ly;
+    double c;
+    double* p()
+    {
+        return pvec[0];
+    }
+    double* px()
+    {
+        return pvec[1];
+    }
+    double* py()
+    {
+        return pvec[2];
+    }
+    double* pa()
+    {
+        return pvec[3];
+    }
+
+public:
+    // pvec = {p, X, Y, angle}; the placement parameters may be null for Mode::Constant
+    ConstraintBlockPlacement(Mode m, double* member, double* X, double* Y, double* angle, double lx_, double ly_, double c_);
+    ConstraintType getTypeId() override;
+    double error() override;
+    double grad(double*) override;
 };
 
 // Center of Gravity

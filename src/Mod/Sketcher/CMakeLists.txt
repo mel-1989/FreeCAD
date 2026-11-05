@@ -14,6 +14,7 @@ set(Sketcher_Scripts
     Profiles.py
     SketcherDiagnosis.py
     SketcherAutoDefine.py
+    SketcherBlocks.py
 )
 
 set(Sketcher_TestScripts

@@ -229,6 +229,11 @@ SketchObject::SketchObject() : geoLastId(0)
                       "Internal Geometry",
                       App::Prop_None,
                       "Enables selection of closed profiles within a sketch as input for operations");
+    ADD_PROPERTY_TYPE(BlockData,
+                      (""),
+                      "Blocks",
+                      (App::PropertyType)(App::Prop_Hidden),
+                      "Sketch block definitions and instances (JSON), see Sketcher.SketcherBlocks");
     ADD_PROPERTY_TYPE(_InternalFaceVersion,
                       (0),
                       "Base",
@@ -1408,6 +1413,10 @@ void SketchObject::onSketchRestore()
         migrateSketch();
 
         updateGeometryRefs();
+
+        if (int exploded = pruneBlocks()) {
+            Base::Console().warning("{}: {} block instance(s) no longer match their geometry and were exploded\n", getNameInDocument() ? getNameInDocument() : "Sketch", exploded);
+        }
 
         fixMissingAxisInExternalGeo();
 
