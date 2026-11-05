@@ -878,6 +878,20 @@ bool SketchObject::isInGroup(int geoId, bool includeHandle) const
     return false;
 }
 
+std::unordered_set<int> SketchObject::getGroupMemberGeoIds() const
+{
+    std::unordered_set<int> members;
+    for (const auto& constr : Constraints.getValues()) {
+        if (constr->Type == Group || constr->Type == Text) {
+            // First is the group construction line, which isInGroup(geoId, false) leaves out.
+            for (int i = 1; constr->hasElement(i); ++i) {
+                members.insert(constr->getGeoId(i));
+            }
+        }
+    }
+    return members;
+}
+
 bool SketchObject::isGroupHandle(int geoId) const
 {
     const std::vector<Sketcher::Constraint*>& vals = Constraints.getValues();

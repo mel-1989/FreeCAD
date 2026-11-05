@@ -258,6 +258,8 @@ def run_size(n, mw, warm=False):
     out["dpr"] = gl.devicePixelRatioF()
     out["window"] = [mw.width(), mw.height()]
     view = Gui.ActiveDocument.ActiveView
+    if os.environ.get("FREECAD_RENDER_BENCH_NO_CAMERA_ANIMATION"):
+        view.setAnimationEnabled(False)   # a second figure for enter, without the 10-step camera fit; off in the baseline
     out["steps"]["enter"] = step(lambda: Gui.ActiveDocument.setEdit(sk.Name))
     out["gl_size_in_edit"] = [gl.width(), gl.height()]   # the task panel of edit mode may change the viewport
     cx, cy = W // 2, H // 2

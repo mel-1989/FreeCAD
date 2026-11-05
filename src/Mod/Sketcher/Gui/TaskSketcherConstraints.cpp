@@ -602,6 +602,10 @@ ConstraintView::ConstraintView(QWidget* parent)
 {
     ExpressionDelegate* delegate = new ExpressionDelegate(this);
     setItemDelegate(delegate);
+    // Every row is one line of the same font and icon, so the list can take the height and width of the first
+    // row for all of them instead of asking the delegate for the size hint of each one at every layout (which
+    // took a quarter of a second at 5,000 constraints).  A grab of the list is pixel-identical either way.
+    setUniformItemSizes(true);
 }
 
 ConstraintView::~ConstraintView()
@@ -1464,7 +1468,7 @@ void TaskSketcherConstraints::updateList()
     ParameterGrp::handle hGrp = App::GetApplication().GetParameterGroupByPath(
         "User parameter:BaseApp/Preferences/Mod/Sketcher");
     bool visibilityTracksFilter = hGrp->GetBool("VisualisationTrackingFilter", false);
-    change3DViewVisibilityToTrackFilter(visibilityTracksFilter);
+    change3DViewVisibilityToTrackFilter(visibilityTracksFilter, true);
 }
 
 void TaskSketcherConstraints::onSelectionChanged(const Gui::SelectionChanges& msg)
@@ -1674,7 +1678,7 @@ void TaskSketcherConstraints::onListWidgetConstraintsItemSelectionChanged()
     });
 }
 
-void TaskSketcherConstraints::change3DViewVisibilityToTrackFilter(bool filterEnabled)
+void TaskSketcherConstraints::change3DViewVisibilityToTrackFilter(bool filterEnabled, bool listIsCurrent)
 {
     assert(sketchView);
     // Build up ListView with the constraints
@@ -1717,7 +1721,7 @@ void TaskSketcherConstraints::change3DViewVisibilityToTrackFilter(bool filterEna
         }
     }
 
-    if (constrIdsToSetVisible.empty() && constrIdsToSetHidden.empty()) {
+    if (constrIdsToSetVisible.empty() && constrIdsToSetHidden.empty() && !(listIsCurrent && !vals.empty())) {
         slotConstraintsChanged();
     }
 }

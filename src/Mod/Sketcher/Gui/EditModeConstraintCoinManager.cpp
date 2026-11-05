@@ -1767,6 +1767,8 @@ void EditModeConstraintCoinManager::updateConstraintColor(
     );
 
     // colors of the constraints
+    const auto groupMembers = ViewProviderSketchCoinAttorney::getGroupMemberGeoIds(viewProvider);
+
     for (int i = 0; i < maxNumberOfConstraints; i++) {
         auto* s = static_cast<SoSeparator*>(editModeScenegraphNodes.constrGroup->getChild(i));
 
@@ -1880,7 +1882,8 @@ void EditModeConstraintCoinManager::updateConstraintColor(
         else {
             bool isActive = ViewProviderSketchCoinAttorney::isConstraintActiveInSketch(
                 viewProvider,
-                constraint
+                constraint,
+                groupMembers
             );
             if (hasDatumLabel) {
                 auto* l = static_cast<SoDatumLabel*>(
@@ -1962,6 +1965,8 @@ void EditModeConstraintCoinManager::rebuildConstraintNodes(
 )
 {
 
+    const auto groupMembers = ViewProviderSketchCoinAttorney::getGroupMemberGeoIds(viewProvider);
+
     for (auto it : constrlist) {
         // root separator for one constraint
         auto* sep = new SoSeparator();
@@ -1972,7 +1977,8 @@ void EditModeConstraintCoinManager::rebuildConstraintNodes(
         // every constrained visual node gets its own material for preselection and selection
         auto* mat = new SoMaterial;
         mat->ref();
-        bool isActive = ViewProviderSketchCoinAttorney::isConstraintActiveInSketch(viewProvider, it);
+        bool isActive
+            = ViewProviderSketchCoinAttorney::isConstraintActiveInSketch(viewProvider, it, groupMembers);
         mat->diffuseColor = isActive
             ? (it->isDriving ? SketcherGui::DrawingParameters::ConstrDimColor
                              : SketcherGui::DrawingParameters::NonDrivingConstrDimColor)

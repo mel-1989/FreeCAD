@@ -957,6 +957,12 @@ private:
 
     // Return true if the constraint is active, includes checking if it's not in a group
     bool isConstraintActiveInSketch(const Sketcher::Constraint* cstr) const;
+    // The same for a loop over many constraints, with the group members of the sketch got once
+    std::unordered_set<int> getGroupMemberGeoIds() const;
+    bool isConstraintActiveInSketch(
+        const Sketcher::Constraint* cstr,
+        const std::unordered_set<int>& groupMembers
+    ) const;
 
     // gets the list of geometry of the sketchobject or of the solver instance
     const GeoList getGeoList() const;

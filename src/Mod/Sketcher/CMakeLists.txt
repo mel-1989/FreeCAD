@@ -62,6 +62,7 @@ if(BUILD_GUI)
           SketcherTests/TestOnViewParameterGui.py
           SketcherTests/TestExternalFacePreselection.py
           SketcherTests/TestVisualLayerListGui.py
+          SketcherTests/TestSketchEditEntryGui.py
           SketcherTests/TestSketcherDiagnosisPanelGui.py
           SketcherTests/SketchDiagnosisPanelMutants.py
           SketcherTests/TestSketcherFullyDefinePanelGui.py

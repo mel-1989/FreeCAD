@@ -358,6 +358,27 @@ bool SketchObject::isConstraintActiveInSketch(const Sketcher::Constraint* cstr) 
     return true;
 }
 
+bool SketchObject::isConstraintActiveInSketch(
+    const Sketcher::Constraint* cstr,
+    const std::unordered_set<int>& groupMembers
+) const
+{
+    if (!cstr || !cstr->isActive) {
+        return false;
+    }
+
+    if (cstr->Type == Group || cstr->Type == Text) {
+        return true;
+    }
+
+    for (int j = 0; cstr->hasElement(j); ++j) {
+        if (groupMembers.count(cstr->getGeoId(j)) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int SketchObject::toggleActive(int ConstrId)
 {
     // no need to check input data validity as this is an sketchobject managed operation.
@@ -787,7 +808,7 @@ int SketchObject::setUpSketch()
 
     if (lastHasRedundancies || lastDoF < 0 || lastHasConflict || lastHasMalformedConstraints
         || lastHasPartialRedundancies)
-        Constraints.touch();
+        touchConstraintsAfterSetUp();
 
     return lastDoF;
 }

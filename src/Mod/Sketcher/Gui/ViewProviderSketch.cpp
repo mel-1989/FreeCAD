@@ -5212,6 +5212,19 @@ bool ViewProviderSketch::isConstraintActiveInSketch(const Sketcher::Constraint* 
     return getSketchObject()->isConstraintActiveInSketch(cstr);
 }
 
+std::unordered_set<int> ViewProviderSketch::getGroupMemberGeoIds() const
+{
+    return getSketchObject()->getGroupMemberGeoIds();
+}
+
+bool ViewProviderSketch::isConstraintActiveInSketch(
+    const Sketcher::Constraint* cstr,
+    const std::unordered_set<int>& groupMembers
+) const
+{
+    return getSketchObject()->isConstraintActiveInSketch(cstr, groupMembers);
+}
+
 const GeoList ViewProviderSketch::getGeoList() const
 {
     const std::vector<Part::Geometry*> tempGeo =

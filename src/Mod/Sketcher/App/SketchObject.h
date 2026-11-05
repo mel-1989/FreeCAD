@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include <unordered_set>
+
 #include <App/FeaturePython.h>
 #include <App/IndexedName.h>
 #include <App/PropertyFile.h>
@@ -152,6 +154,8 @@ public:
      \retval bool - true if the geometry is supported
      */
     bool isInGroup(int geoId, bool includeHandle = true) const;
+    /// the GeoIds for which isInGroup(geoId, false) is true, from one pass over the constraints
+    std::unordered_set<int> getGroupMemberGeoIds() const;
     bool isGroupHandle(int geoId) const;
     std::set<int> getGroupGeometries(int handleGeoId) const;
     /*!
@@ -378,6 +382,12 @@ public:
     int getActive(int ConstrId, bool& isactive);
     // Return true if the constraint is active, includes checking if it's not in a group
     bool isConstraintActiveInSketch(const Sketcher::Constraint* cstr) const;
+    /// the same, with the group members taken from getGroupMemberGeoIds() so that a loop over all
+    /// constraints is one pass instead of one pass per constraint
+    bool isConstraintActiveInSketch(
+        const Sketcher::Constraint* cstr,
+        const std::unordered_set<int>& groupMembers
+    ) const;
     /// toggle the driving status of this constraint
     int toggleActive(int ConstrId);
 

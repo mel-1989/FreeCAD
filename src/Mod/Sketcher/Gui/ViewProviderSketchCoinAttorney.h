@@ -89,6 +89,12 @@ private:
         const ViewProviderSketch& vp,
         const Sketcher::Constraint* cstr
     );
+    static inline std::unordered_set<int> getGroupMemberGeoIds(const ViewProviderSketch& vp);
+    static inline bool isConstraintActiveInSketch(
+        const ViewProviderSketch& vp,
+        const Sketcher::Constraint* cstr,
+        const std::unordered_set<int>& groupMembers
+    );
     static inline const GeoList getGeoList(const ViewProviderSketch& vp);
     static inline const GeoListFacade getGeoListFacade(const ViewProviderSketch& vp);
     static inline Base::Placement getEditingPlacement(const ViewProviderSketch& vp);
@@ -155,6 +161,20 @@ inline bool ViewProviderSketchCoinAttorney::isConstraintActiveInSketch(
 )
 {
     return vp.isConstraintActiveInSketch(cstr);
+}
+
+inline std::unordered_set<int> ViewProviderSketchCoinAttorney::getGroupMemberGeoIds(const ViewProviderSketch& vp)
+{
+    return vp.getGroupMemberGeoIds();
+}
+
+inline bool ViewProviderSketchCoinAttorney::isConstraintActiveInSketch(
+    const ViewProviderSketch& vp,
+    const Sketcher::Constraint* cstr,
+    const std::unordered_set<int>& groupMembers
+)
+{
+    return vp.isConstraintActiveInSketch(cstr, groupMembers);
 }
 
 inline const GeoList ViewProviderSketchCoinAttorney::getGeoList(const ViewProviderSketch& vp)
