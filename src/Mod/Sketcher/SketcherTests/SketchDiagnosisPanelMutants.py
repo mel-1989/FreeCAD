@@ -28,6 +28,7 @@ import time
 SUITE = "TestSketcherDiagnosisPanelGui.TestSketcherDiagnosisPanelGui"
 API_SUITE = "SketcherTests.TestSketchDiagnosis.TestSketchDiagnosis"
 HANG_BOUND = 120
+REPAIR_SUITE = "SketcherTests.TestSketchDiagnosis.TestSketchDiagnosisRepairs"
 APP_SUITE = "SketcherTests.TestSketchDiagnosis.TestSketchDiagnosisProgress"
 SURVEY = {"PANEL_SURVEY_CASES": "single_conflict,two_overlapping_conflicts,rectangle_width_conflict"}
 PANEL = "SketcherDiagnosisPanel.py"
@@ -231,7 +232,12 @@ mutant(
     "expression_fix_certified_without_recompute",
     "a fix is certified without asking whether a recompute undoes it, so a reference read by an expression is offered",
     API,
-    [("    return not _same_datum_state(before, _datum_state(sk))", "    return False")],
+    [
+        (
+            "    return not _same_datum_state(before, _datum_state(sk)) or solver_before != _solver_state(sk)",
+            "    return False",
+        )
+    ],
     ["testExpressionReaderMadeNonDrivingIsNotOffered", "testEveryOfferedFixSurvivesARecompute"],
     runner="cmd",
     suite=API_SUITE,
@@ -243,6 +249,79 @@ mutant(
     PANEL,
     [("        self._restore_selection(kept)\n", "        pass\n")],
     ["testOpeningThePanelKeepsTheUsersSelection"],
+)
+
+mutant(
+    "overlapping_removals_not_offered",
+    "overlapping redundancy groups get no removal (the search has no step for them), so Apply, diagnose, Apply cannot clear three equal distances",
+    API,
+    [("        if chosen is None and overlap_fallback:", "        if False and overlap_fallback:")],
+    ["testOverlappingRedundancyGroupsReachACleanSketchByApplyingRepeatedly"],
+    runner="cmd",
+    suite=REPAIR_SUITE,
+)
+mutant(
+    "fix_certified_before_a_recompute_without_expressions",
+    "a fix is re-applied to a copy and recomputed only when the sketch has expressions (the old rule), so a fix the recompute undoes is certified",
+    API,
+    [("                if settle:\n                    if _recompute_changes(sk):", "                if settle and self.has_expr:\n                    if _recompute_changes(sk):")],
+    ["testNoFixIsCertifiedThatARecomputeChangesOnASketchWithoutExpressions"],
+    runner="cmd",
+    suite=REPAIR_SUITE,
+)
+mutant(
+    "removal_states_a_clean_result_on_a_conflicted_sketch",
+    "a redundancy removal states no remaining conflict and a degrees-of-freedom count although the conflict is still there",
+    API,
+    [
+        ('            "remaining_conflicts": conflicts,\n', '            "remaining_conflicts": [],\n'),
+        ('            "dof_after": None if conflicts else st.dof,\n', '            "dof_after": st.dof,\n'),
+    ],
+    ["testStatedConflictsAndDofEqualTheRealOnes", "testRemovalOnAConflictedSketchStatesTheConflictThatRemains"],
+    runner="cmd",
+    suite=REPAIR_SUITE,
+)
+mutant(
+    "other_objects_expressions_ignored",
+    "fixes are not checked against expressions in other objects that read the sketch's constraints",
+    API,
+    [("        names, indices = self.readers\n", "        return None\n        names, indices = self.readers\n")],
+    ["testAFixThatBreaksAnotherObjectsExpressionIsNotOffered"],
+    runner="cmd",
+    suite=REPAIR_SUITE,
+)
+mutant(
+    "editor_switch_to_another_document_not_noticed",
+    "Apply looks at the sketch's own document for the edit state, and the editor switching to another sketch does not invalidate the panel",
+    PANEL,
+    [
+        (
+            "        gdoc = Gui.ActiveDocument\n        vp = gdoc.getInEdit() if gdoc is not None else None\n        return (",
+            "        gdoc = Gui.getDocument(sketch.Document.Name)\n        vp = gdoc.getInEdit()\n        return (",
+        ),
+        (
+            '        if not mine:\n            self.panel.invalidate(tr("The editor switched to another sketch."), close=True)',
+            "        if not mine:\n            pass",
+        ),
+    ],
+    [
+        "testStaleWhenTheEditorSwitchesToASketchInAnotherDocument",
+        "testApplyRefusesWhenAnotherDocumentsSketchIsInEditEvenIfNoEventArrived",
+    ],
+)
+mutant(
+    "users_selection_not_restored_on_close",
+    "closing the panel leaves the selection the panel made instead of putting the user's back",
+    PANEL,
+    [("            self._restore_saved_selection()\n        except Exception:", "            pass\n        except Exception:")],
+    ["testClosingThePanelPutsTheUsersSelectionBack", "testRestoredSelectionLeavesOutNamesThatNoLongerExist"],
+)
+mutant(
+    "not_offered_line_dropped",
+    "the panel does not say that fixes were not offered",
+    PANEL,
+    [("        line = not_offered_line(r)\n", "        line = None\n")],
+    ["testThePanelSaysWhatWasNotOffered"],
 )
 
 

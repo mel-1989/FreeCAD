@@ -32,6 +32,7 @@ from SketcherTests.TestSketchCarbonCopyReverseMapping import TestSketchCarbonCop
 from SketcherTests.TestSketchInternalFaces import TestSketchInternalFaces
 from SketcherTests.TestSketcherEllipse import TestSketcherEllipse
 from SketcherTests.TestSketchDiagnosis import TestSketchDiagnosis
+from SketcherTests.TestSketchDiagnosis import TestSketchDiagnosisRepairs
 from SketcherTests.TestSketchAutoDefine import TestSketchAutoDefine
 from SketcherTests.TestSketchSolverCore import TestSketchSolverCore
 from SketcherTests.TestSketchSolverCore import TestDegenerateLine

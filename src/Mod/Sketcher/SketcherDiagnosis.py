@@ -63,21 +63,51 @@ Redundancy groups.  The same machinery with the predicate "the solver
 reports redundant or partially redundant constraints and no conflicts".  Each
 round shrinks to a minimal redundant group, picks one member to remove and
 deactivates it before looking for the next group.  The member suggested for
-removal is the newest one (highest index) whose removal keeps the DOF and
-moves no solved point by more than 1e-9.  The removal is also returned as
-``fix``, an ``apply_fix`` dict tested like a conflict fix: applied for real to
-a fresh copy and solved (with the conflicts' hitting set switched off, as the
-search assumes), and offered only if no conflict is left, the group's other
-members are no longer redundant, nothing redundant appears that was not there
-and the DOF is the one measured.  A fix to a conflict is judged against the
+removal is the newest one (highest index) whose removal keeps the DOF, moves no
+solved point by more than 1e-9 and leaves none of the group's other members
+redundant.  When no member does (overlapping groups: three equal distances on one
+line, where any two are redundant) a member is taken whose removal keeps the DOF
+and the geometry and leaves strictly fewer redundancy groups; the group is then
+marked ``overlaps`` and "apply, diagnose again, apply" reaches a clean sketch.
+The removal is also returned as ``fix``, an ``apply_fix`` dict tested like a
+conflict fix on a fresh copy of the sketch *as it is*, the conflicts in place:
+applied for real and recomputed, then it is offered only if no conflict appears
+beyond the sketch's own, the solver code is acceptable, nothing redundant
+appears that was not there, the DOF is the sketch's, and (with no conflict) the
+number of redundancy groups is smaller.  ``remaining_conflicts`` is what that
+copy reports and ``dof_after`` is stated only when none is left (``None``
+otherwise: with a conflict in place the solver's count is not the sketch's).
+When no removal can be offered the group carries ``no_fix_reason`` (a code) and
+``no_fix_text`` (plain words).  A fix to a conflict is judged against the
 redundancy that was already in the sketch: only redundancy it creates counts
 against it.
 
-Recompute stability.  When the sketch has expressions, every fix that is
-offered is applied to its copy and the copy is recomputed; a fix whose result
-a recompute changes (a datum re-evaluated from an expression, for example a
-constraint made non-driving while another datum's expression reads it) is not
-offered and is listed in ``not_offered`` with the reason.
+Recompute stability.  Every fix that is offered is applied to a fresh copy, the
+copy is solved, touched and recomputed, and the fix is dropped if the recompute
+changes anything a fix is meant to leave: a datum, a driving state, an
+expression, or the solver's verdict (code, DOF, conflicting and redundant
+lists).  A recompute solves again from the geometry the first solve left, and
+the solver does not always give the same answer from there (a sketch that solves
+cleanly from the drawn geometry can come back redundant, with more DOF, from the
+solved one), so a certification from the drawn start alone is not enough.  This
+runs on every sketch up to 300 constraints (``_CONFIRM_ALL_LIMIT``), with or
+without expressions.  The one exception is larger sketches without expressions:
+there the fixes are tested by deactivating constraints on the working copy and
+only the combined plan is applied to a fresh copy, because one native solve of
+the 1,000-constraint case takes 1.2 s and a recompute per fix would break the
+1.5 s event-loop bar of the panel (G10 slice 4a, check 7); on those sketches a
+fix is not certified against a recompute.  A fix that is dropped is listed in
+``not_offered`` with ``reason`` (a code) and ``reason_text`` (plain words).
+
+Other objects.  The throwaway copy carries no other object.  Before a fix is
+offered the real document is searched for expressions of other objects that read
+this sketch's constraints (``Sketch.Constraints.name`` or
+``Sketch.Constraints[3]``); a fix that deletes, shifts (any delete shifts every
+later index), makes non-driving or re-values a constraint they read is not
+offered and is listed with the reason ``read_by_another_object``.  A datum bound
+by an expression to another object (a spreadsheet cell) cannot be tested honestly
+on a copy that cannot carry the binding, so no value change is offered on it
+(reason ``bound_outside_sketch``).
 
 Fixes.  For every minimal conflict set the module proposes, per member, to
 delete it and, for datum constraints, to make it non-driving; a change of
@@ -96,7 +126,7 @@ redundant constraint behind, the removal of that redundant constraint is
 appended to the fix (a multi-operation fix) and the whole thing is tested
 again; redundancy that was already there (``redundancy_members``) is not
 counted as caused by the fix.  The reported ``dof_after`` is the DOF measured
-on the copy.
+on the copy, and ``None`` when a conflict is left.
 
 A change-datum fix cannot be a clean fix: a conflict the solver detects is a
 rank deficiency, a new datum value cannot remove it, and FreeCAD's
@@ -121,8 +151,8 @@ serialised ``Geometry``, ``ExternalGeo`` and ``Constraints`` properties plus
 its expressions (read-only on the user's sketch).  Links to other objects are
 not followed, so the copy needs neither the support nor the referenced
 objects; expressions that point at other objects are not re-bound, and the
-copy is solved but never recomputed, so datum values are those already
-evaluated in the user's sketch.
+copy is solved but never recomputed (except by the stability check above), so
+datum values are those already evaluated in the user's sketch.
 
 Limits.  Detection is the solver's rank-based detection: infeasible but
 full-rank systems (a triangle with sides 3, 4 and 10) and solver failures
@@ -1269,6 +1299,8 @@ class _Diagnoser:
             conflicts = sorted(keep_map[i] for i in st.conflicts if i < len(keep_map))
             if set(conflicts) - self.conflict_union:
                 return no("leaves_new_conflict")
+            if not self._code_ok({"conflicts": conflicts, "code": st.code, "redundancy": left}):
+                return no("solver_rejected")
             if st.dof != self.base.dof:
                 return no("changes_dof")
             if [i for i in left if i not in self.base_red]:
@@ -1355,6 +1387,7 @@ class _Diagnoser:
             real, err = self._try_ops(ops)
             if (
                 real is None
+                or not self._code_ok(real)  # the code the recompute leaves, not only the one the trial gave
                 or real["conflicts"] != res["conflicts"]
                 or [i for i in real["redundancy"] if i not in self.base_red]
                 or real["dof"] != res["dof"]
