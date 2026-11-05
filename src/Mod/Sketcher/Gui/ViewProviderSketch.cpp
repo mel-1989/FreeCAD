@@ -3794,6 +3794,36 @@ bool ViewProviderSketch::getIsShownVirtualSpace() const
     return viewProviderParameters.isShownVirtualSpace;
 }
 
+void ViewProviderSketch::setConstraintFilter(const std::vector<int>& shownIds)
+{
+    if (!editCoinManager) {
+        return;
+    }
+    editCoinManager->setConstraintFilter(shownIds);
+    editCoinManager->updateVirtualSpace();
+    editCoinManager->drawConstraintIcons();
+}
+
+void ViewProviderSketch::clearConstraintFilter()
+{
+    if (!editCoinManager || !editCoinManager->hasConstraintFilter()) {
+        return;
+    }
+    editCoinManager->clearConstraintFilter();
+    editCoinManager->updateVirtualSpace();
+    editCoinManager->drawConstraintIcons();
+}
+
+bool ViewProviderSketch::hasConstraintFilter() const
+{
+    return editCoinManager && editCoinManager->hasConstraintFilter();
+}
+
+std::vector<int> ViewProviderSketch::getConstraintFilter() const
+{
+    return editCoinManager ? editCoinManager->getConstraintFilter() : std::vector<int>();
+}
+
 
 void ViewProviderSketch::drawEdit(const std::vector<Base::Vector2d>& EditCurve)
 {

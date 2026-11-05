@@ -675,6 +675,16 @@ public:
     bool getIsShownVirtualSpace() const;
     //@}
 
+    /** @name view-only constraint filter (cad-fork G10 slice 4c)
+     *  Shows only the listed constraints in the edit view.  Held by the edit session, never saved,
+     *  not a property, gone when edit mode ends; the document is not touched. */
+    //@{
+    void setConstraintFilter(const std::vector<int>& shownIds);
+    void clearConstraintFilter();
+    bool hasConstraintFilter() const;
+    std::vector<int> getConstraintFilter() const;
+    //@}
+
     /** @name base class implementer */
     //@{
     void attach(App::DocumentObject*) override;

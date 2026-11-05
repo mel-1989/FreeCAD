@@ -112,12 +112,44 @@ void EditModeConstraintCoinManager::updateVirtualSpace()
 
         for (size_t i = 0; i < constrlist.size(); i++) {
             sws[i] = !(constrlist[i]->isInVirtualSpace != isshownvirtualspace)
-                && constrlist[i]->isVisible;  // XOR of constraint mode and VP mode
+                && constrlist[i]->isVisible  // XOR of constraint mode and VP mode
+                && !isFilteredOut(static_cast<int>(i));
         }
 
 
         editModeScenegraphNodes.constrGroup->enable.finishEditing();
     }
+}
+
+void EditModeConstraintCoinManager::setConstraintFilter(const std::vector<int>& shownIds)
+{
+    size_t n = ViewProviderSketchCoinAttorney::getConstraints(viewProvider).size();
+    filterShown.assign(n, 0);
+    for (int id : shownIds) {
+        if (id >= 0 && static_cast<size_t>(id) < n) {
+            filterShown[id] = 1;
+        }
+    }
+    filterActive = true;
+}
+
+void EditModeConstraintCoinManager::clearConstraintFilter()
+{
+    filterActive = false;
+    filterShown.clear();
+}
+
+std::vector<int> EditModeConstraintCoinManager::getConstraintFilter() const
+{
+    std::vector<int> ids;
+    if (filterActive) {
+        for (size_t i = 0; i < filterShown.size(); i++) {
+            if (filterShown[i]) {
+                ids.push_back(static_cast<int>(i));
+            }
+        }
+    }
+    return ids;
 }
 
 void EditModeConstraintCoinManager::processConstraints(const GeoListFacade& geolistfacade)
@@ -2551,7 +2583,7 @@ void EditModeConstraintCoinManager::drawConstraintIcons(const GeoListFacade& geo
         thisIcon.infoPtr = infoPtr;
         thisIcon.visible = (constraint->isInVirtualSpace
                             == ViewProviderSketchCoinAttorney::isShownVirtualSpace(viewProvider))
-            && constraint->isVisible;
+            && constraint->isVisible && !isFilteredOut(constrId);
 
         if (constraint->Type == Symmetric) {
             Base::Vector3d startingpoint

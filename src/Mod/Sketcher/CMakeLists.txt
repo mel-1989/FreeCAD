@@ -50,6 +50,9 @@ if(BUILD_GUI)
           TestSketcherFullyDefinePanelGui.py
           SketcherFullyDefinePanel.py
           CommandFullyDefine.py
+          TestSketcherRelationsPanelGui.py
+          SketcherRelationsPanel.py
+          CommandRelations.py
     )
     list (APPEND Sketcher_TestScripts
           SketcherTests/TestConstraintPreselectionGui.py
@@ -67,6 +70,9 @@ if(BUILD_GUI)
           SketcherTests/SketchFullyDefinePanelMutants.py
           SketcherTests/diagnosis_gui_fixture.py
           SketcherTests/fully_define_gui_fixture.py
+          SketcherTests/TestSketcherRelationsPanelGui.py
+          SketcherTests/SketchRelationsPanelMutants.py
+          SketcherTests/relations_gui_fixture.py
     )
 endif(BUILD_GUI)
 

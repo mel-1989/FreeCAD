@@ -295,6 +295,12 @@ public:
 
     void updateVirtualSpace();
 
+    /// View-only constraint filter (cad-fork G10 4c), see EditModeConstraintCoinManager
+    void setConstraintFilter(const std::vector<int>& shownIds);
+    void clearConstraintFilter();
+    bool hasConstraintFilter() const;
+    std::vector<int> getConstraintFilter() const;
+
     /// Draw all constraint icons
     /*! Except maybe the radius and lock ones? */
     void drawConstraintIcons();
