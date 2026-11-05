@@ -1013,6 +1013,11 @@ public:  // geometry extension functionalities for single element sketch object 
     /// removes the block instances whose members no longer exist (they become plain geometry);
     /// returns how many were removed
     int pruneBlocks();
+    /// while on, block data is not validated (SketcherBlocks edits geometry and data in several steps)
+    void setBlockGuard(bool on)
+    {
+        blockGuard += on ? 1 : (blockGuard > 0 ? -1 : 0);
+    }
 
     /// Replaces geometries at `oldGeoIds` with `newGeos`, lower Ids first.
     /// If `oldGeoIds` is bigger, deletes the remaining.
@@ -1180,6 +1185,8 @@ private:
 
     struct BlockInstanceData
     {
+        std::string name;
+        size_t defMembers = 0;  ///< members the definition has
         std::vector<long> ids;  ///< persistent geometry id of each member, in member order
         Sketch::BlockInstance inst;
     };
@@ -1188,6 +1195,12 @@ private:
     bool blockCacheValid = false;
     /// hands the instances in BlockData to the solver sketch, with the GeoIds they have now
     void syncBlocks();
+    std::vector<bool> validBlockInstances();
+    int explodeInvalidBlocks();
+    int explodeBlocksOf(const std::vector<int>& geoIds);
+    int blockGuard = 0;
+    bool inExplodeBlocks = false;
+    bool restoreChecksBlocks = false;
     const std::vector<BlockInstanceData>& parsedBlocks();
 
     /** this internal flag indicate that an operation modifying the geometry, but not the DoF of the

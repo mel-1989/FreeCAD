@@ -166,6 +166,7 @@ class TestBlockRigidity(BlocksCase):
     def test_drags_and_datum_changes(self):
         rng = random.Random(11)
         solves = 0
+        false_explosions = 0  # an instance that vanished from the data during a rigid solve
         failed = 0  # solves that did not converge, other than drags of an arc's end points
         arc_end_drags = 0
         arc_end_failed = 0
@@ -193,6 +194,7 @@ class TestBlockRigidity(BlocksCase):
                 else:
                     failed += rc not in (0, None)
                 self.check_rigid(sk, spec, name, "%s drag %d" % (spec.name, d))
+                false_explosions += len(B.blocks(sk)["instances"]) != n
             # datum changes: pin a member point of the first instance, then move the datum
             _, ids = member_geos(sk, names[0])
             i, pos, _, _ = kp[0]
@@ -206,6 +208,7 @@ class TestBlockRigidity(BlocksCase):
                 failed += rc != 0
                 for name in names:
                     self.check_rigid(sk, spec, name, "%s datum %d" % (spec.name, d))
+                false_explosions += len(B.blocks(sk)["instances"]) != n
             self.doc.removeObject(sk.Name)
         self.assertGreaterEqual(solves, 2000)
         # Dragging an arc's start or end point is refused by the drag solver when the target is farther than
@@ -213,9 +216,10 @@ class TestBlockRigidity(BlocksCase):
         # reach zero.  A stock arc with a radius constraint refuses 13 of 60 such seeded drags the same way
         # (measured in run 060); in a block it is 28 percent.  The geometry then stays unmoved and rigid,
         # which the loop above has just checked.  Everything else must converge.
+        self.assertEqual(false_explosions, 0)
         self.assertEqual(failed, 0, "%d of %d solves did not converge" % (failed, solves))
         self.assertLess(arc_end_failed, 0.5 * max(arc_end_drags, 1))
-        print("\nblocks rigidity: %d solves, %d arc-end drags of which %d refused" % (solves, arc_end_drags, arc_end_failed))
+        print("\nblocks rigidity: %d solves, %d false explosions, %d arc-end drags of which %d refused" % (solves, false_explosions, arc_end_drags, arc_end_failed))
 
 
 class TestBlockPlacement(BlocksCase):
@@ -435,9 +439,14 @@ def geometry_numbers(sk):
 
 
 def stable_bin():
-    return os.environ.get(
-        "CADFORK_STABLE_BIN", os.path.expanduser("~/src/cad-fork/stable/.pixi/envs/default/bin/freecadcmd")
-    )
+    """The stable reader of harness/compat/README.md: CADFORK_STABLE_BIN, else under CADFORK_HOME."""
+    explicit = os.environ.get("CADFORK_STABLE_BIN")
+    if explicit:
+        return explicit
+    home = os.environ.get("CADFORK_HOME")
+    if home:
+        return os.path.join(home, "stable", ".pixi", "envs", "default", "bin", "freecadcmd")
+    return ""
 
 
 def fork_cmd():
@@ -445,10 +454,13 @@ def fork_cmd():
 
 
 def run_script(binary, source, timeout=120):
-    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
-    return subprocess.run(
-        [binary, "-c", source], capture_output=True, text=True, timeout=timeout, env=env
-    )
+    """Run `source` in a fresh FreeCAD process (a file, with unbuffered output) and return the result."""
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONUNBUFFERED="1")
+    with tempfile.TemporaryDirectory(prefix="blocks_run_") as d:
+        path = os.path.join(d, "run_blocks.py")
+        with open(path, "w") as fh:
+            fh.write(source)
+        return subprocess.run([binary, path], capture_output=True, text=True, timeout=timeout, env=env, cwd=d)
 
 
 class TestBlockPersistence(BlocksCase):
@@ -553,7 +565,7 @@ class TestBlockPersistence(BlocksCase):
         finally:
             FreeCAD.closeDocument(d2.Name)
 
-    @unittest.skipUnless(os.path.exists(stable_bin()), "stable reader not installed (harness/compat/README.md)")
+    @unittest.skipUnless(stable_bin() and os.path.exists(stable_bin()), "stable reader not found: set CADFORK_STABLE_BIN or CADFORK_HOME (harness/compat/README.md)")
     def test_stable_reader_opens_with_same_shape_and_loses_blocks_on_save(self):
         doc = self.doc
         body = doc.addObject("PartDesign::Body", "Body")
@@ -637,7 +649,7 @@ class TestBlockPersistence(BlocksCase):
         # both instances plain: 2 x (4 + 4 + 3) + 4 + 3 = 29 freedoms, 9 equations from the 7 constraints
         self.assertEqual(res["dof"], 29 - 9)
         self.assertEqual(len(res["geo"]), len(want))
-        self.assertEqual(out.count("no longer match their geometry"), 1, out)
+        self.assertEqual(out.count("no longer fit their definition"), 1, out)
         self.assertNotIn("Traceback", out)
 
 
@@ -908,6 +920,193 @@ class TestBlockShape(BlocksCase):
             # lost: the host feature reports it (the same happens to a plain unconstrained rectangle turned by
             # the same angle, measured in run 060), it does not point at another edge
             self.assertIn("Invalid", fillet.State)
+
+
+def rect_geometry():
+    return [
+        Part.LineSegment(V(0, 0, 0), V(10, 0, 0)),
+        Part.LineSegment(V(10, 0, 0), V(10, 6, 0)),
+        Part.LineSegment(V(10, 6, 0), V(0, 6, 0)),
+        Part.LineSegment(V(0, 6, 0), V(0, 0, 0)),
+    ]
+
+
+class TestBlockGuard(BlocksCase):
+    """Repair round: edits made behind the blocks' back, hand-written data, and update with redundancy."""
+
+    def instance_sketch(self, name, cutter=False, two=False):
+        sk = self.doc.addObject("Sketcher::SketchObject", name)
+        sk.addGeometry(rect_geometry(), False)
+        B.define(sk, "R", [0, 1, 2, 3])
+        sk.delGeometries([0, 1, 2, 3])
+        B.insert(sk, "R", 0, 0, 0.0)
+        if two:
+            B.insert(sk, "R", 30, 0, 0.0)
+        if cutter:
+            sk.addGeometry(Part.LineSegment(V(3, -2, 0), V(3, 8, 0)), False)
+        sk.solve()
+        return sk
+
+    def plain_twin(self, sk, name):
+        twin = self.doc.addObject("Sketcher::SketchObject", name)
+        twin.addGeometry([g.copy() for g in sk.Geometry], False)
+        twin.solve()
+        return twin
+
+    OPS = {
+        "trim": lambda sk: sk.trim(0, V(6, 0, 0)),
+        "split": lambda sk: sk.split(0, V(5, 0, 0)),
+        "extend": lambda sk: sk.extend(0, 3.0, 2),
+        "fillet": lambda sk: sk.fillet(0, 1, V(8, 0, 0), V(10, 2, 0), 1.0, True, True),
+    }
+
+    def same_geometry(self, a, b, label):
+        ga, gb = world_state(a), world_state(b)
+        self.assertEqual(len(ga), len(gb), label)
+        for (ta, na), (tb, nb) in zip(ga, gb):
+            self.assertEqual(ta, tb, label)
+            for x, y in zip(na, nb):
+                self.assertAlmostEqual(x, y, delta=1e-9, msg=label)
+
+    def test_operations_on_a_member_explode_that_instance_and_move_nothing(self):
+        for op, f in self.OPS.items():
+            sk = self.instance_sketch("B_" + op, cutter=(op == "trim"), two=True)
+            if op == "fillet":  # a fillet needs the two lines joined at the corner
+                sk.addConstraint(Sketcher.Constraint("Coincident", 0, 2, 1, 1))
+                sk.solve()
+            twin = self.plain_twin(sk, "P_" + op)
+            if op == "fillet":
+                twin.addConstraint(Sketcher.Constraint("Coincident", 0, 2, 1, 1))
+                twin.solve()
+            f(twin)
+            twin.solve()
+            data_before = sk.dumpPropertyContent("BlockData")
+            self.doc.openTransaction("op")
+            f(sk)
+            self.doc.commitTransaction()
+            sk.solve()
+            self.same_geometry(sk, twin, op)  # every other element is where the plain sketch has it
+            inst = B.blocks(sk)["instances"]
+            self.assertEqual(list(inst), ["R_2"], op)  # only the edited instance exploded
+            self.assertEqual(sk.getBlockInstanceCount(), 1, op)
+            # undo restores the instance exactly, in one entry
+            self.doc.undo()
+            self.assertEqual(sk.dumpPropertyContent("BlockData"), data_before, op)
+            self.assertEqual(set(B.blocks(sk)["instances"]), {"R_1", "R_2"}, op)
+            self.doc.redo()
+            self.assertEqual(list(B.blocks(sk)["instances"]), ["R_2"], op)
+
+    def test_direct_geometry_replacement_explodes_with_one_message(self):
+        sk = self.instance_sketch("Direct")
+        fresh = [g.copy() for g in rect_geometry()]  # new objects, no ids
+        before = [C.member_numbers(g) for g in fresh]
+        script = (
+            "import FreeCAD, Part, SketcherBlocks as B\n"
+            "V = FreeCAD.Vector\n"
+            "d = FreeCAD.newDocument('d'); s = d.addObject('Sketcher::SketchObject', 'S')\n"
+            "s.addGeometry([Part.LineSegment(V(0,0,0), V(10,0,0)), Part.LineSegment(V(10,0,0), V(10,6,0)), Part.LineSegment(V(10,6,0), V(0,6,0)), Part.LineSegment(V(0,6,0), V(0,0,0))], False)\n"
+            "B.define(s, 'R', [0,1,2,3]); s.delGeometries([0,1,2,3]); B.insert(s, 'R', 0, 0, 0.0)\n"
+            "print('MARK-BEFORE', flush=True)\n"
+            "s.Geometry = [Part.LineSegment(V(0,0,0), V(10,0,0)), Part.LineSegment(V(10,0,0), V(10,6,0)), Part.LineSegment(V(10,6,0), V(0,6,0)), Part.LineSegment(V(0,6,0), V(0,0,0))]\n"
+            "print('MARK-AFTER', len(B.blocks(s)['instances']), flush=True)\n"
+        )
+        r = run_script(fork_cmd(), script)
+        out = r.stdout + r.stderr
+        self.assertIn("MARK-BEFORE", out)
+        after = out.split("MARK-BEFORE")[1]
+        self.assertEqual(after.count("were exploded"), 1, out)
+        self.assertIn("MARK-AFTER 0", after)
+        sk.Geometry = fresh
+        self.assertEqual(B.blocks(sk)["instances"], {})
+        self.assertEqual([C.member_numbers(g) for g in sk.Geometry], before)
+
+    def hand_edit(self, edit, two=True):
+        sk = self.instance_sketch("Hand", two=two)
+        sk.addGeometry(Part.LineSegment(V(500, 500, 0), V(990, 500, 0)), False)  # other geometry
+        sk.solve()
+        geo = world_state(sk)
+        data = json.loads(sk.BlockData)
+        edit(data, sk)
+        sk.BlockData = json.dumps(data, sort_keys=True, separators=(",", ":"))
+        sk.solve()
+        for (ta, na), (tb, nb) in zip(geo, world_state(sk)):
+            self.assertEqual(ta, tb)
+            for x, y in zip(na, nb):
+                self.assertAlmostEqual(x, y, delta=1e-9)  # nothing moved
+        return sk
+
+    def test_shared_id_explodes_the_second_instance(self):
+        sk = self.hand_edit(lambda d, s: d["inst"]["R_2"]["m"].__setitem__("m0000", d["inst"]["R_1"]["m"]["m0000"]))
+        self.assertEqual(list(B.blocks(sk)["instances"]), ["R_1"])
+
+    def test_type_mismatch_explodes(self):
+        def edit(d, s):
+            d["defs"]["R"]["members"]["m0000"]["t"] = "c"
+            d["defs"]["R"]["members"]["m0000"]["g"] = [0, 0, 3]
+        sk = self.hand_edit(edit)
+        self.assertEqual(B.blocks(sk)["instances"], {})
+
+    def test_degenerate_definition_explodes(self):
+        def edit(d, s):
+            for m in d["defs"]["R"]["members"].values():
+                m["g"] = [3.0, 3.0, 3.0, 3.0]
+        sk = self.hand_edit(edit)
+        self.assertEqual(B.blocks(sk)["instances"], {})
+
+    def test_instance_written_over_other_geometry_explodes_and_nothing_moves(self):
+        def edit(d, s):
+            other = s.getGeometryId(len(s.Geometry) - 1)
+            d["inst"]["R_1"]["m"]["m0000"] = other
+        sk = self.hand_edit(edit)
+        self.assertEqual(list(B.blocks(sk)["instances"]), ["R_2"])
+
+    def test_cache_follows_a_direct_set(self):
+        sk = self.instance_sketch("Cache", two=True)
+        self.assertEqual(sk.getBlockInstanceCount(), 2)
+        data = json.loads(sk.BlockData)
+        del data["inst"]["R_1"]
+        sk.BlockData = json.dumps(data, sort_keys=True, separators=(",", ":"))
+        sk.solve()
+        self.assertEqual(sk.getBlockInstanceCount(), 1)
+        sk.BlockData = ""
+        sk.solve()
+        self.assertEqual(sk.getBlockInstanceCount(), 0)
+
+    def test_update_with_a_redundancy_already_in_the_sketch(self):
+        sk = self.instance_sketch("Red", two=True)
+        g = B.blocks(sk)["instances"]["R_1"]["geo_ids"]
+        h = B.blocks(sk)["instances"]["R_2"]["geo_ids"]
+        sk.addConstraint(Sketcher.Constraint("Equal", g[0], g[2]))  # redundant with the rigid cluster
+        sk.addConstraint(Sketcher.Constraint("Coincident", g[1], 2, h[3], 2))
+        sk.addConstraint(Sketcher.Constraint("Equal", g[0], h[0]))
+        sk.solve()
+        self.assertTrue(list(sk.RedundantConstraints))
+        res = B.update_definition(sk, "R", {"m0001": Part.LineSegment(V(10, 0, 0), V(10, 6, 0))})
+        self.assertTrue(res["redundant_constraints"])
+        # an edit that makes the redundant constraint a conflict is refused, nothing changes
+        snap = tuple(sk.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData"))
+        with self.assertRaises(B.SketchBlockError):
+            B.update_definition(sk, "R", {"m0002": Part.LineSegment(V(10, 6, 0), V(-3, 6, 0))})
+        self.assertEqual(tuple(sk.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData")), snap)
+
+    def test_malformed_data_gives_block_errors(self):
+        sk = self.instance_sketch("Mal")
+        sk.BlockData = '{"defs":{"x":5},"inst":{"i":{"def":"x","m":[1]}}}'
+        with self.assertRaises(B.SketchBlockError):
+            B.blocks(sk)
+        sk.BlockData = ""
+        sk2 = self.instance_sketch("Mal2")
+        with self.assertRaises(B.SketchBlockError):
+            B.update_definition(sk2, "R", {"m0000": 5})
+
+    def test_insert_uses_the_frame_origin_fixed_at_definition(self):
+        sk = self.instance_sketch("Origin")
+        B.update_definition(sk, "R", {"m0000": Part.LineSegment(V(1, 0, 0), V(10, 0, 0))})
+        name = B.insert(sk, "R", 50, 50, 0.0)
+        g = sk.Geometry[B.blocks(sk)["instances"][name]["geo_ids"][0]]
+        # the frame's origin stayed where define put it, so member 0 now starts one unit to its right
+        self.assertAlmostEqual(g.StartPoint.x, 51.0, delta=MM)
+        self.assertAlmostEqual(g.StartPoint.y, 50.0, delta=MM)
 
 
 if __name__ == "__main__":

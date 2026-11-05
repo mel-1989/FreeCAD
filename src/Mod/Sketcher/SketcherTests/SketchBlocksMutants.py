@@ -49,6 +49,7 @@ PYDIAG = "build/release/Mod/Sketcher/SketcherDiagnosis.py"
 
 # cheap classes first; the run of a mutant stops at the first failing class
 TESTS = [
+    "TestBlockGuard",
     "TestBlockConstraints",
     "TestBlockPersistence",
     "TestBlockEditing",
@@ -84,9 +85,19 @@ MUTANTS = [
     ("member_deleted_cluster_left", "cpp", SKOBJ, [
         ("        pruneBlocks();\r\n    }\r\n\r\n    if (isRestoring() && checkMigration(Geometry)) {", "    }\r\n\r\n    if (isRestoring() && checkMigration(Geometry)) {"),
     ], "deleting a member leaves the instance's data in place"),
-    ("stale_id_accepted", "cpp", SKOBJ, [
-        ("if (int exploded = pruneBlocks()) {", "if (int exploded = 0) {"),
-    ], "ids that match no geometry are kept on load"),
+    ("stale_id_accepted", "cpp", BLOCKS, [
+        ("    if (blockGuard != 0 || BlockData.getStrValue().empty() || inExplodeBlocks) {\n        return 0;\n    }\n    const auto* doc", "    if (true) {\n        return 0;\n    }\n    const auto* doc"),
+    ], "ids that match no geometry, and members that do not fit, are kept in the data on load and on every change"),
+    ("misfit_member_not_detected", "cpp", BLOCKS, [
+        ("            good = fitsDefinition(d.inst.members, cur);", "            good = fitsDefinition(d.inst.members, cur) || true;"),
+    ], "an instance whose member was edited keeps its cluster, so the solver pulls the edit back"),
+    ("shared_id_accepted", "cpp", BLOCKS, [
+        ("!used.count(d.ids[k]) && ", ""),
+        ("            good = fitsDefinition(d.inst.members, cur);", "            good = fitsDefinition(d.inst.members, cur) || true;"),
+    ], "two instances may claim the same geometry (the fit check is off too, because it also catches a shared member)"),
+    ("update_refused_on_redundancy", "py", PYBLK, [
+        ("        if status in (-1, -4, -5, -6) or introduced", "        if status != 0 or introduced"),
+    ], "an edit is refused in a sketch that already had a redundant constraint"),
     ("cluster_left_after_explode", "py", PYBLK, [
         ('    del data["inst"][instance]\n', "    pass\n"),
     ], "explode leaves the instance's cluster in the data"),
@@ -134,7 +145,7 @@ def main(argv):
 
     # the unmutated tree must pass every class first, or "caught" means nothing
     base_failed = []
-    for t in TESTS[:4]:
+    for t in TESTS[:5]:
         r = run([binary, "-t", "SketcherTests.TestSketchBlocks." + t], "/tmp", env)
         if "\nOK" not in r.stdout + r.stderr:
             base_failed.append(t)
@@ -170,6 +181,8 @@ def main(argv):
             if kind == "cpp":
                 ok, build_s = rebuild()
             failed = tests() if ok else []
+            if not ok:
+                raise RuntimeError("the planted defect %s does not compile; a defect that cannot be built is not a result" % name)
         finally:
             with open(path, "wb") as fh:
                 fh.write(original)

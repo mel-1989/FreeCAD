@@ -1030,3 +1030,9 @@ class SketchObject(Part2DObject):
         Number of block instances the solver tied in its last set up; 0 when no block code ran.
         """
         ...
+
+    def setBlockGuard(self, on: bool, /) -> None:
+        """
+        While on, block data is not checked against the geometry; SketcherBlocks sets it around its own multi-step edits.
+        """
+        ...

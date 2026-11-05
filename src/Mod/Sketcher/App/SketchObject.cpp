@@ -1014,6 +1014,10 @@ void SketchObject::onChanged(const App::Property* prop)
     else if (prop == &Constraints) {
         onConstraintsChanged();
     }
+    else if (prop == &BlockData && !isRestoring()) {
+        // hand-written data that does not fit the geometry is exploded at once, with one message
+        explodeInvalidBlocks();
+    }
     else if (prop == &ExternalGeo && !prop->testStatus(App::Property::User3)) {
         onExternalGeoChanged();
     }
@@ -1421,9 +1425,9 @@ void SketchObject::onSketchRestore()
 
         updateGeometryRefs();
 
-        if (int exploded = pruneBlocks()) {
-            Base::Console().warning("{}: {} block instance(s) no longer match their geometry and were exploded\n", getNameInDocument() ? getNameInDocument() : "Sketch", exploded);
-        }
+        restoreChecksBlocks = true;
+        pruneBlocks();
+        restoreChecksBlocks = false;
 
         fixMissingAxisInExternalGeo();
 

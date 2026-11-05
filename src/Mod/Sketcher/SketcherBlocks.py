@@ -230,9 +230,12 @@ def _transaction(sk, label):
     snapshot = {p: sk.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData")}
     if not nested:
         doc.openTransaction(label)
+    # the data and the geometry change in several steps; the sketch must not judge them in between
+    sk.setBlockGuard(True)
     try:
         yield
     except BaseException:
+        sk.setBlockGuard(False)
         if not nested:
             doc.abortTransaction()
         # no undo recorded (UndoMode 0): put the properties back by hand
@@ -243,6 +246,7 @@ def _transaction(sk, label):
             sk.solve()
         raise
     else:
+        sk.setBlockGuard(False)
         if not nested:
             doc.commitTransaction()
 
@@ -322,7 +326,11 @@ def _add_instance_geometry(sk, defn, X, Y, th, keys=None):
 
 def insert(sk, name, x=0.0, y=0.0, angle=0.0):
     """Place an instance of block `name` with its origin at (x, y), rotated by
-    `angle` radians (any value, not wrapped).  Returns the instance's name."""
+    `angle` radians (any value, not wrapped).  Returns the instance's name.
+
+    The origin is the frame's origin fixed when the block was defined (the first
+    point of the first member then).  It does not follow member 0 if
+    :func:`update_definition` later moves that member."""
     data = _load(sk)
     if name not in data["defs"]:
         raise SketchBlockError("there is no block called '%s'" % name)
@@ -360,16 +368,19 @@ def blocks(sk):
     'instances': {name: {'definition': name, 'geo_ids': [GeoId per member]}}}."""
     data = _load(sk)
     idmap = _id_map(sk)
-    return {
-        "definitions": {n: sorted(d["members"]) for n, d in sorted(data["defs"].items())},
-        "instances": {
-            n: {
-                "definition": i["def"],
-                "geo_ids": [idmap.get(i["m"][k], -1) for k in sorted(i["m"])],
-            }
-            for n, i in sorted(data["inst"].items())
-        },
-    }
+    try:
+        return {
+            "definitions": {n: sorted(d["members"]) for n, d in sorted(data["defs"].items())},
+            "instances": {
+                n: {
+                    "definition": i["def"],
+                    "geo_ids": [idmap.get(i["m"][k], -1) for k in sorted(i["m"])],
+                }
+                for n, i in sorted(data["inst"].items())
+            },
+        }
+    except (TypeError, KeyError, IndexError, AttributeError) as exc:
+        raise SketchBlockError("the sketch's block data is malformed (%s)" % exc)
 
 
 def _constraint_label(c, index):
@@ -395,6 +406,8 @@ def update_definition(sk, name, changes):
     new_def = json.loads(json.dumps(defn))
     removed, added, moved = [], [], []
     for key, geo in changes.items():
+        if geo is not None and not hasattr(geo, "TypeId"):
+            raise SketchBlockError("member '%s' must be a Part geometry or None" % (key,))
         if geo is None:
             if key not in defn["members"]:
                 raise SketchBlockError("block '%s' has no member '%s'" % (name, key))
@@ -422,7 +435,7 @@ def update_definition(sk, name, changes):
             raise SketchBlockError("instance '%s' is missing geometry" % n)
         placements[n] = _placement(defn, _instance_world(sk, defn, inst, idmap))
     conflicts_before = list(sk.ConflictingConstraints)
-    result = {"removed_constraints": [], "instances": sorted(insts)}
+    result = {"removed_constraints": [], "redundant_constraints": [], "instances": sorted(insts)}
 
     with _transaction(sk, "Edit block definition"):
         # 1. the constraints on removed members go, by name, before the geometry does
@@ -457,9 +470,12 @@ def update_definition(sk, name, changes):
         if gone:
             sk.delGeometries(gone)
         status = sk.solve()
-        # 6. the call fails, and with it the transaction, if the instances cannot hold
-        if status != 0 or (sk.ConflictingConstraints and not conflicts_before):
+        # 6. the call fails, and with it the transaction, if the solver fails or the edit introduced a
+        #    conflict; a redundancy that was already there stays and is reported
+        introduced = set(sk.ConflictingConstraints) - set(conflicts_before)
+        if status in (-1, -4, -5, -6) or introduced or (status == -3 and not conflicts_before):
             raise SketchBlockError("the edited block cannot be solved in the sketch; nothing was changed")
+        result["redundant_constraints"] = [_constraint_label(c, i - 1) for i, c in ((i, sk.Constraints[i - 1]) for i in sk.RedundantConstraints)]
         idmap2 = _id_map(sk)
         for n, inst in insts.items():
             X, Y, th = placements[n]

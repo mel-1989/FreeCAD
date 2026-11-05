@@ -60,6 +60,15 @@ SketchSolveStatus SketchObject::moveGeometries(
     // geometry to that of of SketchObject upon moving. => use updateGeometry parameter = true then
 
 
+    if (updateGeoBeforeMoving) {
+        // a programmatic move (extend, fillet) edits the member; it is not a drag of the instance
+        std::vector<int> moved;
+        for (const auto& e : geoEltIds) {
+            moved.push_back(e.GeoId);
+        }
+        explodeBlocksOf(moved);
+    }
+
     if (updateGeoBeforeMoving || solverNeedsUpdate) {
         syncBlocks();
         lastDoF = solvedSketch.setUpSketch(

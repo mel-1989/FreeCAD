@@ -33,7 +33,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <App/Document.h>
 #include <Base/Console.h>
+#include <Mod/Part/App/Geometry.h>
 
 #include "SketchObject.h"
 
@@ -89,6 +91,8 @@ const std::vector<SketchObject::BlockInstanceData>& SketchObject::parsedBlocks()
         for (const auto& [iname, idata] : j.at("inst").items()) {
             const auto& def = defs.at(idata.at("def").get<std::string>()).at("members");
             BlockInstanceData out;
+            out.name = iname;
+            out.defMembers = def.size();
             for (const auto& [key, d] : def.items()) {
                 if (!idata.at("m").contains(key)) {
                     continue;  // a member the instance does not have (yet)
@@ -110,13 +114,184 @@ const std::vector<SketchObject::BlockInstanceData>& SketchObject::parsedBlocks()
     return blockCache;
 }
 
+namespace
+{
+constexpr double kFitLength = 1e-5;  // mm: a member that deviates more from its definition is not part of it
+constexpr double kFitAngle = 1e-6;   // rad
+
+struct Numbers
+{
+    char t = 0;
+    double v[5] = {0, 0, 0, 0, 0};
+};
+
+bool numbersOf(const Part::Geometry* g, Numbers& n)
+{
+    if (auto p = dynamic_cast<const Part::GeomPoint*>(g)) {
+        n.t = 'p';
+        n.v[0] = p->getPoint().x;
+        n.v[1] = p->getPoint().y;
+    }
+    else if (auto l = dynamic_cast<const Part::GeomLineSegment*>(g)) {
+        n.t = 'l';
+        n.v[0] = l->getStartPoint().x;
+        n.v[1] = l->getStartPoint().y;
+        n.v[2] = l->getEndPoint().x;
+        n.v[3] = l->getEndPoint().y;
+    }
+    else if (auto a = dynamic_cast<const Part::GeomArcOfCircle*>(g)) {
+        n.t = 'a';
+        n.v[0] = a->getCenter().x;
+        n.v[1] = a->getCenter().y;
+        n.v[2] = a->getRadius();
+        a->getRange(n.v[3], n.v[4], true);
+    }
+    else if (auto c = dynamic_cast<const Part::GeomCircle*>(g)) {
+        n.t = 'c';
+        n.v[0] = c->getCenter().x;
+        n.v[1] = c->getCenter().y;
+        n.v[2] = c->getRadius();
+    }
+    else {
+        return false;
+    }
+    return true;
+}
+
+struct Pt
+{
+    double lx, ly, wx, wy;
+};
+
+// the member's points as (definition, current) pairs
+void pointsOf(const Sketch::BlockMember& m, const Numbers& w, std::vector<Pt>& out)
+{
+    out.push_back({m.x0, m.y0, w.v[0], w.v[1]});
+    if (m.type == 'l') {
+        out.push_back({m.x1, m.y1, w.v[2], w.v[3]});
+    }
+    else if (m.type == 'a') {
+        out.push_back(
+            {m.x0 + m.r * std::cos(m.a0),
+             m.y0 + m.r * std::sin(m.a0),
+             w.v[0] + w.v[2] * std::cos(w.v[3]),
+             w.v[1] + w.v[2] * std::sin(w.v[3])}
+        );
+    }
+}
+
+// does every member of the instance sit where one rigid placement of its definition puts it?
+bool fitsDefinition(const std::vector<Sketch::BlockMember>& members, const std::vector<Numbers>& cur)
+{
+    std::vector<Pt> pts;
+    for (size_t k = 0; k < members.size(); ++k) {
+        if (members[k].type != cur[k].t) {
+            return false;
+        }
+        pointsOf(members[k], cur[k], pts);
+    }
+    if (pts.empty()) {
+        return false;
+    }
+    const Pt q0 = pts.front();
+    bool distinct = false;
+    double th = 0.0;
+    for (const auto& q : pts) {
+        if (std::hypot(q.lx - q0.lx, q.ly - q0.ly) > 1e-6) {
+            th = std::atan2(q.wy - q0.wy, q.wx - q0.wx) - std::atan2(q.ly - q0.ly, q.lx - q0.lx);
+            distinct = true;
+            break;
+        }
+    }
+    if (!distinct) {
+        return false;  // a definition that cannot tell its rotation
+    }
+    const double c = std::cos(th), s = std::sin(th);
+    const double X = q0.wx - (q0.lx * c - q0.ly * s);
+    const double Y = q0.wy - (q0.lx * s + q0.ly * c);
+    auto close = [](double a, double b) { return std::abs(a - b) <= kFitLength; };
+    auto place = [&](double x, double y, double& ox, double& oy) {
+        ox = X + x * c - y * s;
+        oy = Y + x * s + y * c;
+    };
+    for (size_t k = 0; k < members.size(); ++k) {
+        const auto& m = members[k];
+        const auto& w = cur[k].v;
+        double x, y;
+        place(m.x0, m.y0, x, y);
+        if (!close(x, w[0]) || !close(y, w[1])) {
+            return false;
+        }
+        if (m.type == 'l') {
+            place(m.x1, m.y1, x, y);
+            if (!close(x, w[2]) || !close(y, w[3])) {
+                return false;
+            }
+        }
+        else if (m.type == 'c' || m.type == 'a') {
+            if (!close(m.r, w[2])) {
+                return false;
+            }
+            if (m.type == 'a'
+                && (std::abs(std::remainder(m.a0 + th - w[3], 2.0 * std::numbers::pi)) > kFitAngle
+                    || std::abs(std::remainder(m.a1 + th - w[4], 2.0 * std::numbers::pi))
+                        > kFitAngle)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+}  // namespace
+
+std::vector<bool> SketchObject::validBlockInstances()
+{
+    const auto& parsed = parsedBlocks();
+    std::vector<bool> ok(parsed.size(), false);
+    std::unordered_map<long, int> idToGeo;
+    const auto& geos = getInternalGeometry();
+    idToGeo.reserve(geos.size());
+    for (size_t i = 0; i < geos.size(); ++i) {
+        idToGeo.emplace(GeometryFacade::getFacade(geos[i])->getId(), static_cast<int>(i));
+    }
+    std::set<long> used;
+    for (size_t n = 0; n < parsed.size(); ++n) {
+        const auto& d = parsed[n];
+        if (d.inst.members.empty() || d.ids.size() != d.defMembers) {
+            continue;  // the instance lacks members of its definition: it is not a whole copy
+        }
+        bool good = true;
+        std::vector<Numbers> cur(d.ids.size());
+        for (size_t k = 0; k < d.ids.size() && good; ++k) {
+            auto it = idToGeo.find(d.ids[k]);
+            good = it != idToGeo.end() && !used.count(d.ids[k]) && numbersOf(geos[it->second], cur[k]);
+        }
+        if (good) {
+            good = fitsDefinition(d.inst.members, cur);
+        }
+        if (good) {
+            for (long id : d.ids) {
+                used.insert(id);
+            }
+        }
+        ok[n] = good;
+    }
+    return ok;
+}
+
 void SketchObject::syncBlocks()
 {
     if (BlockData.getStrValue().empty()) {
         solvedSketch.setBlockInstances({});
         return;
     }
+    // an instance whose members no longer fit its definition (or whose geometry is gone) becomes plain
+    // geometry before this solve can pull anything back
+    if (blockGuard == 0) {
+        explodeInvalidBlocks();
+    }
     const auto& parsed = parsedBlocks();
+    std::vector<bool> ok = blockGuard == 0 ? validBlockInstances() : std::vector<bool>(parsed.size(), true);
     std::unordered_map<long, int> idToGeo;
     const auto& geos = getInternalGeometry();
     idToGeo.reserve(geos.size());
@@ -125,13 +300,17 @@ void SketchObject::syncBlocks()
     }
     std::vector<Sketch::BlockInstance> out;
     out.reserve(parsed.size());
-    for (const auto& d : parsed) {
+    for (size_t n = 0; n < parsed.size(); ++n) {
+        const auto& d = parsed[n];
+        if (!ok[n]) {
+            continue;
+        }
         Sketch::BlockInstance inst = d.inst;
         bool complete = true;
         for (size_t k = 0; k < d.ids.size(); ++k) {
             auto it = idToGeo.find(d.ids[k]);
             if (it == idToGeo.end()) {
-                complete = false;  // a member is gone: the instance is plain geometry
+                complete = false;
                 break;
             }
             inst.members[k].geoId = it->second;
@@ -143,42 +322,96 @@ void SketchObject::syncBlocks()
     solvedSketch.setBlockInstances(std::move(out));
 }
 
-int SketchObject::pruneBlocks()
+int SketchObject::explodeInvalidBlocks()
 {
-    const std::string src = BlockData.getValue();
-    if (src.empty()) {
+    if (blockGuard != 0 || BlockData.getStrValue().empty() || inExplodeBlocks) {
+        return 0;
+    }
+    const auto* doc = getDocument();
+    if (isRestoring() && !restoreChecksBlocks) {
+        return 0;
+    }
+    if (doc && doc->isPerformingTransaction()) {
+        return 0;  // properties are being put back one by one; the data may be momentarily out of step
+    }
+    const auto& parsed = parsedBlocks();
+    std::vector<bool> ok = validBlockInstances();
+    std::vector<std::string> bad;
+    for (size_t n = 0; n < parsed.size(); ++n) {
+        if (!ok[n]) {
+            bad.push_back(parsed[n].name);
+        }
+    }
+    if (bad.empty()) {
         return 0;
     }
     nlohmann::json j;
     try {
-        j = nlohmann::json::parse(src);
-    }
-    catch (const std::exception&) {
-        return 0;
-    }
-    std::set<long> ids;
-    for (const auto* g : getInternalGeometry()) {
-        ids.insert(GeometryFacade::getFacade(g)->getId());
-    }
-    std::vector<std::string> stale;
-    try {
-        for (const auto& [iname, idata] : j.at("inst").items()) {
-            for (const auto& [key, id] : idata.at("m").items()) {
-                if (!ids.count(id.get<long>())) {
-                    stale.push_back(iname);
-                    break;
-                }
-            }
-        }
-        for (const auto& n : stale) {
+        j = nlohmann::json::parse(BlockData.getValue());
+        for (const auto& n : bad) {
             j["inst"].erase(n);
         }
     }
     catch (const std::exception&) {
         return 0;
     }
-    if (!stale.empty()) {
-        BlockData.setValue(j.dump());
+    inExplodeBlocks = true;
+    BlockData.setValue(j.dump());
+    inExplodeBlocks = false;
+    Base::Console().warning(
+        "{}: {} block instance(s) no longer fit their definition or lost geometry and were exploded\n",
+        getNameInDocument() ? getNameInDocument() : "Sketch",
+        bad.size()
+    );
+    return static_cast<int>(bad.size());
+}
+
+int SketchObject::pruneBlocks()
+{
+    return explodeInvalidBlocks();
+}
+
+int SketchObject::explodeBlocksOf(const std::vector<int>& geoIds)
+{
+    if (BlockData.getStrValue().empty() || blockGuard != 0) {
+        return 0;
     }
-    return static_cast<int>(stale.size());
+    const auto& geos = getInternalGeometry();
+    std::set<long> ids;
+    for (int g : geoIds) {
+        if (g >= 0 && g < static_cast<int>(geos.size())) {
+            ids.insert(GeometryFacade::getFacade(geos[g])->getId());
+        }
+    }
+    nlohmann::json j;
+    std::vector<std::string> hit;
+    try {
+        j = nlohmann::json::parse(BlockData.getValue());
+        for (const auto& [iname, idata] : j.at("inst").items()) {
+            for (const auto& [key, id] : idata.at("m").items()) {
+                if (ids.count(id.get<long>())) {
+                    hit.push_back(iname);
+                    break;
+                }
+            }
+        }
+        for (const auto& n : hit) {
+            j["inst"].erase(n);
+        }
+    }
+    catch (const std::exception&) {
+        return 0;
+    }
+    if (hit.empty()) {
+        return 0;
+    }
+    inExplodeBlocks = true;
+    BlockData.setValue(j.dump());
+    inExplodeBlocks = false;
+    Base::Console().warning(
+        "{}: {} block instance(s) were exploded by an edit of one of their members\n",
+        getNameInDocument() ? getNameInDocument() : "Sketch",
+        hit.size()
+    );
+    return static_cast<int>(hit.size());
 }
