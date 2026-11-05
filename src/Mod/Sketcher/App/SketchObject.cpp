@@ -1038,6 +1038,13 @@ void SketchObject::onChanged(const App::Property* prop)
 
 void SketchObject::onGeometryChanged()
 {
+    // a block instance that lost a member becomes plain geometry; not while a transaction or a
+    // restore is putting properties back one by one, when the data may be momentarily out of step
+    if (!isRestoring() && !BlockData.getStrValue().empty() && getDocument()
+        && !getDocument()->isPerformingTransaction()) {
+        pruneBlocks();
+    }
+
     if (isRestoring() && checkMigration(Geometry)) {
         // Construction migration to extension
         for (auto geometryValue : Geometry.getValues()) {

@@ -37,6 +37,9 @@ from SketcherTests.TestSketchAutoDefine import TestSketchAutoDefine
 from SketcherTests.TestSketchBlocks import TestBlockDOF
 from SketcherTests.TestSketchBlocks import TestBlockRigidity
 from SketcherTests.TestSketchBlocks import TestBlockPlacement
+from SketcherTests.TestSketchBlocks import TestBlockConstraints
+from SketcherTests.TestSketchBlocks import TestBlockPersistence
+from SketcherTests.TestSketchBlocks import TestBlockEditing
 from SketcherTests.TestSketchSolverCore import TestSketchSolverCore
 from SketcherTests.TestSketchSolverCore import TestDegenerateLine
 from SketcherTests.TestSketchSolverCore import TestPartitionedDiagnosis
