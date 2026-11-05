@@ -133,6 +133,13 @@ class FDTestBase(PanelTestBase):
     def setUp(self):
         super().setUp()
         self.fd = _FDRig.build()
+        if any(c[3].DoF == 0 for c in self.fd.cases):
+            # a test that applied a candidate left a case fully defined: the shared corpus is rebuilt, so that no
+            # test sees what an earlier one did to it
+            if self.fd.doc.Name in FreeCAD.listDocuments():
+                FreeCAD.closeDocument(self.fd.doc.Name)
+            _FDRig.doc = None
+            self.fd = _FDRig.build()
 
     def open_fd(self, sketch, wait=True, keep_edit=False):
         if not keep_edit:
