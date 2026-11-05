@@ -419,6 +419,148 @@ class TestSketchDiagnosis(unittest.TestCase):
                     finally:
                         chk.close()
 
+    # -- fixes that survive, and removals that apply --------------------------
+    @staticmethod
+    def _settled(sk):
+        """What a user sees of a sketch: constraints, expressions, the solver's lists and the DOF."""
+        sk.solve()
+        return (
+            [(c.Type, c.Name, round(c.Value, 9), c.Driving, c.IsActive, c.First, c.Second) for c in sk.Constraints],
+            [(str(p).lstrip("."), str(e)) for p, e in sk.ExpressionEngine],
+            list(sk.ConflictingConstraints),
+            list(sk.RedundantConstraints),
+            list(sk.PartiallyRedundantConstraints),
+            sk.DoF,
+        )
+
+    def _survives_recompute(self, sketch, fx):
+        chk = _Check(sketch)
+        try:
+            SD.apply_fix(chk.sk, fx)
+            before = self._settled(chk.sk)
+            chk.sk.touch()
+            chk.sk.Document.recompute()
+            return before == self._settled(chk.sk)
+        finally:
+            chk.close()
+
+    def testEveryOfferedFixSurvivesARecompute(self):
+        """The sketch and its conflict state are the same after a recompute as right after the fix (conflict fixes
+        and redundancy removals alike); a fix a recompute would undo is not offered."""
+        total = unstable = 0
+        for case in self.cases:
+            r = self.results[case.name]
+            fixes = [f for cs in r["conflict_sets"] for f in cs["fixes"]]
+            fixes += [g["fix"] for g in r["redundancy_groups"] if g["fix"]]
+            for fx in fixes:
+                total += 1
+                if not self._survives_recompute(case.sketch, fx):
+                    unstable += 1
+                    print("UNSTABLE", case.name, fx["description"])
+        self.assertGreater(total, 100)
+        self.assertEqual(unstable, 0)
+        self.__class__.stats["fixes_checked_after_recompute"] = total
+
+    def testExpressionReaderMadeNonDrivingIsNotOffered(self):
+        r = self.results["expression_driven_conflict"]
+        offered = [(o["op"], o["index"]) for cs in r["conflict_sets"] for f in cs["fixes"] for o in f["ops"]]
+        # w (index 0) is read by v's expression: as a reference it takes the measured value and a recompute moves v
+        self.assertNotIn(("set_driving", 0), offered)
+        self.assertTrue(offered)
+        self.assertIn("recompute_changes_result", [n["reason"] for n in r["not_offered"]])
+
+    def testIndexBoundExpressionsDoNotCertifyAShiftedFix(self):
+        doc = FreeCAD.newDocument("TestDiagnosisIdx")
+        try:
+            s = doc.addObject("Sketcher::SketchObject", "S")
+            s.addGeometry(Part.LineSegment(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(5, 0, 0)))
+            s.addGeometry(Part.LineSegment(FreeCAD.Vector(0, 3, 0), FreeCAD.Vector(5, 3, 0)))
+            s.addConstraint(Sketcher.Constraint("Horizontal", 0))
+            s.addConstraint(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 5.0))
+            s.addConstraint(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 6.0))
+            s.addConstraint(Sketcher.Constraint("DistanceX", 1, 1, 1, 2, 5.0))
+            s.setExpression("Constraints[3]", ".Constraints[1] * 2")  # reads an unnamed constraint by position
+            doc.recompute()
+            r = SD.diagnose(s)
+            fixes = [f for cs in r["conflict_sets"] for f in cs["fixes"]]
+            self.assertTrue(fixes)
+            for f in fixes:
+                self.assertTrue(self._survives_recompute(s, f), f["description"])
+            self.assertTrue(r["not_offered"])  # deleting #2 shifts the position the expression reads
+        finally:
+            FreeCAD.closeDocument(doc.Name)
+
+    def _two_lines(self, doc, name, redundancy, conflict=True):
+        s = doc.addObject("Sketcher::SketchObject", name)
+        v = FreeCAD.Vector
+        s.addGeometry(Part.LineSegment(v(0, 0, 0), v(10, 0, 0)))
+        s.addConstraint(Sketcher.Constraint("Coincident", 0, 1, -1, 1))
+        s.addConstraint(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 10.0))
+        if conflict:
+            s.addConstraint(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 12.0))
+        s.addConstraint(Sketcher.Constraint("Horizontal", 0))
+        if redundancy:
+            s.addGeometry(Part.LineSegment(v(0, 5, 0), v(10, 5, 0)))
+            s.addConstraint(Sketcher.Constraint("DistanceX", 1, 1, 1, 2, 7.0))
+            s.addConstraint(Sketcher.Constraint("DistanceX", 1, 1, 1, 2, 7.0))
+        doc.recompute()
+        return s
+
+    def testConflictWithAnUnrelatedRedundancyStillOffersFixes(self):
+        doc = FreeCAD.newDocument("TestDiagnosisMixed")
+        try:
+            s = self._two_lines(doc, "S", redundancy=True)
+            r = SD.diagnose(s)
+            self.assertEqual(len(r["conflict_sets"]), 1)
+            self.assertTrue(r["redundancy_groups"])
+            self.assertTrue(r["conflict_sets"][0]["fixes"], "a redundancy that was already there vetoed every fix")
+            plain = SD.diagnose(self._two_lines(doc, "P", redundancy=False))
+            self.assertEqual(
+                len(plain["conflict_sets"][0]["fixes"]), len(r["conflict_sets"][0]["fixes"])
+            )
+            for fx in r["conflict_sets"][0]["fixes"]:
+                chk = _Check(s)
+                try:
+                    SD.apply_fix(chk.sk, fx)
+                    chk.sk.solve()
+                    self.assertEqual(list(chk.sk.ConflictingConstraints), [])
+                finally:
+                    chk.close()
+        finally:
+            FreeCAD.closeDocument(doc.Name)
+
+    def testRedundancyRemovalsApplyAndRepairARedundantSketch(self):
+        offered = 0
+        for case in self.cases:
+            for g in self.results[case.name]["redundancy_groups"]:
+                fx = g["fix"]
+                if fx is None:
+                    continue
+                offered += 1
+                self.assertEqual(fx["ops"], [{"op": "delete", "index": g["suggested_removal"]}])
+                self.assertTrue(fx["verified"] and fx["applied_to_fresh_copy"])
+                json.dumps(fx)
+        self.assertGreaterEqual(offered, 8)
+        # a sketch with redundancy only is repaired by applying the offered removals one at a time
+        doc = FreeCAD.newDocument("TestDiagnosisRepair")
+        try:
+            s = self._two_lines(doc, "S", redundancy=True, conflict=False)
+            dof = None
+            for _ in range(4):
+                r = SD.diagnose(s)
+                dof = r["dof"] if dof is None else dof
+                if not r["redundancy_groups"]:
+                    break
+                fx = r["redundancy_groups"][0]["fix"]
+                self.assertIsNotNone(fx, "a redundancy group without an applicable removal")
+                SD.apply_fix(s, fx)
+            r = SD.diagnose(s)
+            self.assertEqual(r["redundancy_groups"], [])
+            self.assertEqual(r["conflict_sets"], [])
+            self.assertEqual(r["dof"], dof)
+        finally:
+            FreeCAD.closeDocument(doc.Name)
+
     def testCulpritRate(self):
         labelled = hit = 0
         misses = []

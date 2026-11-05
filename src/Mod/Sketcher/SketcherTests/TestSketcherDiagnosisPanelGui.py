@@ -311,6 +311,18 @@ class PanelTestBase(SketcherGuiTestCase):
                     out.append((k, d["fix"], (k, j)))
         return out
 
+    def removal_rows(self):
+        """(group position, path) of every removal row, read from the widgets."""
+        out = []
+        t = self.panel.tree
+        for k in range(t.topLevelItemCount()):
+            top = t.topLevelItem(k)
+            for j in range(top.childCount()):
+                d = top.child(j).data(0, QtCore.Qt.UserRole) or {}
+                if d.get("kind") == "removal":
+                    out.append((d["group"], (k, j)))
+        return out
+
     def status_label(self):
         labels = _find("labelStatus", QtWidgets.QLabel)
         return labels[0].text() if labels else None
@@ -401,12 +413,17 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
             p = test.open_panel(sk)
             doc.clearUndos()  # the document's undo limit would otherwise swallow the count after a few cases
             base_red = set(p.result["redundancy_members"])
-            for k, j, path in test.fix_rows():
-                fix = p.result["conflict_sets"][k]["fixes"][j]
+            p0_conflicts = list(p.result["solver_conflicting"])
+            rows = [(k, j, path, p.result["conflict_sets"][k]["fixes"][j]) for k, j, path in test.fix_rows()]
+            rows += [(None, g, path, p.result["redundancy_groups"][g]["fix"]) for g, path in test.removal_rows()]
+            for k, j, path, fix in rows:
+                if fix is None:
+                    continue
+                removal = k is None
                 original = _content(sk)
                 expected = test.copy_with_fix(sk, fix)
                 test.choose(path)
-                rec = {"case": c.name, "set": k, "fix": j, "applyable": p.apply_button.isEnabled()}
+                rec = {"case": c.name, "set": k, "fix": j, "removal": removal, "applyable": p.apply_button.isEnabled()}
                 u0, r0 = doc.UndoCount, doc.RedoCount
                 p.apply_button.click()
                 test.wait_ready()
@@ -417,7 +434,10 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
                 rec["undo_name"] = doc.UndoNames[0] if doc.UndoNames else None
                 rec["editing"] = _editing() == (doc.Name, sk.Name)
                 rec["conflicts"] = sorted(_old_index(i - 1, fix["ops"]) for i in sk.ConflictingConstraints)
-                rec["remaining"] = fix["remaining_conflicts"]
+                # a removal leaves the conflicts alone; a conflict fix leaves the ones it says it does
+                rec["remaining"] = (
+                    sorted(p0_conflicts) if removal else fix["remaining_conflicts"]
+                )
                 red = {
                     _old_index(i - 1, fix["ops"])
                     for i in list(sk.RedundantConstraints) + list(sk.PartiallyRedundantConstraints)
@@ -427,6 +447,13 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
                 rec["dof_stated"] = fix["dof_after"]
                 rec["label"] = test.status_label()
                 rec["fresh"] = _stable(SD.diagnose(sk)) == _stable(p.result)
+                # check 2, stricter: a recompute leaves the serialised sketch and the diagnosis as they are
+                shown = _stable(p.result)
+                sk.touch()
+                doc.recompute()
+                test.wait_ready()
+                rec["recompute_same_sketch"] = _same_sketch(_content(sk), rec["applied"])
+                rec["recompute_same_diagnosis"] = _stable(SD.diagnose(sk)) == shown
                 rec["tree_fresh"] = _rows(p.tree) == _expected_rows(sk, p.result)
                 Gui.runCommand("Std_Undo")
                 test.wait_ready()
@@ -452,18 +479,27 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
     def testApplyingEveryOfferedFix(self):
         survey = self._apply_survey(self)
         self.assertGreaterEqual(len(survey), 30 if not os.environ.get("PANEL_SURVEY_CASES") else 1)
+        if not os.environ.get("PANEL_SURVEY_CASES"):
+            self.assertGreaterEqual(len([r for r in survey if r["removal"]]), 8)  # redundancy removals go through Apply too
         for r in survey:
-            with self.subTest(case=r["case"], set=r["set"], fix=r["fix"]):
+            with self.subTest(case=r["case"], set=r["set"], fix=r["fix"], removal=r["removal"]):
                 self.assertTrue(r["applyable"])
                 self.assertTrue(_same_sketch(r["applied"], r["expected"]), "applied sketch differs from apply_fix on a copy")
-                self.assertEqual(r["conflicts"], r["remaining"])
+                if r["removal"]:
+                    # removing a redundant constraint may only shrink the conflicts, never add one
+                    self.assertTrue(set(r["conflicts"]) <= set(r["remaining"]), (r["conflicts"], r["remaining"]))
+                else:
+                    self.assertEqual(r["conflicts"], r["remaining"])
                 self.assertEqual(r["new_redundancy"], [])
-                self.assertEqual(r["dof"], r["dof_stated"])
+                if not r["conflicts"]:
+                    self.assertEqual(r["dof"], r["dof_stated"])
+                self.assertTrue(r["recompute_same_sketch"], "a recompute changed the sketch the panel certified")
+                self.assertTrue(r["recompute_same_diagnosis"], "a recompute changed the diagnosis")
                 self.assertTrue(r["editing"])
                 self.assertTrue(r["fresh"], "the panel's new diagnosis is not the API's for the changed sketch")
                 self.assertTrue(r["tree_fresh"])
                 self.assertIsNotNone(r["label"])
-                expect_over = bool(r["remaining"])
+                expect_over = bool(r["conflicts"])
                 self.assertEqual(r["label"].startswith("Over-constrained"), expect_over, r["label"])
 
     def testEveryApplyIsOneNamedUndoStepAndUndoRedoAreExact(self):
@@ -479,7 +515,7 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
             ),
         )
         for r in survey:
-            with self.subTest(case=r["case"], set=r["set"], fix=r["fix"]):
+            with self.subTest(case=r["case"], set=r["set"], fix=r["fix"], removal=r["removal"]):
                 self.assertEqual(r["undo_delta"], 1)
                 self.assertEqual(r["undo_name"], TRANSACTION_NAME)
                 self.assertTrue(_same_sketch(r["after_undo"], r["original"]), "undo did not restore the sketch")

@@ -64,7 +64,20 @@ reports redundant or partially redundant constraints and no conflicts".  Each
 round shrinks to a minimal redundant group, picks one member to remove and
 deactivates it before looking for the next group.  The member suggested for
 removal is the newest one (highest index) whose removal keeps the DOF and
-moves no solved point by more than 1e-9.
+moves no solved point by more than 1e-9.  The removal is also returned as
+``fix``, an ``apply_fix`` dict tested like a conflict fix: applied for real to
+a fresh copy and solved (with the conflicts' hitting set switched off, as the
+search assumes), and offered only if no conflict is left, the group's other
+members are no longer redundant, nothing redundant appears that was not there
+and the DOF is the one measured.  A fix to a conflict is judged against the
+redundancy that was already in the sketch: only redundancy it creates counts
+against it.
+
+Recompute stability.  When the sketch has expressions, every fix that is
+offered is applied to its copy and the copy is recomputed; a fix whose result
+a recompute changes (a datum re-evaluated from an expression, for example a
+constraint made non-driving while another datum's expression reads it) is not
+offered and is listed in ``not_offered`` with the reason.
 
 Fixes.  For every minimal conflict set the module proposes, per member, to
 delete it and, for datum constraints, to make it non-driving; a change of
@@ -532,17 +545,20 @@ def _max_move(before, after):
     return worst
 
 
-def _redundancy_groups(probe, base_active, deadline, max_groups=16):
+def _redundancy_groups(probe, base_active, deadline, max_groups=16, first_code=None):
     """Find redundancy groups among `base_active` candidates.
 
     Returns (groups, removed) where each group is a dict with the members and
-    the suggested removal."""
+    the suggested removal.  ``first_code``, a list, receives the solver code of
+    the first status (the code a sketch with this redundancy returns)."""
     groups = []
     active = list(base_active)
-    for _ in range(max_groups):
+    for round_ in range(max_groups):
         if time.time() > deadline:
             break
         st = probe.check(active)
+        if round_ == 0 and first_code is not None:
+            first_code.append(st.code)
         if not st.only_redundant:
             break
         before = _geometry_signature(probe.sk)
@@ -600,6 +616,40 @@ def _expression_paths(sk, index):
 
 def _has_own_expression(sk, index):
     return bool(_expression_paths(sk, index)[0])
+
+
+def _datum_state(sk):
+    """What a recompute must leave alone: each constraint's value, driving flag
+    and activity, and the expressions."""
+    return (
+        # a reference constraint's value is measured, not set: only the driving
+        # values (and the flags) are the result
+        [
+            (c.Value if c.Driving else 0.0, bool(c.Driving), bool(c.IsActive))
+            for c in sk.Constraints
+        ],
+        sorted((str(p).lstrip("."), str(e)) for p, e in sk.ExpressionEngine),
+    )
+
+
+def _same_datum_state(a, b):
+    if a[1] != b[1] or len(a[0]) != len(b[0]):
+        return False
+    for (v1, d1, a1), (v2, d2, a2) in zip(a[0], b[0]):
+        if d1 != d2 or a1 != a2 or abs(v1 - v2) > 1e-9 * max(1.0, abs(v1)):
+            return False
+    return True
+
+
+def _recompute_changes(sk):
+    """Touch and recompute a throwaway copy; True if that changed anything a
+    fix is meant to leave (see ``_datum_state``)."""
+    _tick("solve")
+    sk.solve()  # reference values are measured by a solve; a recompute reads them
+    before = _datum_state(sk)
+    sk.touch()
+    sk.Document.recompute()
+    return not _same_datum_state(before, _datum_state(sk))
 
 
 def _apply_ops(sk, ops):
@@ -690,6 +740,7 @@ class _Diagnoser:
         self.deadline = time.time() + time_budget
         self.with_fixes = with_fixes
         self.copies = 0
+        self.not_offered = []
 
     # -- helpers ----------------------------------------------------------
     def _copy(self):
@@ -793,12 +844,23 @@ class _Diagnoser:
             "code": st.code,
         }
 
-    def _try_ops(self, ops):
-        """Apply the real operations to a fresh copy and re-solve it."""
+    def _try_ops(self, ops, settle=True):
+        """Apply the real operations to a fresh copy and re-solve it.  When the
+        sketch has expressions the copy is also recomputed, and the fix is
+        rejected (``None`` and a reason) if the recompute changes any datum,
+        driving state or expression: a fix that a recompute undoes would be
+        certified and then lost.  ``settle`` is False for the plan, which only
+        reports."""
         sk = self._copy()
         try:
             try:
                 _apply_ops(sk, ops)
+                if settle and self.has_expr:
+                    if _recompute_changes(sk):
+                        self.not_offered.append(
+                            {"ops": [dict(o) for o in ops], "reason": "recompute_changes_result"}
+                        )
+                        return None, "a recompute changes the result"
             except Exception as exc:  # solver rejected the change
                 return None, repr(exc)
             probe = _Probe(sk)
@@ -866,6 +928,7 @@ class _Diagnoser:
             "candidate_constraints": list(probe.candidates),
             "conflict_sets": [],
             "redundancy_groups": [],
+            "not_offered": self.not_offered,
             "complete": True,
         }
         sets = []
@@ -883,7 +946,12 @@ class _Diagnoser:
             if not (set(members) & hitting):
                 hitting.add(max(members))
         base_active = [i for i in probe.candidates if i not in hitting]
-        groups, _ = _redundancy_groups(probe, base_active, self.deadline)
+        first = []
+        groups, _ = _redundancy_groups(probe, base_active, self.deadline, first_code=first)
+        # The code the solver returns for the redundancy that was already there
+        # (a redundant sketch can come back as -1, not only -2): a fix that
+        # leaves only that redundancy behind is judged against it.
+        self.base_red_code = first[0] if (first and groups) else None
         result["redundancy_groups"] = groups
         result["redundancy_assumes_conflicts_resolved"] = bool(sets)
         # redundancy that was already there does not count as caused by a fix
@@ -901,6 +969,7 @@ class _Diagnoser:
         for g in groups:
             g["constraints"] = [desc(i) for i in g["members"]]
             g["suggested_removal_constraint"] = desc(g["suggested_removal"])
+            g["fix"] = self._removal_fix(g, hitting) if self.with_fixes else None
         probe.activate_only(probe.candidates)
         for k, members in enumerate(sets):
             result["conflict_sets"].append(
@@ -993,7 +1062,7 @@ class _Diagnoser:
                         seen.add(repr(o))
                         plan_ops.append(o)
         if plan_ops:
-            res, err = self._try_ops(plan_ops)
+            res, err = self._try_ops(plan_ops, settle=False)
             result["plan"] = {
                 "ops": plan_ops,
                 "description": _fix_text(plan_ops, {o["index"]: self.describe(o["index"]) for o in plan_ops}),
@@ -1005,6 +1074,68 @@ class _Diagnoser:
                 ),
             }
 
+    def _removal_fix(self, group, hitting):
+        """The suggested removal of a redundancy group as an ``apply_fix``
+        dict, or None.  It is offered only after it has been applied, with the
+        real operation, to a fresh copy (with the conflicts' hitting set
+        switched off, as the redundancy search assumes) and the copy solved
+        (and recomputed when the sketch has expressions): no conflict, none of
+        the group's other members redundant any more, no redundancy beyond what
+        was there, and the degrees of freedom as the search measured them."""
+        if time.time() > self.deadline or group.get("dof_after") is None:
+            return None
+        m = group["suggested_removal"]
+        ops = [{"op": "delete", "index": m}]
+        sk = self._copy()
+        try:
+            try:
+                for h in sorted(hitting):
+                    sk.setActive(h, False)
+                _apply_ops(sk, ops)
+                if self.has_expr:
+                    if _recompute_changes(sk):
+                        self.not_offered.append({"ops": ops, "reason": "recompute_changes_result"})
+                        return None
+            except Exception:
+                return None
+            st = _Probe(sk).status()
+            keep_map = [i for i in range(self.n) if i != m]
+            left = [keep_map[i] for i in st.redundancy if i < len(keep_map)]
+            if (
+                st.conflicts
+                or st.dof != group["dof_after"]
+                or [i for i in group["members"] if i != m and i in left]
+                or [i for i in left if i not in self.base_red]
+            ):
+                return None
+        finally:
+            _discard(sk)
+        return {
+            "ops": ops,
+            "kind": "delete",
+            "constraint": m,
+            "description": _fix_text(ops, {m: self.describe(m)}),
+            "resolves": [],
+            "remaining_conflicts": [],
+            "dof_after": st.dof,
+            "leaves_redundancy": [],
+            "verified": True,
+            "applied_to_fresh_copy": True,
+        }
+
+    def _code_ok(self, res):
+        """The solver accepts the result: solved or redundant, or the code the
+        sketch already returned for its own pre-existing redundancy, with no
+        redundancy beyond it."""
+        if res["conflicts"] or res["code"] in (0, -2):
+            return True
+        return (
+            self.base_red_code is not None
+            and res["code"] == self.base_red_code
+            and bool(res["redundancy"])
+            and all(i in self.base_red for i in res["redundancy"])
+        )
+
     def _evaluate(self, ops, sets, confirm):
         """Test one fix; return the fix dict or None when it does not work."""
         datum = ops[0]["op"] == "set_datum"
@@ -1015,14 +1146,14 @@ class _Diagnoser:
         if res is None:
             return None
         ops = list(ops)
-        if res["code"] not in (0, -2) and not res["conflicts"]:
+        if not self._code_ok(res):
             return None
         fresh = [i for i in res["redundancy"] if i not in self.base_red]
         if fresh and not res["conflicts"] and res.get("closure") and not datum:
             extra = [r for members, r in res["closure"] if set(members) & set(fresh)]
             ops = ops + [{"op": "delete", "index": i} for i in extra]
             res = self._trial(ops)
-            if res["code"] not in (0, -2):
+            if not self._code_ok(res) or res["conflicts"]:
                 return None
         touched = {o["index"] for o in ops}
         resolves, unresolved = [], []
@@ -1044,7 +1175,7 @@ class _Diagnoser:
         if not res["conflicts"] and unresolved:
             return None
         confirmed = datum
-        if confirm and not datum:
+        if (confirm or self.has_expr) and not datum:
             real, err = self._try_ops(ops)
             if (
                 real is None
@@ -1076,7 +1207,11 @@ def diagnose(sketch, max_sets=12, max_fixes=6, time_budget=120.0, with_fixes=Tru
     and ``inactive_constraints``, ``conflict_sets`` (each with ``members``,
     ``constraints``, ranked solver-tested ``fixes`` and ``alternatives`` that
     resolve the conflict but leave a redundancy), ``redundancy_groups`` (each
-    with ``members`` and ``suggested_removal``), ``plan`` (the top fix of every
+    with ``members``, ``suggested_removal`` and ``fix``: the removal as an
+    ``apply_fix``-compatible dict, offered only after it was applied to a copy
+    and solved, or ``None``), ``not_offered`` (fixes that passed the solver
+    but were dropped because a recompute would undo them, each with its
+    ``ops`` and a ``reason``), ``plan`` (the top fix of every
     set applied together to a fresh copy) and ``complete``.  All constraint
     indices are 0-based.
 

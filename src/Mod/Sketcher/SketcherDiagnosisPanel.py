@@ -451,7 +451,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
             self._item(
                 top,
                 tr("Suggested removal: constraint %s") % constraint_text(sk, rem),
-                {"kind": "removal", "select": [rem]},
+                {"kind": "removal", "group": k, "select": [rem]},
             )
             top.setExpanded(True)
         self.tree.blockSignals(False)
@@ -465,7 +465,8 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
             if not r.get("complete", True):
                 text += " " + tr("The list may be incomplete.")
         elif r["status"] in ("solver_failed", "malformed"):
-            text = tr("The solver reports %s, without a conflict or redundancy that can be located.") % r["status"]
+            what = tr("a failed solve") if r["status"] == "solver_failed" else tr("malformed constraints")
+            text = tr("The solver reports %s, without a conflict or redundancy that can be located.") % what
         else:
             text = tr("Nothing is wrong: no conflicting or redundant constraints (degrees of freedom: %d).") % r["dof"]
         self.status.setText(text)
@@ -484,7 +485,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
             return
         data = item.data(0, _ROLE) or {}
         self.select_constraints(data.get("select", []))
-        self.apply_button.setEnabled(data.get("kind") == "fix" and self.state == "ready")
+        self.apply_button.setEnabled(self.chosen_fix() is not None and self.state == "ready")
 
     def select_constraints(self, indices):
         """Select exactly these constraints (0-based API indices) in the editor."""
@@ -510,9 +511,12 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         if item is None or self.result is None:
             return None
         data = item.data(0, _ROLE) or {}
-        if data.get("kind") != "fix":
-            return None
-        return self.result["conflict_sets"][data["set"]]["fixes"][data["fix"]]
+        if data.get("kind") == "fix":
+            return self.result["conflict_sets"][data["set"]]["fixes"][data["fix"]]
+        if data.get("kind") == "removal":
+            # the API's tested removal for the group; None when it could not be shown to work
+            return self.result["redundancy_groups"][data["group"]].get("fix")
+        return None
 
     def apply_chosen(self, *_):
         """Apply the chosen fix in one named transaction, if the sketch is still the one it was computed for."""
