@@ -2190,6 +2190,26 @@ void EditModeCoinManager::updateVirtualSpace()
     pEditModeConstraintCoinManager->updateVirtualSpace();
 }
 
+void EditModeCoinManager::setConstraintFilter(const std::vector<int>& shownIds)
+{
+    pEditModeConstraintCoinManager->setConstraintFilter(shownIds);
+}
+
+void EditModeCoinManager::clearConstraintFilter()
+{
+    pEditModeConstraintCoinManager->clearConstraintFilter();
+}
+
+bool EditModeCoinManager::hasConstraintFilter() const
+{
+    return pEditModeConstraintCoinManager->hasConstraintFilter();
+}
+
+std::vector<int> EditModeCoinManager::getConstraintFilter() const
+{
+    return pEditModeConstraintCoinManager->getConstraintFilter();
+}
+
 /************************ Resizing of coin nodes ************************/
 
 int EditModeCoinManager::defaultApplicationFontSizePixels() const

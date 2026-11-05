@@ -62,6 +62,8 @@ FreeCAD.__unit_test__ += ["TestSketcherGui"]
 # and the menu find it in every workbench; the panel itself loads on first use.
 import CommandDiagnoseSketch
 import CommandFullyDefine
+import CommandRelations
 
 FreeCAD.__unit_test__ += ["TestSketcherDiagnosisPanelGui"]
 FreeCAD.__unit_test__ += ["TestSketcherFullyDefinePanelGui"]
+FreeCAD.__unit_test__ += ["TestSketcherRelationsPanelGui"]

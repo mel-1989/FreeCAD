@@ -135,6 +135,22 @@ public:
 
     void updateVirtualSpace();
 
+    /** View-only filter (cad-fork G10 4c): only the listed constraint ids are shown.
+     *  Held for this edit session only, never saved, never touching the document. */
+    void setConstraintFilter(const std::vector<int>& shownIds);
+    void clearConstraintFilter();
+    bool hasConstraintFilter() const
+    {
+        return filterActive;
+    }
+    /// true when the filter hides this constraint (ids past the filter's size count as shown)
+    bool isFilteredOut(int constraintId) const
+    {
+        return filterActive && constraintId >= 0 && constraintId < static_cast<int>(filterShown.size())
+            && !filterShown[constraintId];
+    }
+    std::vector<int> getConstraintFilter() const;
+
     /// Draw all constraint icons
     /*! Except maybe the radius and lock ones? */
     void drawConstraintIcons();
@@ -224,6 +240,10 @@ private:
 
     // helper data structures for the constraint rendering
     std::vector<Sketcher::ConstraintType> vConstrType;
+
+    // view-only filter, see setConstraintFilter
+    bool filterActive {false};
+    std::vector<char> filterShown;
 
     // For each of the combined constraint icons drawn, also create a vector
     // of bounding boxes and associated constraint IDs, to go from the icon's

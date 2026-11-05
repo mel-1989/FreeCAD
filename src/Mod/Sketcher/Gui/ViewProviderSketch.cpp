@@ -3785,6 +3785,9 @@ void ViewProviderSketch::setIsShownVirtualSpace(bool isshownvirtualspace)
     viewProviderParameters.isShownVirtualSpace = isshownvirtualspace;
 
     editCoinManager->updateVirtualSpace();
+    // the icons are cleared for whichever space is not shown each time they are drawn (the filter, a solve or a drag
+    // do it), so switching the space has to draw them again or the space just shown has no icons
+    editCoinManager->drawConstraintIcons();
 
     signalConstraintsChanged();
 }
@@ -3792,6 +3795,36 @@ void ViewProviderSketch::setIsShownVirtualSpace(bool isshownvirtualspace)
 bool ViewProviderSketch::getIsShownVirtualSpace() const
 {
     return viewProviderParameters.isShownVirtualSpace;
+}
+
+void ViewProviderSketch::setConstraintFilter(const std::vector<int>& shownIds)
+{
+    if (!editCoinManager) {
+        return;
+    }
+    editCoinManager->setConstraintFilter(shownIds);
+    editCoinManager->updateVirtualSpace();
+    editCoinManager->drawConstraintIcons();
+}
+
+void ViewProviderSketch::clearConstraintFilter()
+{
+    if (!editCoinManager || !editCoinManager->hasConstraintFilter()) {
+        return;
+    }
+    editCoinManager->clearConstraintFilter();
+    editCoinManager->updateVirtualSpace();
+    editCoinManager->drawConstraintIcons();
+}
+
+bool ViewProviderSketch::hasConstraintFilter() const
+{
+    return editCoinManager && editCoinManager->hasConstraintFilter();
+}
+
+std::vector<int> ViewProviderSketch::getConstraintFilter() const
+{
+    return editCoinManager ? editCoinManager->getConstraintFilter() : std::vector<int>();
 }
 
 

@@ -23,6 +23,8 @@
  ***************************************************************************/
 
 
+#include <limits>
+
 #include <Base/Console.h>
 #include <Base/Interpreter.h>
 #include <Base/PyObjectBase.h>
@@ -79,6 +81,26 @@ public:
             "The tuple uses the same coordinate system as Gui.ActiveDocument.ActiveView"
             ".getPointOnViewport().\n"
         );
+        add_varargs_method(
+            "setConstraintFilter",
+            &Module::setConstraintFilter,
+            "setConstraintFilter(list of int or None) -> bool\n"
+            "\n"
+            "View-only filter on the sketch in edit mode: shows only the listed constraint indices\n"
+            "(0-based, as in Sketch.Constraints) and hides the rest in the view. None clears it.\n"
+            "Nothing in the document changes; the filter lives with the edit session.\n"
+            "Ids must be ints (a float or an id beyond the int range raises). An id that names no\n"
+            "constraint (negative, or past the last one) is ignored, so an empty list, or a list of only\n"
+            "such ids, hides every constraint: the list is what to show, and nothing is on it.\n"
+            "Returns False when no sketch is in edit.\n"
+        );
+        add_varargs_method(
+            "getConstraintFilter",
+            &Module::getConstraintFilter,
+            "getConstraintFilter() -> list of int or None\n"
+            "\n"
+            "The constraint indices the view-only filter shows, or None when no filter is on.\n"
+        );
         initialize("This module is the SketcherGui module.");  // register with Python
     }
 
@@ -86,6 +108,66 @@ public:
     {}
 
 private:
+    static SketcherGui::ViewProviderSketch* editingSketchViewProvider()
+    {
+        auto* editDoc = Gui::Application::Instance->editDocument();
+        if (!editDoc) {
+            return nullptr;
+        }
+        return freecad_cast<SketcherGui::ViewProviderSketch*>(editDoc->getInEdit());
+    }
+
+    Py::Object setConstraintFilter(const Py::Tuple& args)
+    {
+        PyObject* object;
+        if (!PyArg_ParseTuple(args.ptr(), "O", &object)) {
+            throw Py::Exception();
+        }
+        auto* vp = editingSketchViewProvider();
+        if (!vp) {
+            return Py::False();
+        }
+        if (object == Py_None) {
+            vp->clearConstraintFilter();
+            return Py::True();
+        }
+        std::vector<int> ids;
+        if (!PySequence_Check(object) || PyUnicode_Check(object) || PyBytes_Check(object)) {
+            throw Py::TypeError("setConstraintFilter expects a list of int or None");
+        }
+        const Py::Sequence seq(object);
+        ids.reserve(seq.size());
+        for (Py::Sequence::size_type i = 0; i < seq.size(); i++) {
+            // only a true int is an index: 3.5 is not 3, and 2**32 + 1 is not 1
+            PyObject* item = seq[i].ptr();
+            if (!PyLong_Check(item)) {
+                throw Py::TypeError("setConstraintFilter: every id must be an int");
+            }
+            int overflow = 0;
+            const long value = PyLong_AsLongAndOverflow(item, &overflow);
+            if (overflow != 0 || value < std::numeric_limits<int>::min()
+                || value > std::numeric_limits<int>::max()) {
+                throw Py::OverflowError("setConstraintFilter: an id does not fit in an int");
+            }
+            ids.push_back(static_cast<int>(value));
+        }
+        vp->setConstraintFilter(ids);
+        return Py::True();
+    }
+
+    Py::Object getConstraintFilter(const Py::Tuple&)
+    {
+        auto* vp = editingSketchViewProvider();
+        if (!vp || !vp->hasConstraintFilter()) {
+            return Py::None();
+        }
+        Py::List result;
+        for (int id : vp->getConstraintFilter()) {
+            result.append(Py::Long(id));
+        }
+        return result;
+    }
+
     Py::Object getActiveSketchPreselection(const Py::Tuple& args)
     {
         PyObject* object;
