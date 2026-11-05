@@ -728,6 +728,44 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
         self.assertEqual(_stable(p.result), _stable(SD.diagnose(c.sketch)))
         self.assertEqual(_rows(p.tree), _expected_rows(c.sketch, p.result))
 
+    def _stale_removal_setup(self, docname="PanelStaleRemoval"):
+        """A line with the same length twice (redundant), a removal row chosen."""
+        d = FreeCAD.newDocument(docname)
+        self._extra_docs.append(docname)
+        sk = d.addObject("Sketcher::SketchObject", "S")
+        sk.addGeometry(Part.LineSegment(V(0, 0, 0), V(10, 0, 0)))
+        sk.addConstraint(Sketcher.Constraint("Horizontal", 0))
+        sk.addConstraint(Sketcher.Constraint("Distance", 0, 10.0))
+        sk.addConstraint(Sketcher.Constraint("Distance", 0, 10.0))
+        d.recompute()
+
+        class _C:
+            sketch = sk
+
+        p = self.open_panel(sk)
+        rows = self.removal_rows()
+        self.assertTrue(rows)
+        self.choose(rows[0][1])
+        self.assertTrue(p.apply_button.isEnabled())
+        return _C, p
+
+    def testStaleRemovalIsNotApplied(self):
+        c, p = self._stale_removal_setup()
+        c.sketch.addConstraint(Sketcher.Constraint("Distance", 0, 10.0))
+        self._assert_stale_handled(c, p, "constraint added under a chosen removal")
+        self.wait_ready()
+        self.assertEqual(_stable(p.result), _stable(SD.diagnose(c.sketch)))
+
+    def testARedundantSketchIsRepairedFromThePanel(self):
+        c, p = self._stale_removal_setup("PanelRepairRedundant")
+        doc = c.sketch.Document
+        u0 = doc.UndoCount
+        p.apply_button.click()
+        self.wait_ready()
+        self.assertEqual(doc.UndoCount - u0, 1)
+        self.assertEqual(p.result["redundancy_groups"], [])
+        self.assertTrue(p.status.text().startswith("Nothing is wrong"), p.status.text())
+
     def testStaleAfterADatumChanges(self):
         c, p = self._stale_setup()
         datum = [i for i, k in enumerate(c.sketch.Constraints) if k.Type in SD._DATUM_TYPES and k.Driving][-1]
