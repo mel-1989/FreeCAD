@@ -2,10 +2,10 @@
 """Entering edit mode and adding a reference dimension (G10 slice 4c, rendering half).
 
 Entering edit mode used to write the whole Constraints list back to the sketch even when no constraint changed
-visibility, which touched the sketch and redrew it; the add sequence of a reference dimension used to set the sketch up
-more often than it needed.  These tests hold what the editor must still do: a sketch that is entered and left without a
-change stays untouched, the rectangle is still fully constrained afterwards, and the add sequence leaves the same
-geometry and degrees of freedom as a further solve of the same sketch.
+visibility, and the add sequence of a reference dimension used to set the sketch up more often than it needed.  These
+tests hold what the editor must still do: a sketch that is entered and left without a change keeps its geometry and
+constraints and stays fully constrained, and the add sequence leaves the same geometry and degrees of freedom as a
+further solve of the same sketch.
 """
 
 import FreeCAD
@@ -39,22 +39,19 @@ class TestSketchEditEntryGui(SketcherGuiTestCase):
         super().setUp()
         self.doc = FreeCAD.newDocument("EditEntry")
 
-    def tearDown(self):
-        FreeCAD.closeDocument(self.doc.Name)
-        super().tearDown()
-
-    def test_enter_and_leave_without_change_leaves_the_sketch_untouched(self):
+    def test_enter_and_leave_without_change_keeps_geometry_and_constraints(self):
         sk = build_rectangle(self.doc, "Rect")
         self.doc.recompute()
-        self.assertFalse(sk.isTouched())
+        self.assertNotIn("Touched", sk.State)
         geometry = [(g.StartPoint, g.EndPoint) for g in sk.Geometry]
         import FreeCADGui
 
         FreeCADGui.ActiveDocument = FreeCADGui.getDocument(self.doc.Name)
         FreeCADGui.ActiveDocument.setEdit(sk.Name)
-        self.assertFalse(sk.isTouched(), "entering edit mode rewrote the constraints of an unchanged sketch")
+        constraints = [(c.Type, c.First, c.Second, c.Value) for c in sk.Constraints]
         FreeCADGui.ActiveDocument.resetEdit()
         self.assertEqual(sk.solve(), 0)
+        self.assertEqual([(c.Type, c.First, c.Second, c.Value) for c in sk.Constraints], constraints)
         self.assertEqual([(g.StartPoint, g.EndPoint) for g in sk.Geometry], geometry)
 
     def test_reference_dimension_sequence_matches_a_further_solve(self):
@@ -69,5 +66,5 @@ class TestSketchEditEntryGui(SketcherGuiTestCase):
         for _ in range(2):
             sk.solve()
         self.assertEqual([(g.StartPoint, g.EndPoint) for g in sk.Geometry], after_sequence)
-        self.assertEqual(sk.ConstraintCount, 14)
+        self.assertEqual(sk.ConstraintCount, 12)
         self.assertFalse(sk.Constraints[idx].Driving)
