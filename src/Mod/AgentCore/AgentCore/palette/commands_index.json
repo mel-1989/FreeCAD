@@ -795,6 +795,7 @@
 {"key": "D", "menu": "Dimension", "name": "Sketcher_Dimension", "tip": "Constrains contextually based on the selection. The type can be changed with the M key.", "wb": "SketcherWorkbench"},
 {"menu": "Edit Sketch", "name": "Sketcher_EditSketch", "tip": "Opens the selected sketch for editing", "wb": "SketcherWorkbench"},
 {"key": "G, Q", "menu": "Extend Edge", "name": "Sketcher_Extend", "tip": "Extends an edge with respect to the selected position", "wb": "SketcherWorkbench"},
+{"menu": "Fully define sketch", "name": "Sketcher_FullyDefine", "tip": "Proposes constraint sets that remove the remaining degrees of freedom of the sketch being edited, each already tested on a copy. Choosing a candidate shows what it would add; applying it is one undoable step.", "wb": "SketcherWorkbench"},
 {"menu": "Toggle Grid", "name": "Sketcher_Grid", "tip": "Toggles the grid display in the active sketch", "wb": "SketcherWorkbench"},
 {"key": "G, I", "menu": "External Intersection", "name": "Sketcher_Intersection", "tip": "Creates the intersection of external geometry with the sketch plane", "wb": "SketcherWorkbench"},
 {"menu": "Join Curves", "name": "Sketcher_JoinCurves", "tip": "Joins 2 curves at selected end points", "wb": "SketcherWorkbench"},
