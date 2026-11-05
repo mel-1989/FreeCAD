@@ -54,6 +54,7 @@ private:
 protected:
     ViewProviderSketch* sketchView;
     QLabel* labelDiagnose = nullptr;
+    QLabel* labelFullyDefine = nullptr;
     fastsignals::connection connectionDiagnoseLink;
 };
 

@@ -144,7 +144,9 @@ import time
 import FreeCAD
 import Sketcher
 
+import SketcherDiagnosis as _SD
 from SketcherDiagnosis import (
+    DiagnosisCancelled,
     _Scratch,
     _Status,
     _discard,
@@ -152,7 +154,7 @@ from SketcherDiagnosis import (
     _max_move,
 )
 
-__all__ = ["propose", "apply_candidate", "AutoDefineError", "SCHEMES"]
+__all__ = ["propose", "apply_candidate", "AutoDefineError", "AutoDefineCancelled", "SCHEMES"]
 
 LENGTH_TOLERANCE = 1e-7
 ANGLE_TOLERANCE = 1e-8
@@ -180,6 +182,11 @@ _GEOMETRIC = {
 
 class AutoDefineError(RuntimeError):
     """Raised when a candidate cannot be applied or the input is unusable."""
+
+
+class AutoDefineCancelled(DiagnosisCancelled):
+    """Raised by ``propose`` when its progress callback asked to stop.  The scratch document is closed and the
+    user's sketch is untouched, as after any other exit."""
 
 
 class _Timeout(Exception):
@@ -968,6 +975,9 @@ class _Build:
         try:
             self.sk.addConstraint([_make(s) for s in specs])
             st = _Status(self.sk)
+        except DiagnosisCancelled:
+            self._remove_new(n0)
+            raise
         except Exception:
             st = None
         self.solves += 1
@@ -1022,7 +1032,7 @@ class _Build:
                 self.solves += 1
                 if time.time() > self.deadline:
                     raise _Timeout()
-        except _Timeout:
+        except (_Timeout, DiagnosisCancelled):
             self._remove_new(n0)
             raise
         except Exception:
@@ -1066,6 +1076,8 @@ class _Build:
                 self.dirty = False
             self.sk.solve()
             free = {g for g, _ in self.sk.getGeometryWithDependentParameters()}
+        except DiagnosisCancelled:
+            raise
         except Exception:
             return None
         return free or None
@@ -1328,7 +1340,7 @@ def _quiet():
             FreeCAD.Console.SetStatus(name, kind, True)
 
 
-def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0, stability_budget=None):
+def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0, stability_budget=None, progress=None):
     """Propose constraint sets that make `sketch` fully defined.
 
     Returns a JSON-serialisable dict: ``dof`` (before), ``status`` (``ok``,
@@ -1341,7 +1353,16 @@ def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0,
     of names tried first (``baseline``, ``chain``, ``symmetric``).
     `stability_budget` (seconds, default `STABILITY_BUDGET`) is the longest a
     verification step may take before the repeat passes and the re-solve gate
-    are skipped; each candidate's ``gate`` says whether that happened."""
+    are skipped; each candidate's ``gate`` says whether that happened.
+
+    `progress` is an optional callable, called on the calling thread before
+    every solver call and copy with a dict (``phase`` and a running ``ticks``
+    count); it may keep an interface alive in the call.  If it returns a true
+    value ``propose`` stops and raises ``AutoDefineCancelled`` after closing its
+    scratch document.  An exception it raises propagates the same way.  Without
+    a callback nothing changes.  When a scheme ran out of `time_budget` its
+    ``unclosed`` entry carries ``out_of_time: True`` and so does the result, so
+    that "ran out of time" is never read as "cannot be closed"."""
     if getattr(sketch, "TypeId", None) != "Sketcher::SketchObject":
         raise AutoDefineError("propose() needs a Sketcher::SketchObject")
     if isinstance(max_candidates, bool) or not isinstance(max_candidates, int) or max_candidates < 1:
@@ -1351,8 +1372,17 @@ def propose(sketch, keep=None, prefer=None, max_candidates=3, time_budget=120.0,
     ncons = len(sketch.Constraints)
     if any((not isinstance(k, int)) or k < 0 or k >= ncons for k in keep):
         raise AutoDefineError("keep refers to a constraint that does not exist")
-    with _quiet():
-        return _propose(sketch, names, keep, max_candidates, time_budget, stability_budget)
+    outer = (_SD._progress, _SD._progress_ticks)
+    _SD._progress, _SD._progress_ticks = progress, 0
+    try:
+        with _quiet():
+            return _propose(sketch, names, keep, max_candidates, time_budget, stability_budget)
+    except AutoDefineCancelled:
+        raise
+    except DiagnosisCancelled as exc:
+        raise AutoDefineCancelled(str(exc))
+    finally:
+        _SD._progress, _SD._progress_ticks = outer
 
 
 def _propose(sketch, names, keep, max_candidates, time_budget, stability_budget=None):
@@ -1401,13 +1431,15 @@ def _propose(sketch, names, keep, max_candidates, time_budget, stability_budget=
                 if why == "input":
                     continue
                 if b.dof > 0:
-                    result["unclosed"].append(
-                        {
-                            "scheme": scheme,
-                            "remaining_dof": b.dof,
-                            "reason": "time budget exhausted" if why == "time" else _unclosed_reason(b, model),
-                        }
-                    )
+                    entry = {
+                        "scheme": scheme,
+                        "remaining_dof": b.dof,
+                        "reason": "time budget exhausted" if why == "time" else _unclosed_reason(b, model),
+                    }
+                    if why == "time":
+                        entry["out_of_time"] = True
+                        result["out_of_time"] = True
+                    result["unclosed"].append(entry)
                     continue
                 key = _candidate_key(b.specs)
                 if key in seen:
