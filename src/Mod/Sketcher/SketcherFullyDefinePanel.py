@@ -96,11 +96,12 @@ def gate_text(gate, reason):
 
 
 def candidate_text(position, cand):
-    return tr("Candidate %d: %s scheme, %d relation(s) and %d dimension(s)") % (
+    # the dimension count comes first: in a narrow dock the end of the row is the part that is cut off
+    return tr("Candidate %d: %d dimension(s), %d relation(s), %s scheme") % (
         position + 1,
-        cand["scheme"],
-        cand["relations"],
         cand["dimensions"],
+        cand["relations"],
+        cand["scheme"],
     )
 
 
@@ -226,6 +227,11 @@ class FullyDefinePanel(DP.DiagnosisPanel):
         self.tree.setAccessibleName(tr("Candidates"))
         self.tree.setToolTip(tr("Choose a candidate to see what it would add to the sketch"))
         self.tree.setMinimumHeight(160)
+        # the chosen row is drawn in the plain highlight colour whether or not the dock has the focus
+        self.tree.setStyleSheet(
+            "QTreeWidget::item:selected, QTreeWidget::item:selected:!active "
+            "{ background: palette(highlight); color: palette(highlighted-text); }"
+        )
         self.tree.itemSelectionChanged.connect(self._on_choice)
         lay.addWidget(self.tree)
         self.preview_label = QtWidgets.QLabel("")

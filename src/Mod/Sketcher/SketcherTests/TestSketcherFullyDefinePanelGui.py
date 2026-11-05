@@ -9,6 +9,7 @@ negative cases.  The expected values are computed here from ``SketcherAutoDefine
 show are written out here, not taken from the dialog.
 """
 
+import copy
 import json
 import math
 import os
@@ -85,7 +86,7 @@ def _expected_candidates(r):
     """(head row, constraint specs, facts row) for every candidate, as the dialog must show them."""
     out = []
     for k, c in enumerate(r["candidates"]):
-        head = "Candidate %d: %s scheme, %d relation(s) and %d dimension(s)" % (k + 1, c["scheme"], c["relations"], c["dimensions"])
+        head = "Candidate %d: %d dimension(s), %d relation(s), %s scheme" % (k + 1, c["dimensions"], c["relations"], c["scheme"])
         gate = "complete" if c["gate"] == "full" else "shortened (%s)" % (c["gate_reason"] or c["gate"])
         facts = "Measured on a fresh copy: degrees of freedom after: %d; largest point move: below %s mm; verification runs: %d; re-solve check: %s" % (
             c["dof_after"],
@@ -97,16 +98,76 @@ def _expected_candidates(r):
     return out
 
 
-def _check_constraint_row(test, text, spec):
-    test.assertTrue(text.startswith(spec["type"] + ": "), text)
-    if spec["role"] == "dimension":
-        value = spec["args"][-1]
-        if spec["type"] == "Angle":
-            test.assertTrue(text.endswith("= %.6g deg" % math.degrees(value)), text)
+# What each arguments list means, by (type, number of arguments including a dimension's value): P is a point (geometry
+# index, then the point on it), G a geometry.  Written out here from the API's documentation of the specs, so a row is
+# built without the dialog's own formatter.
+_LAYOUT = {
+    ("Angle", 2): "G",
+    ("Coincident", 4): "PP",
+    ("Diameter", 2): "G",
+    ("Distance", 2): "G",
+    ("DistanceX", 3): "P",
+    ("DistanceX", 5): "PP",
+    ("DistanceY", 3): "P",
+    ("DistanceY", 5): "PP",
+    ("Equal", 2): "GG",
+    ("Horizontal", 1): "G",
+    ("Horizontal", 4): "PP",
+    ("Parallel", 2): "GG",
+    ("PointOnObject", 3): "PG",
+    ("Radius", 2): "G",
+    ("Symmetric", 5): "PPG",
+    ("Symmetric", 6): "PPP",
+    ("Tangent", 2): "GG",
+    ("Tangent", 4): "PP",
+    ("Vertical", 1): "G",
+    ("Vertical", 4): "PP",
+}
+
+
+def _ref_name(geo, pos=None):
+    """The words for a reference: the editor numbers elements from 1; -1 is the x axis (its point 1 is the origin)."""
+    if geo == -1:
+        return "the origin" if pos == 1 else "the x axis"
+    if geo == -2:
+        return "the y axis"
+    name = "element %d" % (geo + 1) if geo >= 0 else "external geometry %d" % (-geo - 2)
+    if pos:
+        name += " " + {1: "start", 2: "end", 3: "centre"}[pos]
+    return name
+
+
+def _expected_row(spec):
+    """The row for one proposed constraint, built from the spec's arguments by the layout table above."""
+    args = list(spec["args"])
+    value = args.pop() if spec["role"] == "dimension" else None
+    layout = _LAYOUT[(spec["type"], len(spec["args"]))]
+    refs = []
+    i = 0
+    for kind in layout:
+        if kind == "P":
+            refs.append(_ref_name(args[i], args[i + 1]))
+            i += 2
         else:
-            test.assertTrue(text.endswith("= %.6g mm" % value), text)
-    else:
-        test.assertNotIn("=", text)
+            refs.append(_ref_name(args[i]))
+            i += 1
+    assert i == len(args), spec
+    text = "%s: %s" % (spec["type"], ", ".join(refs))
+    if value is not None:
+        text += " = %.6g deg" % math.degrees(value) if spec["type"] == "Angle" else " = %.6g mm" % value
+    return text
+
+
+def _expected_status(r):
+    """The status line of a result that has candidates."""
+    text = "Found %d candidate(s) that fully define the sketch (degrees of freedom now: %d)." % (len(r["candidates"]), r["dof"])
+    if r.get("out_of_time"):
+        text += " A scheme ran out of time, so the list may be incomplete."
+    return text
+
+
+def _check_constraint_row(test, text, spec):
+    test.assertEqual(text, _expected_row(spec))
 
 
 def _labels(name):
@@ -218,6 +279,8 @@ class TestSketcherFullyDefinePanelGui(FDTestBase):
             [(u["scheme"], u["remaining_dof"], u["reason"]) for u in expected["unclosed"]],
             label,
         )
+        if got["candidates"]:
+            self.assertEqual(p.status.text(), _expected_status(expected), label)
         rows = _rows(p.tree)
         cands = _expected_candidates(got)
         self.assertEqual(len(rows), len(cands) + len(got["unclosed"]), label)
@@ -352,7 +415,7 @@ class TestSketcherFullyDefinePanelGui(FDTestBase):
             p.diagnose_now()
             self.wait_ready()
             self.assertEqual(p.result["candidates"][0]["scheme"], other)
-            self.assertTrue(p.tree.topLevelItem(0).text(0).startswith("Candidate 1: %s scheme" % other))
+            self.assertTrue(p.tree.topLevelItem(0).text(0).endswith(", %s scheme" % other))
             return
         self.fail("no corpus case has two candidates")
 
@@ -416,6 +479,80 @@ class TestSketcherFullyDefinePanelGui(FDTestBase):
         self.assertIn("stability budget", outcome)
         self.assertNotIn("full re-solve check", outcome)
         self.assertEqual(sk.DoF, 0)
+
+    def _plant_result(self, mutate):
+        """Make ``propose`` return its real result with `mutate` applied, for facts the corpus never produces."""
+        import SketcherFullyDefinePanel as P
+
+        real = P.AD.propose
+
+        def planted(sketch, **kw):
+            r = copy.deepcopy(real(sketch, **kw))
+            mutate(r)
+            return r
+
+        P.AD.propose = planted
+        self.addCleanup(setattr, P.AD, "propose", real)
+
+    def testAPlantedReducedGateAndAMoveAboveZeroAreShownToTheUser(self):
+        """The corpus holds only full gates and moves of exactly 0, so the facts row is checked on a planted result:
+        a candidate whose gate ran reduced, for a stated reason, and one whose largest point move is 3.2e-9 mm."""
+        reason = "the stability budget ran out"
+
+        def mutate(r):
+            c = r["candidates"][0]
+            c["gate"] = "repeats_skipped"
+            c["gate_reason"] = reason
+            c["max_move"] = 3.2e-9
+            for other in r["candidates"][1:]:
+                other["max_move"] = 4e-7
+
+        self.assertGreaterEqual(len(AD.propose(self.two_candidate_sketch())["candidates"]), 2)
+        self._plant_result(mutate)
+        p = self.open_fd(self.two_candidate_sketch())
+        rows = _rows(p.tree)
+        c0, c1 = p.result["candidates"][0], p.result["candidates"][1]
+        facts0 = "Measured on a fresh copy: degrees of freedom after: %d; largest point move: below 1e-08 mm; verification runs: %d; re-solve check: shortened (%s)"
+        facts1 = "Measured on a fresh copy: degrees of freedom after: %d; largest point move: below 1e-06 mm; verification runs: %d; re-solve check: complete"
+        self.assertEqual(rows[0][1][-1][0], facts0 % (c0["dof_after"], c0["verification_runs"], reason))
+        self.assertEqual(rows[1][1][-1][0], facts1 % (c1["dof_after"], c1["verification_runs"]))
+        self.finish()
+
+    def testAnOutOfTimeNoteIsShownWhenCandidatesExist(self):
+        """A result that has candidates and also ran out of time for one scheme says the list may be incomplete."""
+        self._plant_result(lambda r: r.__setitem__("out_of_time", True))
+        p = self.open_fd(self.two_candidate_sketch())
+        self.assertTrue(p.result["candidates"])
+        self.assertEqual(p.status.text(), _expected_status(p.result))
+        self.assertIn("may be incomplete", p.status.text())
+        self.assertTrue(p.status.text().startswith("Found "))
+        self.finish()
+
+    def testTheCountOfDimensionsIsReadableInTheRowAt420Pixels(self):
+        """The candidate rows elide at the dock's width: the dimension count must be inside what stays visible."""
+        def widest(r):  # the longest counts a real sketch is likely to reach, with the longest scheme name
+            for c in r["candidates"]:
+                c["relations"], c["dimensions"] = 150, 15
+
+        self._plant_result(widest)
+        sk = self.two_candidate_sketch()
+        p = self.open_fd(sk)
+        p.setFloating(True)
+        p.resize(420, 560)
+        p.show()
+        _pump(30)
+        tree = p.tree
+        font = QtGui.QFont(tree.font())
+        font.setBold(True)
+        fm = QtGui.QFontMetrics(font)
+        room = tree.viewport().width() - tree.indentation() - 8
+        self.assertGreater(room, 200)
+        for k, path in self.candidate_paths():
+            cand = p.result["candidates"][k]
+            shown = fm.elidedText(tree.topLevelItem(k).text(0), QtCore.Qt.ElideRight, room)
+            self.assertIn("%d dimension(s)" % cand["dimensions"], shown)
+            self.assertIn("%d relation(s)" % cand["relations"], shown)
+        self.finish()
 
     # check 4 -----------------------------------------------------------------------------------------------------
     def testARefusedApplyChangesNothingAndOtherCandidatesCanStillBeTried(self):
@@ -731,6 +868,34 @@ class TestSketcherFullyDefinePanelGui(FDTestBase):
         self.assertEqual(_rows(p.tree), rows)
         self.assertEqual(_content(sk), before)
         self.assertTrue(p.apply_chosen())
+
+    def testUsersTabChoiceDuringARunIsNotUndoneWhenTheRunEnds(self):
+        """``propose`` runs on the main thread and the dialog pumps events meanwhile.  A document tab clicked during
+        the run stays the active document after it: the scratch document's close puts back only its own change."""
+        other = self.tiny("FDTmpTabB")
+        b = other.Document.Name
+        sk = self.tiny("FDTmpTabA")
+        a = sk.Document.Name
+        p = self.open_fd(sk)
+        fired = []
+        orig = p._on_progress
+
+        def hook(info):
+            if not fired:
+                fired.append(1)
+                Gui.setActiveDocument(b)
+            return orig(info)
+
+        p._on_progress = hook
+        p.diagnose_now()
+        self.assertTrue(_wait(lambda: p.state in ("ready", "failed", "closed")))
+        self.assertTrue(fired)
+        self.assertNotEqual(a, b)
+        self.assertEqual(Gui.ActiveDocument.Document.Name, b)
+        self.assertEqual(_active_name(), b)
+        self.assert_no_scratch()
+        self._look_at(a)
+        self.finish()
 
     # check 9 -----------------------------------------------------------------------------------------------------
     def testTimeBudgetRunningOutIsReportedAsSuchAndNeverAsCannotClose(self):

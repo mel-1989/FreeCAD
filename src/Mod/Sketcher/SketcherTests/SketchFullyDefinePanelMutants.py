@@ -175,6 +175,67 @@ mutant(
     ["testNoSideEffectsOnTheCorpus"],
 )
 
+mutant(
+    "element_numbering_off_by_one",
+    "a row names the element one lower than the editor numbers it",
+    [(FD, 'tr("element %d") % (geo + 1)', 'tr("element %d") % geo')],
+    ["testContentsEqualTheApiAtEveryStripLevel", "testChoosingACandidateListsWhatItWouldAddAndChoosingNothingShowsNothing"],
+)
+mutant(
+    "origin_named_the_x_axis",
+    "the origin is called the x axis in a row",
+    [(FD, 'return tr("the origin")', 'return tr("the x axis")')],
+    ["testContentsEqualTheApiAtEveryStripLevel"],
+)
+mutant(
+    "status_dof_forced_to_zero",
+    "the status line says the degrees of freedom now are 0",
+    [(FD, '% (n, r["dof"])', "% (n, 0)")],
+    ["testContentsEqualTheApiAtEveryStripLevel"],
+)
+mutant(
+    "gate_reason_dropped_from_facts",
+    "the facts row shows the bare gate name instead of the reason the gate was shortened",
+    [(FD, 'return tr("shortened (%s)") % (reason or gate)', 'return tr("shortened (%s)") % gate')],
+    ["testAPlantedReducedGateAndAMoveAboveZeroAreShownToTheUser"],
+)
+mutant(
+    "reduced_gate_in_facts_shown_as_complete",
+    "the facts row calls a shortened re-solve check complete",
+    [(FD, '    if gate == "full":\n        return tr("complete")', '    if True:\n        return tr("complete")')],
+    ["testAPlantedReducedGateAndAMoveAboveZeroAreShownToTheUser"],
+)
+mutant(
+    "move_text_floor_instead_of_ceil",
+    "the largest point move is shown as the power of ten below it, so the stated bound is too small",
+    [(FD, "math.ceil(math.log10(max(move, 1e-12)))", "math.floor(math.log10(max(move, 1e-12)))")],
+    ["testAPlantedReducedGateAndAMoveAboveZeroAreShownToTheUser"],
+)
+mutant(
+    "out_of_time_note_dropped_with_candidates",
+    "a result with candidates that is partly out of time loses its note that the list may be incomplete",
+    [(FD, 'text += " " + tr("A scheme ran out of time, so the list may be incomplete.")', "pass")],
+    ["testAnOutOfTimeNoteIsShownWhenCandidatesExist"],
+)
+mutant(
+    "scratch_close_overrides_users_tab_click",
+    "the scratch document's close always puts the previous document back, even over a tab the user clicked during the run",
+    [(DIAG, "moved = now is not None and now.Name not in (self.name, self._previous_name)", "moved = False")],
+    ["testUsersTabChoiceDuringARunIsNotUndoneWhenTheRunEnds"],
+)
+mutant(
+    "candidate_row_leads_with_the_scheme",
+    "the dimension count moves to the end of the row, where a narrow dock cuts it off",
+    [
+        (
+            FD,
+            '"Candidate %d: %d dimension(s), %d relation(s), %s scheme") % (\n        position + 1,\n        cand["dimensions"],\n        cand["relations"],\n        cand["scheme"],\n',
+            '"Candidate %d: %s scheme, %d relation(s) and %d dimension(s)") % (\n        position + 1,\n        cand["scheme"],\n        cand["relations"],\n        cand["dimensions"],\n',
+        )
+    ],
+    ["testTheCountOfDimensionsIsReadableInTheRowAt420Pixels", "testContentsEqualTheApiAtEveryStripLevel"],
+)
+
 
 def target(path_file, build, src):
     if path_file == CPP:
