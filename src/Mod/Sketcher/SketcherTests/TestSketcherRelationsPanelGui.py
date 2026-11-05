@@ -79,7 +79,8 @@ def expected_rows(sk, geo, pos):
         if c.Name:
             head += " '%s'" % c.Name
         if c.Type in SD._DATUM_TYPES:
-            head += " = %.6g %s" % (SD._value_in_unit(c.Value, c.Type), "deg" if c.Type == "Angle" else "mm")
+            unit = {"Angle": " deg", "Weight": "", "SnellsLaw": ""}.get(c.Type, " mm")  # a weight is a plain number
+            head += " = %.6g%s" % (SD._value_in_unit(c.Value, c.Type), unit)
         head += " " + DASH + " " + ", ".join(on)
         out.append((head, tied))
     return out
@@ -597,9 +598,13 @@ class TestSketcherRelationsPanelGui(RelationsTestBase):
         self.assertIsNone(SketcherGui.getConstraintFilter())
         self._settled(sk, p)
         self.assertEqual(_panel_rows(p), expected_rows(sk, 0, None))
+        self.assertIn("filter was cleared", p.status.text(), "undo cleared the filter and said nothing")
+        p.filter_to_element()
         doc.redo()
+        self.assertIsNone(SketcherGui.getConstraintFilter())
         self._settled(sk, p)
         self.assertEqual(_panel_rows(p), expected_rows(sk, 0, None))
+        self.assertIn("filter was cleared", p.status.text(), "redo cleared the filter and said nothing")
 
     def testStaleWhenElementsAreDeleted(self):
         sk, p = self._stale_setup("RelStaleGeo")
@@ -821,3 +826,58 @@ class TestSketcherRelationsPanelGui(RelationsTestBase):
         sk = d.addObject("Sketcher::SketchObject", "S")
         self.corner(sk)
         return sk.Constraints
+
+    # -- the low findings of the second verifier ---------------------------------------------------------------------------------
+    def testTheFilterTakesOnlyTrueIntsAndSaysWhatAnEmptyListMeans(self):
+        sk = self.new_sketch("RelIds", self.corner)
+        self.edit(sk)
+        for bad in ([3.5], [2**32 + 1], [-(2**40)], ["1"], [None], "01", 7, [[1]]):
+            with self.subTest(ids=bad):
+                with self.assertRaises((TypeError, OverflowError)):
+                    SketcherGui.setConstraintFilter(bad)
+                self.assertIsNone(SketcherGui.getConstraintFilter(), "a refused list changed the filter")
+        self.assertTrue(SketcherGui.setConstraintFilter([1, 3]))
+        self.assertEqual(SketcherGui.getConstraintFilter(), [1, 3])
+        self.assertRaises(TypeError, SketcherGui.setConstraintFilter, [0, 2.0])
+        self.assertEqual(SketcherGui.getConstraintFilter(), [1, 3], "a refused list changed the filter")
+        # documented: the list is what to show, so [] and ids that name no constraint show nothing
+        for nothing in ([], [999], [-1], [999, -5]):
+            SketcherGui.setConstraintFilter(nothing)
+            self.assertEqual(SketcherGui.getConstraintFilter(), [], nothing)
+        self.assertIn("hides every constraint", SketcherGui.setConstraintFilter.__doc__ or "")
+        SketcherGui.setConstraintFilter(None)
+        self.assertIsNone(SketcherGui.getConstraintFilter())
+
+    def testAnEmptyFilterHidesEveryConstraintInTheView(self):
+        sk = self.new_sketch("RelNone", self.corner)
+        view = self._view(sk)
+        cam = view.getCamera()
+        base = self._shot(view, cam, _tmp("rel_none_base.png"))
+        SketcherGui.setConstraintFilter([])
+        hidden = self._shot(view, cam, _tmp("rel_none_on.png"))
+        self.assertNotEqual(base, hidden)
+        SketcherGui.setConstraintFilter([999])
+        self.assertEqual(hidden, self._shot(view, cam, _tmp("rel_none_999.png")))
+        SketcherGui.setConstraintFilter(None)
+        self.assertEqual(base, self._shot(view, cam, _tmp("rel_none_off.png")))
+
+    def testAWeightRowHasNoUnit(self):
+        def build(sk):
+            spline = Part.BSplineCurve()
+            spline.interpolate([V(0, 0, 0), V(10, 20, 0), V(30, 0, 0)])
+            sk.addGeometry(spline, False)
+            sk.exposeInternalGeometry(0)
+
+        sk = self.new_sketch("RelWeight", build)
+        weights = [i for i, c in enumerate(sk.Constraints) if c.Type == "Weight"]
+        self.assertTrue(weights, "the sketch has no Weight constraint to look at")
+        geo = sk.Constraints[weights[0]].First
+        p = self.open_rel(sk)
+        self.select(sk, "Edge%d" % (geo + 1))
+        rows = [h for h, _ in _panel_rows(p) if ": Weight" in h]
+        self.assertTrue(rows)
+        for h in rows:
+            self.assertNotIn(" mm", h)
+            self.assertNotIn(" deg", h)
+            self.assertRegex(h, r"Weight = [0-9.e+-]+ " + DASH)
+        self.assertEqual(_panel_rows(p), expected_rows(sk, geo, None))

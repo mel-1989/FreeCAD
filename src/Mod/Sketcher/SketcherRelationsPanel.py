@@ -129,6 +129,9 @@ def selection_names_of_element(sketch, geo, pos, vertex_index):
 # ---------------------------------------------------------------------------
 
 
+_UNITLESS = ("Weight", "SnellsLaw")
+
+
 class Relations:
     """One pass over ``sketch.Constraints``, then dictionary lookups.
 
@@ -495,7 +498,9 @@ class RelationsPanel(QtWidgets.QDockWidget):
 
         t = idx.types[i]
         if t in SD._DATUM_TYPES:
-            return "%.6g %s" % (SD._value_in_unit(idx.values[i], t), "deg" if t == "Angle" else "mm")
+            number = "%.6g" % SD._value_in_unit(idx.values[i], t)
+            unit = "deg" if t == "Angle" else ("" if t in _UNITLESS else "mm")  # a weight or a Snell ratio has no unit
+            return number + (" " + unit if unit else "")
         return ""
 
     # -- the view-only filter ----------------------------------------------------------
@@ -670,6 +675,8 @@ class RelationsPanel(QtWidgets.QDockWidget):
         if not self._alive():
             return
         self._drop_focus()
+        if not keep_filter and (self.filter_spec is not None or self._resume_filter is not None):
+            self._filter_dropped = True  # _resync says so once the status line is rebuilt
         if keep_filter and self.filter_spec is not None:
             self._resume_filter = self.filter_spec
         elif not keep_filter:
@@ -691,12 +698,14 @@ class RelationsPanel(QtWidgets.QDockWidget):
             QtCore.QTimer.singleShot(0, self._resync)
 
     _signature_before = None
+    _filter_dropped = False
 
     def _resync(self):
         self._resync_pending = False
         if not self._alive():
             return
         resume, self._resume_filter = self._resume_filter, None
+        dropped, self._filter_dropped = self._filter_dropped, False
         if not self._editing_here():
             return
         try:
@@ -707,8 +716,8 @@ class RelationsPanel(QtWidgets.QDockWidget):
         if resume is not None and idx.refs_signature == self._signature_before:
             ids = idx.by_type.get(resume[1], []) if resume[0] == "type" else idx.ids_on(resume[1], resume[2])
             self._apply_filter(resume, list(ids))
-        elif resume is not None:
-            self.status.setText(self.status.text() + " " + tr("The filter was cleared because the constraints changed."))
+        elif resume is not None or dropped:
+            self.status.setText(self.status.text() + " " + tr("The filter was cleared because the sketch changed."))
 
     def invalidate(self, reason, close=False):
         if not self._alive():
