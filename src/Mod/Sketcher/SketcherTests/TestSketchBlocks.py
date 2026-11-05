@@ -345,7 +345,13 @@ class TestBlockConstraints(BlocksCase):
 
         sk, ids, cs = scene(self.doc)
         extra = sk.addConstraint(Sketcher.Constraint("DistanceX", -1, 1, ids["i1"][0], 1, 5.0))
+        n_cons, geo_before = len(sk.Constraints), world_state(sk)
         res = D.diagnose(sk)
+        # the diagnosis worked on copies: the user's sketch is as it was
+        self.assertIn(sk.Name, [o.Name for o in self.doc.Objects])
+        self.assertEqual(len(sk.Constraints), n_cons)
+        self.assertTrue(all(c.IsActive for c in sk.Constraints))
+        self.assertEqual(world_state(sk), geo_before)
         self.assertEqual(len(res["conflict_sets"]), 1)
         members = set(res["conflict_sets"][0]["members"])
         self.assertEqual(members, {cs["origin"], extra})
@@ -366,6 +372,8 @@ class TestBlockConstraints(BlocksCase):
         scratch = D._Scratch(sk)
         try:
             cp = scratch.copy()
+            self.assertNotEqual(cp.Name, sk.Name)
+            self.assertIsNot(cp.Document, sk.Document)
             cp.solve()
             self.assertEqual(cp.DoF, sk.DoF)
             self.assertEqual(cp.BlockData, sk.BlockData)

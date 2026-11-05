@@ -41,6 +41,7 @@ set(Sketcher_TestScripts
     SketcherTests/SketchPlantedScale.py
     SketcherTests/TestSketchBlocks.py
     SketcherTests/SketchBlocksCorpus.py
+    SketcherTests/SketchBlocksMutants.py
 )
 
 if(BUILD_GUI)
