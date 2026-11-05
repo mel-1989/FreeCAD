@@ -277,12 +277,19 @@ class _Scratch:
         return n
 
     def close(self):
+        # The active document at this moment: a progress callback may have pumped events, and the user may have
+        # clicked another document's tab meanwhile.  That choice is theirs and is left alone; only a document change
+        # that is the scratch document's own doing (it, or nothing, is active) is put back.
+        now = FreeCAD.ActiveDocument
+        moved = now is not None and now.Name not in (self.name, self._previous_name)
         try:
             FreeCAD.closeDocument(self.name)
         finally:
             names = FreeCAD.listDocuments()
-            if self._previous_name is not None and self._previous_name in names:
-                FreeCAD.setActiveDocument(self._previous_name)
+            if not moved and self._previous_name is not None and self._previous_name in names:
+                after = FreeCAD.ActiveDocument
+                if after is None or after.Name != self._previous_name:
+                    FreeCAD.setActiveDocument(self._previous_name)
 
 
 def _discard(sketch_copy):

@@ -373,6 +373,33 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
             except Exception:
                 pass
 
+    # -- what a panel of this family says and computes (FullyDefinePanel overrides these) ---------------------
+    def _words(self):
+        """The sentences the shared machinery shows, in the user's words."""
+        return {
+            "away": tr("This sketch's document is not the active one. Switch back to it to apply a fix or diagnose again."),
+            "running": tr("Diagnosing..."),
+            "cancelled": tr("Diagnosis cancelled."),
+            "changed_again": tr("The sketch changed; diagnosing again."),
+            "failed": tr("The diagnosis failed: %s"),
+            "keeps_changing": tr("The sketch keeps changing while it is diagnosed. Use Diagnose again."),
+            "again": tr("Diagnosing again."),
+        }
+
+    def _compute(self):
+        """The long computation, on the main thread; raises ``SD.DiagnosisCancelled`` when asked to stop."""
+        return SD.diagnose(self.sketch, progress=self._on_progress)
+
+    def chosen_action(self):
+        """What Apply would apply now, or None."""
+        return self.chosen_fix()
+
+    def _forget(self):
+        """Closing: this panel is no longer the open one."""
+        global _panel
+        if _panel is self:
+            _panel = None
+
     # -- running the diagnosis ---------------------------------------------
     def _fingerprint(self):
         """What the diagnosis depends on, as stable data.  The dumps are zip archives that carry timestamps, so the
@@ -430,9 +457,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
             return
         self._dormant = True
         self._status_when_active = self.status.text()
-        self.status.setText(
-            tr("This sketch's document is not the active one. Switch back to it to apply a fix or diagnose again.")
-        )
+        self.status.setText(self._words()["away"])
         self.apply_button.setEnabled(False)
         self.refresh_button.setEnabled(False)
         self.tree.setEnabled(False)
@@ -443,7 +468,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         self.status.setText(self._status_when_active)
         self.refresh_button.setEnabled(not running)
         self.tree.setEnabled(not running)
-        self.apply_button.setEnabled(not running and self.state == "ready" and self.chosen_fix() is not None)
+        self.apply_button.setEnabled(not running and self.state == "ready" and self.chosen_action() is not None)
         if self.state in ("stale", "cancelled"):
             self._schedule_rediagnose()  # the sketch changed while the user was away
 
@@ -486,7 +511,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         self._cancel = False
         self._rerun = False
         self.state = "running"
-        self.status.setText(tr("Diagnosing..."))
+        self.status.setText(self._words()["running"])
         self._set_running(True)
         self.max_gap = 0.0
         self._last_pump = 0.0
@@ -497,7 +522,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         kept = self._user_selection()
         try:
             fp = self._fingerprint()
-            result = SD.diagnose(self.sketch, progress=self._on_progress)
+            result = self._compute()
         except SD.DiagnosisCancelled:
             error = "cancelled"
         except Exception as e:  # shown, not raised: a failed diagnosis must not take the editor down
@@ -513,13 +538,13 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         stale = gen != self._generation or self.state == "stale"
         if error == "cancelled" or stale:
             self.state = "cancelled" if not stale else "stale"
-            self.status.setText(tr("Diagnosis cancelled.") if not stale else tr("The sketch changed; diagnosing again."))
+            self.status.setText(self._words()["cancelled"] if not stale else self._words()["changed_again"])
             if self._rerun or stale:
                 self._schedule_rediagnose()
             return
         if error == "failed":
             self.state = "failed"
-            self.status.setText(tr("The diagnosis failed: %s") % self.last_error)
+            self.status.setText(self._words()["failed"] % self.last_error)
             return
         self.result = result
         self.fingerprint = fp
@@ -539,7 +564,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
                 if self._restarts > _MAX_RESTARTS:
                     # something keeps changing the sketch while it is diagnosed: stop instead of looping
                     self.state = "failed"
-                    self.status.setText(tr("The sketch keeps changing while it is diagnosed. Use Diagnose again."))
+                    self.status.setText(self._words()["keeps_changing"])
                     self.tree.setEnabled(True)
                     return
                 self.state = "idle"
@@ -626,7 +651,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
             return
         data = item.data(0, _ROLE) or {}
         self.select_constraints(data.get("select", []))
-        self.apply_button.setEnabled(self.chosen_fix() is not None and self.state == "ready")
+        self.apply_button.setEnabled(self.chosen_action() is not None and self.state == "ready")
 
     def select_constraints(self, indices):
         """Select exactly these constraints (0-based API indices) in the editor.  The user's own selection is
@@ -763,16 +788,15 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         self.tree.blockSignals(False)
         self._owned = []
         if self._dormant:
-            self._status_when_active = reason + " " + tr("Diagnosing again.")  # shown when the user comes back
+            self._status_when_active = reason + " " + self._words()["again"]  # shown when the user comes back
         else:
-            self.status.setText(reason + " " + tr("Diagnosing again."))
+            self.status.setText(reason + " " + self._words()["again"])
         if self._cancel:
             return  # the running diagnosis stops at its next tick and starts again
         self._schedule_rediagnose()
 
     # -- closing ---------------------------------------------------------------------
     def closeEvent(self, event):
-        global _panel
         if self.state == "running":
             self._cancel = True
         self.state = "closed"
@@ -782,8 +806,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
             self._restore_saved_selection()
         except Exception:
             pass
-        if _panel is self:
-            _panel = None
+        self._forget()
         super().closeEvent(event)
         self.deleteLater()
 

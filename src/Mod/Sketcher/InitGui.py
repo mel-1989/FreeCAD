@@ -61,5 +61,7 @@ FreeCAD.__unit_test__ += ["TestSketcherGui"]
 # The diagnosis panel's command is registered at start-up so the messages box link
 # and the menu find it in every workbench; the panel itself loads on first use.
 import CommandDiagnoseSketch
+import CommandFullyDefine
 
 FreeCAD.__unit_test__ += ["TestSketcherDiagnosisPanelGui"]
+FreeCAD.__unit_test__ += ["TestSketcherFullyDefinePanelGui"]

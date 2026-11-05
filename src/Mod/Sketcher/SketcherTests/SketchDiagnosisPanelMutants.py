@@ -440,6 +440,15 @@ def verdict(out):
     return ("survived" if ran_ok else "no-result"), []
 
 
+def kinds(out):
+    """How the failing tests failed: ``assertion`` (an AssertionError), ``error`` (any other exception, which may be only
+    the mutant breaking the code) or ``mixed``.  Only an assertion shows that a test noticed the defect."""
+    lines = out.splitlines()
+    fails = sum(1 for ln in lines if ln.startswith("FAIL: test"))
+    errors = sum(1 for ln in lines if ln.startswith("ERROR: test"))
+    return "assertion" if fails and not errors else "error" if errors and not fails else "mixed" if fails else "-"
+
+
 def rebuild(ctl):
     subprocess.run(
         ["bash", os.path.join(ctl, "harness", "build.sh")],
@@ -496,7 +505,7 @@ def main():
         if status == "no-result":
             print("\n".join("    | " + ln for ln in out.splitlines()[-8:]))
         rows.append((m["name"], status, failed))
-        print("%-36s %-9s %5.0fs  %s" % (m["name"], status, time.time() - t0, ", ".join(failed)[:150]))
+        print("%-36s %-9s %-9s %5.0fs  %s" % (m["name"], status, kinds(out), time.time() - t0, ", ".join(failed)[:150]))
         sys.stdout.flush()
     if not a.dry:
         caught = sum(1 for r in rows if r[1] == "caught")

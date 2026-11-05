@@ -66,6 +66,19 @@ TaskSketcherMessages::TaskSketcherMessages(ViewProviderSketch* sketchView)
         Gui::Application::Instance->commandManager().runCommandByName("Sketcher_DiagnoseSketch");
     });
     groupLayout()->addWidget(labelDiagnose);
+
+    // Link to the Fully Define dialog (G10 slice 4b), shown while the sketch is under-constrained.
+    labelFullyDefine = new QLabel(this);
+    labelFullyDefine->setObjectName(QStringLiteral("labelFullyDefine"));
+    labelFullyDefine->setTextFormat(Qt::RichText);
+    labelFullyDefine->setText(QStringLiteral("<a href=\"#fullydefine\">%1</a>").arg(tr("Fully define...")));
+    labelFullyDefine->setToolTip(tr("Opens the Fully Define dialog: constraint sets the solver has tested that remove the remaining degrees of freedom"));
+    labelFullyDefine->setAccessibleName(tr("Fully define"));
+    labelFullyDefine->setVisible(false);
+    connect(labelFullyDefine, &QLabel::linkActivated, this, [](const QString&) {
+        Gui::Application::Instance->commandManager().runCommandByName("Sketcher_FullyDefine");
+    });
+    groupLayout()->addWidget(labelFullyDefine);
     connectionDiagnoseLink = sketchView->signalSetUp.connect(std::bind(
         &SketcherGui::TaskSketcherMessages::slotDiagnoseLink, this, sp::_1, sp::_2, sp::_3, sp::_4));
 }
@@ -83,6 +96,7 @@ void TaskSketcherMessages::slotDiagnoseLink(
         state == QStringLiteral("conflicting_constraints")
         || state == QStringLiteral("redundant_constraints")
         || state == QStringLiteral("partially_redundant_constraints"));
+    labelFullyDefine->setVisible(state == QStringLiteral("under_constrained"));
 }
 
 void TaskSketcherMessages::updateToolTip(const QString& link)
