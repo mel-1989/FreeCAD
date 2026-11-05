@@ -789,5 +789,118 @@ class TestBlockEditing(BlocksCase):
             self.assertEqual(sk.State, state, "case %d" % i)
 
 
+class TestBlockShape(BlocksCase):
+    """Check 11 (shape and references) and check 1's counter (no block, no block code)."""
+
+    def test_shape_equals_the_same_geometry_drawn_plain(self):
+        sk, ids, cs = scene(self.doc)
+        plain = self.doc.addObject("Sketcher::SketchObject", "Plain")
+        plain.Geometry = list(sk.Geometry)  # same order, same persistent ids
+        self.doc.recompute()
+        self.assertEqual(len(sk.Shape.Edges), len(plain.Shape.Edges))
+        self.assertEqual(list(sk.Shape.ElementMap.items()), list(plain.Shape.ElementMap.items()))
+        for ea, eb in zip(sk.Shape.Edges, plain.Shape.Edges):
+            self.assertEqual(ea.Curve.TypeId if hasattr(ea.Curve, "TypeId") else type(ea.Curve), eb.Curve.TypeId if hasattr(eb.Curve, "TypeId") else type(eb.Curve))
+            self.assertAlmostEqual(ea.Length, eb.Length, delta=1e-9)
+            for pa, pb in zip(ea.Vertexes, eb.Vertexes):
+                self.assertAlmostEqual((pa.Point - pb.Point).Length, 0.0, delta=1e-9)
+
+    def test_no_instance_no_block_code(self):
+        from SketcherTests import SketchDiagnosisCorpus as Corpus
+
+        cases, _ = Corpus.build_corpus(self.doc, FreeCAD.newDocument, scale_sizes=[10, 100], real=False)
+        self.assertGreater(len(cases), 40)
+        for case in cases[:60]:
+            case.sketch.solve()
+            self.assertEqual(case.sketch.BlockData, "", case.name)
+            self.assertEqual(case.sketch.getBlockInstanceCount(), 0, case.name)
+
+    def test_exploded_sketch_no_longer_enters_the_block_code(self):
+        sk, ids, cs = scene(self.doc)
+        sk.solve()
+        self.assertEqual(sk.getBlockInstanceCount(), 2)
+        B.explode(sk, "T_1")
+        B.explode(sk, "T_2")
+        sk.solve()
+        self.assertEqual(sk.getBlockInstanceCount(), 0)
+        self.assertEqual(B.blocks(sk)["instances"], {})
+
+    def pad_fillet_model(self):
+        doc = self.doc
+        body = doc.addObject("PartDesign::Body", "Body")
+        sk = body.newObject("Sketcher::SketchObject", "Blk")
+        sk.AttachmentSupport = (body.Origin.OriginFeatures[3], [""])
+        sk.MapMode = "FlatFace"
+        sk.addGeometry([Part.LineSegment(V(0, 0, 0), V(6, 0, 0)), Part.LineSegment(V(6, 0, 0), V(6, 4, 0)), Part.LineSegment(V(6, 4, 0), V(0, 4, 0)), Part.LineSegment(V(0, 4, 0), V(0, 0, 0))], False)
+        B.define(sk, "R", [0, 1, 2, 3])
+        sk.delGeometries([0, 1, 2, 3])
+        B.insert(sk, "R", 0, 0, 0)
+        i2 = B.insert(sk, "R", 10, 0, 0)
+        g2 = B.blocks(sk)["instances"][i2]["geo_ids"]
+        pad = body.newObject("PartDesign::Pad", "Pad")
+        pad.Profile = sk
+        pad.Length = 3
+        doc.recompute()
+        self.assertAlmostEqual(pad.Shape.Volume, 144.0, delta=1e-6)
+        name = None
+        for i, e in enumerate(pad.Shape.Edges):
+            a, b = e.Vertexes[0].Point, e.Vertexes[-1].Point
+            if abs(a.x - 10) < 1e-6 and abs(a.y) < 1e-6 and abs(b.x - 10) < 1e-6 and abs(b.y) < 1e-6 and abs(a.z - b.z) > 1:
+                name = "Edge%d" % (i + 1)
+        self.assertIsNotNone(name)
+        fillet = body.newObject("PartDesign::Fillet", "Fillet")
+        fillet.Base = (pad, [name])
+        fillet.Radius = 1.0
+        doc.recompute()
+        self.assertTrue(fillet.isValid())
+        self.assertAlmostEqual(fillet.Shape.Volume, self.want_volume, delta=1e-6)
+        return sk, pad, fillet, g2
+
+    want_volume = 144.0 - (1.0 - math.pi / 4.0) * 3.0
+
+    def cylinder_center(self, shape):
+        cs_ = [f.Surface.Center for f in shape.Faces if f.Surface.TypeId == "Part::GeomCylinder"]
+        self.assertEqual(len(cs_), 1)
+        return cs_[0]
+
+    def test_pad_and_fillet_follow_a_datum_move_without_retargeting(self):
+        sk, pad, fillet, g2 = self.pad_fillet_model()
+        stored = list(fillet.Base[1])
+        cx = sk.addConstraint(Sketcher.Constraint("DistanceX", -1, 1, g2[0], 1, 10.0))
+        cy = sk.addConstraint(Sketcher.Constraint("DistanceY", -1, 1, g2[0], 1, 0.0))
+        sk.addConstraint(Sketcher.Constraint("Horizontal", g2[0]))
+        self.doc.recompute()
+        self.assertTrue(fillet.isValid())
+        sk.setDatum(cx, FreeCAD.Units.Quantity("12 mm"))
+        sk.setDatum(cy, FreeCAD.Units.Quantity("1 mm"))
+        self.doc.recompute()
+        self.assertTrue(pad.isValid() and fillet.isValid())
+        self.assertEqual(list(fillet.Base[1]), stored)  # survived: the stored name is untouched
+        self.assertAlmostEqual(pad.Shape.Volume, 144.0, delta=1e-6)
+        self.assertAlmostEqual(fillet.Shape.Volume, self.want_volume, delta=1e-6)
+        c1 = self.cylinder_center(fillet.Shape)
+        self.assertAlmostEqual(c1.x, 13.0, delta=1e-6)  # the same corner of the same instance, moved
+        self.assertAlmostEqual(c1.y, 2.0, delta=1e-6)
+
+    def test_pad_and_fillet_after_a_drag_are_right_or_lost_never_wrong(self):
+        sk, pad, fillet, g2 = self.pad_fillet_model()
+        sk.solve()
+        sk.moveGeometry(g2[0], 1, V(12, 1, 0), False)  # the free instance also turns a little: the drag is min-norm
+        a = sk.Geometry[g2[0]]
+        self.doc.recompute()
+        self.assertTrue(pad.isValid())
+        self.assertAlmostEqual(pad.Shape.Volume, 144.0, delta=1e-6)
+        if fillet.isValid():
+            # survival harness: a valid host must point at the intended element
+            self.assertAlmostEqual(fillet.Shape.Volume, self.want_volume, delta=1e-6)
+            c1 = self.cylinder_center(fillet.Shape)
+            corner = a.StartPoint
+            self.assertLess(math.hypot(c1.x - corner.x, c1.y - corner.y), 1.5)
+        else:
+            # lost: the host feature reports it (the same happens to a plain unconstrained rectangle turned by
+            # the same angle, measured in run 060), it does not point at another edge
+            self.assertIn("Invalid", fillet.State)
+
+
 if __name__ == "__main__":
     unittest.main()
