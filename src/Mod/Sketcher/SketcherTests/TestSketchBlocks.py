@@ -1039,6 +1039,65 @@ class TestBlockGuard(BlocksCase):
         sk = self.hand_edit(lambda d, s: d["inst"]["R_2"]["m"].__setitem__("m0000", d["inst"]["R_1"]["m"]["m0000"]))
         self.assertEqual(list(B.blocks(sk)["instances"]), ["R_1"])
 
+    def test_whole_instance_sharing_every_id_is_dropped(self):
+        # every member fits, so the fit alone cannot catch this one: only the shared-id check can
+        sk = self.hand_edit(lambda d, s: d["inst"].__setitem__("R_3", json.loads(json.dumps(d["inst"]["R_1"]))))
+        self.assertEqual(sorted(B.blocks(sk)["instances"]), ["R_1", "R_2"])
+        self.assertEqual(sk.getBlockInstanceCount(), 2)
+
+    def test_instance_missing_a_member_explodes(self):
+        sk = self.hand_edit(lambda d, s: d["inst"]["R_1"]["m"].pop("m0000"))
+        self.assertEqual(list(B.blocks(sk)["instances"]), ["R_2"])
+        self.assertEqual(sk.getBlockInstanceCount(), 1)
+
+    def curved_block(self, name):
+        sk = self.doc.addObject("Sketcher::SketchObject", name)
+        center = V(5, 3, 0)
+        sk.addGeometry(rect_geometry(), False)
+        sk.addGeometry(Part.Circle(center, V(0, 0, 1), 1.0), False)
+        sk.addGeometry(Part.ArcOfCircle(Part.Circle(center, V(0, 0, 1), 2.0), 0.5, 4.0), False)
+        B.define(sk, "C", [0, 1, 2, 3, 4, 5])
+        sk.delGeometries([0, 1, 2, 3, 4, 5])
+        inst = B.insert(sk, "C", 20, 0, 0.4)
+        sk.solve()
+        return sk, inst
+
+    def edit_in_place(self, sk, edit):
+        # a direct Geometry edit: the member stays the same object with the same id
+        geos = list(sk.Geometry)
+        for i, g in enumerate(geos):
+            if edit(g):
+                sk.Geometry = geos
+                return i
+        self.fail("no member to edit")
+
+    def test_changed_radius_explodes_and_is_not_pulled_back(self):
+        sk, inst = self.curved_block("RadiusEdit")
+        def edit(g):
+            if g.TypeId == "Part::GeomCircle":
+                g.Radius = 1.5
+                return True
+            return False
+        i = self.edit_in_place(sk, edit)
+        sk.solve()
+        self.assertNotIn(inst, B.blocks(sk)["instances"])
+        self.assertAlmostEqual(sk.Geometry[i].Radius, 1.5, places=9)
+
+    def test_changed_arc_end_explodes_and_is_not_pulled_back(self):
+        sk, inst = self.curved_block("ArcEdit")
+        sweep = []
+        def edit(g):
+            if g.TypeId == "Part::GeomArcOfCircle":
+                g.setParameterRange(g.FirstParameter, g.LastParameter - 0.3)
+                sweep.append(g.LastParameter - g.FirstParameter)
+                return True
+            return False
+        i = self.edit_in_place(sk, edit)
+        sk.solve()
+        self.assertNotIn(inst, B.blocks(sk)["instances"])
+        now = sk.Geometry[i]
+        self.assertAlmostEqual(now.LastParameter - now.FirstParameter, sweep[0], places=9)
+
     def test_type_mismatch_explodes(self):
         def edit(d, s):
             d["defs"]["R"]["members"]["m0000"]["t"] = "c"

@@ -119,6 +119,10 @@ MUTANTS = [
     ("diagnosis_solves_the_real_sketch", "py", PYDIAG, [
         ("            n.restorePropertyContent(prop, src.dumpPropertyContent(prop))\n        for path, expr", "            n.restorePropertyContent(prop, src.dumpPropertyContent(prop))\n        n = src\n        for path, expr"),
     ], "the diagnosis works on the user's sketch instead of a copy"),
+    ("shared_id_check_off", "cpp", BLOCKS, [("!used.count(d.ids[k]) && ", "")], "an instance sharing all its ids with another is kept"),
+    ("radius_not_fitted", "cpp", BLOCKS, [("            if (!close(m.r, w[2])) {\n                return false;\n            }\n", "")], "a changed radius is pulled back instead of exploding"),
+    ("arc_angles_not_fitted", "cpp", BLOCKS, [("std::abs(std::remainder(m.a0 + th - w[3], 2.0 * std::numbers::pi)) > kFitAngle", "(kFitAngle < 0 && th > 1e300)"), ("std::abs(std::remainder(m.a1 + th - w[4], 2.0 * std::numbers::pi))\n                        > kFitAngle", "(kFitAngle < 0 && th > 1e300)")], "a changed arc end is pulled back instead of exploding"),
+    ("missing_member_accepted", "cpp", BLOCKS, [(" || d.ids.size() != d.defMembers", "")], "an instance lacking a member is kept"),
 ]
 
 
