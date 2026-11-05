@@ -214,6 +214,7 @@ class _Scratch:
         name = "SketchDiagnosisScratch%d" % next(_scratch_ids)  # unique, so a nested use closes its own document
         self.doc = FreeCAD.newDocument(name, name, True, True)
         self.name = self.doc.Name
+        self.dropped_expressions = []  # paths of expressions the copy could not carry (bound outside the sketch)
         try:
             self.doc.UndoMode = 0
         except Exception:
@@ -239,7 +240,10 @@ class _Scratch:
             try:
                 n.setExpression(path.lstrip("."), expr)
             except Exception:
-                pass  # bound to another object, which the copy does not have
+                # bound to another object, which the copy does not have: remembered, so that no fix is certified
+                # on a datum whose binding the copy cannot honour
+                if path.lstrip(".") not in self.dropped_expressions:
+                    self.dropped_expressions.append(path.lstrip("."))
         return n
 
     def close(self):
@@ -545,7 +549,7 @@ def _max_move(before, after):
     return worst
 
 
-def _redundancy_groups(probe, base_active, deadline, max_groups=16, first_code=None):
+def _redundancy_groups(probe, base_active, deadline, max_groups=16, first_code=None, overlap_fallback=True):
     """Find redundancy groups among `base_active` candidates.
 
     Returns (groups, removed) where each group is a dict with the members and
@@ -580,17 +584,43 @@ def _redundancy_groups(probe, base_active, deadline, max_groups=16, first_code=N
             chosen = m
             report = (st2.dof, move)
             break
+        overlaps = False
+        if chosen is None and overlap_fallback:
+            # Overlapping groups (three equal distances on one line: any two are
+            # redundant): no removal clears this group on its own, but one that
+            # keeps the DOF and the geometry and leaves strictly less redundancy
+            # is a step that "apply, diagnose again" repeats to a clean sketch.
+            # (the solver's list names one constraint per redundancy, not the
+            # rank deficiency, so progress is counted in groups)
+            n_before = None
+            for m in sorted(members, reverse=True):
+                rest = [i for i in active if i != m]
+                st2 = probe.check(rest)
+                after = _geometry_signature(probe.sk)
+                move = _max_move(before, after)
+                if st2.has_conflict or st2.dof != dof_before or move > _POSITION_TOLERANCE:
+                    continue
+                if n_before is None:
+                    n_before = len(_redundancy_groups(probe, active, deadline, overlap_fallback=False)[0])
+                if len(_redundancy_groups(probe, rest, deadline, overlap_fallback=False)[0]) >= n_before:
+                    continue
+                probe.check(rest)  # leave the probe where the loop expects it
+                chosen = m
+                report = (st2.dof, move)
+                overlaps = True
+                break
         if chosen is None:
             chosen = max(members)
             report = (None, None)
-        groups.append(
-            {
-                "members": sorted(members),
-                "suggested_removal": chosen,
-                "dof_after": report[0],
-                "max_point_move": report[1],
-            }
-        )
+        group = {
+            "members": sorted(members),
+            "suggested_removal": chosen,
+            "dof_after": report[0],
+            "max_point_move": report[1],
+        }
+        if overlaps:
+            group["overlaps"] = True
+        groups.append(group)
         active = [i for i in active if i != chosen]
     return groups, active
 
@@ -641,15 +671,25 @@ def _same_datum_state(a, b):
     return True
 
 
+def _solver_state(sk):
+    """What the solver says about a sketch: code, degrees of freedom and the conflicting and redundant lists."""
+    st = _Status(sk)
+    return (st.code, st.dof, tuple(st.conflicts), tuple(st.redundancy))
+
+
 def _recompute_changes(sk):
     """Touch and recompute a throwaway copy; True if that changed anything a
-    fix is meant to leave (see ``_datum_state``)."""
+    fix is meant to leave: a datum, a driving state, an expression or the
+    solver's verdict (``_solver_state``).  A recompute solves again from the
+    geometry the first solve left, which is a different start than the drawn
+    one the certification solved from."""
     _tick("solve")
     sk.solve()  # reference values are measured by a solve; a recompute reads them
     before = _datum_state(sk)
+    solver_before = _solver_state(sk)
     sk.touch()
     sk.Document.recompute()
-    return not _same_datum_state(before, _datum_state(sk))
+    return not _same_datum_state(before, _datum_state(sk)) or solver_before != _solver_state(sk)
 
 
 def _apply_ops(sk, ops):
@@ -674,6 +714,85 @@ def _apply_ops(sk, ops):
             sk.delConstraint(i)
         else:
             raise DiagnosisError("unknown fix operation %r" % (o["op"],))
+
+
+_READ = None
+
+
+def _external_readers(sketch):
+    """Which of this sketch's constraints other objects' expressions read:
+    (names, indices).  An expression that reads ``Sketch.Constraints.name`` or
+    ``Sketch.Constraints[3]`` breaks, or changes its value, when the fix
+    deletes or re-values what it reads, and the throwaway copy carries no
+    other object to show that."""
+    global _READ
+    import re
+
+    if _READ is None:
+        _READ = re.compile(
+            r"(?<![\w.>])(<<[^>]+>>|[A-Za-z_]\w*)\s*\.\s*Constraints\s*(?:\.\s*([A-Za-z_]\w*)|\[\s*(\d+)\s*\])"
+        )
+    names, indices = set(), set()
+    me = {sketch.Name, sketch.Label}
+    try:
+        others = list(sketch.Document.Objects)
+    except Exception:
+        return names, indices
+    for obj in others:
+        if obj.Name == sketch.Name:
+            continue
+        try:
+            engine = obj.ExpressionEngine
+        except Exception:
+            continue
+        for _path, expr in engine:
+            for tok, name, idx in _READ.findall(str(expr)):
+                if tok.strip("<>") in me:
+                    if name:
+                        names.add(name)
+                    else:
+                        indices.add(int(idx))
+    return names, indices
+
+
+def _external_bindings(sketch):
+    """Paths of this sketch's own expressions that read another object (a
+    spreadsheet cell, another sketch): the throwaway copy has no such object,
+    so a fix that changes one of these datums cannot be tested honestly."""
+    import re
+
+    out = []
+    doc = sketch.Document
+    me = {sketch.Name, sketch.Label}
+    for path, expr in sketch.ExpressionEngine:
+        for tok in re.findall(r"(?<![\w.>])(<<[^>]+>>|[A-Za-z_]\w*)\s*\.", str(expr)):
+            name = tok.strip("<>")
+            if name in me:
+                continue
+            if doc.getObject(name) is not None or doc.getObjectsByLabel(name):
+                out.append(str(path).lstrip("."))
+                break
+    return out
+
+
+_REASON_TEXT = {
+    "recompute_changes_result": "a recompute would undo it",
+    "read_by_another_object": "another object's expression reads the constraint",
+    "bound_outside_sketch": "its value is bound to an expression outside the sketch, which the test copy cannot carry",
+    "result_not_reproduced": "applied for real and recomputed, the sketch does not end up as the test showed",
+    "leaves_new_conflict": "removing it would leave a new conflict",
+    "leaves_new_redundancy": "removing it would leave other redundancy that was not there",
+    "changes_dof": "removing it would change the degrees of freedom",
+    "does_not_shrink": "removing it would not reduce the redundancy",
+    "no_safe_member": "no member of the group can be removed without changing the sketch",
+    "solver_rejected": "the solver rejects the result",
+    "out_of_time": "the time budget ran out",
+}
+
+
+def reason_text(code):
+    """Plain words for a ``not_offered`` reason code."""
+    return _REASON_TEXT.get(code, str(code))
 
 
 def apply_fix(sketch, fix):
@@ -741,11 +860,32 @@ class _Diagnoser:
         self.with_fixes = with_fixes
         self.copies = 0
         self.not_offered = []
+        self.readers = (set(), set())
+        self.names = []
 
     # -- helpers ----------------------------------------------------------
     def _copy(self):
         self.copies += 1
         return self.scratch.copy()
+
+    def _note(self, ops, reason):
+        self.not_offered.append({"ops": [dict(o) for o in ops], "reason": reason, "reason_text": reason_text(reason)})
+
+    def _reader_block(self, ops):
+        """The reason code if another object reads what these operations delete, shift or re-value."""
+        names, indices = self.readers
+        if not names and not indices:
+            return None
+        for o in ops:
+            i = o["index"]
+            if i < len(self.names) and self.names[i] and self.names[i] in names:
+                return "read_by_another_object"
+            if o["op"] == "delete":
+                if any(j >= i for j in indices):
+                    return "read_by_another_object"  # a delete shifts every later index
+            elif i in indices:
+                return "read_by_another_object"
+        return None
 
     def _verified_sets(self, found):
         """Re-verify every found set on fresh copies.  A set that fails is
@@ -855,11 +995,9 @@ class _Diagnoser:
         try:
             try:
                 _apply_ops(sk, ops)
-                if settle and self.has_expr:
+                if settle:
                     if _recompute_changes(sk):
-                        self.not_offered.append(
-                            {"ops": [dict(o) for o in ops], "reason": "recompute_changes_result"}
-                        )
+                        self._note(ops, "recompute_changes_result")
                         return None, "a recompute changes the result"
             except Exception as exc:  # solver rejected the change
                 return None, repr(exc)
@@ -910,6 +1048,15 @@ class _Diagnoser:
         self.n = probe.n
         self.errors = self._drawing_errors(probe)
         base = probe.status()
+        self.base = base
+        self.names = [c.Name for c in probe.cons]
+        self.readers = _external_readers(self.user)
+        # constraints bound by an expression the copy could not carry
+        self.unbound = set()
+        for path in list(self.scratch.dropped_expressions) + _external_bindings(self.user):
+            for i, nm in enumerate(self.names):
+                if (nm and path == "Constraints." + nm) or path == "Constraints[%d]" % i:
+                    self.unbound.add(i)
         result = {
             "sketch": self.user.Name,
             "constraint_count": probe.n,
@@ -939,6 +1086,7 @@ class _Diagnoser:
             if changed:
                 result["complete"] = result["complete"] and self._covered
         sets.sort()
+        self.conflict_union = set().union(*sets) if sets else set()
 
         # Redundancy on the sketch with one hitting set of the conflicts removed.
         hitting = set()
@@ -953,6 +1101,7 @@ class _Diagnoser:
         # leaves only that redundancy behind is judged against it.
         self.base_red_code = first[0] if (first and groups) else None
         result["redundancy_groups"] = groups
+        self.n_groups = len(groups)
         result["redundancy_assumes_conflicts_resolved"] = bool(sets)
         # redundancy that was already there does not count as caused by a fix
         self.base_red = {i for g in groups for i in g["members"]}
@@ -1000,12 +1149,17 @@ class _Diagnoser:
         confirm_all = self.n <= _CONFIRM_ALL_LIMIT
         alternatives_ok = self.n <= _ALTERNATIVES_LIMIT
         by_key = {}
+        noted = set()
         for k, members in enumerate(sets):
             for m in members:
                 options = [[{"op": "delete", "index": m}]]
                 if probe.types[m] in _DATUM_TYPES:
                     options.append([{"op": "set_driving", "index": m, "value": False}])
-                    if alternatives_ok and not own_expr[m]:
+                    if alternatives_ok and m in self.unbound:
+                        if m not in noted:
+                            noted.add(m)
+                            self._note([{"op": "set_datum", "index": m, "value": None}], "bound_outside_sketch")
+                    elif alternatives_ok and not own_expr[m]:
                         v = self._forced_value(probe, members, m)
                         if v is not None and abs(v - self.describe(m)["value"]) > 1e-12:
                             options.append(
@@ -1076,38 +1230,56 @@ class _Diagnoser:
 
     def _removal_fix(self, group, hitting):
         """The suggested removal of a redundancy group as an ``apply_fix``
-        dict, or None.  It is offered only after it has been applied, with the
-        real operation, to a fresh copy (with the conflicts' hitting set
-        switched off, as the redundancy search assumes) and the copy solved
-        (and recomputed when the sketch has expressions): no conflict, none of
-        the group's other members redundant any more, no redundancy beyond what
-        was there, and the degrees of freedom as the search measured them."""
-        if time.time() > self.deadline or group.get("dof_after") is None:
+        dict, or None with the reason in ``group["no_fix_reason"]``.  It is
+        offered only after it has been applied, with the real operation, to a
+        fresh copy of the sketch as it is (the conflicts, if any, in place) and
+        the copy recomputed and solved: no conflict beyond the sketch's own,
+        no redundancy that was not there, strictly less redundancy than before
+        (and, for a group that overlaps no other, none of its members left),
+        and the degrees of freedom the sketch had.  ``dof_after`` is stated
+        only when no conflict is left."""
+
+        def no(reason):
+            group["no_fix_reason"] = reason
+            group["no_fix_text"] = reason_text(reason)
             return None
+
+        if time.time() > self.deadline:
+            return no("out_of_time")
+        if group.get("dof_after") is None:
+            return no("no_safe_member")
         m = group["suggested_removal"]
         ops = [{"op": "delete", "index": m}]
+        blocked = self._reader_block(ops)
+        if blocked:
+            self._note(ops, blocked)
+            return no(blocked)
         sk = self._copy()
         try:
             try:
-                for h in sorted(hitting):
-                    sk.setActive(h, False)
                 _apply_ops(sk, ops)
-                if self.has_expr:
-                    if _recompute_changes(sk):
-                        self.not_offered.append({"ops": ops, "reason": "recompute_changes_result"})
-                        return None
+                if _recompute_changes(sk):
+                    self._note(ops, "recompute_changes_result")
+                    return no("recompute_changes_result")
             except Exception:
-                return None
+                return no("solver_rejected")
             st = _Probe(sk).status()
             keep_map = [i for i in range(self.n) if i != m]
             left = [keep_map[i] for i in st.redundancy if i < len(keep_map)]
-            if (
-                st.conflicts
-                or st.dof != group["dof_after"]
-                or [i for i in group["members"] if i != m and i in left]
-                or [i for i in left if i not in self.base_red]
-            ):
-                return None
+            conflicts = sorted(keep_map[i] for i in st.conflicts if i < len(keep_map))
+            if set(conflicts) - self.conflict_union:
+                return no("leaves_new_conflict")
+            if st.dof != self.base.dof:
+                return no("changes_dof")
+            if [i for i in left if i not in self.base_red]:
+                return no("leaves_new_redundancy")
+            if not conflicts:
+                probe_after = _Probe(sk)
+                after_groups, _ = _redundancy_groups(probe_after, probe_after.candidates, self.deadline)
+                if len(after_groups) >= self.n_groups:
+                    return no("does_not_shrink")
+            if not group.get("overlaps") and [i for i in group["members"] if i != m and i in left]:
+                return no("does_not_shrink")
         finally:
             _discard(sk)
         return {
@@ -1116,8 +1288,8 @@ class _Diagnoser:
             "constraint": m,
             "description": _fix_text(ops, {m: self.describe(m)}),
             "resolves": [],
-            "remaining_conflicts": [],
-            "dof_after": st.dof,
+            "remaining_conflicts": conflicts,
+            "dof_after": None if conflicts else st.dof,
             "leaves_redundancy": [],
             "verified": True,
             "applied_to_fresh_copy": True,
@@ -1174,6 +1346,10 @@ class _Diagnoser:
             return None
         if not res["conflicts"] and unresolved:
             return None
+        blocked = self._reader_block(ops)
+        if blocked:
+            self._note(ops, blocked)
+            return None
         confirmed = datum
         if (confirm or self.has_expr) and not datum:
             real, err = self._try_ops(ops)
@@ -1183,6 +1359,9 @@ class _Diagnoser:
                 or [i for i in real["redundancy"] if i not in self.base_red]
                 or real["dof"] != res["dof"]
             ):
+                if real is not None:
+                    # settled by a recompute, the fix does not give what the trial showed
+                    self._note(ops, "result_not_reproduced")
                 return None
             confirmed = True
         return {
@@ -1192,7 +1371,8 @@ class _Diagnoser:
             "description": _fix_text(ops, {o["index"]: self.describe(o["index"]) for o in ops}),
             "resolves": resolves,
             "remaining_conflicts": sorted(res["conflicts"]),
-            "dof_after": res["dof"],
+            # with a conflict left the solver's count is not the sketch's: not stated
+            "dof_after": None if res["conflicts"] else res["dof"],
             "leaves_redundancy": leaves,
             "verified": True,
             "applied_to_fresh_copy": confirmed,

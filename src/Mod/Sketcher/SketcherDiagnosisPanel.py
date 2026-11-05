@@ -107,8 +107,53 @@ def group_text(position, members):
     return tr("Redundant group %d: constraints %s") % (position + 1, ", ".join(str(m + 1) for m in members))
 
 
+def reason_label(code, fallback=None):
+    """A ``not_offered`` reason code in the user's words."""
+    labels = {
+        "recompute_changes_result": tr("a recompute would undo it"),
+        "result_not_reproduced": tr("applied for real it does not give the result that was tested"),
+        "read_by_another_object": tr("another object's expression reads the constraint"),
+        "bound_outside_sketch": tr("its value is bound to an expression outside the sketch"),
+        "leaves_new_conflict": tr("it would leave a new conflict"),
+        "leaves_new_redundancy": tr("it would leave redundancy that was not there"),
+        "changes_dof": tr("it would change the degrees of freedom"),
+        "does_not_shrink": tr("it would not reduce the redundancy"),
+        "no_safe_member": tr("no member of the group can be removed without changing the sketch"),
+        "solver_rejected": tr("the solver rejects the result"),
+        "out_of_time": tr("the time budget ran out"),
+    }
+    return labels.get(code) or fallback or str(code)
+
+
 def fix_row_text(sketch, fix):
+    if fix["dof_after"] is None:
+        return tr("%s (the conflict remains)") % fix_text(sketch, fix)
     return tr("%s (degrees of freedom after: %d)") % (fix_text(sketch, fix), fix["dof_after"])
+
+
+def removal_row_text(sketch, group):
+    """The suggested removal of a redundancy group, with what the API says about applying it."""
+    text = tr("Suggested removal: constraint %s") % constraint_text(sketch, group["suggested_removal"])
+    fix = group.get("fix")
+    if fix is None:
+        if group.get("no_fix_reason"):
+            text += " " + tr("(cannot be applied: %s)") % reason_label(group["no_fix_reason"], group.get("no_fix_text"))
+    elif fix.get("remaining_conflicts"):
+        text += " " + tr("(the conflict remains)")
+    return text
+
+
+def not_offered_line(result):
+    """One plain line on the fixes the diagnosis dropped, or None when it dropped none."""
+    dropped = result.get("not_offered") or []
+    if not dropped:
+        return None
+    reasons = []
+    for n in dropped:
+        label = reason_label(n.get("reason"), n.get("reason_text"))
+        if label not in reasons:
+            reasons.append(label)
+    return tr("%d fix(es) not offered: %s.") % (len(dropped), "; ".join(reasons))
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +210,15 @@ class _GuiWatch:
         except Exception:
             self.panel.invalidate(tr("The sketch is no longer being edited."), close=True)
 
+    def slotInEdit(self, vobj):
+        """The editor switched to an object: if it is not the panel's sketch the panel is out of date."""
+        try:
+            mine = vobj.Object.Name == self.panel.sketch_name and vobj.Object.Document.Name == self.panel.doc_name
+        except Exception:
+            mine = False
+        if not mine:
+            self.panel.invalidate(tr("The editor switched to another sketch."), close=True)
+
     def slotDeletedDocument(self, gdoc):
         try:
             if gdoc.Document.Name == self.panel.doc_name:
@@ -174,11 +228,16 @@ class _GuiWatch:
 
 
 def sketch_in_edit(sketch):
-    """True when `sketch` is the object the editor has open now."""
+    """True when `sketch` is the object the editor has open now: in the active document, which is where the editor
+    is.  (Another document's sketch may still hold its own edit state while the user edits a sketch elsewhere.)"""
     try:
-        gdoc = Gui.getDocument(sketch.Document.Name)
-        vp = gdoc.getInEdit()
-        return vp is not None and vp.Object.Name == sketch.Name
+        gdoc = Gui.ActiveDocument
+        vp = gdoc.getInEdit() if gdoc is not None else None
+        return (
+            vp is not None
+            and vp.Object.Name == sketch.Name
+            and vp.Object.Document.Name == sketch.Document.Name
+        )
     except Exception:
         return False
 
@@ -205,6 +264,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         self._applying = False
         self._rediagnose_pending = False
         self._owned = []  # selection names the panel put in the editor
+        self._saved = None  # what the user had selected before the panel first replaced it
         self._last_pump = 0.0
         self._pump_end = 0.0
         self.max_gap = 0.0
@@ -450,11 +510,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
             for m in g["members"]:
                 self._item(top, constraint_text(sk, m), {"kind": "member", "select": [m]})
             rem = g["suggested_removal"]
-            self._item(
-                top,
-                tr("Suggested removal: constraint %s") % constraint_text(sk, rem),
-                {"kind": "removal", "group": k, "select": [rem]},
-            )
+            self._item(top, removal_row_text(sk, g), {"kind": "removal", "group": k, "select": [rem]})
             top.setExpanded(True)
         self.tree.blockSignals(False)
         if sets or groups:
@@ -471,6 +527,9 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
             text = tr("The solver reports %s, without a conflict or redundancy that can be located.") % what
         else:
             text = tr("Nothing is wrong: no conflicting or redundant constraints (degrees of freedom: %d).") % r["dof"]
+        line = not_offered_line(r)
+        if line:
+            text += "\n" + line
         self.status.setText(text)
         self.apply_button.setEnabled(False)
 
@@ -490,7 +549,12 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         self.apply_button.setEnabled(self.chosen_fix() is not None and self.state == "ready")
 
     def select_constraints(self, indices):
-        """Select exactly these constraints (0-based API indices) in the editor."""
+        """Select exactly these constraints (0-based API indices) in the editor.  The user's own selection is
+        remembered and put back when the panel closes."""
+        mine = {(self.doc_name, self.sketch_name, n) for n in self._owned}
+        others = [t for t in self._user_selection() if t not in mine]
+        if others or self._saved is None:
+            self._saved = others
         Gui.Selection.clearSelection()
         self._owned = []
         for i in indices:
@@ -520,6 +584,25 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
                 Gui.Selection.addSelection(doc, obj, sub)
         except Exception:
             pass
+
+    def _restore_saved_selection(self):
+        """On close: put back what the user had selected, leaving out whatever no longer exists.  A selection the
+        user has made since is left alone."""
+        saved, self._saved = self._saved, None
+        if not saved or self._user_selection():
+            return
+        for doc, obj, sub in saved:
+            try:
+                d = App.getDocument(doc)
+                o = d.getObject(obj) if d is not None else None
+                if o is None:
+                    continue
+                if sub.startswith("Constraint") and sub[len("Constraint"):].isdigit():
+                    if not 1 <= int(sub[len("Constraint"):]) <= len(o.Constraints):
+                        continue
+                Gui.Selection.addSelection(doc, obj, sub)
+            except Exception:
+                pass
 
     def _deselect_owned(self):
         """Remove what the panel selected, and nothing else."""
@@ -611,6 +694,7 @@ class DiagnosisPanel(QtWidgets.QDockWidget):
         self._unwatch()
         try:
             self._deselect_owned()
+            self._restore_saved_selection()
         except Exception:
             pass
         if _panel is self:

@@ -393,7 +393,8 @@ class TestSketchDiagnosis(unittest.TestCase):
                             or broken
                             or left - unresolved
                             or red - set(r["redundancy_members"])
-                            or chk.sk.DoF != fx["dof_after"]
+                            # dof_after is stated only when no conflict is left; None must mean one is
+                            or (chk.sk.DoF != fx["dof_after"] if fx["dof_after"] is not None else not left)
                         ):
                             failed += 1
                             self.fail_detail = (case.name, fx["description"])
@@ -865,3 +866,289 @@ class TestSketchDiagnosisProgress(unittest.TestCase):
         self.assertEqual(_signature(self.sk), before)
         self.assertFalse([d for d in FreeCAD.listDocuments() if "Scratch" in d])
         SD.diagnose(self.sk)  # the hook is gone: a later call without a callback works
+
+
+# ---------------------------------------------------------------------------
+# Repairs after the independent verification of slice 4a (run 057)
+# ---------------------------------------------------------------------------
+
+# Random small sketches the verifier fuzzed: (lines, [(type, a, b, pos a, pos b, value)]).  Seeds 5 and 155 are
+# sketches where a fix certified on the copy changes after a recompute; 79 and 98 are conflicted sketches with
+# a redundancy removal.
+_FUZZ = {
+    5: (3, [("Ang", 2, 2, 1, 2, 10.0), ("Perp", 2, 0, 1, 2, 5.0), ("DX", 0, 1, 1, 1, 10.0), ("H", 2, 0, 2, 1, 7.0), ("DY", 0, 0, 2, 1, 5.0), ("Par", 0, 0, 1, 1, 5.0)]),
+    155: (3, [("DY", 2, 1, 2, 1, 10.0), ("Coin", 0, 2, 1, 1, 5.0), ("Par", 0, 2, 1, 1, 5.0), ("Dist", 2, 0, 1, 2, 7.0), ("Perp", 0, 2, 1, 1, 10.0), ("V", 1, 1, 1, 2, 10.0), ("DY", 2, 1, 1, 1, 7.0)]),
+    79: (2, [("DX", 0, 0, 2, 1, 5.0), ("V", 1, 0, 1, 2, 5.0), ("Ang", 1, 0, 2, 2, 7.0), ("Dist", 0, 1, 2, 2, 5.0), ("H", 1, 1, 1, 1, 10.0), ("DX", 0, 0, 1, 2, 5.0), ("Eq", 1, 0, 2, 2, 10.0)]),
+    98: (3, [("H", 1, 1, 2, 2, 5.0), ("Ang", 2, 2, 2, 1, 5.0), ("DY", 0, 2, 2, 1, 10.0), ("H", 1, 1, 1, 2, 7.0), ("Perp", 2, 0, 1, 1, 7.0), ("Eq", 2, 2, 1, 1, 5.0), ("Ang", 1, 2, 1, 2, 5.0), ("Par", 1, 1, 2, 1, 5.0)]),
+}
+
+
+def _fuzz_build(doc, nl, cs, name="S"):
+    V = FreeCAD.Vector
+    C = Sketcher.Constraint
+    s = doc.addObject("Sketcher::SketchObject", name)
+    for i in range(nl):
+        s.addGeometry(Part.LineSegment(V(0, 3 * i, 0), V(8 + i, 3 * i + (1 if i % 2 else 0), 0)))
+    for t, a, b, pa, pb, v in cs:
+        try:
+            if t == "H":
+                s.addConstraint(C("Horizontal", a))
+            elif t == "V":
+                s.addConstraint(C("Vertical", a))
+            elif t == "Par" and a != b:
+                s.addConstraint(C("Parallel", a, b))
+            elif t == "Perp" and a != b:
+                s.addConstraint(C("Perpendicular", a, b))
+            elif t == "Eq" and a != b:
+                s.addConstraint(C("Equal", a, b))
+            elif t == "DX":
+                s.addConstraint(C("DistanceX", a, 1, a, 2, v))
+            elif t == "DY":
+                s.addConstraint(C("DistanceY", a, 1, a, 2, v))
+            elif t == "Dist":
+                s.addConstraint(C("Distance", a, v))
+            elif t == "Coin" and a != b:
+                s.addConstraint(C("Coincident", a, pa, b, pb))
+            elif t == "Ang":
+                s.addConstraint(C("Angle", a, 0.5))
+        except Exception:
+            pass
+    doc.recompute()
+    return s
+
+
+def _fuzz_spec(seed):
+    import random
+
+    rng = random.Random(seed)
+    nl = rng.choice([2, 3])
+    cs = []
+    for _ in range(rng.randint(4, 8)):
+        t = rng.choice(["H", "V", "Par", "Perp", "Eq", "DX", "DY", "DX", "DY", "Dist", "Coin", "Ang"])
+        a = rng.randrange(nl)
+        b = rng.randrange(nl)
+        v = rng.choice([5.0, 7.0, 10.0])
+        pa = rng.choice([1, 2])
+        pb = rng.choice([1, 2])
+        cs.append((t, a, b, pa, pb, v))
+    return nl, cs
+
+
+def _real_state(s):
+    code = s.solve()
+    return {
+        "code": code,
+        "conf": sorted(i - 1 for i in s.ConflictingConstraints),
+        "red": sorted(i - 1 for i in list(s.RedundantConstraints) + list(s.PartiallyRedundantConstraints)),
+        "dof": s.DoF,
+    }
+
+
+def _all_fixes(r):
+    out = [("c%d.%d" % (k, j), f) for k, cs in enumerate(r["conflict_sets"]) for j, f in enumerate(cs["fixes"])]
+    out += [("r%d" % k, g["fix"]) for k, g in enumerate(r["redundancy_groups"]) if g.get("fix")]
+    return out
+
+
+def _shifted(i, ops):
+    """The index a constraint has after the fix's deletions."""
+    return i - sum(1 for o in ops if o["op"] == "delete" and o["index"] < i)
+
+
+class TestSketchDiagnosisRepairs(unittest.TestCase):
+    def setUp(self):
+        self.previous = _active_name()
+        self.docs = []
+
+    def tearDown(self):
+        for n in self.docs:
+            if n in FreeCAD.listDocuments():
+                FreeCAD.closeDocument(n)
+        if self.previous is not None and self.previous in FreeCAD.listDocuments():
+            FreeCAD.setActiveDocument(self.previous)
+
+    def newdoc(self, name):
+        d = FreeCAD.newDocument(name)
+        self.docs.append(d.Name)
+        return d
+
+    def three_equal_distances(self, doc, name="S", expr=False, n=2):
+        return Corpus.repair_equal_distances(doc, name, n, expr)
+
+    # M1 -----------------------------------------------------------------
+    def testOverlappingRedundancyGroupsReachACleanSketchByApplyingRepeatedly(self):
+        doc = self.newdoc("RepairTriple")
+        s = self.three_equal_distances(doc)
+        r = SD.diagnose(s)
+        self.assertEqual(sorted(len(g["members"]) for g in r["redundancy_groups"]), [2, 2])
+        self.assertTrue(all(g["fix"] for g in r["redundancy_groups"]), [g.get("no_fix_reason") for g in r["redundancy_groups"]])
+        dof = r["dof"]
+        doc.clearUndos()
+        steps = 0
+        while True:
+            r = SD.diagnose(s)
+            groups = [g for g in r["redundancy_groups"]]
+            if not groups:
+                break
+            self.assertLess(steps, 4, "applying removals does not converge")
+            self.assertTrue(groups[0]["fix"], groups[0].get("no_fix_reason"))
+            before = len(s.Constraints)
+            doc.openTransaction("Apply sketch fix")
+            SD.apply_fix(s, groups[0]["fix"])
+            doc.commitTransaction()
+            doc.recompute()
+            self.assertEqual(len(s.Constraints), before - 1)
+            steps += 1
+        self.assertEqual(steps, 2)
+        self.assertEqual(doc.UndoCount, 2)  # one undo entry per Apply
+        self.assertEqual(r["conflict_sets"], [])
+        self.assertEqual(r["dof"], dof)
+        self.assertEqual(_real_state(s)["red"], [])
+
+    def testARemovalThatCannotBeOfferedStatesWhy(self):
+        doc = self.newdoc("RepairNamedExpr")
+        s = self.three_equal_distances(doc, expr=True, n=1)  # c reads b0, the member the search would remove
+        r = SD.diagnose(s)
+        no = [g for g in r["redundancy_groups"] if not g["fix"]]
+        self.assertTrue(no, "the removal of a constraint another expression reads was offered")
+        for g in no:
+            self.assertTrue(g["no_fix_reason"])
+            self.assertIsInstance(g["no_fix_text"], str)
+            self.assertGreater(len(g["no_fix_text"]), 10)
+        json.dumps(r)
+
+    # M2 -----------------------------------------------------------------
+    def testNoFixIsCertifiedThatARecomputeChangesOnASketchWithoutExpressions(self):
+        offered = dropped = 0
+        for seed in (5, 155):  # two sketches with no expressions at all
+            doc = self.newdoc("RepairRecompute%d" % seed)
+            nl, cs = _FUZZ[seed]
+            s = _fuzz_build(doc, nl, cs)
+            self.assertFalse(s.ExpressionEngine)
+            r = SD.diagnose(s)
+            dropped += len([n for n in r["not_offered"] if n["reason"] in ("recompute_changes_result", "result_not_reproduced")])
+            for name, fx in _all_fixes(r):
+                offered += 1
+                d2 = self.newdoc("RepairRecomputeFix")
+                s2 = _fuzz_build(d2, nl, cs)
+                SD.apply_fix(s2, fx)
+                before = _real_state(s2)
+                s2.touch()
+                d2.recompute()
+                self.assertEqual(before, _real_state(s2), (seed, name, fx["description"]))
+        self.assertGreaterEqual(dropped, 2, "the fixes the verifier found are not reported as dropped")
+
+    def testFuzzedFixesAreStableUnderARecompute(self):
+        unstable = total = 0
+        for seed in range(60):
+            nl, cs = _fuzz_spec(seed)
+            doc = self.newdoc("RepairFuzz%d" % seed)
+            s = _fuzz_build(doc, nl, cs)
+            st = _real_state(s)
+            if not (st["conf"] or st["red"]):
+                continue
+            r = SD.diagnose(s)
+            for name, fx in _all_fixes(r):
+                d2 = self.newdoc("RepairFuzzFix")
+                s2 = _fuzz_build(d2, nl, cs)
+                SD.apply_fix(s2, fx)
+                a = _real_state(s2)
+                d2.recompute()
+                total += 1
+                if a != _real_state(s2):
+                    unstable += 1
+        self.assertGreater(total, 20)
+        self.assertEqual(unstable, 0)
+
+    # L1 -----------------------------------------------------------------
+    def testStatedConflictsAndDofEqualTheRealOnes(self):
+        stated_none = checked = 0
+        for seed in [79, 98] + list(range(60)):
+            nl, cs = _FUZZ[seed] if seed in _FUZZ and seed > 59 else _fuzz_spec(seed)
+            doc = self.newdoc("RepairTruth%d" % seed)
+            s = _fuzz_build(doc, nl, cs)
+            st = _real_state(s)
+            if not (st["conf"] or st["red"]):
+                continue
+            r = SD.diagnose(s)
+            for name, fx in _all_fixes(r):
+                d2 = self.newdoc("RepairTruthFix")
+                s2 = _fuzz_build(d2, nl, cs)
+                SD.apply_fix(s2, fx)
+                d2.recompute()
+                real = _real_state(s2)
+                with self.subTest(seed=seed, fix=name, text=fx["description"]):
+                    checked += 1
+                    self.assertEqual(real["conf"], sorted(_shifted(i, fx["ops"]) for i in fx["remaining_conflicts"]))
+                    if fx["remaining_conflicts"]:
+                        stated_none += 1
+                        self.assertIsNone(fx["dof_after"])
+                    else:
+                        self.assertEqual(real["dof"], fx["dof_after"])
+        self.assertGreater(checked, 20)
+        self.assertGreater(stated_none, 0, "no conflicted sketch with a removal in the sample")
+
+    def testRemovalOnAConflictedSketchStatesTheConflictThatRemains(self):
+        for seed in (79, 98):
+            nl, cs = _FUZZ[seed]
+            doc = self.newdoc("RepairConflicted%d" % seed)
+            s = _fuzz_build(doc, nl, cs)
+            r = SD.diagnose(s)
+            self.assertTrue(r["conflict_sets"])
+            removals = [g["fix"] for g in r["redundancy_groups"] if g.get("fix")]
+            self.assertTrue(removals, seed)
+            for fx in removals:
+                self.assertTrue(fx["remaining_conflicts"], seed)
+                self.assertIsNone(fx["dof_after"], seed)
+
+    # L2 -----------------------------------------------------------------
+    def other_sketch_reads(self, doc, expr, name_of_reader="Sk2"):
+        return Corpus.repair_reader_pair(doc, expr, name_of_reader)
+
+    def testAFixThatBreaksAnotherObjectsExpressionIsNotOffered(self):
+        # (what the other sketch reads, ops that would break it)
+        cases = (
+            ("Sk.Constraints.w2 + 1 mm", lambda o: o["index"] == 3),  # by name: any change of w2
+            ("Sk.Constraints[4] + 1 mm", lambda o: o["index"] == 4 or (o["op"] == "delete" and o["index"] < 4)),  # by position
+        )
+        for expr, breaks in cases:
+            doc = self.newdoc("RepairOther")
+            s, s2 = self.other_sketch_reads(doc, expr)
+            self.assertTrue(s2.isValid())
+            r = SD.diagnose(s)
+            fixes = [f for cs in r["conflict_sets"] for f in cs["fixes"]]
+            self.assertTrue(fixes, "nothing is offered at all: " + str(r["not_offered"]))
+            for f in fixes:
+                self.assertFalse([o for o in f["ops"] if breaks(o)], (expr, f["description"]))
+                # and applied for real the reader stays valid
+                d2 = self.newdoc("RepairOtherApply")
+                s_b, s2_b = self.other_sketch_reads(d2, expr)
+                SD.apply_fix(s_b, f)
+                d2.recompute()
+                self.assertTrue(s2_b.isValid(), (expr, f["description"]))
+                self.assertEqual(len(s2_b.ExpressionEngine), 1, (expr, f["description"]))
+            listed = [n for n in r["not_offered"] if n["reason"] == "read_by_another_object"]
+            self.assertTrue(listed, (expr, r["not_offered"]))
+            self.assertTrue(all(n["reason_text"] for n in listed))
+
+    def testADatumBoundOutsideTheSketchIsNotTreatedAsFree(self):
+        doc = self.newdoc("RepairSheet")
+        V = FreeCAD.Vector
+        C = Sketcher.Constraint
+        s = doc.addObject("Sketcher::SketchObject", "Sk")
+        s.addGeometry(Part.LineSegment(V(0, 0, 0), V(10, 0, 0)))
+        s.addConstraint(C("Horizontal", 0))
+        s.renameConstraint(s.addConstraint(C("DistanceX", 0, 1, 0, 2, 10.0)), "w")
+        s.renameConstraint(s.addConstraint(C("DistanceX", 0, 1, 0, 2, 12.0)), "w2")
+        sh = doc.addObject("Spreadsheet::Sheet", "Sheet")
+        sh.set("B1", "10")
+        doc.recompute()
+        s.setExpression("Constraints.w", "Sheet.B1")
+        doc.recompute()
+        r = SD.diagnose(s)
+        for cs in r["conflict_sets"]:
+            for f in cs["fixes"] + cs["alternatives"]:
+                for o in f["ops"]:
+                    self.assertNotEqual((o["op"], o["index"]), ("set_datum", 1))
+        reasons = [(n["ops"][0]["op"], n["ops"][0]["index"], n["reason"]) for n in r["not_offered"]]
+        self.assertIn(("set_datum", 1, "bound_outside_sketch"), reasons)

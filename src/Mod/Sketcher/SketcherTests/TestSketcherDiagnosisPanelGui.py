@@ -171,6 +171,33 @@ class _Rig:
         return cls
 
 
+# the reasons in the user's words, written out here and not taken from the panel
+_REASON_WORDS = {
+    "recompute_changes_result": "a recompute would undo it",
+    "result_not_reproduced": "applied for real it does not give the result that was tested",
+    "read_by_another_object": "another object's expression reads the constraint",
+    "bound_outside_sketch": "its value is bound to an expression outside the sketch",
+    "leaves_new_conflict": "it would leave a new conflict",
+    "leaves_new_redundancy": "it would leave redundancy that was not there",
+    "changes_dof": "it would change the degrees of freedom",
+    "does_not_shrink": "it would not reduce the redundancy",
+    "no_safe_member": "no member of the group can be removed without changing the sketch",
+    "solver_rejected": "the solver rejects the result",
+    "out_of_time": "the time budget ran out",
+}
+
+
+def _expected_not_offered_line(r):
+    """The line the panel must add under its summary for the fixes the API dropped, or None."""
+    if not r["not_offered"]:
+        return None
+    reasons = []
+    for n in r["not_offered"]:
+        if _REASON_WORDS[n["reason"]] not in reasons:
+            reasons.append(_REASON_WORDS[n["reason"]])
+    return "%d fix(es) not offered: %s." % (len(r["not_offered"]), "; ".join(reasons))
+
+
 def _expected_rows(sketch, r):
     """The panel's tree as the API's result says it must read (rows written out here, not taken from the panel)."""
 
@@ -194,6 +221,8 @@ def _expected_rows(sketch, r):
                 parts.append("Make " + label + " non-driving (reference)")
             else:
                 parts.append("Change %s to %.6g %s" % (label, o["value"], o.get("unit", "")))
+        if f["dof_after"] is None:
+            return "%s (the conflict remains)" % "; ".join(parts)
         return "%s (degrees of freedom after: %d)" % ("; ".join(parts), f["dof_after"])
 
     rows = []
@@ -202,7 +231,12 @@ def _expected_rows(sketch, r):
         rows.append(("Conflict %d: constraints %s" % (k + 1, ", ".join(str(m + 1) for m in cs["members"])), kids))
     for k, g in enumerate(r["redundancy_groups"]):
         kids = [(con(m), []) for m in g["members"]]
-        kids.append(("Suggested removal: constraint " + con(g["suggested_removal"]), []))
+        removal = "Suggested removal: constraint " + con(g["suggested_removal"])
+        if g.get("fix") is None and g.get("no_fix_reason"):
+            removal += " (cannot be applied: %s)" % _REASON_WORDS[g["no_fix_reason"]]
+        elif g.get("fix") and g["fix"]["remaining_conflicts"]:
+            removal += " (the conflict remains)"
+        kids.append((removal, []))
         rows.append(("Redundant group %d: constraints %s" % (k + 1, ", ".join(str(m + 1) for m in g["members"])), kids))
     return rows
 
@@ -370,6 +404,9 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
             with self.subTest(case=c.name):
                 self.assertEqual(_stable(p.result), _stable(expected))
                 self.assertEqual(_rows(p.tree), _expected_rows(sk, expected))
+                line = _expected_not_offered_line(expected)
+                lines = p.status.text().split("\n")
+                self.assertEqual(lines[1] if len(lines) > 1 else None, line)
                 self.assertEqual(p.state, "ready")
                 self.assertFalse(p.apply_button.isEnabled())  # nothing chosen yet
             self.close_panel()
@@ -413,7 +450,6 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
             p = test.open_panel(sk)
             doc.clearUndos()  # the document's undo limit would otherwise swallow the count after a few cases
             base_red = set(p.result["redundancy_members"])
-            p0_conflicts = list(p.result["solver_conflicting"])
             rows = [(k, j, path, p.result["conflict_sets"][k]["fixes"][j]) for k, j, path in test.fix_rows()]
             rows += [(None, g, path, p.result["redundancy_groups"][g]["fix"]) for g, path in test.removal_rows()]
             for k, j, path, fix in rows:
@@ -434,10 +470,7 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
                 rec["undo_name"] = doc.UndoNames[0] if doc.UndoNames else None
                 rec["editing"] = _editing() == (doc.Name, sk.Name)
                 rec["conflicts"] = sorted(_old_index(i - 1, fix["ops"]) for i in sk.ConflictingConstraints)
-                # a removal leaves the conflicts alone; a conflict fix leaves the ones it says it does
-                rec["remaining"] = (
-                    sorted(p0_conflicts) if removal else fix["remaining_conflicts"]
-                )
+                rec["remaining"] = fix["remaining_conflicts"]  # the API's statement, removal or conflict fix alike
                 red = {
                     _old_index(i - 1, fix["ops"])
                     for i in list(sk.RedundantConstraints) + list(sk.PartiallyRedundantConstraints)
@@ -485,13 +518,12 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
             with self.subTest(case=r["case"], set=r["set"], fix=r["fix"], removal=r["removal"]):
                 self.assertTrue(r["applyable"])
                 self.assertTrue(_same_sketch(r["applied"], r["expected"]), "applied sketch differs from apply_fix on a copy")
-                if r["removal"]:
-                    # removing a redundant constraint may only shrink the conflicts, never add one
-                    self.assertTrue(set(r["conflicts"]) <= set(r["remaining"]), (r["conflicts"], r["remaining"]))
-                else:
-                    self.assertEqual(r["conflicts"], r["remaining"])
+                # every stated value is the real one, removals on a conflicted sketch included
+                self.assertEqual(r["conflicts"], r["remaining"])
                 self.assertEqual(r["new_redundancy"], [])
-                if not r["conflicts"]:
+                if r["dof_stated"] is None:
+                    self.assertTrue(r["conflicts"], "no degrees of freedom stated, yet no conflict is left")
+                else:
                     self.assertEqual(r["dof"], r["dof_stated"])
                 self.assertTrue(r["recompute_same_sketch"], "a recompute changed the sketch the panel certified")
                 self.assertTrue(r["recompute_same_diagnosis"], "a recompute changed the diagnosis")
@@ -882,6 +914,143 @@ class TestSketcherDiagnosisPanelGui(PanelTestBase):
         _pump()
         self.assertEqual(_selected_names(), ["Edge1"])
         self.assertFalse(p.apply_button.isEnabled())
+
+    # check 5, the sixth event: the editor moves to a sketch in another document ---------------------------------
+    def testStaleWhenTheEditorSwitchesToASketchInAnotherDocument(self):
+        c, p = self._stale_setup("PanelTwoDocsA")
+        other = self.fresh_sketch("PanelTwoDocsB").sketch
+        before_other = _content(other)
+        Gui.ActiveDocument = Gui.getDocument(other.Document.Name)
+        Gui.ActiveDocument.setEdit(other.Name)  # no pump: the check is of the instant after the event
+        self._assert_stale_handled(c, p, "the editor switched to another document's sketch")
+        self.assertTrue(_wait(lambda: p.state == "closed"))
+        self.assertIsNone(self.P.current_panel())
+        self.assertEqual(_content(other), before_other)
+        self.assertEqual(_editing(), (other.Document.Name, other.Name))
+
+    def testApplyRefusesWhenAnotherDocumentsSketchIsInEditEvenIfNoEventArrived(self):
+        c, p = self._stale_setup("PanelTwoDocsC")
+        before = _content(c.sketch)
+        p._unwatch()  # no observer tells the panel: Apply must look at the editor itself
+        other = self.fresh_sketch("PanelTwoDocsD").sketch
+        self.edit(other)
+        before_other = _content(other)
+        self.assertFalse(p.apply_chosen())
+        self.assertEqual(_content(c.sketch), before)
+        self.assertEqual(_content(other), before_other)
+
+    # check 6, the user's selection -----------------------------------------------------------------------------
+    def testClosingThePanelPutsTheUsersSelectionBack(self):
+        c = self.case("two_overlapping_conflicts")
+        self.edit(c.sketch)
+        Gui.Selection.clearSelection()
+        doc, name = c.sketch.Document.Name, c.sketch.Name
+        Gui.Selection.addSelection(doc, name, "Constraint1")
+        Gui.Selection.addSelection(doc, name, "Edge1")
+        mine = _selected_names()
+        Gui.runCommand(COMMAND)
+        import SketcherDiagnosisPanel as P
+
+        self.P = P
+        self.panel = P.current_panel()
+        self.wait_ready()
+        self.choose((0,))
+        self.assertNotEqual(_selected_names(), mine)  # the row replaced it
+        self.choose((0, 0))
+        self.close_panel()
+        _pump(30)
+        self.assertEqual(_selected_names(), mine)
+
+    def testClosingWithNothingSelectedBeforeLeavesNothingSelected(self):
+        c = self.case("single_conflict")
+        p = self.open_panel(c.sketch)
+        Gui.Selection.clearSelection()
+        self.choose((0,))
+        self.assertTrue(_selected_names())
+        self.close_panel()
+        _pump(30)
+        self.assertEqual(_selected_names(), [])
+
+    def testRestoredSelectionLeavesOutNamesThatNoLongerExist(self):
+        c = self.fresh_sketch("PanelSelStale")
+        sk = c.sketch
+        self.edit(sk)
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(sk.Document.Name, sk.Name, "Constraint3")
+        Gui.Selection.addSelection(sk.Document.Name, sk.Name, "Constraint1")
+        Gui.runCommand(COMMAND)
+        import SketcherDiagnosisPanel as P
+
+        self.P = P
+        self.panel = P.current_panel()
+        self.wait_ready()
+        p = self.panel
+        n = len(sk.Constraints)
+        row = [
+            path for k, j, path in self.fix_rows()
+            if p.result["conflict_sets"][k]["fixes"][j]["ops"][0]["op"] == "delete"
+            and p.result["conflict_sets"][k]["fixes"][j]["ops"][0]["index"] == n - 1
+        ][0]
+        self.choose(row)
+        p.apply_button.click()
+        self.wait_ready()
+        self.assertEqual(len(sk.Constraints), n - 1)
+        self.close_panel()  # Constraint3 does not exist any more: restoring must not raise
+        _pump(30)
+        self.assertEqual(_selected_names(), ["Constraint1"])
+
+    # check 1 again: what was not offered, and why -------------------------------------------------------------
+    def testThePanelSaysWhatWasNotOffered(self):
+        doc = FreeCAD.newDocument("PanelNotOffered")
+        self._extra_docs.append(doc.Name)
+        sk, _reader = Corpus.repair_reader_pair(doc, "Sk.Constraints.w2 + 1 mm")
+        expected = SD.diagnose(sk)
+        self.assertTrue(expected["not_offered"])
+        p = self.open_panel(sk)
+        self.assertEqual(_stable(p.result), _stable(expected))
+        line = _expected_not_offered_line(expected)
+        self.assertEqual(p.status.text().split("\n")[1:], [line])
+        self.assertIn("another object's expression reads the constraint", line)
+        self.assertEqual(_rows(p.tree), _expected_rows(sk, expected))
+
+    def testARemovalThatCannotBeOfferedGivesItsReasonAndCannotBeApplied(self):
+        doc = FreeCAD.newDocument("PanelNoRemoval")
+        self._extra_docs.append(doc.Name)
+        sk = Corpus.repair_equal_distances(doc, "S", n=1, expr=True)
+        expected = SD.diagnose(sk)
+        no = [g for g in expected["redundancy_groups"] if not g["fix"]]
+        self.assertTrue(no)
+        p = self.open_panel(sk)
+        rows = self.removal_rows()
+        self.assertTrue(rows)
+        self.assertEqual(_rows(p.tree), _expected_rows(sk, expected))
+        k, path = [r for r in rows if not expected["redundancy_groups"][r[0]]["fix"]][0]
+        self.choose(path)
+        self.assertIn("(cannot be applied: ", p.tree.currentItem().text(0))
+        self.assertFalse(p.apply_button.isEnabled())
+        self.assertFalse(p.apply_chosen())
+
+    # check 2, overlapping redundancy groups ------------------------------------------------------------------
+    def testOverlappingRedundancyIsRepairedByApplyingAndDiagnosingAgain(self):
+        doc = FreeCAD.newDocument("PanelTriple")
+        self._extra_docs.append(doc.Name)
+        sk = Corpus.repair_equal_distances(doc, "S", n=2)
+        p = self.open_panel(sk)
+        doc.clearUndos()
+        steps = 0
+        while p.result["redundancy_groups"]:
+            self.assertLess(steps, 4, "applying removals does not converge")
+            rows = self.removal_rows()
+            self.choose(rows[0][1])
+            self.assertTrue(p.apply_button.isEnabled(), p.tree.currentItem().text(0))
+            n = len(sk.Constraints)
+            p.apply_button.click()
+            self.wait_ready()
+            self.assertEqual(len(sk.Constraints), n - 1)
+            steps += 1
+            self.assertEqual(doc.UndoCount, steps)
+        self.assertEqual(steps, 2)
+        self.assertTrue(p.status.text().startswith("Nothing is wrong"), p.status.text())
 
     # check 8 ----------------------------------------------------------------
     def testCommandIsActiveOnlyWithASketchInEdit(self):
