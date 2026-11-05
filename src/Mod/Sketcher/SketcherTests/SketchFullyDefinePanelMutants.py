@@ -242,7 +242,7 @@ def main():
         if status == "no-result":
             print("\n".join("    | " + ln for ln in out.splitlines()[-8:]))
         rows.append((m["name"], status, failed))
-        print("%-40s %-9s %5.0fs  %s" % (m["name"], status, time.time() - t0, ", ".join(failed)[:150]))
+        print("%-40s %-9s %-9s %5.0fs  %s" % (m["name"], status, base.kinds(out), time.time() - t0, ", ".join(failed)[:150]))
         sys.stdout.flush()
     if not a.dry:
         caught = sum(1 for r in rows if r[1] == "caught")

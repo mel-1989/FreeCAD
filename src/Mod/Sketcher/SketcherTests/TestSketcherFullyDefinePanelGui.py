@@ -608,8 +608,9 @@ class TestSketcherFullyDefinePanelGui(FDTestBase):
 
     # check 7 -----------------------------------------------------------------------------------------------------
     def testChoosingACandidateListsWhatItWouldAddAndChoosingNothingShowsNothing(self):
-        sk = self.tiny("FDTmpPrev")
+        sk = self.two_candidate_sketch()  # candidates that differ from one another, so a preview of the wrong one shows
         p = self.open_fd(sk)
+        self.assertGreaterEqual(len(p.result["candidates"]), 2)
         before = _signature(sk)
         self.assertTrue(p.preview.isHidden())
         self.assertEqual(p.preview.count(), 0)
@@ -620,6 +621,8 @@ class TestSketcherFullyDefinePanelGui(FDTestBase):
             self.assertEqual(p.preview.count(), len(cand["constraints"]))
             for i, spec in enumerate(cand["constraints"]):
                 _check_constraint_row(self, p.preview.item(i).text(), spec)
+                # and it is the row the tree shows for this very candidate
+                self.assertEqual(p.preview.item(i).text(), p.tree.topLevelItem(k).child(i).text(0))
             self.assertIn("would add %d constraint(s)" % len(cand["constraints"]), p.preview_label.text())
             self.choose(path + (0,))  # a child row of the candidate chooses the candidate too
             self.assertEqual(p.preview.count(), len(cand["constraints"]))
