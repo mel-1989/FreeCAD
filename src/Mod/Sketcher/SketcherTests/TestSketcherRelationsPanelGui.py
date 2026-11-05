@@ -9,6 +9,8 @@ a few built here.  The rows the panel must show are computed here, from ``sketch
 not call the panel's: its own element names, its own definition of "on an element".
 """
 
+import os
+import tempfile
 import time
 
 import FreeCAD
@@ -114,6 +116,10 @@ def vertex_number(sk, geo, pos):
 
 def _panel_rows(panel):
     return [(h, [c for c, _ in kids]) for h, kids in _rows(panel.tree)]
+
+
+def _tmp(name):
+    return os.path.join(tempfile.gettempdir(), name)
 
 
 def _grab(view, path, size=(480, 360)):
@@ -349,7 +355,14 @@ class TestSketcherRelationsPanelGui(RelationsTestBase):
         self.assertNotIn("Constraint%d" % (n + 1), _selected_names())
 
     # -- check 7: the filter ---------------------------------------------------------------------------------------------
+    def _needs_gl(self):
+        """Pictures and picks need an OpenGL context, which Qt's offscreen platform does not have: those tests run in the
+        harness's Cocoa lane (``harness/gui/run.sh suites``) and are skipped in the offscreen one."""
+        if QtWidgets.QApplication.platformName() == "offscreen":
+            self.skipTest("needs a GL context (the offscreen platform has none)")
+
     def _view(self, sk):
+        self._needs_gl()
         self.edit(sk)
         view = Gui.ActiveDocument.ActiveView
         view.setCameraType("Orthographic")
@@ -368,20 +381,20 @@ class TestSketcherRelationsPanelGui(RelationsTestBase):
         view = self._view(sk)
         cam = view.getCamera()
         p = self.open_rel(sk)
-        base = self._shot(view, cam, "/tmp/rel_base.png")
+        base = self._shot(view, cam, _tmp("rel_base.png"))
         self.select(sk, "Edge1")
         p.filter_to_element()
         Gui.Selection.clearSelection()
-        hidden = self._shot(view, cam, "/tmp/rel_hidden.png")
+        hidden = self._shot(view, cam, _tmp("rel_hidden.png"))
         self.assertNotEqual(base, hidden, "the filter hid nothing")
         self.assertTrue(p.banner.isVisible())
         p.clear_filter()
-        self.assertEqual(base, self._shot(view, cam, "/tmp/rel_again.png"))
+        self.assertEqual(base, self._shot(view, cam, _tmp("rel_again.png")))
         self.assertFalse(p.banner.isVisible())
         p.filter_to_type("Coincident")
-        self.assertNotEqual(base, self._shot(view, cam, "/tmp/rel_type.png"))
+        self.assertNotEqual(base, self._shot(view, cam, _tmp("rel_type.png")))
         p.clear_filter()
-        self.assertEqual(base, self._shot(view, cam, "/tmp/rel_again2.png"))
+        self.assertEqual(base, self._shot(view, cam, _tmp("rel_again2.png")))
 
     def testAConstraintInStocksVirtualSpaceStaysHiddenWhenTheFilterClears(self):
         sk = self.new_sketch("RelVirtual", self.corner)
@@ -389,12 +402,12 @@ class TestSketcherRelationsPanelGui(RelationsTestBase):
         view = self._view(sk)
         cam = view.getCamera()
         p = self.open_rel(sk)
-        base = self._shot(view, cam, "/tmp/rel_v_base.png")
+        base = self._shot(view, cam, _tmp("rel_v_base.png"))
         self.assertTrue(p.filter_to_type("DistanceX"))  # lists the virtual-space constraint among the ids to show
         self.assertIn(DATUM_X, SketcherGui.getConstraintFilter())
-        self.assertNotEqual(base, self._shot(view, cam, "/tmp/rel_v_on.png"))
+        self.assertNotEqual(base, self._shot(view, cam, _tmp("rel_v_on.png")))
         p.clear_filter()
-        self.assertEqual(base, self._shot(view, cam, "/tmp/rel_v_off.png"))
+        self.assertEqual(base, self._shot(view, cam, _tmp("rel_v_off.png")))
         self.assertTrue(sk.Constraints[DATUM_X].InVirtualSpace)
 
     def testAMaskedMemberOfAMergedIconIsNotDrawn(self):
@@ -414,15 +427,15 @@ class TestSketcherRelationsPanelGui(RelationsTestBase):
         hidden.Document.recompute()
         view = self._view(full)
         cam = view.getCamera()
-        shown_all = self._shot(view, cam, "/tmp/rel_m_all.png")
+        shown_all = self._shot(view, cam, _tmp("rel_m_all.png"))
         SketcherGui.setConstraintFilter([0, 1, 2, 3, 4])
-        masked = self._shot(view, cam, "/tmp/rel_m_masked.png")
+        masked = self._shot(view, cam, _tmp("rel_m_masked.png"))
         self.assertNotEqual(shown_all, masked, "the mask changed nothing: the Equal icon was not on show")
         SketcherGui.setConstraintFilter(None)
         Gui.ActiveDocument.resetEdit()
         _pump(40)
         view = self._view(hidden)
-        stock = self._shot(view, cam, "/tmp/rel_m_stock.png")
+        stock = self._shot(view, cam, _tmp("rel_m_stock.png"))
         self.assertEqual(masked, stock)
 
     def testAMaskedConstraintIsNotPickableAndStaysMaskedThroughRedraws(self):

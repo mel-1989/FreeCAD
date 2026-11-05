@@ -53,7 +53,6 @@ CLOSE_NAME = "relationsClose"
 GEO_UNDEF = -2000
 _ROLE = QtCore.Qt.UserRole
 _panel = None
-_POS_WORDS = {1: "start", 2: "end", 3: "centre"}
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +68,7 @@ def element_label(geo, pos=None):
         return tr("Y axis")
     text = tr("Edge%d") % (geo + 1) if geo >= 0 else tr("External edge %d") % (-geo - 2)
     if pos:
-        text += " " + tr(_POS_WORDS.get(pos, "point"))
+        text += " " + {1: tr("start"), 2: tr("end"), 3: tr("centre")}.get(pos, tr("point"))
     return text
 
 
