@@ -3785,6 +3785,9 @@ void ViewProviderSketch::setIsShownVirtualSpace(bool isshownvirtualspace)
     viewProviderParameters.isShownVirtualSpace = isshownvirtualspace;
 
     editCoinManager->updateVirtualSpace();
+    // the icons are cleared for whichever space is not shown each time they are drawn (the filter, a solve or a drag
+    // do it), so switching the space has to draw them again or the space just shown has no icons
+    editCoinManager->drawConstraintIcons();
 
     signalConstraintsChanged();
 }

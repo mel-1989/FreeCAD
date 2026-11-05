@@ -748,3 +748,76 @@ class TestSketcherRelationsPanelGui(RelationsTestBase):
             else:
                 self.assertEqual(_panel_rows(p), expected_rows(sk, 1, 1))
         self.close_panel()
+
+    # -- check 7 with stock's Sketcher_SwitchVirtualSpace, found by the second verifier -----------------------------------
+    def _switch_sequence(self, tag, steps, filter_ids=None):
+        """Run ``steps`` ('toggle', 'on', 'off', 'solve') on the corner sketch with one constraint in virtual space and
+        return (picture before, picture after, picks before, picks after).  Toggles come in pairs in every sequence used."""
+        sk = self.new_sketch("RelSw" + tag, self.corner)
+        sk.setVirtualSpace(DATUM_X, True)
+        view = self._view(sk)
+        cam = view.getCamera()
+        self.open_rel(sk)
+        n = len(sk.Constraints)
+        corners = [view.getPointOnViewport(V(x, y, 0)) for x in (-15, 35) for y in (-15, 30)]
+        x0, x1 = int(min(c[0] for c in corners)), int(max(c[0] for c in corners))
+        y0, y1 = int(min(c[1] for c in corners)), int(max(c[1] for c in corners))
+
+        def picks():
+            hits = {}
+            for y in range(y0, y1, 4):
+                for x in range(x0, x1, 4):
+                    info = SketcherGui.getActiveSketchPreselection((x, y))
+                    for name in (info.get("SubElementNames") or []) if info else []:
+                        if name.startswith("Constraint"):
+                            hits[name] = hits.get(name, 0) + 1
+            return hits
+
+        before = (self._shot(view, cam, _tmp("rel_sw_%s_base.png" % tag)), picks())
+        for step in steps:
+            if step == "toggle":
+                Gui.Selection.clearSelection()
+                Gui.runCommand("Sketcher_SwitchVirtualSpace")
+            elif step == "on":
+                SketcherGui.setConstraintFilter(filter_ids if filter_ids is not None else list(range(n)))
+            elif step == "off":
+                SketcherGui.setConstraintFilter(None)
+            elif step == "solve":
+                sk.moveGeometry(0, 2, V(0, 0, 0), True)  # a redraw of every icon with nothing changed
+                sk.solve()
+            _pump(80)
+        after = (self._shot(view, cam, _tmp("rel_sw_%s_end.png" % tag)), picks())
+        self.close_panel()
+        Gui.ActiveDocument.resetEdit()
+        _pump(40)
+        return before, after
+
+    def _assert_switch_restores(self, tag, steps, filter_ids=None):
+        before, after = self._switch_sequence(tag, steps, filter_ids)
+        self.assertEqual(before[1], after[1], "%s: pickable constraints differ" % tag)
+        self.assertEqual(before[0], after[0], "%s: the picture differs" % tag)
+
+    def testSwitchVirtualSpaceControlsWithNoFilter(self):
+        self._assert_switch_restores("c1", ["toggle", "toggle"])
+        self._assert_switch_restores("c2", ["toggle", "solve", "toggle"])
+
+    def testSwitchVirtualSpaceWithTheFilterOnInEveryOrder(self):
+        keep = [i for i in range(len(self._probe_corner())) if i != DATUM_X]
+        orders = {
+            "a": ["toggle", "on", "toggle", "off", "toggle", "toggle"],  # the verifier's sequence, then back to the start
+            "b": ["toggle", "on", "off", "toggle"],
+            "c": ["on", "toggle", "off", "toggle"],
+            "d": ["on", "toggle", "toggle", "off"],
+            "e": ["toggle", "on", "toggle", "toggle", "off", "toggle"],
+            "f": ["on", "toggle", "solve", "toggle", "off"],
+        }
+        for tag, steps in sorted(orders.items()):
+            self._assert_switch_restores("o" + tag, steps, keep)
+        self._assert_switch_restores("pa", orders["a"], [])  # an empty list hides everything: the same restore
+
+    def _probe_corner(self):
+        d = FreeCAD.newDocument("RelSwProbe")
+        self._extra_docs.append("RelSwProbe")
+        sk = d.addObject("Sketcher::SketchObject", "S")
+        self.corner(sk)
+        return sk.Constraints
