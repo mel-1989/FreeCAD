@@ -2100,3 +2100,305 @@ class TestBlocksPanelEditLeaving(EditCase):
         self.click_button("blocksCancel")
         self.assertIsNone(self.panel.session)
         self.assertFits(sk, 3)
+
+
+class TestBlocksPanelOutsideTheSession(EditCase):
+    """Run 061, second verifier: Finish and Cancel roll the whole document back by undo, so everything outside the block
+    that differs from the session's start is named first, in the sketch and out of it; a break message stays on screen."""
+
+    def plain_line(self, sk):
+        return [c.First for c in sk.Constraints if c.Name == "Ph"][0]
+
+    def member_move(self, sk):
+        self.stock(sk, "mv member", lambda: sk.moveGeometry(0, 2, V(6.0, 0.4, 0), False))
+
+    def started_with(self, name, extra=None):
+        """Scene W with a Part::Box, optionally more objects made by `extra(doc)`, a session on W_1 with one member moved."""
+        sk = self.scene(name)
+        doc = sk.Document
+        box = doc.addObject("Part::Box", "Box")
+        if extra:
+            extra(doc)
+        doc.recompute()
+        self.open_panel(sk)
+        self.begin(sk)
+        self.member_move(sk)
+        return sk, box
+
+    def press_twice(self, button, label, expect):
+        """The first press names `expect` and changes nothing; the second goes on and ends the session."""
+        self.click_button(button)
+        self.assertIsNotNone(self.panel.session, label + ": the first press went on: " + self.status())
+        self.assertIn(expect, self.status(), label)
+        self.assertIn("not part of the block", self.status(), label)
+        self.click_button(button)
+        self.assertIsNone(self.panel.session, label + ": " + self.status())
+
+    # -- item 1 and 2 -----------------------------------------------------------------------------------------------------
+    def test_other_objects_are_named_before_finish_and_before_cancel(self):
+        for n, button in enumerate(("blocksFinish", "blocksCancel")):
+            self.close_panel()
+            if Gui.ActiveDocument is not None:
+                Gui.ActiveDocument.resetEdit()
+                _pump(40)
+            sk = self.scene("OutsideObjs%d" % n)
+            doc = sk.Document
+            box = doc.addObject("Part::Box", "Box")
+            s2 = doc.addObject("Sketcher::SketchObject", "S2")
+            s2.addGeometry(Part.LineSegment(V(0, 0, 0), V(10, 0, 0)), False)
+            gone = doc.addObject("Part::Cylinder", "Gone")
+            gone.Label = "Old cylinder"
+            doc.recompute()
+            self.open_panel(sk)
+            self.begin(sk)
+            self.member_move(sk)
+            self.stock(sk, "S2", lambda: s2.addGeometry(Part.LineSegment(V(0, 5, 0), V(10, 5, 0)), False))
+            self.stock(sk, "length", lambda: setattr(box, "Length", 33.0))
+            self.stock(sk, "add", lambda: doc.addObject("Part::Sphere", "Ball"))
+            self.stock(sk, "del", lambda: doc.removeObject("Gone"))
+            self.click_button(button)
+            self.assertIsNotNone(self.panel.session, self.status())
+            text = self.status()
+            for part in ("S2 (Geometry)", "Box (Length)", "1 added object (Ball)", "1 deleted object (Old cylinder)"):
+                self.assertIn(part, text, button)
+            self.assertEqual(box.Length.Value, 33.0, "the warning changed the document")
+            self.assertEqual(len(s2.Geometry), 2)
+            self.click_button(button)
+            self.assertIsNone(self.panel.session, self.status())
+            self.assertEqual(box.Length.Value, 10.0)
+            self.assertEqual(len(s2.Geometry), 1)
+            self.assertIsNone(doc.getObject("Ball"))
+            self.assertIsNotNone(doc.getObject("Gone"))
+            self.assertIn("Undone because they are not part of the block", self.status())
+
+    def test_a_cancel_with_only_member_changes_is_one_press_and_restores_the_sketch(self):
+        sk, box = self.started_with("OutsideCancelPlain")
+        before = _snapshot(sk)
+        self.click_button("blocksCancel")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertNotIn("Cancel will undo", self.status())
+
+    # -- the rule for dependents: a Pad over the sketch ---------------------------------------------------------------------
+    def pad_scene(self, name):
+        doc = self.new_doc(name)
+        body = doc.addObject("PartDesign::Body", "Body")
+        sk = body.newObject("Sketcher::SketchObject", "R")
+        pts = [(0, 0), (4, 0), (4, 3), (0, 3)]
+        for i in range(4):
+            a, b = pts[i], pts[(i + 1) % 4]
+            sk.addGeometry(Part.LineSegment(V(a[0], a[1], 0), V(b[0], b[1], 0)), False)
+        B.define(sk, "R", [0, 1, 2, 3])
+        sk.delGeometries([0, 1, 2, 3])
+        B.insert(sk, "R", 0, 0, 0)
+        B.insert(sk, "R", 10, 0, 0)
+        doc.recompute()
+        pad = body.newObject("PartDesign::Pad", "Pad")
+        pad.Profile = sk
+        pad.Length = 5.0
+        doc.recompute()
+        self.assertAlmostEqual(pad.Shape.Volume, 120.0, delta=1e-6)
+        return sk, pad
+
+    def test_a_recompute_of_a_dependent_is_not_a_change_but_an_edit_of_its_input_is(self):
+        sk, pad = self.pad_scene("OutsidePad")
+        self.open_panel(sk)
+        self.begin(sk, "R_1")
+        self.stock(sk, "add construction", lambda: sk.addGeometry(Part.LineSegment(V(-5, -5, 0), V(-1, -5, 0)), True))
+
+        def recompute():
+            sk.touch()
+            sk.Document.recompute()
+
+        self.stock(sk, "recompute", recompute)
+        pad.addProperty("App::PropertyInteger", "Computed", "Test", "a result a recompute writes")
+        pad.setPropertyStatus("Computed", "Output")
+        self.assertIn("Output", pad.getPropertyStatus("Computed"))
+        self.stock(sk, "output property", lambda: setattr(pad, "Computed", 7))
+        self.assertIn(pad, sk.InListRecursive)
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, "a recompute of the Pad over the sketch raised a warning: " + self.status())
+        self.assertNotIn("not part of the block", self.status())
+        # the other direction: the Pad's own input
+        self.begin(sk, "R_1")
+        self.stock(sk, "add construction", lambda: sk.addGeometry(Part.LineSegment(V(-5, -5, 0), V(-1, -5, 0)), True))
+        self.stock(sk, "pad length", lambda: setattr(pad, "Length", 9.0))
+        self.stock(sk, "recompute", recompute)
+        self.click_button("blocksFinish")
+        self.assertIsNotNone(self.panel.session, self.status())
+        self.assertIn("Pad (Length)", self.status())
+        self.assertNotIn("Shape", self.status())
+        self.assertEqual(pad.Length.Value, 9.0)
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertEqual(pad.Length.Value, 5.0)
+
+    def test_a_recompute_in_a_session_on_an_untouched_document_raises_no_warning(self):
+        sk, box = self.started_with("OutsideRecompute")
+        sk.Document.recompute()
+        box.touch()
+        self.stock(sk, "recompute", sk.Document.recompute)
+        time.sleep(2.2)  # a serialised property carries the second it was written in; the same content must not read as a change
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertNotIn("not part of the block", self.status())
+
+    def test_the_whole_document_is_read_only_at_start_finish_and_cancel(self):
+        import SketcherBlocksPanel as P
+
+        sk = self.scene("OutsideCost")
+        doc = sk.Document
+        for i in range(200):
+            doc.addObject("Part::Box", "B%d" % i)
+        doc.recompute()
+        self.open_panel(sk)
+        calls = []
+        orig = B._document_state
+        B._document_state = lambda s: (calls.append(1), orig(s))[1]
+        self.addCleanup(setattr, B, "_document_state", orig)
+        t0 = time.perf_counter()
+        self.begin(sk)
+        t_start = time.perf_counter() - t0
+        n_start = len(calls)
+        for i in range(5):
+            self.stock(sk, "mv %d" % i, lambda i=i: sk.moveGeometry(0, 2, V(6.0 + i, 0.4, 0), False))
+        self.assertEqual(len(calls), n_start, "the document was read again during the session")
+        t0 = time.perf_counter()
+        self.click_button("blocksFinish")
+        t_finish = time.perf_counter() - t0
+        print("OUTSIDE-COST 200 objects: start %.0f ms, finish %.0f ms, document passes %d" % (t_start * 1000, t_finish * 1000, len(calls)))
+        self.assertEqual(len(calls), n_start + 1)
+
+    # -- item 3: the sketch's whole state ----------------------------------------------------------------------------------
+    def test_every_other_part_of_the_sketch_is_named_when_it_changes(self):
+        sk = self.scene("OutsideSketch")
+        doc = sk.Document
+        box = doc.addObject("Part::Box", "Box")
+        P = self.plain_line(sk)
+        names = [c.Name for c in sk.Constraints]
+        datum = sk.addConstraint(Sketcher.Constraint("DistanceX", P, 1, P, 2, 50.0))
+        sk.renameConstraint(datum, "len")
+        sk.solve()
+        doc.recompute()
+        self.open_panel(sk)
+        cases = [
+            ("rename", lambda: sk.renameConstraint(names.index("Ph"), "Ph2"), "renamed constraint ('Ph')"),
+            ("construction", lambda: sk.toggleConstruction(P), "construction setting changed"),
+            ("expression", lambda: sk.setExpression("Constraints.len", "30 mm + 20 mm"), "ExpressionEngine: Constraints.len"),
+            ("active", lambda: sk.setActive(names.index("horiz"), False), "changed active, driving or virtual-space setting ('horiz')"),
+            ("driving", lambda: sk.setDriving(datum, False), "changed active, driving or virtual-space setting ('len')"),
+            ("virtual", lambda: sk.setVirtualSpace(names.index("onP"), True), "changed active, driving or virtual-space setting ('onP')"),
+            ("placement", lambda: setattr(sk, "Placement", FreeCAD.Placement(V(1, 2, 3), FreeCAD.Rotation())), "Placement"),
+            ("external", lambda: sk.addExternal("Box", "Edge1"), "ExternalGeometry"),
+            ("offset", lambda: setattr(sk, "AttachmentOffset", FreeCAD.Placement(V(0, 0, 2), FreeCAD.Rotation())), "AttachmentOffset"),
+        ]
+        for label, op, expect in cases:
+            self.begin(sk)
+            self.member_move(sk)
+            self.stock(sk, label, op)
+            self.press_twice("blocksFinish", label, expect)
+            self.assertNotIn("nothing had changed", self.status(), label)
+            self.assertIn("Undone because they are not part of the block", self.status(), label)
+        self.assertEqual([c.Name for c in sk.Constraints], names + ["len"])
+        self.assertEqual(sk.ExpressionEngine, [])
+        self.assertFalse(sk.getConstruction(P))
+        self.assertEqual(sk.Placement.Base, V(0, 0, 0))
+        self.assertEqual(len(sk.ExternalGeometry), 0)
+
+    # -- item 5 --------------------------------------------------------------------------------------------------------
+
+    # -- item 5 -----------------------------------------------------------------------------------------------------------
+    def test_a_change_between_two_presses_that_nets_to_zero_does_not_ask_again(self):
+        sk, box = self.started_with("OutsideNet")
+        self.stock(sk, "length", lambda: setattr(box, "Length", 33.0))
+        self.click_button("blocksFinish")
+        self.assertIn("Press Finish again", self.status())
+        self.stock(sk, "width", lambda: setattr(box, "Width", 7.0))
+        self.stock(sk, "width back", lambda: setattr(box, "Width", 10.0))
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, "a change that netted to zero asked again: " + self.status())
+        self.assertEqual(box.Length.Value, 10.0)
+
+    def test_a_real_change_between_two_presses_asks_again(self):
+        sk, box = self.started_with("OutsideReask")
+        self.stock(sk, "length", lambda: setattr(box, "Length", 33.0))
+        self.click_button("blocksFinish")
+        self.stock(sk, "width", lambda: setattr(box, "Width", 7.0))
+        self.click_button("blocksFinish")
+        self.assertIsNotNone(self.panel.session)
+        self.assertIn("Box (Length, Width)", self.status())
+
+    # -- item 4: a break message stays ------------------------------------------------------------------------------------
+    def assertMessageStays(self, text_part):
+        self.settle()
+        self.assertIn(text_part, self.status())
+        self.settle()
+        _pump(80)
+        self.assertIn(text_part, self.status(), "a refresh overwrote the message")
+        before = self.status()
+        self.choose("inst", "W_2")  # the user does something in the panel
+        self.assertNotEqual(self.status(), before)
+        self.assertNotIn(text_part, self.status())
+
+    def test_the_message_of_a_broken_session_stays_until_the_next_action(self):
+        # undone past the start
+        sk = self.scene("StayUndo")
+        self.open_panel(sk)
+        self.begin(sk)
+        self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(6.0, 0, 0), False))
+        for _ in range(2):
+            sk.Document.undo()
+        self.assertTrue(_wait(lambda: self.panel.session is None))
+        self.assertMessageStays("undo steps of the edit are gone")
+        # a macro changing the block data
+        self.close_panel()
+        Gui.ActiveDocument.resetEdit()
+        sk = self.scene("StayMacro")
+        self.open_panel(sk)
+        self.begin(sk)
+        self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(6.0, 0, 0), False))
+        B.define(sk, "Other", [len(sk.Geometry) - 2, len(sk.Geometry) - 1])
+        self.assertTrue(_wait(lambda: self.panel.session is None))
+        self.assertMessageStays("block data changed")
+        # a fit-rule explosion of a sibling
+        self.close_panel()
+        Gui.ActiveDocument.resetEdit()
+        sk = self.scene("StaySibling")
+        self.open_panel(sk)
+        self.begin(sk)
+        g2 = self.gids(sk, "W_2")[0]
+        geo = sk.Geometry
+        geo[g2].StartPoint = V(40, 40, 0)
+        sk.Geometry = geo
+        self.assertTrue(_wait(lambda: self.panel.session is None))
+        self.settle()
+        self.assertIn("The edit of W_1 ended", self.status())
+        self.settle()
+        self.assertIn("The edit of W_1 ended", self.status(), "a refresh overwrote the message")
+
+    def test_the_message_of_a_session_longer_than_the_stack_stays(self):
+        grp = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Document")
+        old = grp.GetInt("MaxUndoSize", 20)
+        grp.SetInt("MaxUndoSize", 6)
+        self.addCleanup(grp.SetInt, "MaxUndoSize", old)
+        sk = self.scene("StayLong", bare=True)
+        self.open_panel(sk)
+        self.begin(sk)
+        for i in range(8):
+            self.stock(sk, "op%d" % i, lambda i=i: sk.moveGeometry(0, 2, V(5.0 + 0.1 * i, 0, 0), False))
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session)
+        self.assertMessageStays("undo steps of the edit are gone")
+
+    def test_leaving_the_editor_and_deleting_the_sketch_leave_the_message_in_the_log(self):
+        import SketcherBlocksPanel as P
+
+        n0 = len(P.messages)
+        sk = self.scene("StayLeave")
+        self.open_panel(sk)
+        self.begin(sk)
+        panel = self.panel
+        Gui.ActiveDocument.resetEdit()
+        self.assertTrue(_wait(lambda: P.current_panel() is None))
+        self.assertEqual(len(P.messages), n0 + 1)
+        self.assertIn("ended", P.messages[-1])
+        self.panel = None

@@ -159,7 +159,7 @@ mutant(
 mutant(
     "cancel_leaves_the_session_entry",
     "Cancel ends the session without rolling its undo entries back",
-    [(PANEL, "        if not self._rollback():\n            self._restore(final)\n            self._session_broken(tr(\"the undo steps of the edit could not be rolled back\"))\n            return False\n        self._end_session(tr(\"The edit was cancelled", "        if False and not self._rollback():\n            self._restore(final)\n            self._session_broken(tr(\"the undo steps of the edit could not be rolled back\"))\n            return False\n        self._end_session(tr(\"The edit was cancelled")],
+    [(PANEL, "        if not self._rollback():\n            self._restore(final)\n            self._session_broken(tr(\"the undo steps of the edit could not be rolled back\"))\n            return False\n        text = tr(\"The edit was cancelled", "        if False and not self._rollback():\n            self._restore(final)\n            self._session_broken(tr(\"the undo steps of the edit could not be rolled back\"))\n            return False\n        text = tr(\"The edit was cancelled")],
     [CANCEL],
 )
 mutant(
@@ -261,13 +261,13 @@ mutant(
 mutant(
     "finish_does_not_name_what_it_undoes",
     "Finish rolls back moved plain geometry and deleted constraints without saying so first",
-    [(PANEL, '        if undone and s["warned"] != self._signature():', '        if False and undone and s["warned"] != self._signature():')],
+    [(PANEL, '        if undone and s["warned"] != self._signature(out):\n            # Finish keeps', '        if False and undone and s["warned"] != self._signature(out):\n            # Finish keeps')],
     [OUTSIDE, CPLAIN],
 )
 mutant(
     "the_warning_is_not_rearmed_by_a_further_change",
     "a second Finish goes on after any further change, because the state it compares never differs",
-    [(PANEL, '        return (sk.Document.UndoCount, sk.Document.RedoCount, hash(bytes(sk.dumpPropertyContent("Geometry"))), hash(bytes(sk.dumpPropertyContent("Constraints"))))', "        return 0")],
+    [(PANEL, '        return (B.content_hash(sk, "Geometry"), B.content_hash(sk, "Constraints"), repr(sorted(out.items())))', "        return 0")],
     [REARM],
 )
 mutant(
@@ -388,6 +388,141 @@ mutant(
 
 def target(fname, build):
     return os.path.join(build, "Mod", "Sketcher", fname)
+
+
+# -- run 061, second verifier's repairs: what Finish and Cancel undo outside the block, and the message that stays ----------
+OUTS = "TestBlocksPanelOutsideTheSession"
+O_OBJECTS = t(OUTS, "test_other_objects_are_named_before_finish_and_before_cancel")
+O_CANCEL1 = t(OUTS, "test_a_cancel_with_only_member_changes_is_one_press_and_restores_the_sketch")
+O_PAD = t(OUTS, "test_a_recompute_of_a_dependent_is_not_a_change_but_an_edit_of_its_input_is")
+O_CLEAN = t(OUTS, "test_a_recompute_in_a_session_on_an_untouched_document_raises_no_warning")
+O_COST = t(OUTS, "test_the_whole_document_is_read_only_at_start_finish_and_cancel")
+O_SKETCH = t(OUTS, "test_every_other_part_of_the_sketch_is_named_when_it_changes")
+O_NET = t(OUTS, "test_a_change_between_two_presses_that_nets_to_zero_does_not_ask_again")
+O_REASK = t(OUTS, "test_a_real_change_between_two_presses_asks_again")
+O_STAY = t(OUTS, "test_the_message_of_a_broken_session_stays_until_the_next_action")
+O_STAYLONG = t(OUTS, "test_the_message_of_a_session_longer_than_the_stack_stays")
+
+mutant(
+    "outside_objects_not_read",
+    "Finish and Cancel do not look at the rest of the document",
+    [(API, "    if full:\n        out[\"sketch_props\"]", "    if False:\n        out[\"sketch_props\"]")],
+    [O_OBJECTS, O_SKETCH],
+)
+mutant(
+    "outside_added_objects_not_named",
+    "an object added during the session is not counted",
+    [(API, "for n in now if n not in before)", "for n in now if False)")],
+    [O_OBJECTS],
+)
+mutant(
+    "outside_deleted_objects_not_named",
+    "an object deleted during the session is not counted",
+    [(API, "for n in before if n not in now)", "for n in before if False)")],
+    [O_OBJECTS],
+)
+mutant(
+    "outside_shapes_count_as_changes",
+    "a recomputed shape of a dependent of the sketch counts as the user's change",
+    [(API, "        if \"Shape\" in obj.getTypeIdOfProperty(prop):\n            return False\n", "        if False:\n            return False\n")],
+    [O_PAD, O_CLEAN],
+)
+mutant(
+    "outside_computed_flags_ignored",
+    "properties flagged Output, ReadOnly or Transient count as the user's change",
+    [(API, "_COMPUTED_STATUS = (\"Output\", \"ReadOnly\", \"Transient\")", "_COMPUTED_STATUS = ()")],
+    [O_PAD, O_CLEAN],
+)
+mutant(
+    "outside_input_of_a_dependent_ignored",
+    "a Pad's Length, an input of an object over the sketch, is not compared",
+    [(API, "    if prop in _DERIVED_FIELDS or (own and prop in _OWN_FIELDS):\n", "    if prop in _DERIVED_FIELDS or (own and prop in _OWN_FIELDS) or prop == \"Length\":\n")],
+    [O_PAD, O_OBJECTS],
+)
+mutant(
+    "outside_other_sketches_geometry_skipped",
+    "the geometry of another sketch is left out like the session sketch's own",
+    [(API, "(own and prop in _OWN_FIELDS)", "(prop in _OWN_FIELDS)")],
+    [O_OBJECTS],
+)
+mutant(
+    "cancel_does_not_warn",
+    "Cancel rolls the document back without naming what is outside the block",
+    [(PANEL, "if undone and s[\"warned\"] != self._signature(out):\n            # Cancel", "if False and s[\"warned\"] != self._signature(out):\n            # Cancel")],
+    [O_OBJECTS],
+)
+mutant(
+    "cancel_always_warns",
+    "Cancel asks twice even when only the block's members changed",
+    [(PANEL, "if undone and s[\"warned\"] != self._signature(out):\n            # Cancel", "if s[\"warned\"] != self._signature(out):\n            # Cancel")],
+    [O_CANCEL1],
+)
+mutant(
+    "outside_constraint_rename_not_compared",
+    "a renamed constraint is not a change outside the block",
+    [(API, "        if f[0] != facts[0]:", "        if False:")],
+    [O_SKETCH],
+)
+mutant(
+    "outside_constraint_flags_not_compared",
+    "a constraint made inactive, reference or virtual is not a change outside the block",
+    [(API, "        if f[1:] != facts[1:]:", "        if False:")],
+    [O_SKETCH],
+)
+mutant(
+    "outside_construction_not_compared",
+    "the construction flag of plain geometry is not compared",
+    [(API, "        if bool(sk.getConstruction(i)) != flag:", "        if False:")],
+    [O_SKETCH],
+)
+mutant(
+    "outside_sketch_properties_not_compared",
+    "an expression, the placement or the external geometry of the sketch is not compared",
+    [(API, "out[\"sketch_props\"] = _state_diff(", "out[\"sketch_props\"] = [] and _state_diff(")],
+    [O_SKETCH],
+)
+mutant(
+    "outside_hash_includes_the_clock",
+    "a property's content is hashed with the second it was written in, so an untouched document reads as changed after a tick",
+    [(API, "return hash(tuple((n, z.read(n)) for n in sorted(z.namelist())))", "return hash(raw)")],
+    [O_CLEAN],
+)
+mutant(
+    "outside_state_at_start_empty",
+    "the document's state is not taken when the session starts",
+    [(API, "\"doc\": _document_state(sk)}", "\"doc\": {}}")],
+    [O_CLEAN],
+)
+mutant(
+    "warning_signature_counts_undo_steps",
+    "a change that nets to zero between two presses asks again because the undo stack moved",
+    [(PANEL, "        return (B.content_hash(sk, \"Geometry\")", "        return (sk.Document.UndoCount, B.content_hash(sk, \"Geometry\")")],
+    [O_NET],
+)
+mutant(
+    "warning_signature_ignores_outside",
+    "a change outside the sketch between two presses does not ask again",
+    [(PANEL, "repr(sorted(out.items())))", "\"\")")],
+    [O_REASK],
+)
+mutant(
+    "document_read_on_every_refresh",
+    "the whole document is read for the session label on every refresh, not only at start, Finish and Cancel",
+    [(PANEL, "    def _outside(self, full=False):", "    def _outside(self, full=True):")],
+    [O_COST],
+)
+mutant(
+    "break_message_overwritten_by_refresh",
+    "the list refresh puts the definition and instance count over the message that ended an edit",
+    [(PANEL, "            if self._sticky is None:  # a message", "            if True:  # a message")],
+    [O_STAY, O_STAYLONG],
+)
+mutant(
+    "break_message_never_cleared",
+    "a message that ended an edit stays after the user acts in the panel",
+    [(PANEL, "        if self._sticky is not None:\n            self._sticky = None\n            self.schedule()", "        if False:\n            self._sticky = None\n            self.schedule()")],
+    [O_STAY, O_STAYLONG],
+)
 
 
 def patched_files(m, build):

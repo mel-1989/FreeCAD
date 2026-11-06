@@ -8,6 +8,7 @@ from SketcherTests.TestSketcherBlocksPanelGui import (
     TestBlocksPanelEditResults,
     TestBlocksPanelEditUndo,
     TestBlocksPanelOthers,
+    TestBlocksPanelOutsideTheSession,
     TestBlocksPanelReachable,
     TestBlocksPanelSelection,
     TestBlocksPanelSpeed,
@@ -23,6 +24,7 @@ True if (
     and TestBlocksPanelEditResults
     and TestBlocksPanelEditUndo
     and TestBlocksPanelOthers
+    and TestBlocksPanelOutsideTheSession
     and TestBlocksPanelReachable
     and TestBlocksPanelSelection
     and TestBlocksPanelSpeed

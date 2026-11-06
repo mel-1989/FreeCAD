@@ -293,6 +293,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
         self._own_change = False
         self._tree_sync = False
         self._closing = False
+        self._sticky = None  # the message that ended an edit; refresh leaves it on screen until the next user action
         self._placing = None  # the definition being placed by a click
         self._pressed = False
         self._pointer_busy = False
@@ -408,7 +409,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
         b.setObjectName(name)
         b.setToolTip(tip)
         b.setAccessibleName(text)
-        b.clicked.connect(lambda *_: slot())
+        b.clicked.connect(lambda *_: (self._user_action(), slot()))
         return b
 
     # -- reading the sketch -------------------------------------------------------
@@ -440,7 +441,8 @@ class BlocksPanel(QtWidgets.QDockWidget):
             self._update_session_label()
         if self.session is None and not self._placing:
             nd, ni = len(info["definitions"]), len(info["instances"])
-            self.status.setText(tr("%d definition(s), %d instance(s).") % (nd, ni) if nd else tr("Select geometry, name it and choose Define to make a block."))
+            if self._sticky is None:  # a message that ended an edit stays until the user next does something in the panel
+                self.status.setText(tr("%d definition(s), %d instance(s).") % (nd, ni) if nd else tr("Select geometry, name it and choose Define to make a block."))
         self._update_buttons()
 
     def _fill(self, info, chosen):
@@ -777,9 +779,16 @@ class BlocksPanel(QtWidgets.QDockWidget):
         return self._run(lambda: B.delete_definition(self.sketch, name), lambda _: tr("Deleted the definition %s.") % name)
 
     # -- selection both ways --------------------------------------------------------------
+    def _user_action(self):
+        """The user did something in the panel: a message that ended an edit has been on screen long enough."""
+        if self._sticky is not None:
+            self._sticky = None
+            self.schedule()
+
     def _on_choice(self):
         if self._tree_sync:
             return
+        self._user_action()
         self._update_buttons()
         c = self.chosen()
         if c is None or c[0] != "inst" or not self._alive():
@@ -977,7 +986,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
             snapshot = {p: self.sketch.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData")}
             start_data = self.sketch.BlockData
             known = {self.sketch.getGeometryId(i) for i in range(len(self.sketch.Geometry))}
-            outside = B.session_outside_state(self.sketch, inst["m"].values())
+            outside = B.session_outside_state(self.sketch, inst["m"].values())  # one pass over the document, here and at Finish and Cancel only
             entry = tr("Edit block %s") % name
             tail = list(doc.UndoNames)
             B.explode(self.sketch, name, label=entry)
@@ -1020,10 +1029,11 @@ class BlocksPanel(QtWidgets.QDockWidget):
         self.refresh()
         return True
 
-    def _outside(self):
-        """What differs from the start outside the instance's members (see SketcherBlocks.session_outside_changes)."""
+    def _outside(self, full=False):
+        """What differs from the start outside the instance's members (see SketcherBlocks.session_outside_changes).  The
+        pass over the whole document (full) is made only when the session starts, at Finish and at Cancel."""
         s = self.session
-        return B.session_outside_changes(self.sketch, s["outside"], s["members"].values())
+        return B.session_outside_changes(self.sketch, s["outside"], s["members"].values(), full=full)
 
     def session_added_constraints(self):
         """How many constraints now in the sketch were not there when the edit began."""
@@ -1062,14 +1072,36 @@ class BlocksPanel(QtWidgets.QDockWidget):
         if out["changed_constraints"]:
             n = len(out["changed_constraints"])
             parts.append((tr("%d constraint with a changed value (%s)") if n == 1 else tr("%d constraints with a changed value (%s)")) % (n, names("'%s'" % x for x in out["changed_constraints"])))
+        if out["construction"]:
+            n = len(out["construction"])
+            parts.append((tr("%d element with its construction setting changed (%s)") if n == 1 else tr("%d elements with their construction setting changed (%s)")) % (n, names(member_names(self.sketch, out["construction"]))))
+        for key, one, many in (
+            ("renamed_constraints", tr("%d renamed constraint (%s)"), tr("%d renamed constraints (%s)")),
+            ("flag_constraints", tr("%d constraint with a changed active, driving or virtual-space setting (%s)"), tr("%d constraints with a changed active, driving or virtual-space setting (%s)")),
+        ):
+            if out[key]:
+                n = len(out[key])
+                parts.append((one if n == 1 else many) % (n, names("'%s'" % x for x in out[key])))
+        if out["sketch_props"]:
+            n = len(out["sketch_props"])
+            parts.append((tr("%d changed sketch property (%s)") if n == 1 else tr("%d changed sketch properties (%s)")) % (n, names(out["sketch_props"])))
+        for key, one, many in (
+            ("objects_added", tr("%d added object (%s)"), tr("%d added objects (%s)")),
+            ("objects_deleted", tr("%d deleted object (%s)"), tr("%d deleted objects (%s)")),
+            ("objects_changed", tr("%d other object with a changed property (%s)"), tr("%d other objects with changed properties (%s)")),
+        ):
+            if out[key]:
+                n = len(out[key])
+                parts.append((one if n == 1 else many) % (n, names(out[key])))
         if not parts:
             return ""
         return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + tr(" and ") + parts[-1]
 
-    def _signature(self):
-        """Changes in a way that any further change to the sketch or its undo stack shows."""
+    def _signature(self, out):
+        """The state a warning was given for: the sketch's geometry and constraints and what is listed in `out`.  A change
+        that nets to zero between two presses gives the same signature and does not ask again; any other change does."""
         sk = self.sketch
-        return (sk.Document.UndoCount, sk.Document.RedoCount, hash(bytes(sk.dumpPropertyContent("Geometry"))), hash(bytes(sk.dumpPropertyContent("Constraints"))))
+        return (B.content_hash(sk, "Geometry"), B.content_hash(sk, "Constraints"), repr(sorted(out.items())))
 
     def _rollback(self):
         """Undo the session's entries, counted from its start, and clear what is left to redo.  Returns False when their
@@ -1111,6 +1143,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
 
     def _say(self, text):
         messages.append(text)
+        self._sticky = text
         self.status.setText(text)
         App.Console.PrintMessage("Sketch blocks: %s\n" % text)
 
@@ -1144,7 +1177,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
         doc = sk.Document
         try:
             res = B.session_changes(sk, s["definition"], s["placement"], s["members"], s["known"])
-            out = self._outside()
+            out = self._outside(full=True)
         except B.SketchBlockError as exc:
             self.status.setText(_sentence(str(exc)))
             return False
@@ -1152,10 +1185,10 @@ class BlocksPanel(QtWidgets.QDockWidget):
             self.status.setText(tr("The result cannot be read (%s); the edit goes on.") % _sentence(str(exc)).rstrip("."))
             return False
         undone = self._undone_text(out)
-        if undone and s["warned"] != self._signature():
+        if undone and s["warned"] != self._signature(out):
             # Finish keeps only the block's change; the rest of the session is rolled back.  Say so, and wait for a second Finish
             # with nothing further changed.
-            s["warned"] = self._signature()
+            s["warned"] = self._signature(out)
             self.status.setText(tr("Finish will undo %s that are not part of the block. Press Finish again to accept, or Cancel.") % undone)
             return False
         dropped = out["added_constraints"]
@@ -1235,14 +1268,28 @@ class BlocksPanel(QtWidgets.QDockWidget):
         if not self._editing_ok() or self._busy_elsewhere() or not self._session_valid():
             return False
         s = self.session
+        try:
+            out = self._outside(full=True)
+        except Exception as exc:
+            self.status.setText(tr("The result cannot be read (%s); the edit goes on.") % _sentence(str(exc)).rstrip("."))
+            return False
+        undone = self._undone_text(out)
+        if undone and s["warned"] != self._signature(out):
+            # Cancel rolls the whole document back by undo, so what was changed outside the block goes too: say so first
+            s["warned"] = self._signature(out)
+            self.status.setText(tr("Cancel will undo %s that are not part of the block, as well as the edit. Press Cancel again to go on.") % undone)
+            return False
         final = {p: self.sketch.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData")}
         if not self._rollback():
             self._restore(final)
             self._session_broken(tr("the undo steps of the edit could not be rolled back"))
             return False
-        self._end_session(tr("The edit was cancelled; the sketch is as it was before it."))
+        text = tr("The edit was cancelled; the sketch is as it was before it.")
+        if undone:
+            text += " " + tr("Undone because they are not part of the block: %s.") % undone
+        self._end_session(None)
         self.refresh()
-        self.status.setText(tr("The edit was cancelled; the sketch is as it was before it."))
+        self.status.setText(text)
         return True
 
     # -- keys -------------------------------------------------------------------------------------

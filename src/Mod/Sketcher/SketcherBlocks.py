@@ -722,56 +722,162 @@ def _constraint_key(c, gid_of):
     return (c.Type, ref(c.First, c.FirstPos), ref(c.Second, c.SecondPos), ref(c.Third, c.ThirdPos))
 
 
+# Which properties count as the user's own state when Finish or Cancel rolls the document back by undo.  A property is
+# the user's input unless one of these holds: it is flagged Output, ReadOnly or Transient (a recompute writes those),
+# it holds a shape (the result of a recompute), or it is one of the derived fields of a sketch named below.  The session's
+# own sketch also leaves out its Geometry, Constraints and BlockData, which are compared member by member, not as a whole.  The same rule serves a dependent of the session's sketch
+# (a Pad over it recomputes during the session and that recompute is rolled back legitimately: its Shape, Placement and
+# preview carry the flags or types above and do not count) and every other object: a Pad's Length, a Box's Length,
+# an expression or a link do not carry them and do count.
+_COMPUTED_STATUS = ("Output", "ReadOnly", "Transient")
+_DERIVED_FIELDS = frozenset({"FullyConstrained", "ExternalGeo", "ExternalTypes", "AttacherType"})
+_OWN_FIELDS = frozenset({"BlockData", "Constraints", "Geometry"})
+
+
+def _is_input(obj, prop, own):
+    if prop in _DERIVED_FIELDS or (own and prop in _OWN_FIELDS):
+        return False
+    try:
+        if "Shape" in obj.getTypeIdOfProperty(prop):
+            return False
+        st = obj.getPropertyStatus(prop)
+    except Exception:
+        return False
+    return not any(x in _COMPUTED_STATUS for x in st if isinstance(x, str))
+
+
+def content_hash(obj, prop):
+    """A hash of what a property serialises to.  dumpPropertyContent returns a zip archive whose entries carry the time they
+    were written, so the same content differs from one second to the next; the entries' contents are hashed instead."""
+    import io
+    import zipfile
+
+    raw = bytes(obj.dumpPropertyContent(prop))
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            return hash(tuple((n, z.read(n)) for n in sorted(z.namelist())))
+    except Exception:
+        return hash(raw)
+
+
+def _object_state(obj, own=False):
+    """{property: hash of its serialised content} over an object's input properties, plus the expressions by path."""
+    out = {}
+    for prop in obj.PropertiesList:
+        if not _is_input(obj, prop, own):
+            continue
+        try:
+            out[prop] = content_hash(obj, prop)
+        except Exception:
+            out[prop] = hash(repr(getattr(obj, prop, None)))
+    out["\0expr"] = dict(getattr(obj, "ExpressionEngine", None) or [])
+    return out
+
+
+def _state_diff(before, now):
+    """The properties that differ between two _object_state results; an expression change names its path."""
+    props = []
+    for p in sorted((set(before) | set(now)) - {"\0expr"}):
+        if before.get(p) != now.get(p):
+            if p == "ExpressionEngine":
+                e0, e1 = before["\0expr"], now["\0expr"]
+                paths = sorted(k.lstrip(".") for k in set(e0) | set(e1) if e0.get(k) != e1.get(k))
+                p = "ExpressionEngine: %s" % ", ".join(paths) if paths else p
+            props.append(p)
+    return props
+
+
+def _document_state(sk):
+    """Every object of the document but the sketch itself: label, type and input properties."""
+    return {o.Name: (o.Label, o.TypeId, _object_state(o)) for o in sk.Document.Objects if o.Name != sk.Name}
+
+
+def _con_facts(c):
+    return (c.Name, bool(c.Driving), bool(c.IsActive), bool(c.InVirtualSpace))
+
+
 def session_outside_state(sk, member_gids):
     """What an edit session must not lose without saying so, taken before it begins: where every geometry that is not one
-    of the instance's members is (by persistent id), and every constraint (by what it names, with its value and a label)."""
+    of the instance's members is (by persistent id, with its construction flag), every constraint (by what it names, with
+    its value, name, active, driving and virtual-space settings and a label), every other input property of the sketch
+    and every other object of the document."""
     member_gids = set(member_gids)
     geo = sk.Geometry
     gid_of = {i: sk.getGeometryId(i) for i in range(len(geo))}
-    plain = {gid_of[i]: _outside_numbers(g) for i, g in enumerate(geo) if gid_of[i] not in member_gids}
-    cons = [(_constraint_key(c, gid_of), float(c.Value), _constraint_label(c, k)) for k, c in enumerate(sk.Constraints)]
-    return {"plain": plain, "cons": cons}
+    plain = {gid_of[i]: (_outside_numbers(g), bool(sk.getConstruction(i))) for i, g in enumerate(geo) if gid_of[i] not in member_gids}
+    cons = [(_constraint_key(c, gid_of), float(c.Value), _constraint_label(c, k), _con_facts(c)) for k, c in enumerate(sk.Constraints)]
+    return {"plain": plain, "cons": cons, "sketch": _object_state(sk, True), "doc": _document_state(sk)}
 
 
-def session_outside_changes(sk, state, member_gids):
+def session_outside_changes(sk, state, member_gids, full=False):
     """What differs from `state` (see :func:`session_outside_state`) outside the instance's members, and which constraints are
-    new.  Finish keeps only the block's own change, so everything listed here other than 'added' is undone by it.
-    Returns {'moved': [current GeoIds], 'deleted': [count of deleted plain geometries], 'deleted_constraints': [labels],
-    'changed_constraints': [labels], 'added_constraints': count}.  A constraint that went with a deleted member is the
-    block change's business and is not listed."""
+    new.  Finish keeps only the block's own change, so everything listed here other than 'added_constraints' is undone by it.
+    Returns {'moved': [current GeoIds], 'deleted': count of deleted plain geometries, 'construction': [current GeoIds whose
+    construction flag changed], 'deleted_constraints': [labels], 'changed_constraints': [labels, value changed],
+    'renamed_constraints': [labels], 'flag_constraints': [labels, active, driving or virtual-space setting changed],
+    'added_constraints': count, 'sketch_props': [other sketch properties that changed], 'objects_added': [labels],
+    'objects_deleted': [labels], 'objects_changed': ['Label (property, ...)']}.  The last four need a pass over the
+    whole document and are filled only with full=True (at Finish and Cancel, never on a refresh).  A constraint that went
+    with a deleted member is the block change's business and is not listed."""
     member_gids = set(member_gids)
     geo = sk.Geometry
     idmap = {sk.getGeometryId(i): i for i in range(len(geo))}
     gid_of = {i: g for g, i in idmap.items()}
-    moved, deleted = [], 0
-    for gid, nums in state["plain"].items():
+    moved, deleted, construction = [], 0, []
+    for gid, (nums, flag) in state["plain"].items():
         if gid not in idmap:
             deleted += 1
             continue
-        now = _outside_numbers(geo[idmap[gid]])
+        i = idmap[gid]
+        now = _outside_numbers(geo[i])
         if len(now) != len(nums) or any(abs(a - b) > _OUTSIDE_TOL for a, b in zip(now, nums)):
-            moved.append(idmap[gid])
+            moved.append(i)
+        if bool(sk.getConstruction(i)) != flag:
+            construction.append(i)
     pool = {}
     for k, c in enumerate(sk.Constraints):
-        pool.setdefault(_constraint_key(c, gid_of), []).append(float(c.Value))
+        pool.setdefault(_constraint_key(c, gid_of), []).append((float(c.Value), _con_facts(c)))
     lost_members = {g for g in member_gids if g not in idmap}
-    gone, changed = [], []
-    for key, value, label in state["cons"]:
+    gone, changed, renamed, flagged = [], [], [], []
+    for key, value, label, facts in state["cons"]:
         have = pool.get(key)
         if not have:
             if not any(r[0][0] == "g" and r[0][1] in lost_members for r in key[1:]):
                 gone.append(label)
             continue
-        v = have.pop(0)
+        v, f = have.pop(0)
         if abs(v - value) > 1e-9 * max(1.0, abs(value)):
             changed.append(label)
-    return {
+        if f[0] != facts[0]:
+            renamed.append(label)
+        if f[1:] != facts[1:]:
+            flagged.append(label)
+    out = {
         "moved": sorted(moved),
         "deleted": deleted,
+        "construction": sorted(construction),
         "deleted_constraints": gone,
         "changed_constraints": changed,
+        "renamed_constraints": renamed,
+        "flag_constraints": flagged,
         "added_constraints": sum(len(v) for v in pool.values()),
+        "sketch_props": [],
+        "objects_added": [],
+        "objects_deleted": [],
+        "objects_changed": [],
     }
+    if full:
+        out["sketch_props"] = _state_diff(state["sketch"], _object_state(sk, True))
+        before, now = state["doc"], _document_state(sk)
+        out["objects_added"] = sorted(now[n][0] for n in now if n not in before)
+        out["objects_deleted"] = sorted(before[n][0] for n in before if n not in now)
+        for n in sorted(set(before) & set(now)):
+            props = _state_diff(before[n][2], now[n][2])
+            if before[n][0] != now[n][0]:
+                props.insert(0, "Label")
+            if props:
+                out["objects_changed"].append("%s (%s)" % (now[n][0], ", ".join(props)))
+    return out
 
 
 def _reshape(geo, t, g):
