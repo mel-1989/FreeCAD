@@ -58,6 +58,7 @@ from SketcherTests.TestSketchBlockCurves import TestCurveDefine
 from SketcherTests.TestSketchBlockCurves import TestCurveInternal
 from SketcherTests.TestSketchBlockCurves import TestCurveTools
 from SketcherTests.TestSketchBlockCurves import TestCurveEdit
+from SketcherTests.TestSketchBlockCurves import TestCurveStructureFit
 from SketcherTests.TestSketchBlockCurves import TestCurvePersistence
 from SketcherTests.TestSketchBlockCurves import TestCurveLibrary
 from SketcherTests.TestSketchBlockCurves import TestCurveSpeed

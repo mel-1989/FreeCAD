@@ -715,6 +715,47 @@ class TestCurveTools(CurvesCase):
             self.assertIn(outcomes[("spline", tool)], ("refused/kept", "done/exploded"), tool)
 
 
+class TestCurveStructureFit(CurvesCase):
+    """A member whose weight, multiplicity list or knots no longer match the definition is not read as fitting."""
+
+    def test_a_changed_weight_explodes_the_instance(self):
+        sk, names = build(self.doc, C.Spec("w", [rng_geos()["spline"]]), [(4, -3, 0.9)])
+        g = member_geos(sk, names[0])[1][0]
+        geo = sk.Geometry
+        geo[g].setWeight(2, geo[g].getWeights()[1] + 0.5)
+        sk.Geometry = geo
+        sk.solve()
+        self.assertEqual(sk.getBlockInstanceCount(), 0)
+        self.assertEqual(B.blocks(sk)["instances"], {})
+
+    def test_a_changed_multiplicity_list_does_not_fit(self):
+        sp = Part.BSplineCurve()
+        sp.buildFromPolesMultsKnots([V(0, 0, 0), V(2, 5, 0), V(5, 6, 0), V(8, 2, 0), V(11, 7, 0), V(14, 3, 0), V(17, 6, 0)], [4, 1, 2, 4], [0, 1, 2, 3], False, 3)
+        sk, names = build(self.doc, C.Spec("mult", [sp]), [(4, -3, 0.9)])
+        d = json.loads(sk.BlockData)
+        key = next(iter(d["defs"]["blk"]["members"]))
+        g = d["defs"]["blk"]["members"][key]["g"]
+        n = int(g[2])
+        m = int(g[3 + 3 * n])
+        at = 4 + 3 * n + m
+        i, j = next((i, j) for i in range(1, m - 1) for j in range(i + 1, m - 1) if g[at + i] != g[at + j])
+        g[at + i], g[at + j] = g[at + j], g[at + i]  # the same sum, a different curve
+        sk.BlockData = json.dumps(d)
+        sk.solve()
+        self.assertEqual(sk.getBlockInstanceCount(), 0)
+
+    def test_a_changed_knot_does_not_fit(self):
+        sk, names = build(self.doc, C.Spec("k", [rng_geos()["spline"]]), [(4, -3, 0.9)])
+        d = json.loads(sk.BlockData)
+        key = next(iter(d["defs"]["blk"]["members"]))
+        g = d["defs"]["blk"]["members"][key]["g"]
+        n = int(g[2])
+        g[4 + 3 * n + 1] += 1e-3  # an interior knot of the definition
+        sk.BlockData = json.dumps(d)
+        sk.solve()
+        self.assertEqual(sk.getBlockInstanceCount(), 0)
+
+
 class TestCurveEdit(CurvesCase):
     """Check 10: update_definition and rigid_fit with the new kinds."""
 
@@ -916,6 +957,7 @@ class TestCurveLibrary(CurvesCase):
             "e_neg_minor": ("e", [0, 0, 3, 0, -2]),
             "e_zero_minor": ("e", [0, 0, 3, 0, 0]),
             "e_huge_axis": ("e", [0, 0, 2e6, 0, 2]),
+            "e_axis_over_limit": ("e", [-9e5, 0, 9e5, 0, 2]),
             "e_bool": ("e", [0, 0, True, 0, 2]),
             "o_short": ("o", good_e + [0]),
             "o_empty_arc": ("o", good_e + [1, 1]),

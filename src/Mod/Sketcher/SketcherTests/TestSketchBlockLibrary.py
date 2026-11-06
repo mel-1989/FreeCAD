@@ -1161,7 +1161,7 @@ class TestPlacementQuantities(LibCase):
         ]:
             with self.assertRaises(B.SketchBlockError) as cm:
                 B.insert(sk, "L", *args)
-            self.assertIn("must be", str(cm.exception))
+            self.assertIn("such as", str(cm.exception))  # it says what is wanted: a length such as 3 mm, an angle such as 90 deg
             with self.assertRaises(B.SketchBlockError):
                 B.insert_many(sk, "L", [(0, 0, 0), args])
         self.assertEqual(before, {p: sk.dumpPropertyContent(p) for p in SNAP})
