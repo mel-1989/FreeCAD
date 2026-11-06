@@ -890,7 +890,7 @@ class TestBlockEditing(BlocksCase):
 
     def test_refusals_change_nothing(self):
         sk, ids, cs = self.named_scene()
-        sk.addGeometry(Part.Ellipse(V(20, 20, 0), 3.0, 1.0), False)
+        sk.addGeometry(Part.ArcOfHyperbola(Part.Hyperbola(V(20, 20, 0), 3.0, 1.0), 0.0, 1.0), False)
         sk.addGeometry(Part.LineSegment(V(30, 0, 0), V(31, 0, 0)), False)
         sk.addGeometry(Part.Point(V(40, 0, 0)), False)
         ell = len(sk.Geometry) - 3
@@ -901,7 +901,7 @@ class TestBlockEditing(BlocksCase):
         state = sk.State
         member = B.blocks(sk)["instances"]["T_1"]["geo_ids"][0]
         bad = [
-            lambda: B.define(sk, "E", [ell]),  # ellipse: not before 5b
+            lambda: B.define(sk, "E", [ell]),  # a hyperbola stays refused
             lambda: B.define(sk, "X", []),  # empty
             lambda: B.define(sk, "T", [line, point]),  # duplicate name
             lambda: B.define(sk, "X", [point]),  # a lone point cannot turn

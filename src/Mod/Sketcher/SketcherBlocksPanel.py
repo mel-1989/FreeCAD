@@ -643,7 +643,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
                     raise B.SketchBlockError(tr("A constraint cannot be part of a block; select geometry."))
                 el = RP.element_of_selection_name(self.sketch, sub)
                 if el is None:
-                    raise B.SketchBlockError(tr("%s cannot be part of a block; select points, lines, circles or arcs.") % sub)
+                    raise B.SketchBlockError(tr("%s cannot be part of a block; select points, lines, circles, arcs, ellipses or B-splines.") % sub)
                 geo, pos = el
                 if geo in (-1, -2):
                     raise B.SketchBlockError(tr("The origin and the axes cannot be part of a block."))
@@ -658,13 +658,17 @@ class BlocksPanel(QtWidgets.QDockWidget):
 
         def go():
             ids = self.user_geo_ids()
-            return B.define(self.sketch, name, ids), len(ids)
+            rep = B.define_report(self.sketch, name, ids)
+            return rep["name"], len(ids) - len(rep["left_out"]), len(rep["left_out"])
 
         res = self._run(go)
         if res and res is not True:
             self._choose_row("def", res[0])
             self._update_buttons()
-            self.status.setText(tr("Defined '%s' from %d member(s). The geometry is still plain geometry; Insert places copies.") % res)
+            text = tr("Defined '%s' from %d member(s). The geometry is still plain geometry; Insert places copies.") % res[:2]
+            if res[2]:
+                text += " " + tr("Left out %d axes, foci, pole circles or knot points that belong to a curve; a block holds the curve alone.") % res[2]
+            self.status.setText(text)
             self.name_edit.clear()
         return res
 
