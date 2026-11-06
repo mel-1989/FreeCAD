@@ -563,9 +563,11 @@ int SketchObject::explodeInvalidBlocks()
     const auto& parsed = parsedBlocks();
     std::vector<bool> ok = validBlockInstances();
     std::vector<std::string> bad;
+    std::vector<long> badIds;
     for (size_t n = 0; n < parsed.size(); ++n) {
         if (!ok[n]) {
             bad.push_back(parsed[n].name);
+            badIds.insert(badIds.end(), parsed[n].ids.begin(), parsed[n].ids.end());
         }
     }
     if (bad.empty()) {
@@ -584,6 +586,7 @@ int SketchObject::explodeInvalidBlocks()
     inExplodeBlocks = true;
     BlockData.setValue(j.dump());
     inExplodeBlocks = false;
+    restoreBlockPoleConstraintsOf(badIds);
     Base::Console().warning(
         "{}: {} block instance(s) no longer fit their definition or lost geometry and were exploded\n",
         getNameInDocument() ? getNameInDocument() : "Sketch",
@@ -611,12 +614,16 @@ int SketchObject::explodeBlocksOf(const std::vector<int>& geoIds)
     }
     nlohmann::json j;
     std::vector<std::string> hit;
+    std::vector<long> hitIds;
     try {
         j = nlohmann::json::parse(BlockData.getValue());
         for (const auto& [iname, idata] : j.at("inst").items()) {
             for (const auto& [key, id] : idata.at("m").items()) {
                 if (ids.count(id.get<long>())) {
                     hit.push_back(iname);
+                    for (const auto& [k2, id2] : idata.at("m").items()) {
+                        hitIds.push_back(id2.get<long>());
+                    }
                     break;
                 }
             }
@@ -634,10 +641,92 @@ int SketchObject::explodeBlocksOf(const std::vector<int>& geoIds)
     inExplodeBlocks = true;
     BlockData.setValue(j.dump());
     inExplodeBlocks = false;
+    restoreBlockPoleConstraintsOf(hitIds);
     Base::Console().warning(
         "{}: {} block instance(s) were exploded by an edit of one of their members\n",
         getNameInDocument() ? getNameInDocument() : "Sketch",
         hit.size()
     );
     return static_cast<int>(hit.size());
+}
+
+int SketchObject::restoreBlockPoleConstraintsOf(const std::vector<long>& persistentIds)
+{
+    const auto& geos = getInternalGeometry();
+    std::set<long> wanted(persistentIds.begin(), persistentIds.end());
+    std::vector<int> geoIds;
+    for (size_t i = 0; i < geos.size(); ++i) {
+        if (wanted.count(GeometryFacade::getFacade(geos[i])->getId())) {
+            geoIds.push_back(static_cast<int>(i));
+        }
+    }
+    return restoreBlockPoleConstraints(geoIds);
+}
+
+int SketchObject::restoreBlockPoleConstraints(const std::vector<int>& geoIds)
+{
+    // An instance's spline has its weights tied to the definition's, so exposing its pole circles adds no Weight or
+    // Equal constraint (they would hold the same parameters twice). Once the instance is plain geometry nothing ties
+    // the weights any more: give the circles what exposeInternalGeometry gives new ones, so the spline has the
+    // degrees of freedom and the drag behaviour of a stock one.
+    if (restoringPoles) {
+        return 0;
+    }
+    std::vector<Constraint*> added;
+    const auto& vals = Constraints.getValues();
+    const int count = static_cast<int>(getInternalGeometry().size());
+    for (int geoId : geoIds) {
+        if (geoId < 0 || geoId >= count || isValidBlockMember(geoId)) {
+            continue;
+        }
+        const auto* bsp = dynamic_cast<const Part::GeomBSplineCurve*>(getInternalGeometry()[geoId]);
+        if (!bsp) {
+            continue;
+        }
+        const std::vector<double> weights = bsp->getWeights();
+        std::vector<int> circle(weights.size(), GeoEnum::GeoUndef);
+        for (const auto* c : vals) {
+            if (c->Type == Sketcher::InternalAlignment && c->Second == geoId
+                && c->AlignmentType == Sketcher::BSplineControlPoint && c->InternalAlignmentIndex >= 0
+                && static_cast<size_t>(c->InternalAlignmentIndex) < circle.size()) {
+                circle[c->InternalAlignmentIndex] = c->First;
+            }
+        }
+        auto has = [&](Sketcher::ConstraintType type, int first, int second) {
+            return std::ranges::any_of(vals, [&](const Constraint* c) {
+                return c->Type == type && c->First == first && (second == GeoEnum::GeoUndef || c->Second == second);
+            });
+        };
+        bool firstConstrained = circle[0] != GeoEnum::GeoUndef && has(Sketcher::Weight, circle[0], GeoEnum::GeoUndef);
+        for (size_t index = 0; index < circle.size(); ++index) {
+            if (circle[index] == GeoEnum::GeoUndef) {
+                continue;
+            }
+            const bool already = index == 0 ? firstConstrained : has(Sketcher::Equal, circle[index], circle[0]);
+            if (already) {
+                continue;
+            }
+            appendPoleWeightConstraints(weights, index, circle[index], circle[0], firstConstrained, added);
+        }
+    }
+    if (added.empty()) {
+        return 0;
+    }
+    const int n = static_cast<int>(added.size());
+    restoringPoles = true;
+    try {
+        addConstraints(added);
+    }
+    catch (...) {
+        restoringPoles = false;
+        for (auto* c : added) {
+            delete c;
+        }
+        throw;
+    }
+    restoringPoles = false;
+    for (auto* c : added) {
+        delete c;
+    }
+    return n;
 }

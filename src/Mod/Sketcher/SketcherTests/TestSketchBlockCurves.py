@@ -25,6 +25,7 @@
 Check numbers refer to the slice 5b2 acceptance checks in briefs/phase1/G10-sketcher.md.  Measured figures are printed
 with the prefix ``5b2:`` so a run's log carries them."""
 
+import collections
 import json
 import math
 import os
@@ -162,7 +163,10 @@ class TestCurveDOF(CurvesCase):
             B.define(sk, "x", [0])
         self.assertEqual(sk.BlockData, "")
         sk.addGeometry(Part.LineSegment(V(0, 0, 0), V(5, 0, 0)), False)
-        B.define(sk, "y", [0, 1])  # next to something that tells the rotation it is fine
+        with self.assertRaises(B.SketchBlockError) as cm:  # next to a line it is refused too (run 063): the ellipse's own axis is noise
+            B.define(sk, "y", [0, 1])
+        self.assertIn("nearly a circle", str(cm.exception))
+        self.assertEqual(sk.BlockData, "")
 
 
 class TestCurveRigidity(CurvesCase):
@@ -521,17 +525,48 @@ class TestCurveInternal(CurvesCase):
         self.assertIn(c2 + 1, list(sk2.ConflictingConstraints))
 
     def test_diagnosis_and_auto_define_handle_or_say_they_cannot(self):
+        """Check 6, last sentence: `propose` either closes a sketch of curve instances (verified candidates that apply to DOF 0
+        with the blocks intact) or says it cannot with a reason; neither touches the sketch it was asked about."""
         import SketcherAutoDefine as AD
         import SketcherDiagnosis as D
 
-        sk, name, spec = self.instance("ellipse")
-        g = member_geos(sk, name)[1][0]
-        sk.exposeInternalGeometry(g)
-        sk.solve()
-        res = D.diagnose(sk)
-        self.assertIsNotNone(res)
-        self.assertEqual(sk.getBlockInstanceCount(), 1)
-        self.assertTrue(hasattr(AD, "plan") or hasattr(AD, "propose") or True)
+        outcomes = {}
+        for kind in ("ellipse", "aoe", "spline", "periodic"):
+            for exposed in (False, True):
+                sk, name, spec = self.instance(kind)
+                second = B.insert(sk, "blk", -30, 4, -1.0)
+                g = member_geos(sk, name)[1][0]
+                if exposed:
+                    sk.exposeInternalGeometry(g)
+                sk.solve()
+                before = {p: B.content_hash(sk, p) for p in ("Geometry", "Constraints", "BlockData")}
+                data = sk.BlockData
+                label = "%s %s" % (kind, "exposed" if exposed else "plain")
+                res = D.diagnose(sk)
+                self.assertEqual(res["dof"], sk.DoF, label)
+                self.assertEqual(list(res["solver_conflicting"]), [], label)
+                self.assertEqual(list(res["solver_redundant"]), [], label)
+                rep = AD.propose(sk, time_budget=60)
+                self.assertIn(rep["status"], ("ok", "cannot_close"), label)
+                self.assertEqual(sk.BlockData, data, label)  # the sketch asked about is untouched
+                self.assertEqual(before, {p: B.content_hash(sk, p) for p in before}, label)
+                if rep["status"] == "ok":
+                    self.assertTrue(rep["candidates"], label)
+                    self.assertTrue(all(c["verified"] for c in rep["candidates"]), label)
+                    AD.apply_candidate(sk, rep["candidates"][0])
+                    sk.solve()
+                    self.assertEqual(sk.DoF, 0, label)
+                    self.assertClean(sk, label)
+                    self.assertEqual(sk.getBlockInstanceCount(), 2, label)  # both instances are still blocks
+                    self.assertEqual(sorted(B.blocks(sk)["instances"]), sorted([name, second]), label)
+                else:
+                    self.assertEqual(rep["candidates"], [], label)
+                    self.assertTrue(rep["unclosed"] and all(u.get("reason") for u in rep["unclosed"]), label)
+                outcomes[label] = rep["status"]
+        report("auto define on curve instances: %s" % outcomes)
+        # whatever else, at least one kind of curve instance is closed and the verdict for an ellipse is a clear refusal
+        self.assertIn("ok", outcomes.values())
+        self.assertEqual(outcomes["ellipse plain"], outcomes["ellipse exposed"])
 
     def test_deleting_one_pole_or_axis_keeps_the_instance(self):
         for kind in ("spline", "periodic", "ellipse", "aoe"):
@@ -607,22 +642,20 @@ class TestCurveInternal(CurvesCase):
             self.assertEqual(len(sk.Geometry), n, kind)
             self.assertEqual(self.doc.UndoCount, count + 1, kind)
             moved = max(math.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(shape, C.samples(sk.Geometry[g])))
-            if kind == "spline":
-                # stock's start-value tweak (addBSpline: a lone weight of 1.0 starts at 0.99 times the last other weight)
-                # acts on the weight once nothing ties it, and the poles follow it: measured, not asserted to 1e-9
-                report("explode of a rational spline with one weight of exactly 1.0: poles moved %.3f mm, weights %s -> %s" % (
-                    max(math.hypot(p.x - q[0], p.y - q[1]) for p, q in zip(sk.Geometry[g].getPoles(), poles)),
-                    [round(w, 3) for w in weights], [round(w, 3) for w in sk.Geometry[g].getWeights()]))
-                self.doc.undo()
-                self.assertEqual((sk.BlockData, len(sk.Constraints)), (snap[0], snap[2]), kind)
-                continue
             self.assertLess(moved, 1e-9, kind)
             if poles:
                 self.assertLess(max(math.hypot(p.x - q[0], p.y - q[1]) for p, q in zip(sk.Geometry[g].getPoles(), poles)), 1e-9)
                 self.assertEqual([round(w, 9) for w in sk.Geometry[g].getWeights()], [round(w, 9) for w in weights])
             self.assertEqual(list(sk.ConflictingConstraints), [], kind)
-            # the curve's own freedoms, counted by hand: 7 for an arc of ellipse, poles and weights (3 per pole) for a spline
-            self.assertEqual(sk.DoF, 7 if kind == "aoe" else 3 * len(rng_geos()[kind].getPoles()), kind)
+            # the curve's own freedoms, counted by hand: 7 for an arc of ellipse; for a spline its poles (2 each) and
+            # weights (1 each) less what the Weight and Equal constraints of an exposed polynomial spline fix
+            if kind == "aoe":
+                self.assertEqual(sk.DoF, 7, kind)
+            else:
+                stock = plain(self.doc, [sk.Geometry[g]], "Stock_" + kind)
+                stock.exposeInternalGeometry(0)
+                stock.solve()
+                self.assertEqual(sk.DoF, stock.DoF, kind)
             self.doc.undo()
             self.assertEqual((sk.BlockData, len(sk.Constraints)), (snap[0], snap[2]), kind)
             self.assertLess(max(math.hypot(a[0] - b[0], a[1] - b[1]) for s1, s2 in zip(snap[1], [C.samples(x) for x in sk.Geometry]) for a, b in zip(s1, s2)), 1e-9, kind)
@@ -953,6 +986,7 @@ class TestCurveLibrary(CurvesCase):
             "o_empty_arc": ("o", good_e + [1, 1]),
             "o_over_a_turn": ("o", good_e + [0, 7]),
             "o_circle_like": ("o", [0, 0, 0.0001, 0, 2, 0, 1]),
+            "e_circle_like": ("e", [0, 0, 0.0001, 0, 2]),
             "o_angle_huge": ("o", good_e + [0, 1e6]),
             "s_empty": ("s", []),
             "s_degree_float": ("s", [2.5] + base[1:]),
@@ -1059,6 +1093,12 @@ class TestCurveLibrary(CurvesCase):
                 sk.solve()
             except Exception as exc:
                 self.fail("%s: %r" % (label, exc))
+            if label.endswith(":c_text"):
+                # a construction flag that is not a boolean reads as false, which is what the member has: harmless, so the instance
+                # may stand (until run 063 every case here read 0 only because the block's rational spline held a lone weight
+                # of 1.0, which the solver's start-value tweak rewrote, so the instance never fitted whatever the mutation)
+                self.assertIn(sk.getBlockInstanceCount(), (0, 1), label)
+                continue
             self.assertEqual(sk.getBlockInstanceCount(), 0, label)
         sk.BlockData = sk.BlockData  # still a sketch
         report("hostile BlockData: %d mutations read by the C++ side, none threw or crashed, none solved an instance" % len(mutations))
@@ -1099,3 +1139,470 @@ class TestCurveSpeed(CurvesCase):
             moves.append(time.time() - t0)
         report("speed: drag on 20 instances: %s ms, median %.0f ms" % ([round(t * 1000) for t in moves], sorted(moves)[1] * 1000))
         self.assertLess(sorted(moves)[1], 0.1)
+
+
+# ---------------------------------------------------------------------------
+# repairs after verification of run 063
+# ---------------------------------------------------------------------------
+
+POLES5 = [(0, 0), (10, 15), (20, -5), (30, 10), (40, 0)]
+
+
+def spl5(weights, poles=POLES5):
+    """A cubic B-spline of five poles with one interior knot and the given weights."""
+    s = Part.BSplineCurve()
+    s.buildFromPolesMultsKnots([V(x, y, 0) for x, y in poles], [4, 1, 4], [0.0, 0.5, 1.0], False, 3, [float(w) for w in weights])
+    return s
+
+
+def weight_cases():
+    """Weight lists with exactly one 1.0: the ones that matter, and seeded ones. 0.5 is there because scaling by 2 turns it
+    into a new lone 1.0, 0.25 because scaling by 4 does."""
+    rng = random.Random(8101)
+    out = [[2, 1, 4, 0.5, 1.5], [1, 3, 4, 0.5, 1.5], [0.5, 1, 2, 3, 4], [0.25, 0.5, 1, 2, 4], [3, 2, 1, 5, 0.5]]
+    while len(out) < 16:
+        w = [round(rng.uniform(0.3, 6.0), 3) for _ in range(5)]
+        w[rng.randrange(5)] = 1.0
+        if sum(1 for x in w if x == 1.0) == 1:
+            out.append(w)
+    return out
+
+
+def curve_gap(a, b, n=41):
+    """The largest distance between the points of two curves at the same fractions of their parameter ranges."""
+    pa, pb = C.samples(a, n), C.samples(b, n)
+    return max(math.hypot(p[0] - q[0], p[1] - q[1]) for p, q in zip(pa, pb))
+
+
+def placed_gap(src, X, Y, th, got, n=41):
+    """The largest distance between the source's points, carried by the placement, and the curve `got`."""
+    origin = C.origin_of(src)
+    want = [C.place(p, origin, X, Y, th) for p in C.samples(src, n)]
+    return max(math.hypot(w[0] - p[0], w[1] - p[1]) for w, p in zip(want, C.samples(got, n)))
+
+
+class TestLoneUnitWeight(CurvesCase):
+    """Run 063 repair R1.  Sketch.cpp's addBSpline turns a lone weight of exactly 1.0 into 0.99 times the last other weight on
+    the first solve.  A block's weight tie hides that until the instance is exploded or edited in place; then the curve
+    moves and a no-edit Finish reads the move as an edit.  A stored definition therefore never holds exactly one weight of
+    1.0: its weights are multiplied by the smallest power of 2 that leaves none (the curve is the same)."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = tempfile.mkdtemp(prefix="loneone_")
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+        super().tearDown()
+
+    def test_the_factor(self):
+        self.assertEqual(B._weight_scale([2, 1, 4, 0.5, 1.5]), 4)  # 2 would make the 0.5 a new lone 1.0
+        self.assertEqual(B._weight_scale([1, 3, 4, 0.5, 1.5]), 4)
+        self.assertEqual(B._weight_scale([0.25, 0.5, 1, 2, 4]), 8)  # 2 and 4 each leave one 1.0
+        self.assertEqual(B._weight_scale([1, 2, 3]), 2)
+        for w in ([1.0] * 5, [1, 1, 3, 1], [2, 3, 4], [1, 1, 1, 2]):  # none, or two or more: nothing to do
+            self.assertEqual(B._weight_scale(w), 1, w)
+        for w in weight_cases():
+            f = B._weight_scale(w)
+            self.assertGreater(f, 1)
+            self.assertEqual(f & (f - 1), 0, "a power of 2")
+            self.assertFalse(any(x * f == 1.0 for x in w), w)
+            self.assertEqual([x * f / f for x in w], w, "a power of 2 is exact")
+
+    def test_define_says_it_and_keeps_the_source(self):
+        for w in weight_cases():
+            sk = plain(self.doc, [spl5(w)], "W")
+            with mock.patch.object(FreeCAD.Console, "PrintMessage") as pm:
+                rep = B.define_report(sk, "s", [0])
+            f = B._weight_scale(w)
+            self.assertEqual(rep["scaled"], {"m0000": f}, w)
+            self.assertTrue(any("multiplied by %d" % f in str(c) for c in pm.call_args_list), w)
+            self.assertEqual(B._spline_parts(B._load(sk)["defs"]["s"]["members"]["m0000"]["g"])[3], [x * f for x in w])
+            self.assertEqual(list(sk.Geometry[0].getWeights()), [float(x) for x in w], "the source geometry is untouched")
+            self.assertEqual(len(sk.Constraints), 0)
+
+    def test_nothing_changes_without_a_lone_one(self):
+        for w in ([1.0] * 5, [2, 3, 4, 0.5, 1.5], [1, 1, 3, 1, 4], [1, 2, 1, 2, 1]):
+            sk = plain(self.doc, [spl5(w)], "N")
+            with mock.patch.object(FreeCAD.Console, "PrintMessage") as pm:
+                rep = B.define_report(sk, "s", [0])
+            self.assertEqual(rep["scaled"], {}, w)
+            self.assertFalse(any("multiplied" in str(c) for c in pm.call_args_list), w)
+            g = B._load(sk)["defs"]["s"]["members"]["m0000"]["g"]
+            self.assertEqual(B._spline_parts(g)[3], [float(x) for x in w], w)
+
+    def test_the_curve_is_the_same_everywhere(self):
+        worst = {"instance": 0.0, "exploded": 0.0, "exposed then exploded": 0.0, "session": 0.0, "library": 0.0}
+        for i, w in enumerate(weight_cases()):
+            src = spl5(w)
+            sk = plain(self.doc, [src], "Cv%d" % i)
+            B.define(sk, "s", [0])
+            sk.delGeometries([0])
+            f = B._weight_scale(w)
+            X, Y, th = 3.0 + i, -4.0, 0.4 * i - 3.0
+            name = B.insert(sk, "s", X, Y, th)
+            sk.solve()
+            gid = member_geos(sk, name)[1][0]
+            self.assertEqual(sk.DoF, 3)
+            worst["instance"] = max(worst["instance"], placed_gap(src, X, Y, th, sk.Geometry[gid]))
+            self.assertEqual(list(sk.Geometry[gid].getWeights()), [x * f for x in w])
+            # a session that changes nothing: explode, solve, read it back: an empty change, the definition as it was
+            members = dict(B._load(sk)["inst"][name]["m"])
+            known = {sk.getGeometryId(k) for k in range(len(sk.Geometry))}
+            placement = B.instance_placement(sk, name)
+            before = sk.BlockData
+            B.explode(sk, name)
+            sk.solve()
+            worst["exploded"] = max(worst["exploded"], placed_gap(src, X, Y, th, sk.Geometry[gid]))
+            self.assertEqual([round(x, 12) for x in sk.Geometry[gid].getWeights()], [round(x * f, 12) for x in w], w)
+            res = B.session_changes(sk, "s", placement, members, known)
+            self.assertEqual(res["changes"], {}, w)
+            self.assertFalse(res["moved_together"], w)
+            worst["session"] = max(worst["session"], placed_gap(src, X, Y, th, sk.Geometry[gid]))
+            self.doc.undo()
+            self.assertEqual(sk.BlockData, before)
+            # with the pole circles exposed first
+            sk.exposeInternalGeometry(gid)
+            sk.solve()
+            B.explode(sk, name)
+            sk.solve()
+            worst["exposed then exploded"] = max(worst["exposed then exploded"], placed_gap(src, X, Y, th, sk.Geometry[gid]))
+            self.assertEqual([round(x, 12) for x in sk.Geometry[gid].getWeights()], [round(x * f, 12) for x in w], w)
+            self.doc.undo()
+            # library round trip
+            folder = os.path.join(self.root, "r%d" % i)
+            os.makedirs(folder)
+            p1 = B.library_save(sk, "s", folder=folder)
+            doc2 = new_doc("Lone2_%d" % i)
+            sk2 = doc2.addObject("Sketcher::SketchObject", "D")
+            B.library_load(sk2, "s", folder=folder)
+            self.assertEqual(B._load(sk2)["defs"]["s"], B._load(sk)["defs"]["s"], w)
+            n2 = B.insert(sk2, "s", X, Y, th)
+            worst["library"] = max(worst["library"], placed_gap(src, X, Y, th, sk2.Geometry[B.blocks(sk2)["instances"][n2]["geo_ids"][0]]))
+            second = os.path.join(folder, "second")
+            os.makedirs(second)
+            self.assertEqual(open(p1, "rb").read(), open(B.library_save(sk2, "s", folder=second), "rb").read())
+            FreeCAD.closeDocument(doc2.Name)
+        for k, v in worst.items():
+            self.assertLess(v, 1e-9, k)
+        report("lone weight of 1.0: %d weight lists, largest gap in mm %s" % (len(weight_cases()), {k: "%.1e" % v for k, v in worst.items()}))
+
+    def test_a_library_file_with_a_lone_one_loads_scaled_and_says_so(self):
+        sk = plain(self.doc, [spl5([2, 3, 4, 0.5, 1.5]), Part.LineSegment(V(0, 0, 0), V(5, 5, 0))], "H")
+        B.define(sk, "s", [0, 1])
+        B.library_save(sk, "s", folder=self.root)
+        path = os.path.join(self.root, "s.json")
+        doc = json.loads(open(path).read())
+        m = doc["members"]["m0000"]["g"]
+        n = int(m[2])
+        m[3 + 2 * n + 1] = 1.0  # the second weight becomes the only 1.0
+        open(path, "w").write(json.dumps(doc))
+        doc2 = new_doc("Lone3")
+        sk2 = doc2.addObject("Sketcher::SketchObject", "D")
+        with mock.patch.object(FreeCAD.Console, "PrintMessage") as pm:
+            B.library_load(sk2, "s", folder=self.root)
+        self.assertTrue(any("multiplied by 4" in str(c) for c in pm.call_args_list))
+        self.assertEqual(B._spline_parts(B._load(sk2)["defs"]["s"]["members"]["m0000"]["g"])[3], [8.0, 4.0, 16.0, 2.0, 6.0])
+        FreeCAD.closeDocument(doc2.Name)
+
+    def test_a_designers_edit_that_makes_a_lone_one_is_never_silent(self):
+        sk = plain(self.doc, [spl5([2, 3, 4, 0.5, 1.5])], "E")
+        B.define(sk, "s", [0])
+        sk.delGeometries([0])
+        n1, n2 = B.insert(sk, "s", 0, 0, 0.3), B.insert(sk, "s", 30, 5, -1.2)
+        edited = spl5([2, 1, 4, 3, 5])  # the designer set a weight to exactly 1.0
+        with mock.patch.object(FreeCAD.Console, "PrintMessage") as pm:
+            res = B.update_definition(sk, "s", {"m0000": edited})
+        self.assertEqual(res["scaled"], {"m0000": 2})
+        self.assertTrue(any("multiplied by 2" in str(c) and "'m0000'" in str(c) for c in pm.call_args_list))
+        for n in (n1, n2):
+            g = sk.Geometry[member_geos(sk, n)[1][0]]
+            self.assertEqual(list(g.getWeights()), [4.0, 2.0, 8.0, 6.0, 10.0])
+            X, Y, th = B.instance_placement(sk, n)
+            self.assertLess(placed_gap(edited, X, Y, th, g), 1e-9)
+        # an edit that makes no lone 1.0 says nothing and reports nothing
+        with mock.patch.object(FreeCAD.Console, "PrintMessage") as pm:
+            res = B.update_definition(sk, "s", {"m0000": spl5([2, 1.5, 4, 3, 5])})
+        self.assertEqual(res["scaled"], {})
+        self.assertFalse(any("multiplied" in str(c) for c in pm.call_args_list))
+
+    def test_a_weight_too_large_to_scale_is_refused(self):
+        sk = plain(self.doc, [spl5([1.0, 600000.0, 3, 4, 5])], "Big")
+        data = sk.BlockData
+        with self.assertRaises(B.SketchBlockError) as cm:
+            B.define(sk, "s", [0])
+        self.assertIn("weight", str(cm.exception))
+        self.assertEqual(sk.BlockData, data)
+
+
+class TestExplodeKeepsStockPoleConstraints(CurvesCase):
+    """Run 063 repair R2.  Exposing internal geometry on a block's spline adds no Weight or Equal constraint (the instance ties
+    the weights).  When the instance becomes plain geometry by any path, its pole circles get the constraints a stock
+    spline gets, so the exploded spline has stock's degrees of freedom and stock's behaviour under a drag."""
+
+    WEIGHTS = ([1.0] * 5, [2, 3, 4, 0.5, 1.5], [1, 3, 4, 0.5, 1.5], [2, 2, 3, 2, 5], [1, 1, 3, 1, 4], [1, 2, 1, 2, 1])
+
+    def kinds(self, sk):
+        return collections.Counter(c.Type for c in sk.Constraints)
+
+    def stock(self, w):
+        f = B._weight_scale(w)
+        sk = plain(self.doc, [spl5([x * f for x in w])], "Stock")
+        sk.exposeInternalGeometry(0)
+        sk.solve()
+        return sk
+
+    def drag(self, sk, spline_id):
+        """Drag the edge of the second pole circle outwards; returns the weights."""
+        circles = [i for i, g in enumerate(sk.Geometry) if g.TypeId == "Part::GeomCircle"]
+        c = sk.Geometry[circles[1]]
+        try:
+            sk.moveGeometry(circles[1], 0, V(c.Center.x + c.Radius + 2, c.Center.y, 0), False)
+        except Exception as exc:
+            return "refused: %s" % type(exc).__name__
+        sk.solve()
+        return [round(x, 6) for x in sk.Geometry[spline_id].getWeights()]
+
+    def instance_with_circles(self, w, extra=()):
+        sk, names = build(self.doc, C.Spec("w", [spl5(w)] + list(extra)), [(5, 5, 0.0)])
+        gid = member_geos(sk, names[0])[1][0]
+        sk.exposeInternalGeometry(gid)
+        sk.solve()
+        return sk, names[0], gid
+
+    def test_python_explode_matches_stock(self):
+        for w in self.WEIGHTS:
+            st = self.stock(w)
+            sk, name, gid = self.instance_with_circles(w)
+            self.assertEqual(self.kinds(sk).get("Weight", 0) + self.kinds(sk).get("Equal", 0), 0, "an instance's circles get none")
+            self.assertEqual(sk.DoF, 3)
+            count = self.doc.UndoCount
+            B.explode(sk, name)
+            sk.solve()
+            self.assertEqual(self.doc.UndoCount, count + 1, "one undo entry")
+            self.assertEqual(self.kinds(sk), self.kinds(st), w)
+            self.assertEqual(sk.DoF, st.DoF, w)
+            self.assertClean(sk, str(w))
+            self.assertEqual(self.drag(sk, gid), self.drag(st, 0), w)
+            # undo takes the constraints away again with the explode
+            self.doc.undo()
+            self.assertEqual(self.kinds(sk).get("Weight", 0) + self.kinds(sk).get("Equal", 0), 0, w)
+            self.assertEqual(sk.getBlockInstanceCount(), 1)
+
+    def test_a_polynomial_spline_stays_polynomial_under_a_drag(self):
+        st = self.stock([1.0] * 5)
+        sk, name, gid = self.instance_with_circles([1.0] * 5)
+        B.explode(sk, name)
+        sk.solve()
+        self.assertEqual(sk.DoF, 10)
+        self.assertEqual(st.DoF, 10)
+        self.assertEqual(self.drag(sk, gid), self.drag(st, 0))
+        self.assertEqual(self.drag(sk, gid), [1.0] * 5)
+
+    def test_a_circle_that_was_not_exposed_gets_nothing(self):
+        sk, name, gid = self.instance_with_circles([1.0] * 5)
+        sk.deleteUnusedInternalGeometry(gid)  # take the exposed elements away again
+        sk.solve()
+        n = len(sk.Constraints)
+        B.explode(sk, name)
+        self.assertEqual(len(sk.Constraints), n)
+
+    def test_invalid_on_load_explode_by_the_solver_side(self):
+        """C++ explodeInvalidBlocks: a spline moved by hand no longer fits its definition; the instance explodes with a
+        message and its pole circles get stock's constraints."""
+        for w in self.WEIGHTS:
+            st = self.stock(w)
+            sk, name, gid = self.instance_with_circles(w)
+            geo = sk.Geometry
+            sp = geo[gid]
+            sp.setPole(2, V(sp.getPole(2).x + 1.0, sp.getPole(2).y, 0))
+            sk.Geometry = geo
+            self.assertEqual(B.blocks(sk)["instances"], {}, w)
+            sk.solve()
+            self.assertEqual(self.kinds(sk), self.kinds(st), w)
+            self.assertEqual(sk.DoF, st.DoF, w)
+            self.doc.removeObject(sk.Name)
+
+    def test_hand_written_block_data_explode(self):
+        for w in self.WEIGHTS[:3]:
+            st = self.stock(w)
+            sk, name, gid = self.instance_with_circles(w)
+            data = json.loads(sk.BlockData)
+            data["defs"]["blk"]["members"]["m0000"]["g"][3] += 5.0  # the definition no longer matches the geometry
+            sk.BlockData = json.dumps(data)
+            self.assertEqual(B.blocks(sk)["instances"], {}, w)
+            sk.solve()
+            self.assertEqual(self.kinds(sk), self.kinds(st), w)
+            self.assertEqual(sk.DoF, st.DoF, w)
+            self.doc.removeObject(sk.Name)
+
+    def test_extend_of_a_line_member_explodes_the_instance_through_the_member_edit_path(self):
+        """C++ explodeBlocksOf: a programmatic edit of one member (extend) explodes the instance; the spline beside the line
+        gets stock's constraints."""
+        w = [1.0] * 5
+        st = self.stock(w)
+        sk, name, gid = self.instance_with_circles(w, extra=[Part.LineSegment(V(-4, -4, 0), V(-2, -4, 0))])
+        line = member_geos(sk, name)[1][1]
+        sk.extend(line, 1.0, 2)
+        self.assertEqual(B.blocks(sk)["instances"], {})
+        sk.solve()
+        self.assertEqual(self.kinds(sk).get("Weight", 0), 1)
+        self.assertEqual(self.kinds(sk).get("Equal", 0), 4)
+        self.assertClean(sk)
+
+    def test_a_still_valid_instance_is_left_alone(self):
+        sk, name, gid = self.instance_with_circles([1.0] * 5)
+        self.assertEqual(sk.restoreBlockPoleConstraints([gid]), 0)
+        self.assertEqual(self.kinds(sk).get("Weight", 0), 0)
+
+
+class TestNearCircularEllipse(CurvesCase):
+    """Run 063 repair R3.  A whole ellipse whose focus is nearer its centre than _MIN_FOCAL has an axis the solver cannot tell
+    from noise: exposing its internal geometry left DOF one too high.  It is refused like an arc of ellipse, with a sentence."""
+
+    def ellipse_at(self, a, f):
+        e = Part.Ellipse(V(1, 2, 0), a, math.sqrt(a * a - f * f))
+        e.AngleXU = 0.8
+        return e
+
+    def test_focus_at_the_limit_is_clean_after_exposing(self):
+        done = []
+        for a in (5.0, 50.0, 500.0, 5000.0):
+            sk = plain(self.doc, [self.ellipse_at(a, 1e-3), Part.LineSegment(V(1, 2, 0), V(11, 12, 0))], "F%g" % a)
+            B.define(sk, "b", [0, 1])
+            sk.delGeometries([0, 1])
+            name = B.insert(sk, "b", 3, 3, 1.0)
+            sk.solve()
+            self.assertEqual(sk.DoF, 3, a)
+            sk.exposeInternalGeometry(member_geos(sk, name)[1][0])
+            sk.solve()
+            self.assertEqual(sk.DoF, 3, a)
+            self.assertClean(sk, str(a))
+            done.append(a)
+        report("near-circular ellipse: focus 1e-3 clean after exposing at a = %s" % done)
+
+    def test_a_focus_under_the_limit_is_refused_with_a_sentence(self):
+        for a in (5.0, 50.0, 500.0):
+            for f in (0.0, 1e-6, 5e-5, 5e-4, 9e-4):
+                sk = plain(self.doc, [self.ellipse_at(a, f), Part.LineSegment(V(1, 2, 0), V(11, 12, 0))], "R")
+                with self.assertRaises(B.SketchBlockError) as cm:
+                    B.define(sk, "b", [0, 1])
+                self.assertIn("nearly a circle", str(cm.exception))
+                self.assertIn("use a circle", str(cm.exception))
+                self.assertEqual(sk.BlockData, "")
+
+    def test_update_and_library_refuse_it_too(self):
+        sk = plain(self.doc, [self.ellipse_at(8.0, 0.5), Part.LineSegment(V(1, 2, 0), V(11, 12, 0))], "U")
+        B.define(sk, "b", [0, 1])
+        sk.delGeometries([0, 1])
+        B.insert(sk, "b", 0, 0, 0.0)
+        data = sk.BlockData
+        with self.assertRaises(B.SketchBlockError) as cm:
+            B.update_definition(sk, "b", {"m0000": self.ellipse_at(8.0, 1e-5)})
+        self.assertIn("nearly a circle", str(cm.exception))
+        self.assertEqual(sk.BlockData, data)
+        root = tempfile.mkdtemp(prefix="nearcirc_")
+        try:
+            B.library_save(sk, "b", folder=root)
+            path = os.path.join(root, "b.json")
+            doc = json.loads(open(path).read())
+            g = doc["members"]["m0000"]["g"]
+            g[2], g[3] = g[0] + 1e-5, g[1]
+            open(path, "w").write(json.dumps(doc))
+            with self.assertRaises(B.SketchBlockError) as cm:
+                B.library_load(sk, "b", folder=root, as_name="c")
+            self.assertIn("nearly a circle", str(cm.exception))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_the_solver_side_reader_does_not_crash_on_such_a_member(self):
+        """Written straight into BlockData the member reaches the C++ reader, which only asks for a positive minor radius: the
+        instance is tied and solved, or exploded, and exposing its axes afterwards never crashes."""
+        for f in (1e-6, 1e-4, 0.0):
+            sk = plain(self.doc, [self.ellipse_at(8.0, f), Part.LineSegment(V(1, 2, 0), V(11, 12, 0))], "Hand")
+            e = sk.Geometry[0]
+            fx, fy = e.Center.x + f * e.XAxis.x, e.Center.y + f * e.XAxis.y
+            ids = [sk.getGeometryId(0), sk.getGeometryId(1)]
+            data = {
+                "v": 1,
+                "n": 1,
+                "defs": {"b": {"members": {"m0000": {"t": "e", "g": [e.Center.x, e.Center.y, fx, fy, e.MinorRadius], "c": False}, "m0001": {"t": "l", "g": [1, 2, 11, 12], "c": False}}}},
+                "inst": {"b_1": {"def": "b", "m": {"m0000": ids[0], "m0001": ids[1]}}},
+            }
+            sk.BlockData = json.dumps(data)
+            sk.solve()
+            count = sk.getBlockInstanceCount()
+            sk.exposeInternalGeometry(0)
+            sk.solve()
+            report("near-circular ellipse (focus %g) written into BlockData: the C++ reader kept %d instance(s), DoF %d after exposing, no crash" % (f, count, sk.DoF))
+            self.assertIn(count, (0, 1))
+            self.doc.removeObject(sk.Name)
+
+
+class TestReversedArcOfEllipse(CurvesCase):
+    """An arc of ellipse with axis -z (drawn clockwise) is read by the sketch as the same points at the negated parameters;
+    as a block member it is an arc of the same points, whatever the instance's angle."""
+
+    def reversed_arc(self):
+        e = Part.Ellipse(V(2, -1, 0), 10.0, 4.0)
+        e.AngleXU = 0.3
+        arc = Part.ArcOfEllipse(e, 0.5, 2.5)
+        arc.Axis = V(0, 0, -1)
+        self.assertLess(arc.Axis.z, 0)
+        return arc
+
+    def end_points(self, g):
+        return sorted([(round(g.StartPoint.x, 7), round(g.StartPoint.y, 7)), (round(g.EndPoint.x, 7), round(g.EndPoint.y, 7))])
+
+    def test_a_reversed_arc_places_explodes_and_round_trips(self):
+        src = self.reversed_arc()
+        sk = plain(self.doc, [src, Part.LineSegment(V(2, -1, 0), V(7, 3, 0))], "Rev")
+        B.define(sk, "r", [0, 1])
+        member = B._load(sk)["defs"]["r"]["members"]["m0000"]
+        self.assertEqual(member["t"], "o")
+        self.assertGreater(member["g"][6], member["g"][5], "an increasing parameter range")
+        sk.delGeometries([0, 1])
+        for X, Y, th in ((0, 0, 0.0), (5, -3, 1.1), (-4, 2, 3.9), (1, 1, 7.5)):
+            name = B.insert(sk, "r", X, Y, th)
+        sk.solve()
+        self.assertEqual(sk.DoF, 12)
+        for name in sorted(B.blocks(sk)["instances"]):
+            X, Y, th = B.instance_placement(sk, name)
+            arc = sk.Geometry[member_geos(sk, name)[1][0]]
+            c, s = math.cos(th), math.sin(th)
+            ox, oy = src.Center.x, src.Center.y
+            # the source's end points and middle point, carried by the placement, lie on the instance's arc
+            want = []
+            for p in (src.StartPoint, src.EndPoint, src.value(0.5 * (src.FirstParameter + src.LastParameter))):
+                dx, dy = p.x - ox, p.y - oy
+                want.append((X + dx * c - dy * s, Y + dx * s + dy * c))
+            shape = arc.toShape()
+            for q in want:
+                self.assertLess(shape.distToShape(Part.Vertex(V(q[0], q[1], 0)))[0], 1e-7, name)
+            self.assertEqual(self.end_points(arc), sorted((round(q[0], 7), round(q[1], 7)) for q in want[:2]), name)
+        # explode leaves the same arcs; a library round trip gives the same definition
+        before = [self.end_points(sk.Geometry[member_geos(sk, n)[1][0]]) for n in sorted(B.blocks(sk)["instances"])]
+        for n in sorted(B.blocks(sk)["instances"]):
+            B.explode(sk, n)
+        sk.solve()
+        self.assertEqual(before, [self.end_points(sk.Geometry[i]) for i in range(len(sk.Geometry)) if sk.Geometry[i].TypeId == "Part::GeomArcOfEllipse"])
+        root = tempfile.mkdtemp(prefix="revarc_")
+        try:
+            B.library_save(sk, "r", folder=root)
+            doc2 = new_doc("RevArc2")
+            sk2 = doc2.addObject("Sketcher::SketchObject", "D")
+            B.library_load(sk2, "r", folder=root)
+            self.assertEqual(B._load(sk2)["defs"]["r"], B._load(sk)["defs"]["r"])
+            FreeCAD.closeDocument(doc2.Name)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_an_exposed_reversed_arc_keeps_three_dof(self):
+        sk = plain(self.doc, [self.reversed_arc(), Part.LineSegment(V(2, -1, 0), V(7, 3, 0))], "RevX")
+        B.define(sk, "r", [0, 1])
+        sk.delGeometries([0, 1])
+        name = B.insert(sk, "r", 5, -3, 1.1)
+        sk.exposeInternalGeometry(member_geos(sk, name)[1][0])
+        sk.solve()
+        self.assertEqual(sk.DoF, 3)
+        self.assertClean(sk)

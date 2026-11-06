@@ -1162,7 +1162,16 @@ class TestPlacementQuantities(LibCase):
             with self.assertRaises(B.SketchBlockError) as cm:
                 B.insert(sk, "L", *args)
             self.assertIn("such as", str(cm.exception))  # it says what is wanted: a length such as 3 mm, an angle such as 90 deg
-            with self.assertRaises(B.SketchBlockError):
+            with self.assertRaises(B.SketchBlockError) as many:
                 B.insert_many(sk, "L", [(0, 0, 0), args])
+            # insert_many says the same, naming the placement, and not "must be three numbers"
+            self.assertIn(str(cm.exception), str(many.exception))
+            self.assertIn("placement 2:", str(many.exception))
+            self.assertIn("such as", str(many.exception))
+            self.assertNotIn("three numbers", str(many.exception))
+        # a placement that is not three numbers still says so
+        with self.assertRaises(B.SketchBlockError) as cm:
+            B.insert_many(sk, "L", [(0, 0)])
+        self.assertIn("three numbers", str(cm.exception))
         self.assertEqual(before, {p: sk.dumpPropertyContent(p) for p in SNAP})
 

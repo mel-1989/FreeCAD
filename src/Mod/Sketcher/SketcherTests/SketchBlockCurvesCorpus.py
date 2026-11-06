@@ -33,6 +33,8 @@ import random
 import FreeCAD
 import Part
 
+import SketcherBlocks as B
+
 V = FreeCAD.Vector
 TWO_PI = 2.0 * math.pi
 SAMPLES = 40
@@ -191,6 +193,8 @@ def deviation(spec, X, Y, th, inst_geos):
         have = samples(got)
         for a, b in zip(want, have):
             mm = max(mm, math.hypot(a[0] - b[0], a[1] - b[1]))
-        for a, b in zip(weights_of(src), weights_of(got)):
-            dw = max(dw, abs(a - b))
+        ws = weights_of(src)
+        factor = B._weight_scale(ws)  # a definition holds no lone weight of 1.0: its weights are those times a power of 2
+        for a, b in zip(ws, weights_of(got)):
+            dw = max(dw, abs(a * factor - b))
     return mm, dw

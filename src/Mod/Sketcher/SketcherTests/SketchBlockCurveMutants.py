@@ -48,6 +48,9 @@ LIB = ("TestCurveLibrary",)
 EDIT = ("TestCurveEdit",)
 FIT = ("TestCurveStructureFit",)
 PLACE = ("TestCurvePlacement", "TestCurveRigidity")
+LONE = ("TestLoneUnitWeight",)
+EXPLODE = ("TestExplodeKeepsStockPoleConstraints",)
+NEAR = ("TestNearCircularEllipse",)
 
 # (name, [(old, new), ...], tests, what it plants)
 MUTANTS = [
@@ -57,7 +60,7 @@ MUTANTS = [
     ("second_multiplicity_list_unread", [("mults = [int(v) for v in g[4 + 3 * n + m : 4 + 3 * n + 2 * m]]", "mults = [1] * m")], PLACE, "the multiplicities of a spline are not read"),
     ("internal_geometry_kept_as_member", [("            left_out.append(el)", "            pass")], DEF, "internal geometry listed with its curve becomes a member"),
     ("internal_geometry_without_curve_accepted", [("            if cur not in listed:", "            if False:")], DEF, "internal geometry whose curve is not listed is not refused"),
-    ("left_out_not_reported", [('    return {"name": name, "left_out": sorted(left_out)}', '    return {"name": name, "left_out": []}')], DEF, "what was left out is not reported"),
+    ("left_out_not_reported", [('    return {"name": name, "left_out": sorted(left_out), "scaled": scaled}', '    return {"name": name, "left_out": [], "scaled": scaled}')], DEF, "what was left out is not reported"),
     ("weight_change_read_as_rigid", [('        if t == "s" and _differs("s", a, b, float("inf")):\n            return None', "        if False:\n            return None")], EDIT, "a weight changed on a lone spline is read as a placement"),
     ("aoe_parameter_change_read_as_rigid", [('        if t == "o" and any(abs(math.remainder(x - y, TWO_PI)) > 1e-9 for x, y in zip(a[5:], b[5:])):', '        if False:')], EDIT, "an arc of ellipse's parameter change is read as a placement"),
     ("minor_radius_change_read_as_rigid", [('            radii.append((m["g"][4], world[k][4]))', "            pass")], EDIT, "an ellipse's minor radius change is read as a placement"),
@@ -68,7 +71,16 @@ MUTANTS = [
     ("weight_zero_accepted", [("    if not all(w > 0 for w in weights):", "    if False:")], LIB, "a weight of zero is accepted"),
     ("knot_order_unchecked", [("    if any(b <= a for a, b in zip(knots, knots[1:])):", "    if False:")], LIB, "knots out of order are accepted"),
     ("multiplicity_sum_unchecked", [('    if not ok:\n        raise SketchBlockError("%s has multiplicities', '    if False:\n        raise SketchBlockError("%s has multiplicities')], LIB, "multiplicities that do not fit the poles are accepted"),
-    ("circle_like_arc_of_ellipse_accepted", [("            if math.hypot(out[2] - out[0], out[3] - out[1]) < _MIN_FOCAL:", "            if False:")], LIB, "an arc of ellipse whose focus is on its centre is accepted"),
+    ("circle_like_curve_accepted", [("        if math.hypot(out[2] - out[0], out[3] - out[1]) < _MIN_FOCAL * (1.0 - _FOCAL_SLACK):", "        if False:")], LIB + NEAR, "an ellipse or arc of ellipse whose focus is on its centre is accepted"),
+    ("circle_like_whole_ellipse_accepted", [("        if math.hypot(out[2] - out[0], out[3] - out[1]) < _MIN_FOCAL * (1.0 - _FOCAL_SLACK):", '        if t == "o" and math.hypot(out[2] - out[0], out[3] - out[1]) < _MIN_FOCAL * (1.0 - _FOCAL_SLACK):')], NEAR, "only an arc of ellipse is refused for a focus on its centre (the state before run 063)"),
+    ("focal_slack_removed", [("_FOCAL_SLACK = 0.01 ", "_FOCAL_SLACK = 0.0 ")], NEAR, "a focus of exactly 1e-3 mm on a long axis, which sqrt(a*a - b*b) reads a hair low, is refused"),
+    ("weight_scaling_removed", [("    factor = _weight_scale(weights)\n    if factor != 1:", "    factor = 1\n    if factor != 1:")], LONE, "a spline with a lone weight of 1.0 is stored as it is"),
+    ("weight_factor_chosen_without_the_rerun", [("        if not any(w * factor == 1.0 for w in weights):\n            return factor", "        if True:\n            return factor")], LONE, "the factor is always 2, which turns a weight of 0.5 into a new lone 1.0"),
+    ("weight_scaling_not_said", [("            scaled[key] = factor\n", "            pass\n")], LONE, "the scaling is not reported to the caller or the console"),
+    ("weight_scaling_not_said_on_library_load", [("    _say_scaled(\"'%s'\" % target, scaled)\n    return target", "    return target")], LONE, "a library file that is scaled on load says nothing"),
+    ("weight_scale_ignores_a_zero_overflow_check", [("        weights = [_num(w * factor, -_MAX_COORD, _MAX_COORD,", "        weights = [_num(w, -_MAX_COORD, _MAX_COORD,")], LONE, "a weight too large to scale is stored unscaled"),
+    ("explode_gives_no_pole_constraints", [("        sk.restoreBlockPoleConstraints(gids)\n", "")], EXPLODE, "an exploded instance's exposed pole circles get no Weight or Equal constraint"),
+    ("insert_many_loses_the_unit_sentence", [("        except _UnitError as exc:", "        except ZeroDivisionError as exc:")], ("TestPlacementQuantities",), "insert_many answers a wrong-dimension Quantity with 'must be three numbers'"),
     ("overlong_axis_accepted", [("        if math.hypot(math.hypot(out[2] - out[0], out[3] - out[1]), out[4]) > _MAX_COORD:", "        if False:")], LIB, "a major axis longer than the limit is accepted"),
     ("negative_minor_radius_accepted", [("        if not out[4] > 0:", "        if False:")], LIB, "a negative minor radius is accepted"),
     ("empty_arc_of_ellipse_accepted", [("            if not 0 < out[6] - out[5] <= TWO_PI + 1e-9:", "            if False:")], LIB, "an arc of ellipse with no length is accepted"),
@@ -86,6 +98,8 @@ CPP = [
     ("one_pole_tie_dropped", "src/Mod/Sketcher/App/Sketch.cpp", [("                for (size_t i = 0; i < r.poles.size(); ++i) {\n                    point(r.poles[i]", "                for (size_t i = 0; i + 1 < r.poles.size(); ++i) {\n                    point(r.poles[i]")], PLACE + ("TestCurveDOF",), "the last pole of a spline is free"),
     ("focus_tie_dropped", "src/Mod/Sketcher/App/Sketch.cpp", [("            if (r.m->type == 'l' || r.m->type == 'e' || r.m->type == 'o') {\n                point(r.p1, r.m->x1, r.m->y1);", "            if (r.m->type == 'l') {\n                point(r.p1, r.m->x1, r.m->y1);")], PLACE + ("TestCurveDOF",), "an ellipse's focus is free"),
     ("second_multiplicity_list_not_compared", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("            || m.weights.size() != cur.weights.size() || m.knots.size() != cur.knots.size()\n            || m.mult != cur.mult) {", "            || m.weights.size() != cur.weights.size() || m.knots.size() != cur.knots.size()) {")], FIT, "a changed multiplicity list still fits"),
+    ("explode_invalid_gives_no_pole_constraints", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("    restoreBlockPoleConstraintsOf(badIds);\n", "")], EXPLODE, "an instance exploded because it no longer fits leaves its pole circles without Weight and Equal"),
+    ("explode_member_edit_gives_no_pole_constraints", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("    restoreBlockPoleConstraintsOf(hitIds);\n", "")], EXPLODE, "an instance exploded by an edit of one member leaves its pole circles without Weight and Equal"),
     ("weights_compared_with_a_huge_tolerance", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("constexpr double kFitWeight = 1e-6;", "constexpr double kFitWeight = 1e6;")], FIT, "a changed weight still fits"),
 ]
 
@@ -131,7 +145,10 @@ def main(argv):
         with open(path, "rb") as fh:
             original = fh.read()
         mutated = original
+        crlf = b"\r\n" in original  # a file the fork keeps with Windows line ends is patched with them
         for old, new in edits:
+            if crlf:
+                old, new = old.replace("\n", "\r\n"), new.replace("\n", "\r\n")
             if mutated.count(old.encode()) != 1:
                 print("%-44s PATTERN DOES NOT MATCH ONCE" % name)
                 mutated = None

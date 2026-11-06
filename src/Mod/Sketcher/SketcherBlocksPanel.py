@@ -1202,6 +1202,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
             entry = tr("Edit block %s") % name
             tail = list(doc.UndoNames)
             B.explode(self.sketch, name, label=entry)
+            outside["cons"] = B.session_constraint_state(self.sketch)  # the Weight and Equal constraints the explode gave exposed pole circles are the start, not an addition
         except B.SketchBlockError as exc:
             self.refresh()
             self.status.setText(_sentence(str(exc)))
@@ -1424,6 +1425,9 @@ class BlocksPanel(QtWidgets.QDockWidget):
                 self._session_broken(tr("applying the result failed (%s)") % _sentence(str(exc)).rstrip("."))
                 return False
             removed_constraints = applied["removed_constraints"]
+            scaled = applied["scaled"]
+        else:
+            scaled = {}
         self._end_session(None)
         self.refresh()
         if changes:
@@ -1434,6 +1438,10 @@ class BlocksPanel(QtWidgets.QDockWidget):
             text = tr("Finished: the block itself did not change.")
         if removed_constraints:
             text += " " + tr("Constraints removed with their members: %s.") % ", ".join(removed_constraints)
+        if scaled:
+            text += " " + tr("A B-spline had exactly one weight equal to 1.0, which the solver would rewrite when its pole circles are exposed, so all its weights were multiplied by a power of 2 (%s); the curve is the same and an exposed pole circle shows the scaled radius.") % ", ".join(
+                "%s: %d" % (k, f) for k, f in sorted(scaled.items())
+            )
         if res["moved_together"]:
             text += " " + tr("The members moved together, which moves the instance rather than changing the block, so the move was not kept.")
         if undone:

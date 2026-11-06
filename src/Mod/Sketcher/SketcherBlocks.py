@@ -104,13 +104,18 @@ _TYPES = {
     "Part::GeomArcOfEllipse": "o",
     "Part::GeomBSplineCurve": "s",
 }
-_MIN_FOCAL = 1e-3  # an arc of ellipse whose focus is nearer its centre than this has no usable major axis (mm)
+_MIN_FOCAL = 1e-3  # an ellipse or arc of ellipse whose focus is nearer its centre than this has no usable major axis (mm)
+_FOCAL_SLACK = 0.01  # the focus comes from sqrt(a*a - b*b), which loses up to a percent of a focus of 1e-3 mm on a 5000 mm axis
 _MAX_POLES = 1000
 _MAX_DEGREE = 25
 
 
 class SketchBlockError(Exception):
     """A block operation was refused; the sketch was not changed."""
+
+
+class _UnitError(SketchBlockError):
+    """A placement number carried a unit of the wrong dimension."""
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +308,7 @@ def _real(v, kind=None):
         want = {"length": (FreeCAD.Units.Length, "mm", "a length such as 3 mm"), "angle": (FreeCAD.Units.Angle, "rad", "an angle such as 90 deg")}.get(kind)
         if want is not None and v.Unit != FreeCAD.Units.Unit():  # a Quantity without a unit is a plain number
             if v.Unit != want[0]:
-                raise SketchBlockError("the placement %s must be %s, not %s" % ("angle" if kind == "angle" else "position", want[2], v.UserString))
+                raise _UnitError("the placement %s must be %s, not %s" % ("angle" if kind == "angle" else "position", want[2], v.UserString))
             try:
                 return float(v.getValueAs(want[1]).Value)
             except (OverflowError, ValueError):
@@ -443,7 +448,9 @@ def define(sk, name, geo_ids):
 
 def define_report(sk, name, geo_ids):
     """As :func:`define`, returning {'name': name, 'left_out': [GeoIds of internal geometry that was listed with its
-    curve and not made a member]}; the same is said on the console."""
+    curve and not made a member], 'scaled': {member key: factor} for each B-spline whose weights were all multiplied by
+    a power of 2 because exactly one of them was 1.0 (the curve is the same, see :func:`_weight_scale`)}; the same is
+    said on the console."""
     data = _load(sk)
     _name_ok(data, name)
     geo_ids = list(geo_ids)
@@ -480,15 +487,17 @@ def define_report(sk, name, geo_ids):
         raw.append((t, nums, bool(sk.getConstruction(g))))
     ox, oy = _points(raw[0][0], raw[0][1])[0]
     members = {}
+    scaled = {}
     for i, (t, nums, constr) in enumerate(raw):
         members["m%04d" % i] = {"t": t, "g": _to_local(t, nums, ox, oy), "c": constr}
         if t in "eos":
-            members["m%04d" % i]["g"] = _check_curve("m%04d" % i, t, members["m%04d" % i]["g"])
+            members["m%04d" % i]["g"] = _check_curve("m%04d" % i, t, members["m%04d" % i]["g"], scaled)
     _check_distinct(list(members.values()))
     data["defs"][name] = {"members": members}
     with _transaction(sk, "Define block"):
         sk.BlockData = _dump(data)
-    return {"name": name, "left_out": sorted(left_out)}
+    _say_scaled("'%s'" % name, scaled)
+    return {"name": name, "left_out": sorted(left_out), "scaled": scaled}
 
 
 def _flagged(geo, flag):
@@ -570,6 +579,8 @@ def insert_many(sk, name, placements):
             if isinstance(p, (dict, set, frozenset, str, bytes)) or len(p) != 3:
                 raise SketchBlockError("")
             x, y, a = (_real(v, k) for v, k in zip(p, ("length", "length", "angle")))
+        except _UnitError as exc:  # the same sentence insert gives, with the placement's number
+            raise SketchBlockError("placement %d: %s; nothing was changed" % (i + 1, exc))
         except (SketchBlockError, TypeError):
             raise SketchBlockError("placement %d must be three numbers (x, y, angle); nothing was changed" % (i + 1))
         if not all(map(math.isfinite, (x, y, a))):
@@ -619,9 +630,14 @@ def explode(sk, instance, label="Explode block"):
     data = _load(sk)
     if instance not in data["inst"]:
         raise SketchBlockError("there is no block instance called '%s'" % instance)
+    idmap = _id_map(sk)
+    gids = [idmap[g] for g in data["inst"][instance]["m"].values() if g in idmap]
     del data["inst"][instance]
     with _transaction(sk, label):
         sk.BlockData = _dump(data)
+        # nothing ties the weights of an exposed spline's pole circles now: they get the Weight and Equal constraints a
+        # stock spline gets when it is exposed (the C++ side does the same where it explodes an instance)
+        sk.restoreBlockPoleConstraints(gids)
         sk.solve()
 
 
@@ -701,7 +717,9 @@ def update_definition(sk, name, changes):
     members are removed and returned by name, never retargeted.  The construction
     flag is part of the definition: an instance member whose flag differs from
     the definition's is a misfit, and the instance explodes like any other.  Returns
-    {'removed_constraints': [names], 'instances': [names]}."""
+    {'removed_constraints': [names], 'instances': [names], 'replaced': [keys], 'scaled': {key: factor}} where 'scaled' names
+    the B-splines whose weights were all multiplied by a power of 2 because exactly one of them was 1.0 (see
+    :func:`_weight_scale`); it is said on the console too."""
     data = _load(sk)
     if name not in data["defs"]:
         raise SketchBlockError("there is no block called '%s'" % name)
@@ -710,6 +728,7 @@ def update_definition(sk, name, changes):
     defn = data["defs"][name]
     new_def = json.loads(json.dumps(defn))
     removed, added, moved, replaced = [], [], [], []
+    scaled = {}
     flags = {}  # key -> construction flag, for a member given as (geometry, construction)
     for key, geo in changes.items():
         _key_ok(key)
@@ -725,7 +744,7 @@ def update_definition(sk, name, changes):
             continue
         t, nums = _numbers(geo)
         if t in "eos":
-            nums = _check_curve(key, t, nums)
+            nums = _check_curve(key, t, nums, scaled)
         if key in defn["members"]:
             if defn["members"][key]["t"] != t:
                 raise SketchBlockError("member '%s' cannot change its kind" % key)
@@ -751,7 +770,7 @@ def update_definition(sk, name, changes):
             raise SketchBlockError("instance '%s' is missing geometry" % n)
         placements[n] = _placement(defn, _instance_world(sk, defn, inst, idmap))
     conflicts_before = list(sk.ConflictingConstraints)
-    result = {"removed_constraints": [], "redundant_constraints": [], "instances": sorted(insts), "replaced": sorted(replaced)}
+    result = {"removed_constraints": [], "redundant_constraints": [], "instances": sorted(insts), "replaced": sorted(replaced), "scaled": dict(scaled)}
     if replaced:
         FreeCAD.Console.PrintMessage(
             "Sketch block '%s': the structure of %s changed, so each instance's curve was replaced and its constraints were removed\n" % (name, ", ".join(sorted(replaced)))
@@ -810,6 +829,7 @@ def update_definition(sk, name, changes):
                 have = _numbers(sk.Geometry[idmap2[gid]])[1]
                 if _differs(m["t"], want, have, _PLACE_TOL):
                     raise SketchBlockError("an instance would move by more than %g mm; nothing was changed" % _PLACE_TOL)
+    _say_scaled("'%s'" % name, scaled)
     return result
 
 
@@ -1119,8 +1139,16 @@ def session_outside_state(sk, member_gids):
     geo = sk.Geometry
     gid_of = {i: sk.getGeometryId(i) for i in range(len(geo))}
     plain = {gid_of[i]: (_outside_numbers(g), bool(sk.getConstruction(i))) for i, g in enumerate(geo) if gid_of[i] not in member_gids}
-    cons = [(_constraint_key(c, gid_of), float(c.Value), _constraint_label(c, k), _con_facts(c)) for k, c in enumerate(sk.Constraints)]
-    return {"plain": plain, "cons": cons, "sketch": _object_state(sk, True), "doc": _document_state(sk)}
+    return {"plain": plain, "cons": session_constraint_state(sk), "sketch": _object_state(sk, True), "doc": _document_state(sk)}
+
+
+def session_constraint_state(sk):
+    """Every constraint of the sketch by what it names, with its value, name, active, driving and virtual-space settings and a
+    label: the 'cons' part of :func:`session_outside_state`.  An edit session takes it again right after it exploded the
+    instance, because exploding an instance whose pole circles are exposed gives them the Weight and Equal constraints of a
+    stock spline: those are the session's starting point, not something the designer added."""
+    gid_of = {i: sk.getGeometryId(i) for i in range(len(sk.Geometry))}
+    return [(_constraint_key(c, gid_of), float(c.Value), _constraint_label(c, k), _con_facts(c)) for k, c in enumerate(sk.Constraints)]
 
 
 def session_outside_changes(sk, state, member_gids, full=False):
@@ -1330,9 +1358,28 @@ def _int(v, lo, hi, what):
     return v
 
 
-def _check_curve(key, t, g):
+def _weight_scale(weights):
+    """The factor (a power of 2, 1 when none is needed) that keeps a spline's weights from holding exactly one 1.0.
+    Sketch.cpp's addBSpline turns a lone weight of 1.0 into 0.99 times the last other weight on the first solve (a stock
+    start-value tweak for OpenCascade's normalised weights), which would rewrite the curve of an exposed or exploded
+    instance.  A rational curve does not change when all its weights are multiplied by one factor, and a power of 2 keeps
+    every weight bit-exact apart from its exponent, so the smallest power of 2 (2, 4, 8, ...) that leaves no weight equal
+    to 1.0 is used."""
+    if sum(1 for w in weights if w == 1.0) != 1:
+        return 1
+    factor = 1
+    for _ in range(len(weights) + 2):  # each weight can be 1.0 after one factor only, so this ends
+        factor *= 2
+        if not any(w * factor == 1.0 for w in weights):
+            return factor
+    return 1  # unreachable
+
+
+def _check_curve(key, t, g, scaled=None):
     """The numbers `g` of an ellipse ('e'), an arc of ellipse ('o') or a B-spline ('s') member `key`, checked and
-    copied (integers stay integers).  Raises SketchBlockError with a sentence."""
+    copied (integers stay integers).  A B-spline with exactly one weight equal to 1.0 gets all its weights multiplied by
+    a power of 2 (see :func:`_weight_scale`); when `scaled` is a dict the factor is recorded in it under `key`.  Raises
+    SketchBlockError with a sentence."""
     what = "member '%s'" % key
     if not isinstance(g, list):
         raise SketchBlockError("%s needs a list of numbers" % what)
@@ -1349,8 +1396,11 @@ def _check_curve(key, t, g):
             out += [_num(v, -_MAX_ANGLE, _MAX_ANGLE, "an angle of " + what) for v in g[5:]]
             if not 0 < out[6] - out[5] <= TWO_PI + 1e-9:
                 raise SketchBlockError("%s has an arc that is empty or longer than a turn" % what)
-            if math.hypot(out[2] - out[0], out[3] - out[1]) < _MIN_FOCAL:
-                raise SketchBlockError("%s is an arc of ellipse that is nearly a circle (its focus is within %g mm of its centre); use an arc of circle" % (what, _MIN_FOCAL))
+        if math.hypot(out[2] - out[0], out[3] - out[1]) < _MIN_FOCAL * (1.0 - _FOCAL_SLACK):
+            raise SketchBlockError(
+                "%s is %s that is nearly a circle (its focus is within %g mm of its centre); use %s"
+                % (what, "an arc of ellipse" if t == "o" else "an ellipse", _MIN_FOCAL, "an arc of circle" if t == "o" else "a circle")
+            )
         return out
     if len(g) < 5:
         raise SketchBlockError("%s is too short to be a B-spline" % what)
@@ -1376,11 +1426,26 @@ def _check_curve(key, t, g):
         ok = sum(mults) == n + deg + 1
     if not ok:
         raise SketchBlockError("%s has multiplicities that do not fit its %d poles and degree %d" % (what, n, deg))
+    factor = _weight_scale(weights)
+    if factor != 1:
+        weights = [_num(w * factor, -_MAX_COORD, _MAX_COORD, "a weight of %s after scaling by %d (see the note on a lone weight of 1.0)" % (what, factor)) for w in weights]
+        if scaled is not None:
+            scaled[key] = factor
     return [deg, per, n] + poles + weights + [m] + knots + mults
 
 
-def _check_members(members):
-    """The members of a library file or a definition, checked and copied: {key: {'t', 'g', 'c'}}."""
+def _say_scaled(owner, scaled):
+    """The console sentence for B-splines whose weights were multiplied by a power of 2."""
+    for key in sorted(scaled):
+        FreeCAD.Console.PrintMessage(
+            "Sketch block %s: the B-spline '%s' had exactly one weight equal to 1.0, which the solver would rewrite when its pole circles are exposed, "
+            "so all its weights were multiplied by %d (the curve is the same; an exposed pole circle shows the scaled radius)\n" % (owner, key, scaled[key])
+        )
+
+
+def _check_members(members, scaled=None):
+    """The members of a library file or a definition, checked and copied: {key: {'t', 'g', 'c'}}.  `scaled`, a dict,
+    receives {key: factor} for each B-spline whose weights were multiplied (see :func:`_check_curve`)."""
     if not isinstance(members, dict) or not members:
         raise SketchBlockError("the block has no members")
     if len(members) > _MAX_MEMBERS:
@@ -1396,7 +1461,7 @@ def _check_members(members):
         if not isinstance(c, bool):
             raise SketchBlockError("member '%s': c must be true or false" % key)
         if t in _CURVE_KINDS:
-            out[key] = {"t": t, "g": _check_curve(key, t, g), "c": c}
+            out[key] = {"t": t, "g": _check_curve(key, t, g, scaled), "c": c}
             continue
         if not isinstance(g, list) or len(g) != _KINDS[t]:
             raise SketchBlockError("member '%s' needs %d numbers" % (key, _KINDS[t]))
@@ -1426,8 +1491,9 @@ def _refuse_constant(text):
     raise ValueError("%s is not a number a sketch can hold" % text)
 
 
-def _read_block(path, name):
-    """Read and check one block file; returns its members.  Raises SketchBlockError and nothing else."""
+def _read_block(path, name, scaled=None):
+    """Read and check one block file; returns its members.  `scaled`, a dict, receives {key: factor} for each B-spline
+    whose weights were multiplied (see :func:`_weight_scale`).  Raises SketchBlockError and nothing else."""
     try:
         real = os.path.realpath(path)
         folder = os.path.realpath(os.path.dirname(path))
@@ -1459,7 +1525,7 @@ def _read_block(path, name):
         if not isinstance(doc["name"], str) or doc["units"] != "mm":
             raise SketchBlockError("the file of block '%s' must have a name and units 'mm'" % name)
         _text(doc["name"], "the name in the file of block '%s'" % name)
-        members = _check_members(doc["members"])
+        members = _check_members(doc["members"], scaled)
         if version < 2 and any(m["t"] in _CURVE_KINDS for m in members.values()):
             raise SketchBlockError("the file of block '%s' holds ellipses or B-splines, which need version 2" % name)
         return members
@@ -1554,7 +1620,8 @@ def library_load(sk, name, folder=None, as_name=None):
     full = _file_of(path, name)
     if full is None:
         raise SketchBlockError("the library has no block called '%s'" % name)
-    members = _read_block(full, name)
+    scaled = {}
+    members = _read_block(full, name, scaled)
     data = _load(sk)
     if as_name is not None:
         _name_ok(data, as_name)
@@ -1570,6 +1637,7 @@ def library_load(sk, name, folder=None, as_name=None):
     data["defs"][target] = {"members": members}
     with _transaction(sk, "Load block"):
         sk.BlockData = _dump(data)
+    _say_scaled("'%s'" % target, scaled)
     return target
 
 

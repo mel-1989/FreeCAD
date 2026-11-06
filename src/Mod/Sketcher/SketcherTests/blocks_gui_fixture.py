@@ -54,6 +54,16 @@ def _add_curves(sk):
     sk.exposeInternalGeometry(B.blocks(sk)["instances"][name]["geo_ids"][2])
 
 
+def view_doc(name="BlocksCurvesView"):
+    """A document with one sketch for the 3D view's picture (slice 5b2): block 'Curves' (an ellipse, an arc of ellipse and a
+    B-spline) placed once, turned by 0.6 rad, with the pole circles of the spline exposed.  The caller puts the sketch in edit mode."""
+    doc = App.newDocument(name)
+    sk = doc.addObject("Sketcher::SketchObject", "Sketch")
+    _add_curves(sk)
+    doc.recompute()
+    return Rig(doc, sk)
+
+
 def _scene_library(sketch):
     """A library at a fixed path, one good block and one bad file: the panel prints its folder, so a folder named for
     the launch would make every stored picture differ."""

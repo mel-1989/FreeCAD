@@ -2702,6 +2702,25 @@ PyObject* SketchObjectPy::setBlockGuard(PyObject* args)
     Py_Return;
 }
 
+PyObject* SketchObjectPy::restoreBlockPoleConstraints(PyObject* args)
+{
+    PyObject* list = nullptr;
+    if (!PyArg_ParseTuple(args, "O", &list)) {
+        return nullptr;
+    }
+    std::vector<int> ids;
+    try {
+        Py::Sequence seq(list);
+        for (Py::Sequence::iterator it = seq.begin(); it != seq.end(); ++it) {
+            ids.push_back(static_cast<int>(Py::Long(*it)));
+        }
+    }
+    catch (Py::Exception&) {
+        return nullptr;
+    }
+    return Py::new_reference_to(Py::Long(getSketchObjectPtr()->restoreBlockPoleConstraints(ids)));
+}
+
 PyObject* SketchObjectPy::getBlockInstanceCount()
 {
     return Py::new_reference_to(Py::Long(getSketchObjectPtr()->getBlockInstanceCount()));
