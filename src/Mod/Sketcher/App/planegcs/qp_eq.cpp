@@ -681,15 +681,21 @@ int qp_eq(MatrixXd& H, VectorXd& g, MatrixXd& A, VectorXd& c, VectorXd& x, Matri
     if (forceFlag().load(std::memory_order_relaxed)) {
         gLastPath = 0;
         gDense.fetch_add(1, std::memory_order_relaxed);
-        const int rc = qp_eq_dense(H, g, A, c, x, Y, Z);
         const double noise = gNoise.load(std::memory_order_relaxed);
-        if (rc == 0 && noise != 0.0) {
-            // test hook: rounding-sized noise on the forced dense answer, to measure how far apart two
-            // correct answers end up after a whole drag (the solver stops at |step| <= 1e-8)
-            for (Index k = 0; k < x.size(); ++k) {
-                x(k) *= 1.0 + noise * std::sin(12.9898 * static_cast<double>(k) + static_cast<double>(n));
+        if (noise == 0.0) {
+            return qp_eq_dense(H, g, A, c, x, Y, Z);
+        }
+        // test hook: rounding-sized relative noise on the data H of the forced dense solve. It stands in for the
+        // rounding that any other correct solver of the same QP would make: with an ill-conditioned reduced
+        // Hessian two correct answers differ by condition number times epsilon, and a whole drag then ends
+        // anywhere the solver's stopping rule (|step| <= 1e-8) allows
+        MatrixXd Hn = H;
+        for (Index j = 0; j < n; ++j) {
+            for (Index i = 0; i < n; ++i) {
+                Hn(i, j) *= 1.0 + noise * std::sin(12.9898 * static_cast<double>(i + j) + static_cast<double>(n));
             }
         }
+        const int rc = qp_eq_dense(Hn, g, A, c, x, Y, Z);
         return rc;
     }
     VectorXd xf;

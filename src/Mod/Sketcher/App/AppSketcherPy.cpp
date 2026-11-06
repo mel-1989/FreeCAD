@@ -63,7 +63,7 @@ public:
         add_varargs_method(
             "qpEqNoise",
             &Module::qpEqNoise,
-            "qpEqNoise(relative) -> previous: rounding-sized noise on forced-dense answers (test hook)"
+            "qpEqNoise(relative) -> previous: rounding-sized relative noise on the Hessian of forced-dense solves (test hook)"
         );
         add_varargs_method(
             "qpEq",
