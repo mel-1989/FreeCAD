@@ -76,6 +76,7 @@ std::atomic<long> gFallback {0};
 std::atomic<long> gDense {0};
 std::atomic<bool> gAudit {false};
 std::atomic<double> gNoise {0.0};
+std::atomic<int> gFault {0};
 thread_local int gLastPath = 0;
 thread_local int gLastWhy = 0;
 
@@ -476,6 +477,10 @@ Why qp_eq_fast(
         }
     }
 
+    if (gFault.load(std::memory_order_relaxed) == 1) {
+        Y(0, 0) += 1.0;  // test hook: a wrong Y, which the residual checks below must catch
+    }
+
     // products with the sparse view of A: out += A w, absOut += |A| |w|
     auto applyA = [&](const double* w, VectorXd& out, VectorXd& absOut) {
         out.setZero(m);
@@ -554,6 +559,9 @@ Why qp_eq_fast(
             return Why::Residual;
         }
         x += Zo * y;
+    }
+    if (gFault.load(std::memory_order_relaxed) == 2) {
+        x(0) += 1.0;  // test hook: a wrong x
     }
     if (!x.allFinite()) {
         return Why::Residual;
@@ -755,6 +763,11 @@ bool setAudit(bool on)
 double setNoise(double relative)
 {
     return gNoise.exchange(relative);
+}
+
+int setFault(int kind)
+{
+    return gFault.exchange(kind);
 }
 
 Audit audit()

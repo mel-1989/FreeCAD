@@ -63,6 +63,7 @@ class Base(unittest.TestCase):
         Sketcher.qpEqForceDense(False)
         Sketcher.qpEqAudit(False)
         Sketcher.qpEqNoise(0.0)
+        Sketcher.qpEqFault(0)
         Sketcher.qpEqReset()
 
     def tearDown(self):
@@ -178,9 +179,15 @@ class TestQpEqRefusals(Base):
         H, g, A, c = D.structured_system(11, kw.pop("ns", 200), kw.pop("frames", 1), kw.pop("pins", 0))
         return H, g, [list(r) for r in A], c
 
-    def check(self, name, H, g, A, c, must_not_be_fast=True):
+    # why codes of the fast path
+    INPUT, STRUCTURE, BLOCK_RANK, DOUBT, RANK_MISMATCH, RESIDUAL = 1, 2, 3, 4, 5, 6
+
+    def check(self, name, H, g, A, c, must_not_be_fast=True, why=None):
         r = Sketcher.qpEq(H, g, A, c)
-        report("refusal case %-34s status %2d (dense %2d)  path %d" % (name, r["status"], r["statusDense"], r["path"]))
+        report("refusal case %-34s status %2d (dense %2d)  path %d  why %d" % (name, r["status"], r["statusDense"], r["path"], r["why"]))
+        if why is not None:
+            self.assertEqual(r["path"], 2, name)
+            self.assertEqual(r["why"], why, name)
         self.assertEqual(r["status"], r["statusDense"], name)
         if r["status"] == 0:
             for a, b in zip(r["x"], r["xDense"]):
@@ -193,7 +200,7 @@ class TestQpEqRefusals(Base):
         H, g, A, c = self.base()
         A.append(list(A[5]))
         c.append(0.3)
-        r = self.check("two ties on one parameter", H, g, A, c)
+        r = self.check("two ties on one parameter", H, g, A, c, why=self.RANK_MISMATCH)
         self.assertEqual(r["status"], -1)
 
     def test_pin_equal_to_a_tie_row_of_the_member(self):
@@ -203,7 +210,7 @@ class TestQpEqRefusals(Base):
         A.append(pin)
         A.append(list(pin))  # the member fixed twice
         c.extend([0.1, 0.2])
-        self.check("member fixed by two datums", H, g, A, c)
+        self.check("member fixed by two datums", H, g, A, c, why=self.RANK_MISMATCH)
 
     def test_nearly_parallel_rows(self):
         for eps in (1e-10, 1e-13, 1e-16):
@@ -212,13 +219,13 @@ class TestQpEqRefusals(Base):
             row[20] += eps
             A.append(row)
             c.append(0.5)
-            self.check("nearly parallel rows eps=%g" % eps, H, g, A, c)
+            self.check("nearly parallel rows eps=%g" % eps, H, g, A, c, why=self.RANK_MISMATCH)
 
     def test_zero_frame_column(self):
         H, g, A, c = self.base()
         for row in A:
             row[200] = 0.0  # X of the only frame
-        self.check("frame column of zeros", H, g, A, c)
+        self.check("frame column of zeros", H, g, A, c, why=self.STRUCTURE)
 
     def test_more_constraints_than_parameters(self):
         H, g, A, c = self.base()
@@ -243,7 +250,18 @@ class TestQpEqRefusals(Base):
                 c[4] = val
             else:
                 g[4] = val
-            self.check("non-finite " + what, H, g, A, c)
+            self.check("non-finite " + what, H, g, A, c, why=self.INPUT)
+
+    def test_a_wrong_fast_answer_is_caught_by_the_residual_checks(self):
+        # a corrupted Y and a corrupted x are each sent to the dense path, whose answer is returned
+        for kind, what in ((1, "Y"), (2, "x")):
+            H, g, A, c = self.base()
+            Sketcher.qpEqFault(kind)
+            try:
+                r = self.check("planted wrong %s" % what, H, g, A, c, why=self.RESIDUAL)
+            finally:
+                Sketcher.qpEqFault(0)
+            self.assertEqual(r["status"], 0)
 
     def test_empty_a(self):
         H, g, A, c = self.base()

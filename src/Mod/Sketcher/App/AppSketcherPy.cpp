@@ -66,6 +66,11 @@ public:
             "qpEqNoise(relative) -> previous: rounding-sized relative noise on the Hessian of forced-dense solves (test hook)"
         );
         add_varargs_method(
+            "qpEqFault",
+            &Module::qpEqFault,
+            "qpEqFault(kind) -> previous: corrupt Y (1) or x (2) inside the fast path, to show the residual checks catch it (test hook)"
+        );
+        add_varargs_method(
             "qpEq",
             &Module::qpEq,
             "qpEq(H, g, A, c) -> dict: one QP through qp_eq with the dense path beside it (test hook)"
@@ -169,6 +174,15 @@ private:
             throw Py::Exception();
         }
         return Py::Float(QpEq::setNoise(relative));
+    }
+
+    Py::Object qpEqFault(const Py::Tuple& args)
+    {
+        int kind = 0;
+        if (!PyArg_ParseTuple(args.ptr(), "i", &kind)) {
+            throw Py::Exception();
+        }
+        return Py::Long(QpEq::setFault(kind));
     }
 
     Py::Object qpEq(const Py::Tuple& args)

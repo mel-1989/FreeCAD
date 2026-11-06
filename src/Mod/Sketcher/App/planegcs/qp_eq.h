@@ -66,6 +66,7 @@ Stats stats();
 void resetStats();
 bool setForceDense(bool on);  // returns the previous value; initial value from FREECAD_GCS_QP_FORCE_DENSE
 bool setAudit(bool on);       // returns the previous value
+int setFault(int kind);        // test hook: 1 corrupts Y, 2 corrupts x inside the fast path, 0 off; returns the previous value
 double setNoise(double relative);  // relative noise on the Hessian of forced-dense solves (default 0); returns the previous value
 Audit audit();
 
