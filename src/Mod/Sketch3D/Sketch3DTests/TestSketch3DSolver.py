@@ -64,6 +64,27 @@ def all_finite(obj):
     return True
 
 
+DIRECTION_KINDS = {"parallel": (0, 1), "perpendicular": (0, 1), "angle": (0, 1), "along_x": (0,),
+                   "along_y": (0,), "along_z": (0,), "parallel_plane": (0,), "normal_plane": (0,),
+                   "point_on_line": (1,)}
+
+
+def collapsed_direction_lines(spec, coords):
+    """Lines that carry a direction relation, were longer than 1e-6 mm at the spec's own
+    coordinates and are shorter than that at coords (flat). Computed here, not by the solver."""
+    carry = set()
+    for c in spec.get("constraints", []):
+        if c.get("driving", True) and c["type"] in DIRECTION_KINDS:
+            carry.update(c["operands"][k] for k in DIRECTION_KINDS[c["type"]])
+    start = flat_coords(spec)
+
+    def length(flatc, li):
+        a, b = spec["lines"][li]
+        return math.dist(flatc[3 * a:3 * a + 3], flatc[3 * b:3 * b + 3])
+
+    return [li for li in sorted(carry) if length(start, li) > 1e-6 and length(coords, li) < 1e-6]
+
+
 def tags_of(spec):
     return [c["tag"] for c in spec["constraints"]]
 
@@ -95,7 +116,7 @@ class TestEntryPoint(unittest.TestCase):
         r = Sketch3D.solve(spec)
         self.assertEqual(spec, before)
         for key in ("code", "status", "coordinates", "dof", "conflicting", "redundant",
-                    "partially_redundant", "residuals", "iterations", "algorithm"):
+                    "partially_redundant", "residuals", "iterations", "algorithm", "collapsed", "reason"):
             self.assertIn(key, r)
         self.assertEqual(r["code"], 0)
         self.assertEqual(len(r["residuals"]), 5)
@@ -843,10 +864,30 @@ def labelled_cases():
     add("line along X and along Y with a non-zero length", "conflict", along_xy)
 
     def par_perp(b):
+        # no lengths: with them the pair is a plain contradiction; without them the solver can
+        # satisfy both rows by shrinking a line to nothing, and must refuse that
+        l1 = b.line(b.pt(r3()), b.pt(r3())); l2 = b.line(b.pt(r3()), b.pt(r3()))
+        t = [b.con("parallel", l1, l2), b.con("perpendicular", l1, l2)]
+        return [b.cons[c]["tag"] for c in t]
+    add("parallel and perpendicular on the same pair (a line would collapse)", "collapse", par_perp)
+
+    def par_perp_len(b):
         l1 = b.line(b.pt(r3()), b.pt(r3())); l2 = b.line(b.pt(r3()), b.pt(r3()))
         t = [b.con("parallel", l1, l2), b.con("perpendicular", l1, l2), b.con("length", l1, value=1.0), b.con("length", l2, value=1.0)]
         return [b.cons[c]["tag"] for c in t]
-    add("parallel and perpendicular on the same pair", "conflict", par_perp)
+    add("parallel and perpendicular on the same pair, both lengths set", "conflict", par_perp_len)
+
+    def along_xy_free(b):
+        l = b.line(b.pt([0, 0, 0], True), b.pt(r3()))
+        t = [b.con("along_x", l), b.con("along_y", l)]
+        return [b.cons[c]["tag"] for c in t]
+    add("line along X and along Y, no length (a line would collapse)", "collapse", along_xy_free)
+
+    def par_normal_free(b):
+        l = b.line(b.pt([0, 0, 0], True), b.pt(r3())); b.plane([0, 0, 0], [0, 0, 1])
+        t = [b.con("parallel_plane", l, 0), b.con("normal_plane", l, 0)]
+        return [b.cons[c]["tag"] for c in t]
+    add("line parallel to a plane and normal to it, no length (a line would collapse)", "collapse", par_normal_free)
 
     def dist_twice(b):
         p = b.pt(r3()); q = b.pt(r3())
@@ -879,13 +920,19 @@ def labelled_cases():
     add("equal length with lengths 1 and 2", "conflict", equal_len)
 
     def perp_angle(b):
+        # no lengths: a zero-length line is perpendicular to anything and makes any angle row
+        # vacuous, so the pair is satisfiable by collapsing a line, which is refused
         l1 = b.line(b.pt(r3()), b.pt(r3())); l2 = b.line(b.pt(r3()), b.pt(r3()))
-        # the lengths matter: a zero-length line is perpendicular to anything and makes any
-        # angle row vacuous, so without them the pair is satisfiable by collapsing a line
+        t = [b.con("perpendicular", l1, l2), b.con("angle", l1, l2, value=math.radians(60))]
+        return [b.cons[c]["tag"] for c in t]
+    add("perpendicular and 60 degrees (a line would collapse)", "collapse", perp_angle)
+
+    def perp_angle_len(b):
+        l1 = b.line(b.pt(r3()), b.pt(r3())); l2 = b.line(b.pt(r3()), b.pt(r3()))
         t = [b.con("perpendicular", l1, l2), b.con("angle", l1, l2, value=math.radians(60)),
              b.con("length", l1, value=1.0), b.con("length", l2, value=1.0)]
         return [b.cons[c]["tag"] for c in t]
-    add("perpendicular and 60 degrees", "conflict", perp_angle)
+    add("perpendicular and 60 degrees, both lengths set", "conflict", perp_angle_len)
 
     def on_line_dist(b):
         a = b.pt(r3(), True); c = b.pt([5, 0, 0], True); p = b.pt(r3())
@@ -1005,7 +1052,7 @@ class TestConflictAndRedundancy(unittest.TestCase):
     def test_labelled_cases(self):
         cases = labelled_cases()
         self.assertGreaterEqual(len(cases), 30)
-        counts = {"conflict": 0, "redundant": 0, "ok": 0}
+        counts = {"conflict": 0, "collapse": 0, "redundant": 0, "ok": 0}
         for name, kind, b, culprits in cases:
             with self.subTest(name):
                 counts[kind] += 1
@@ -1020,6 +1067,17 @@ class TestConflictAndRedundancy(unittest.TestCase):
                     self.assertTrue(set(r["conflicting"]) & set(culprits), "%s: named %s, culprits %s" % (name, r["conflicting"], culprits))
                     fixed = Sketch3D.solve(remove_tags(spec, set(r["conflicting"])))
                     self.assertEqual(fixed["code"], 0, "%s: still unsolvable after removing %s" % (name, r["conflicting"]))
+                elif kind == "collapse":
+                    # a line shrinks to nothing: refused with its own code, the constraints
+                    # carrying the collapsed line named, the start coordinates returned
+                    # (a solve that is still shrinking the line when it stops fails with code 2
+                    # and names the line the same way)
+                    self.assertIn(r["code"], (2, 3), name)
+                    self.assertEqual(r["status"], "collapsed" if r["code"] == 3 else "failed", name)
+                    self.assertTrue(set(r["collapsed"]) & set(culprits), "%s: collapsed %s, culprits %s" % (name, r["collapsed"], culprits))
+                    self.assertTrue(set(r["collapsed"]) <= tags, name)
+                    self.assertEqual(r["coordinates"], [list(p["xyz"]) for p in spec["points"]], name)
+                    self.assertEqual(Sketch3D.solve(remove_tags(spec, set(r["collapsed"])))["code"], 0, name)
                 elif kind == "redundant":
                     self.assertEqual(r["code"], 0, name)
                     self.assertEqual(r["conflicting"], [], name)
@@ -1296,7 +1354,7 @@ class TestSolveRate(unittest.TestCase):
     stats = {}
 
     def _run(self, frac, need):
-        total = ok = false_success = bad_report = rigid_n = rigid_wrong = 0
+        total = ok = false_success = bad_report = rigid_n = rigid_wrong = collapsed_successes = 0
         sizes = []
         wrong = []
         failures = []
@@ -1314,6 +1372,8 @@ class TestSolveRate(unittest.TestCase):
                 ok += 1
                 if res > TOL:
                     false_success += 1
+                if collapsed_direction_lines(spec, flat(r)):
+                    collapsed_successes += 1
                 if rigid:
                     rigid_n += 1
                     err = max(abs(a - c) for p, q in zip(r["coordinates"], b.truth) for a, c in zip(p, q))
@@ -1329,6 +1389,7 @@ class TestSolveRate(unittest.TestCase):
         print("\n[check 8] start moved by up to %d%%: %d systems (%d..%d unknowns), success %.2f%%, false successes %d, rigid answers checked %d wrong %d %s; failing seeds %s"
               % (frac * 100, total, min(sizes), max(sizes), 100 * rate, false_success, rigid_n, rigid_wrong, wrong[:6], failures[:8]))
         self.assertEqual(false_success, 0)
+        self.assertEqual(collapsed_successes, 0, "successes with a direction-carrying line collapsed under 1e-6 mm")
         self.assertGreaterEqual(rate, need, "success rate; failing seeds %s" % failures[:20])
         return rigid_n, rigid_wrong
 
@@ -1354,8 +1415,9 @@ class TestNumerics(unittest.TestCase):
     def check(self, name, spec, may_succeed=True):
         r = Sketch3D.solve(spec)
         self.assertTrue(all_finite(r), "%s: nan or inf in result" % name)
-        self.assertIn(r["code"], (0, 1, 2), name)
+        self.assertIn(r["code"], (0, 1, 2, 3), name)
         if r["code"] == 0:
+            self.assertEqual(collapsed_direction_lines(spec, flat(r)), [], "%s: success with a collapsed line" % name)
             res = true_residual(spec, flat(r))
             self.assertLessEqual(res, TOL, "%s: false success, residual %g" % (name, res))
         return r

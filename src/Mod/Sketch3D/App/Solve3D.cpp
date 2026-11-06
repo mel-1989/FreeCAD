@@ -105,6 +105,88 @@ double maxAbsRow(std::vector<std::unique_ptr<Rel>>& rows)
     return m;
 }
 
+// Lines that carry a direction relation: for each, the indices of those constraints. A line of
+// length zero satisfies every one of them vacuously, so a solve that ends there has not solved
+// the relation.
+std::map<int, std::vector<int>> directionLines(const Spec& spec)
+{
+    std::map<int, std::vector<int>> out;
+    for (int ci = 0; ci < static_cast<int>(spec.constraints.size()); ++ci) {
+        const ConstraintSpec& c = spec.constraints[ci];
+        if (!c.driving) {
+            continue;
+        }
+        switch (c.kind) {
+            case Kind::Parallel:
+            case Kind::Perpendicular:
+            case Kind::Angle:
+                out[c.operands[0]].push_back(ci);
+                out[c.operands[1]].push_back(ci);
+                break;
+            case Kind::AlongX:
+            case Kind::AlongY:
+            case Kind::AlongZ:
+            case Kind::ParallelPlane:
+            case Kind::NormalPlane:
+                out[c.operands[0]].push_back(ci);
+                break;
+            case Kind::PointOnLine:
+                out[c.operands[1]].push_back(ci);
+                break;
+            default:
+                break;
+        }
+    }
+    return out;
+}
+
+double lineLength(const Spec& spec, const std::vector<double>& c, int line)
+{
+    const int a = spec.lines[line][0];
+    const int b = spec.lines[line][1];
+    return std::sqrt(
+        (c[3 * a] - c[3 * b]) * (c[3 * a] - c[3 * b])
+        + (c[3 * a + 1] - c[3 * b + 1]) * (c[3 * a + 1] - c[3 * b + 1])
+        + (c[3 * a + 2] - c[3 * b + 2]) * (c[3 * a + 2] - c[3 * b + 2])
+    );
+}
+
+// Tags of the direction relations on lines that are shorter than CollapseLength at c and were
+// longer at start; empty when no line collapsed.
+std::vector<int> collapsedTags(
+    const Spec& spec,
+    const std::vector<double>& start,
+    const std::vector<double>& c
+)
+{
+    std::set<int> tags;
+    for (const auto& [line, cons] : directionLines(spec)) {
+        if (lineLength(spec, start, line) > CollapseLength && lineLength(spec, c, line) < CollapseLength) {
+            for (int ci : cons) {
+                tags.insert(spec.constraints[ci].tag);
+            }
+        }
+    }
+    return std::vector<int>(tags.begin(), tags.end());
+}
+
+bool isDirectionKind(Kind k)
+{
+    switch (k) {
+        case Kind::Parallel:
+        case Kind::Perpendicular:
+        case Kind::Angle:
+        case Kind::AlongX:
+        case Kind::AlongY:
+        case Kind::AlongZ:
+        case Kind::ParallelPlane:
+        case Kind::NormalPlane:
+            return true;
+        default:
+            return false;
+    }
+}
+
 }  // namespace
 
 void validate(const Spec& spec)
@@ -211,14 +293,14 @@ const char* algorithmName(GCS::Algorithm a)
 namespace
 {
 
-Result solveImpl(const Spec& spec, int depth);
+Result solveImpl(const Spec& spec, int depth, bool retry);
 
 }  // namespace
 
 Result solve(const Spec& spec)
 {
     validate(spec);
-    return solveImpl(spec, 0);
+    return solveImpl(spec, 0, true);
 }
 
 namespace
@@ -381,7 +463,7 @@ struct Model
     }
 };
 
-Result solveImpl(const Spec& spec, int depth)
+Result solveImpl(const Spec& spec, int depth, bool retry)
 {
     const int np = static_cast<int>(spec.points.size());
     const int nc = static_cast<int>(spec.constraints.size());
@@ -504,6 +586,18 @@ Result solveImpl(const Spec& spec, int depth)
         res.redundant.assign(red.begin(), red.end());
     }
 
+    // A failed solve that ended with a line carrying a direction relation shrunk to nothing
+    // (still shrinking when it stopped): say so
+    if (residual > SuccessResidual && systemRows > 0 && depth == 0) {
+        std::set<int> shrunk;
+        for (const auto* c : {&coords, &leastSquares}) {
+            for (int t : collapsedTags(spec, start, *c)) {
+                shrunk.insert(t);
+            }
+        }
+        res.collapsed.assign(shrunk.begin(), shrunk.end());
+    }
+
     // A failed solve: name the constraints that the least-squares point leaves unsatisfied (a
     // contradiction between nonlinear relations has no dependent Jacobian rows to find), take
     // them out and solve the rest, repeating until the rest is solvable. The result names every
@@ -532,7 +626,7 @@ Result solveImpl(const Spec& spec, int depth)
                     rest.constraints.push_back(spec.constraints[ci]);
                 }
             }
-            const Result sub = solveImpl(rest, depth + 1);
+            const Result sub = solveImpl(rest, depth + 1, false);
             std::set<int> conf(res.conflicting.begin(), res.conflicting.end());
             for (int ci : named) {
                 conf.insert(spec.constraints[ci].tag);
@@ -552,7 +646,51 @@ Result solveImpl(const Spec& spec, int depth)
         coords = start;
         residual = HUGE_VAL;
     }
+    std::vector<int> collapsed;
     if (residual <= SuccessResidual && allFinite) {
+        collapsed = collapsedTags(spec, start, coords);
+    }
+    if (!collapsed.empty() && retry) {
+        // One retry that keeps the line from collapsing: first solve the direction relations
+        // alone from the start (an under-determined system, whose smallest step leaves the
+        // lines near where they were), then the whole system from the point reached.
+        Spec dirs = spec;
+        dirs.constraints.clear();
+        for (const auto& c : spec.constraints) {
+            if (c.driving && isDirectionKind(c.kind)) {
+                dirs.constraints.push_back(c);
+            }
+        }
+        dirs.diagnose = false;
+        const Result first = solveImpl(dirs, depth + 1, false);
+        if (first.code == 0) {
+            Spec second = spec;
+            for (int i = 0; i < np; ++i) {
+                second.points[i].xyz = first.coordinates[i];
+            }
+            Result again = solveImpl(second, depth + 1, false);
+            std::vector<double> flatAgain(3 * np);
+            for (int i = 0; i < np; ++i) {
+                for (int a = 0; a < 3; ++a) {
+                    flatAgain[3 * i + a] = again.coordinates[i][a];
+                }
+            }
+            if (again.code == 0 && collapsedTags(spec, start, flatAgain).empty()) {
+                again.iterations += iterations;
+                // the residuals and the coordinates are those of the retry; so is the diagnosis
+                return again;
+            }
+        }
+    }
+    if (!collapsed.empty()) {
+        res.code = 3;
+        res.status = "collapsed";
+        res.collapsed = collapsed;
+        res.reason = "a line carrying a direction relation shrank to zero length; the relations "
+                     "hold only there";
+        coords = start;
+    }
+    else if (residual <= SuccessResidual && allFinite) {
         res.code = 0;
         res.status = "success";
     }

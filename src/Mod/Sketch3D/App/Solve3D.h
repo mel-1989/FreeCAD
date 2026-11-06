@@ -60,13 +60,19 @@ struct Spec
 
 struct Result
 {
-    int code = 2;  // 0 success, 1 converged without zero residual, 2 failed
+    // 0 success, 1 converged without zero residual, 2 failed, 3 refused: a line that carries a
+    // direction relation shrank below CollapseLength from a longer start (a zero-length line
+    // satisfies parallel, perpendicular, angle and along-axis rows vacuously)
+    int code = 2;
     std::string status;
     std::vector<std::array<double, 3>> coordinates;
     int dof = 0;
     std::vector<int> conflicting;
     std::vector<int> redundant;
     std::vector<int> partiallyRedundant;
+    std::vector<int> collapsed;  // code 3: tags of the direction relations on the collapsed lines
+    // code 2 without a named conflict: why. Empty on success.
+    std::string reason;
     std::vector<double> residuals;  // per constraint, largest absolute row value
     int iterations = 0;
     std::string algorithm;
@@ -83,6 +89,9 @@ struct RowReport
 
 // Residual under which a solve counts as a success.
 constexpr double SuccessResidual = 1e-9;
+
+// A line shorter than this (mm) that started longer counts as collapsed.
+constexpr double CollapseLength = 1e-6;
 
 // Throws SpecError. Does not change the spec.
 void validate(const Spec& spec);

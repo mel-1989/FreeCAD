@@ -273,6 +273,8 @@ PyObject* toDict(const Result& r)
     set("conflicting", intList(r.conflicting));
     set("redundant", intList(r.redundant));
     set("partially_redundant", intList(r.partiallyRedundant));
+    set("collapsed", intList(r.collapsed));
+    set("reason", PyUnicode_FromString(r.reason.c_str()));
     PyObject* res = PyList_New(static_cast<Py_ssize_t>(r.residuals.size()));
     for (size_t i = 0; i < r.residuals.size(); ++i) {
         PyList_SET_ITEM(res, i, PyFloat_FromDouble(r.residuals[i]));

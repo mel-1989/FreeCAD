@@ -37,12 +37,17 @@ class Spec(TypedDict, total=False):
 
 class Result(TypedDict):
     code: int
+    """0 success, 1 converged without a zero residual, 2 failed, 3 refused: a line carrying a direction relation collapsed."""
     status: str
     coordinates: list[list[float]]
     dof: int
     conflicting: list[int]
     redundant: list[int]
     partially_redundant: list[int]
+    collapsed: list[int]
+    """Code 3 only: tags of the direction relations on the lines that shrank to zero length."""
+    reason: str
+    """Why a failed solve names no conflict; empty on success."""
     residuals: list[float]
     iterations: int
     algorithm: str
