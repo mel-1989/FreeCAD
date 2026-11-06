@@ -100,6 +100,7 @@ CPP = [
     ("second_multiplicity_list_not_compared", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("            || m.weights.size() != cur.weights.size() || m.knots.size() != cur.knots.size()\n            || m.mult != cur.mult) {", "            || m.weights.size() != cur.weights.size() || m.knots.size() != cur.knots.size()) {")], FIT, "a changed multiplicity list still fits"),
     ("explode_invalid_gives_no_pole_constraints", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("    restoreBlockPoleConstraintsOf(badIds);\n", "")], EXPLODE, "an instance exploded because it no longer fits leaves its pole circles without Weight and Equal"),
     ("explode_member_edit_gives_no_pole_constraints", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("    restoreBlockPoleConstraintsOf(hitIds);\n", "")], EXPLODE, "an instance exploded by an edit of one member leaves its pole circles without Weight and Equal"),
+    ("pole_restore_not_deferred", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("    if (internaltransaction) {\n        pendingPoleRestore.insert", "    if (false) {\n        pendingPoleRestore.insert")], EXPLODE, "constraints restored inside an internal transaction are overwritten when it ends"),
     ("weights_compared_with_a_huge_tolerance", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("constexpr double kFitWeight = 1e-6;", "constexpr double kFitWeight = 1e6;")], FIT, "a changed weight still fits"),
 ]
 

@@ -1097,7 +1097,7 @@ class TestCurveLibrary(CurvesCase):
                 # a construction flag that is not a boolean reads as false, which is what the member has: harmless, so the instance
                 # may stand (until run 063 every case here read 0 only because the block's rational spline held a lone weight
                 # of 1.0, which the solver's start-value tweak rewrote, so the instance never fitted whatever the mutation)
-                self.assertIn(sk.getBlockInstanceCount(), (0, 1), label)
+                self.assertEqual(sk.getBlockInstanceCount(), 1, label)
                 continue
             self.assertEqual(sk.getBlockInstanceCount(), 0, label)
         sk.BlockData = sk.BlockData  # still a sketch
@@ -1434,6 +1434,39 @@ class TestExplodeKeepsStockPoleConstraints(CurvesCase):
             sk.solve()
             self.assertEqual(self.kinds(sk), self.kinds(st), w)
             self.assertEqual(sk.DoF, st.DoF, w)
+            self.doc.removeObject(sk.Name)
+
+    def test_deleting_a_sibling_member_gives_the_exposed_spline_stock_constraints(self):
+        """The explode fires while delGeometries has replaced the geometry but not yet the constraints; the circles' constraints must
+        still arrive when it ends (run 063, second verifier)."""
+        line = Part.LineSegment(V(-20, -10, 0), V(60, -10, 0))
+        for w in self.WEIGHTS:
+            st = self.stock(w)
+            sk, name, gid = self.instance_with_circles(w, extra=(line,))
+            sk.delGeometry(member_geos(sk, name)[1][1])
+            self.assertEqual(B.blocks(sk)["instances"], {}, w)
+            sk.solve()
+            self.assertEqual(self.kinds(sk), self.kinds(st), w)
+            self.assertEqual(sk.DoF, st.DoF, w)
+            self.assertClean(sk, str(w))
+            spline = [i for i, g in enumerate(sk.Geometry) if g.TypeId == "Part::GeomBSplineCurve"][0]
+            self.assertEqual(self.drag(sk, spline), self.drag(st, 0), w)
+            self.doc.removeObject(sk.Name)
+
+    def test_inserting_a_knot_gives_the_exposed_spline_stock_constraints(self):
+        for w in self.WEIGHTS:
+            st = self.stock(w)
+            k = st.Geometry[0].getKnots()
+            param = 0.5 * (k[0] + k[1])
+            st.insertBSplineKnot(0, param, 1)
+            st.solve()
+            sk, name, gid = self.instance_with_circles(w)
+            sk.insertBSplineKnot(gid, param, 1)
+            self.assertEqual(B.blocks(sk)["instances"], {}, w)
+            sk.solve()
+            self.assertEqual(self.kinds(sk), self.kinds(st), w)
+            self.assertEqual(sk.DoF, st.DoF, w)
+            self.assertClean(sk, str(w))
             self.doc.removeObject(sk.Name)
 
     def test_extend_of_a_line_member_explodes_the_instance_through_the_member_edit_path(self):

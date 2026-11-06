@@ -507,6 +507,7 @@ bool SketchObject::isValidBlockMember(int geoId)
 
 void SketchObject::syncBlocks()
 {
+    flushPoleRestore();
     if (BlockData.getStrValue().empty()) {
         solvedSketch.setBlockInstances({});
         return;
@@ -597,7 +598,9 @@ int SketchObject::explodeInvalidBlocks()
 
 int SketchObject::pruneBlocks()
 {
-    return explodeInvalidBlocks();
+    const int exploded = explodeInvalidBlocks();
+    flushPoleRestore();
+    return exploded;
 }
 
 int SketchObject::explodeBlocksOf(const std::vector<int>& geoIds)
@@ -652,6 +655,12 @@ int SketchObject::explodeBlocksOf(const std::vector<int>& geoIds)
 
 int SketchObject::restoreBlockPoleConstraintsOf(const std::vector<long>& persistentIds)
 {
+    // Inside an internal transaction the geometry has been replaced and the constraints have not: reading them now
+    // finds stale indices, and the transaction's own Constraints.setValues would drop what was added. Wait for it.
+    if (internaltransaction) {
+        pendingPoleRestore.insert(pendingPoleRestore.end(), persistentIds.begin(), persistentIds.end());
+        return 0;
+    }
     const auto& geos = getInternalGeometry();
     std::set<long> wanted(persistentIds.begin(), persistentIds.end());
     std::vector<int> geoIds;
@@ -661,6 +670,18 @@ int SketchObject::restoreBlockPoleConstraintsOf(const std::vector<long>& persist
         }
     }
     return restoreBlockPoleConstraints(geoIds);
+}
+
+void SketchObject::flushPoleRestore()
+{
+    const auto* doc = getDocument();
+    if (pendingPoleRestore.empty() || internaltransaction || isRestoring()
+        || (doc && doc->isPerformingTransaction())) {
+        return;
+    }
+    std::vector<long> ids;
+    ids.swap(pendingPoleRestore);
+    restoreBlockPoleConstraintsOf(ids);
 }
 
 int SketchObject::restoreBlockPoleConstraints(const std::vector<int>& geoIds)

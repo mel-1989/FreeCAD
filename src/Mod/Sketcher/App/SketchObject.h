@@ -1219,7 +1219,9 @@ private:
     int blockGuard = 0;
     bool inExplodeBlocks = false;
     bool restoringPoles = false;
+    std::vector<long> pendingPoleRestore;  // persistent ids waiting for an internal transaction to end
     int restoreBlockPoleConstraintsOf(const std::vector<long>& persistentIds);
+    void flushPoleRestore();
     bool restoreChecksBlocks = false;
     const std::vector<BlockInstanceData>& parsedBlocks();
 
