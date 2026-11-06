@@ -42,6 +42,7 @@ from SketcherTests.TestSketchBlocks import TestBlockPersistence
 from SketcherTests.TestSketchBlocks import TestBlockEditing
 from SketcherTests.TestSketchBlocks import TestBlockShape
 from SketcherTests.TestSketchBlocks import TestBlockGuard
+from SketcherTests.TestSketchBlocks import TestBlockSessionReading
 from SketcherTests.TestSketchSolverCore import TestSketchSolverCore
 from SketcherTests.TestSketchSolverCore import TestDegenerateLine
 from SketcherTests.TestSketchSolverCore import TestPartitionedDiagnosis

@@ -2874,6 +2874,12 @@
      ]
     },
     {
+     "group": "Blocks",
+     "name": "BlockData",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
      "group": "Sketch",
      "name": "Constraints",
      "type": "Sketcher::PropertyConstraintList",
@@ -3228,6 +3234,12 @@
        ]
       }
      ]
+    },
+    {
+     "group": "Blocks",
+     "name": "BlockData",
+     "type": "App::PropertyString",
+     "value": ""
     },
     {
      "group": "Sketch",
@@ -3763,6 +3775,12 @@
        ]
       }
      ]
+    },
+    {
+     "group": "Blocks",
+     "name": "BlockData",
+     "type": "App::PropertyString",
+     "value": ""
     },
     {
      "group": "Sketch",

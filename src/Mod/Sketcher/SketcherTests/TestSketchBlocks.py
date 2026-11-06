@@ -761,6 +761,124 @@ class TestBlockEditing(BlocksCase):
         self.assertEqual(sk.getBlockInstanceCount(), 1)
         self.assertEqual(list(B.blocks(sk)["instances"]), ["T_1"])
 
+    def test_delete_instance_removes_its_members_and_constraints_only(self):
+        sk, ids, cs = self.named_scene()
+        i2_before = [C.member_numbers(sk.Geometry[g]) for g in B.blocks(sk)["instances"]["T_2"]["geo_ids"]]
+        plain_before = [C.member_numbers(sk.Geometry[g]) for g in (ids["P"], ids["Q"])]
+        n_geo, n_cons = len(sk.Geometry), len(sk.Constraints)
+        count = self.doc.UndoCount
+        names = B.delete_instance(sk, "T_1")
+        self.assertEqual(self.doc.UndoCount, count + 1)
+        self.assertEqual(self.doc.UndoNames[0], "Delete block instance")
+        # T_1 carried origin, horiz, chain, perp (shared with T_2) and tangent; equal (T_2 and Q) and Ph (P) stay
+        self.assertEqual(sorted(names), sorted(["c_origin", "c_horiz", "c_chain", "c_perp", "c_tangent"]))
+        self.assertEqual(len(sk.Geometry), n_geo - 3)
+        self.assertEqual(len(sk.Constraints), n_cons - 5)
+        self.assertEqual(list(B.blocks(sk)["instances"]), ["T_2"])
+        self.assertEqual(sk.getBlockInstanceCount(), 1)
+        self.assertEqual([c.Name for c in sk.Constraints], ["c_Ph", "c_equal"])
+        i2 = [C.member_numbers(sk.Geometry[g]) for g in B.blocks(sk)["instances"]["T_2"]["geo_ids"]]
+        for (_, a), (_, b) in zip(i2, i2_before):
+            for x, y in zip(a, b):
+                self.assertAlmostEqual(x, y, delta=1e-9)
+        plain = [C.member_numbers(g) for g in sk.Geometry[-2:]]
+        for (_, a), (_, b) in zip(plain, plain_before):
+            for x, y in zip(a, b):
+                self.assertAlmostEqual(x, y, delta=1e-9)
+        # constraints still name the right elements after the GeoId shift
+        eq = [c for c in sk.Constraints if c.Name == "c_equal"][0]
+        self.assertEqual({eq.First, eq.Second}, {B.blocks(sk)["instances"]["T_2"]["geo_ids"][2], len(sk.Geometry) - 1})
+
+    def test_delete_instance_undo_redo_restore_exactly(self):
+        sk, ids, cs = self.named_scene()
+        before = self.snapshot(sk)
+        B.delete_instance(sk, "T_1")
+        after = self.snapshot(sk)
+        self.doc.undo()
+        self.assertEqual(self.snapshot(sk), before)
+        self.doc.redo()
+        self.assertEqual(self.snapshot(sk), after)
+
+    def test_delete_instance_refusals_and_failure_change_nothing(self):
+        sk, ids, cs = self.named_scene()
+        snap = self.snapshot(sk)
+        count = self.doc.UndoCount
+        with self.assertRaises(B.SketchBlockError):
+            B.delete_instance(sk, "nope")
+        self.assertEqual(self.snapshot(sk), snap)
+        self.assertEqual(self.doc.UndoCount, count)
+
+    def test_delete_last_instance_leaves_the_definition(self):
+        sk, ids, cs = self.named_scene()
+        B.delete_instance(sk, "T_1")
+        B.delete_instance(sk, "T_2")
+        self.assertEqual(sk.getBlockInstanceCount(), 0)
+        self.assertEqual(list(B.blocks(sk)["definitions"]), ["T"])
+        self.assertEqual(len(sk.Geometry), 2)
+
+    def test_delete_definition_refuses_with_instances_and_succeeds_without(self):
+        sk, ids, cs = self.named_scene()
+        snap = self.snapshot(sk)
+        count = self.doc.UndoCount
+        with self.assertRaises(B.SketchBlockError) as cm:
+            B.delete_definition(sk, "T")
+        self.assertIn("2 instances", str(cm.exception))
+        self.assertEqual(self.snapshot(sk), snap)
+        self.assertEqual(self.doc.UndoCount, count)
+        B.delete_instance(sk, "T_1")
+        with self.assertRaises(B.SketchBlockError) as cm:
+            B.delete_definition(sk, "T")
+        self.assertIn("1 instance", str(cm.exception))
+        self.assertNotIn("1 instances", str(cm.exception))
+        B.explode(sk, "T_2")
+        before = self.snapshot(sk)
+        count = self.doc.UndoCount
+        B.delete_definition(sk, "T")
+        self.assertEqual(self.doc.UndoCount, count + 1)
+        self.assertEqual(self.doc.UndoNames[0], "Delete block definition")
+        self.assertEqual(B.blocks(sk)["definitions"], {})
+        self.assertEqual(sk.BlockData, "")
+        self.doc.undo()
+        self.assertEqual(self.snapshot(sk), before)
+        with self.assertRaises(B.SketchBlockError):
+            B.delete_definition(sk, "nope")
+
+    def test_update_definition_carries_a_construction_flip(self):
+        sk, ids, cs = self.named_scene()
+        res = B.update_definition(sk, "T", {"m0002": (Part.Circle(V(1, 1.5, 0), V(0, 0, 1), 0.5), True)})
+        self.assertEqual(res["removed_constraints"], [])
+        for n in ("T_1", "T_2"):
+            g = B.blocks(sk)["instances"][n]["geo_ids"]
+            self.assertTrue(sk.getConstruction(g[2]), n)
+            self.assertFalse(sk.getConstruction(g[0]), n)
+        self.assertEqual(sk.getBlockInstanceCount(), 2)
+        self.assertTrue(B._load(sk)["defs"]["T"]["members"]["m0002"]["c"])
+
+    def test_session_changes_reads_by_persistent_id_through_the_start_placement(self):
+        sk, ids, cs = self.named_scene()
+        pose = fit_pose(sk, None, "T_1")
+        members = dict(zip(("m0000", "m0001", "m0002"), [sk.getGeometryId(g) for g in B.blocks(sk)["instances"]["T_1"]["geo_ids"]]))
+        known = {sk.getGeometryId(i) for i in range(len(sk.Geometry))}
+        before = B.explode(sk, "T_1", label="Edit block T_1")
+        self.assertEqual(self.doc.UndoNames[0], "Edit block T_1")
+        self.assertEqual(B.session_changes(sk, "T", pose, members, known)["changes"], {})
+        sk.delGeometry(ids["i2"][0])  # a GeoId shift for everything after it: T_2 explodes, T_1's members move down
+        geo = sk.Geometry
+        idmap = {sk.getGeometryId(i): i for i in range(len(sk.Geometry))}
+        ci = idmap[members["m0002"]]
+        geo[ci].Radius = 0.8
+        sk.Geometry = geo
+        sk.addGeometry(Part.LineSegment(V(0, 0, 0), V(1, 1, 0)), False)
+        res = B.session_changes(sk, "T", pose, members, known)
+        self.assertEqual(res["moved"], ["m0002"])
+        self.assertEqual(res["removed"], [])
+        self.assertEqual(len(res["added"]), 1)
+        self.assertAlmostEqual(res["changes"]["m0002"][0].Radius, 0.8, delta=1e-9)
+        sk.delGeometry(idmap[members["m0000"]] if members["m0000"] in {sk.getGeometryId(i) for i in range(len(sk.Geometry))} else 0)
+        res = B.session_changes(sk, "T", pose, members, known)
+        self.assertIn("m0000", res["removed"])
+        self.assertIsNone(res["changes"]["m0000"])
+
     def test_deleting_a_member_explodes_that_instance_only(self):
         sk, ids, cs = self.named_scene()
         g = B.blocks(sk)["instances"]["T_1"]["geo_ids"]
@@ -1240,6 +1358,127 @@ class TestBlockGuard(BlocksCase):
         with self.assertRaises(B.SketchBlockError):
             B.insert(sk, "R", 1, 1, 0.0)
         self.assertEqual(sk.dumpPropertyContent("Geometry"), snap)
+
+
+class TestBlockSessionReading(BlocksCase):
+    """Reading an edit session's result (G10 slice 5c, repair round): a rigid move of the members is the instance's, not the block's."""
+
+    def blocksketch(self, members=3):
+        sk = self.doc.addObject("Sketcher::SketchObject", "S")
+        geo = [
+            Part.LineSegment(V(0, 0, 0), V(5, 0, 0)),
+            Part.ArcOfCircle(Part.Circle(V(2.5, 0, 0), V(0, 0, 1), 2.5), 0.0, math.pi),
+            Part.Circle(V(2.5, 1.2, 0), V(0, 0, 1), 0.4),
+        ][:members]
+        sk.addGeometry(geo, False)
+        B.define(sk, "W", list(range(members)))
+        sk.delGeometries(list(range(members)))
+        B.insert(sk, "W", 0, 0, 0)
+        B.insert(sk, "W", 12, 6, 0.4)
+        return sk
+
+    def begin(self, sk):
+        pose = B.instance_placement(sk, "W_1")
+        members = dict(zip(sorted(B._load(sk)["defs"]["W"]["members"]), [sk.getGeometryId(g) for g in B.blocks(sk)["instances"]["W_1"]["geo_ids"]]))
+        known = {sk.getGeometryId(i) for i in range(len(sk.Geometry))}
+        B.explode(sk, "W_1", label="Edit block W_1")
+        return pose, members, known
+
+    def rigid(self, sk, ids, dx, dy, turn):
+        """Move the listed geometries as one body by plain math: turn about the origin, then shift."""
+        c, s = math.cos(turn), math.sin(turn)
+        geo = sk.Geometry
+        for i in ids:
+            g = geo[i]
+            t, n = C.member_numbers(g)
+            r = lambda x, y: (x * c - y * s + dx, x * s + y * c + dy)
+            if t == "l":
+                g.StartPoint, g.EndPoint = V(*r(n[0], n[1]), 0), V(*r(n[2], n[3]), 0)
+            else:
+                g.Center = V(*r(n[0], n[1]), 0)
+                if t == "a":
+                    g.setParameterRange(n[3] + turn, n[4] + turn)
+        sk.Geometry = geo
+
+    def test_members_moved_together_are_the_instances_move_not_a_change_of_the_block(self):
+        sk = self.blocksketch()
+        pose, members, known = self.begin(sk)
+        self.rigid(sk, [0, 1, 2], 3.0, -2.0, 0.7)
+        res = B.session_changes(sk, "W", pose, members, known)
+        self.assertEqual(res["changes"], {})
+        self.assertTrue(res["moved_together"])
+        for a, b in zip(res["frame"], (pose[0] * math.cos(0.7) - pose[1] * math.sin(0.7) + 3.0, pose[0] * math.sin(0.7) + pose[1] * math.cos(0.7) - 2.0, pose[2] + 0.7)):
+            self.assertAlmostEqual(a, b, delta=1e-9)
+
+    def test_a_rigid_move_with_an_added_member_gives_only_the_added_member(self):
+        sk = self.blocksketch()
+        pose, members, known = self.begin(sk)
+        self.rigid(sk, [0, 1, 2], -4.0, 1.5, -0.3)
+        sk.addGeometry(Part.LineSegment(V(-4.0, 1.5, 0), V(-4.0, 6.0, 0)), False)
+        res = B.session_changes(sk, "W", pose, members, known)
+        self.assertEqual(res["moved"], [])
+        self.assertEqual(len(res["added"]), 1)
+        self.assertTrue(res["moved_together"])
+        # the new line, read in the members' own frame, starts at the frame's origin and leaves it along a quarter turn off the x axis
+        t, nums = C.member_numbers(res["changes"][res["added"][0]][0])
+        self.assertAlmostEqual(math.hypot(nums[0], nums[1]), 0.0, delta=1e-9)  # W_1 was at the origin, so its frame now starts at (-4, 1.5)
+        self.assertAlmostEqual(math.hypot(nums[2] - nums[0], nums[3] - nums[1]), 4.5, delta=1e-9)
+        self.assertAlmostEqual(math.atan2(nums[3] - nums[1], nums[2] - nums[0]), math.pi / 2 + 0.3, delta=1e-9)
+
+    def test_a_rigid_move_with_one_member_removed_still_reads_the_rest_as_unchanged(self):
+        sk = self.blocksketch()
+        pose, members, known = self.begin(sk)
+        self.rigid(sk, [0, 1, 2], 2.0, 2.0, 0.2)
+        sk.delGeometry(2)
+        res = B.session_changes(sk, "W", pose, members, known)
+        self.assertEqual(res["removed"], ["m0002"])
+        self.assertEqual(res["moved"], [])
+        self.assertTrue(res["moved_together"])
+
+    def test_a_shape_change_a_lone_member_moved_and_a_first_member_turn_read_as_before(self):
+        # a change of one member among several is a change of the block
+        sk = self.blocksketch()
+        pose, members, known = self.begin(sk)
+        geo = sk.Geometry
+        geo[2].Radius = 0.7
+        sk.Geometry = geo
+        res = B.session_changes(sk, "W", pose, members, known)
+        self.assertEqual(res["moved"], ["m0002"])
+        self.assertFalse(res["moved_together"])
+        # the first member turned about its start, the others where they were: not one rigid pose
+        sk = self.blocksketch()
+        pose, members, known = self.begin(sk)
+        geo = sk.Geometry
+        geo[0].EndPoint = V(4.0, 3.0, 0)
+        sk.Geometry = geo
+        res = B.session_changes(sk, "W", pose, members, known)
+        self.assertEqual(res["moved"], ["m0000"])
+        self.assertFalse(res["moved_together"])
+        # a block of one member that is moved rigidly: one member cannot be told apart from the block changing, as before
+        sk = self.blocksketch(members=1)
+        pose, members, known = self.begin(sk)
+        self.rigid(sk, [0], 3.0, 3.0, 0.5)
+        res = B.session_changes(sk, "W", pose, members, known)
+        self.assertEqual(res["moved"], ["m0000"])
+        self.assertFalse(res["moved_together"])
+
+    def test_two_members_with_a_shared_centre_have_no_rigid_pose_to_fit(self):
+        defn = {"members": {"m0": {"t": "c", "g": [0.0, 0.0, 1.0], "c": False}, "m1": {"t": "c", "g": [0.0, 0.0, 2.0], "c": False}}}
+        self.assertIsNone(B.rigid_fit(defn, {"m0": [5.0, 5.0, 1.0], "m1": [5.0, 5.0, 2.0]}))
+
+    def test_a_definition_cannot_take_an_instances_name_and_an_instance_name_never_collides(self):
+        sk = self.blocksketch()
+        sk.addGeometry([Part.LineSegment(V(0, 0, 0), V(1, 0, 0)), Part.LineSegment(V(1, 0, 0), V(1, 1, 0))], False)
+        before = sk.dumpPropertyContent("BlockData")
+        with self.assertRaises(B.SketchBlockError) as cm:
+            B.define(sk, "W_1", [len(sk.Geometry) - 2, len(sk.Geometry) - 1])
+        self.assertIn("instance", str(cm.exception))
+        self.assertEqual(sk.dumpPropertyContent("BlockData"), before)
+        # a definition named like the next instance of W: the instance steps over it
+        B.define(sk, "W_3", [len(sk.Geometry) - 2, len(sk.Geometry) - 1])
+        self.assertEqual(B.insert(sk, "W", 20, 0, 0), "W_4")
+        names = list(B.blocks(sk)["instances"]) + list(B.blocks(sk)["definitions"])
+        self.assertEqual(len(names), len(set(names)))
 
 
 if __name__ == "__main__":

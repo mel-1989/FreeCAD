@@ -318,6 +318,12 @@
      "value": []
     },
     {
+     "group": "Blocks",
+     "name": "BlockData",
+     "type": "App::PropertyString",
+     "value": ""
+    },
+    {
      "group": "Sketch",
      "name": "Constraints",
      "type": "Sketcher::PropertyConstraintList",
@@ -722,6 +728,12 @@
      "name": "AttachmentSupport",
      "type": "App::PropertyLinkSubList",
      "value": []
+    },
+    {
+     "group": "Blocks",
+     "name": "BlockData",
+     "type": "App::PropertyString",
+     "value": ""
     },
     {
      "group": "Sketch",
@@ -1196,6 +1208,12 @@
      "name": "AttachmentSupport",
      "type": "App::PropertyLinkSubList",
      "value": []
+    },
+    {
+     "group": "Blocks",
+     "name": "BlockData",
+     "type": "App::PropertyString",
+     "value": ""
     },
     {
      "group": "Sketch",
