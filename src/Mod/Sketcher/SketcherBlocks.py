@@ -42,7 +42,27 @@ another product.
     delete_definition(sk, name)          remove a definition that has no instance
     update_definition(sk, name, changes) edit a definition, every instance follows
     blocks(sk)                           what the sketch holds
+    insert_many(sk, name, placements)    place many instances in one undo entry and one solve
+    library_folder(folder=None)          the folder of the block library
+    library_list(folder=None)            the blocks in the library, bad files marked with their reason
+    library_save(sk, name, ...)          write a definition to the library
+    library_load(sk, name, ...)          copy a definition from the library into the sketch
+    library_delete(name, folder=None)    remove a block file from the library
 
+The block library (slice 5b1) is a plain folder holding one JSON file per block, ``<name>.json``, in a format of our
+own.  The file is data only and is never executed or evaluated::
+
+    {"format": "cadfork-sketch-block", "version": 1, "name": "<name>", "units": "mm",
+     "members": {"<key>": {"t": "p|l|c|a", "g": [numbers], "c": true|false}, ...}}
+
+``members`` is the definition's ``BlockData`` entry as the sketch keeps it, in the block's own frame: ``t`` is the kind
+(point, line, circle, arc), ``g`` its numbers (point x, y; line x1, y1, x2, y2; circle x, y, r; arc x, y, r and the
+start and end angles in radians), ``c`` the construction flag.  Keys are sorted, numbers are written with the shortest
+text that reads back to the same double, so a save, a load and a second save are byte-identical.  The default folder is
+``SketchBlocks`` in the user's data directory; the string parameter ``LibraryFolder`` under
+``User parameter:BaseApp/Preferences/Mod/Sketcher/Blocks`` replaces it, and every library call takes ``folder=``.
+Loading copies the definition into the sketch: there is no link back to the file, so changing or deleting the file
+later changes nothing in a sketch.  A file with a newer ``version`` than 1 is refused.
 Supported members: points, line segments, circles, arcs of circle.  Anything
 else, an empty or degenerate set, a duplicate name and the like raise
 :class:`SketchBlockError` before anything is touched."""
@@ -50,6 +70,8 @@ else, an empty or degenerate set, a duplicate name and the like raise
 import contextlib
 import json
 import math
+import os
+import unicodedata
 
 import FreeCAD
 import Part
@@ -366,6 +388,72 @@ def insert(sk, name, x=0.0, y=0.0, angle=0.0):
     return iname
 
 
+def insert_many(sk, name, placements):
+    """Place an instance of block `name` at each of `placements` (a list of (x, y, angle), angle in radians) in one
+    undo entry and one solve.  The result is what calling :func:`insert` once per placement, in order, gives: the same
+    instance names, the same geometry order, the same coordinates.  Every placement is checked before anything changes;
+    one bad placement refuses the whole call.  An empty list changes nothing and makes no undo entry.  Returns the
+    instance names in order."""
+    data = _load(sk)
+    if name not in data["defs"]:
+        raise SketchBlockError("there is no block called '%s'" % name)
+    try:
+        placements = list(placements)
+    except TypeError:
+        raise SketchBlockError("the placements must be a list of (x, y, angle)")
+    clean = []
+    for i, p in enumerate(placements):
+        try:
+            ok = len(p) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in p)
+        except TypeError:
+            ok = False
+        if not ok:
+            raise SketchBlockError("placement %d must be three numbers (x, y, angle); nothing was changed" % (i + 1))
+        x, y, a = (float(v) for v in p)
+        if not all(map(math.isfinite, (x, y, a))):
+            raise SketchBlockError("placement %d must be finite numbers; nothing was changed" % (i + 1))
+        clean.append((x, y, a))
+    if not clean:
+        return []
+    defn = data["defs"][name]
+    try:
+        _check_distinct(list(defn["members"].values()))
+    except SketchBlockError:
+        raise SketchBlockError("block '%s' has a degenerate definition and cannot be placed" % name)
+    names = []
+    for _ in clean:
+        data["n"] += 1
+        while "%s_%d" % (name, data["n"]) in data["inst"] or "%s_%d" % (name, data["n"]) in data["defs"]:
+            data["n"] += 1
+        names.append("%s_%d" % (name, data["n"]))
+        data["inst"][names[-1]] = None  # reserved, so the next name skips it
+    keys = sorted(defn["members"])
+    with _transaction(sk, "Insert blocks"):
+        try:
+            geos, flags = [], []
+            for x, y, a in clean:
+                for key in keys:
+                    m = defn["members"][key]
+                    geos.append(_make(m["t"], _to_world(m["t"], m["g"], x, y, a)))
+                    flags.append(bool(m.get("c")))
+            gids = sk.addGeometry(geos, False)
+            if isinstance(gids, int):
+                gids = [gids]
+            for g, flag in zip(gids, flags):
+                if flag:
+                    sk.setConstruction(g, True)
+            persistent = [sk.getGeometryId(g) for g in gids]
+        except SketchBlockError:
+            raise
+        except Exception as exc:
+            raise SketchBlockError("block '%s' cannot be placed (%s)" % (name, exc))
+        for i, iname in enumerate(names):
+            data["inst"][iname] = {"def": name, "m": dict(zip(keys, persistent[i * len(keys) : (i + 1) * len(keys)]))}
+        sk.BlockData = _dump(data)
+        sk.solve()
+    return names
+
+
 def explode(sk, instance, label="Explode block"):
     """Turn an instance into plain geometry: same coordinates, same external
     constraints, its three placement freedoms become the members' own.  `label`
@@ -596,10 +684,11 @@ def _fit_points(t, g):
 
 def rigid_fit(defn, world, keys=None):
     """The one rigid placement (X, Y, angle) that takes every listed member of `defn` to the numbers in `world` (key ->
-    numbers) within the fit tolerance, or None.  Needs at least two members and two distinct points; a rigid move of a
-    lone member cannot be told from a change of the definition, so it is not read as one."""
+    numbers) within the fit tolerance, or None.  Needs at least one member and two distinct points among the fit points: a lone line or arc always has them,
+    so a rigid move of it is a change of placement; a lone point or circle has none and gets None.  A lone line turned end
+    for end is the rigid half turn about its midpoint: it is read as a new placement and the definition does not change."""
     keys = [k for k in sorted(world) if k in defn["members"]] if keys is None else keys
-    if len(keys) < 2:
+    if not keys:
         return None
     pairs, radii = [], []
     for k in keys:
@@ -637,7 +726,7 @@ def session_changes(sk, name, placement, member_ids, known_ids):
     member whose numbers or construction flag moved is changed, and every geometry whose persistent id is not in
     `known_ids` (the ids that existed when the edit began) is a new member.  Returns
     {'changes': {...}, 'moved': [keys], 'removed': [keys], 'added': [keys], 'moved_together': bool, 'frame': (X, Y, angle)};
-    an empty `changes` means nothing differs.  When the surviving members (at least two, with two distinct points) all
+    an empty `changes` means nothing differs.  When the surviving members (at least one, with two distinct points among them) all
     fit one rigid placement within the fit tolerance they have moved together: that moves the instance and not the
     block, so they are read through that placement ('frame'), `moved_together` says whether it differs from `placement`,
     and an added member is read in that frame too."""
@@ -730,7 +819,7 @@ def _constraint_key(c, gid_of):
 # preview carry the flags or types above and do not count) and every other object: a Pad's Length, a Box's Length,
 # an expression or a link do not carry them and do count.
 _COMPUTED_STATUS = ("Output", "ReadOnly", "Transient")
-_DERIVED_FIELDS = frozenset({"FullyConstrained", "ExternalGeo", "ExternalTypes", "AttacherType"})
+_DERIVED_FIELDS = frozenset({"FullyConstrained", "ExternalGeo", "ExternalTypes", "AttacherType", "_ElementMapVersion"})
 _OWN_FIELDS = frozenset({"BlockData", "Constraints", "Geometry"})
 
 
@@ -773,6 +862,7 @@ def _object_state(obj, own=False):
     out["\0expr"] = dict(getattr(obj, "ExpressionEngine", None) or [])
     if not own:
         _add_appearance(obj, out)
+        _add_hand_shape(obj, out)
     return out
 
 
@@ -787,6 +877,16 @@ def _add_appearance(obj, out):
     for prop in _VIEW_FIELDS if vo is not None else ():
         if hasattr(vo, prop):  # ShapeColor is an attribute over ShapeAppearance, not a listed property
             out["view " + prop] = hash(repr(getattr(vo, prop)))
+
+
+def _add_hand_shape(obj, out):
+    """A Part::Feature has no inputs: nothing recomputes its Shape, so a Shape in it is what somebody assigned, and
+    undoing the session takes it away.  Every other object's Shape is a result and is left out (see _is_input)."""
+    if obj.TypeId == "Part::Feature" and "Shape" in obj.PropertiesList:
+        try:
+            out["Shape"] = content_hash(obj, "Shape")
+        except Exception:
+            out["Shape"] = hash(repr(obj.Shape.BoundBox))
 
 
 def _state_diff(before, now):
@@ -906,3 +1006,287 @@ def _reshape(geo, t, g):
         geo.Center, geo.Radius = V(g[0], g[1], 0), g[2]
         if t == "a":
             geo.setParameterRange(g[3], g[4])
+
+
+# ---------------------------------------------------------------------------
+# library (slice 5b1)
+# ---------------------------------------------------------------------------
+
+LIBRARY_FORMAT = "cadfork-sketch-block"
+LIBRARY_VERSION = 1
+LIBRARY_PARAM = "User parameter:BaseApp/Preferences/Mod/Sketcher/Blocks"
+_MAX_FILE = 2 * 1024 * 1024  # bytes; 200 members come to about 20 kB
+_MAX_MEMBERS = 5000
+_MAX_COORD = 1.0e6  # mm; a sketch is not a kilometre wide
+_MAX_ANGLE = 1.0e3  # rad
+_KINDS = {"p": 2, "l": 4, "c": 3, "a": 5}
+_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {"COM%d" % i for i in range(1, 10)} | {"LPT%d" % i for i in range(1, 10)}
+_BAD_CHARS = set('/\\:*?"<>|')
+
+
+def _norm(text):
+    """A name as the case-insensitive, normalisation-insensitive filesystem sees it."""
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+def library_folder(folder=None):
+    """The folder in use: `folder` if given, else the parameter ``LibraryFolder``, else ``SketchBlocks`` in the user's
+    data directory.  The folder is not created here."""
+    if folder is not None:
+        if not isinstance(folder, (str, os.PathLike)) or not str(folder).strip():
+            raise SketchBlockError("the library folder must be a path")
+        return os.fspath(folder)
+    custom = FreeCAD.ParamGet(LIBRARY_PARAM).GetString("LibraryFolder", "").strip()
+    return custom or os.path.join(FreeCAD.getUserAppDataDir(), "SketchBlocks")
+
+
+def _folder_for(folder, create):
+    """The folder; a missing default one is created when `create`."""
+    path = library_folder(folder)
+    if not os.path.isdir(path):
+        if os.path.exists(path):
+            raise SketchBlockError("the block library folder is a file, not a folder")
+        if folder is None and create:
+            try:
+                os.makedirs(path, exist_ok=True)
+            except OSError as exc:
+                raise SketchBlockError("the block library folder cannot be created (%s)" % exc.strerror)
+        else:
+            raise SketchBlockError("the block library folder does not exist")
+    return path
+
+
+def _file_name_ok(name):
+    """`name` may be the name of a file in the library folder, or raises."""
+    if not isinstance(name, str) or not name.strip():
+        raise SketchBlockError("a library block needs a name")
+    if name != name.strip() or name.endswith("."):
+        raise SketchBlockError("a library name cannot start or end with a space or end with a dot")
+    if name.startswith("."):
+        raise SketchBlockError("a library name cannot start with a dot")
+    if any(ord(ch) < 32 or ord(ch) == 127 or ch in _BAD_CHARS for ch in name):
+        raise SketchBlockError("a library name cannot contain a slash, a colon, a control character or any of * ? \" < > |")
+    if len(name.encode("utf-8")) > 200:
+        raise SketchBlockError("the library name is too long")
+    if name.split(".")[0].upper() in _RESERVED:
+        raise SketchBlockError("'%s' is a reserved file name on Windows and cannot name a library block" % name)
+
+
+def _entries(path):
+    try:
+        return os.listdir(path)
+    except OSError as exc:
+        raise SketchBlockError("the block library folder cannot be read (%s)" % exc.strerror)
+
+
+def _file_of(path, name):
+    """The existing file of block `name` (the exact name, up to Unicode normalisation) or None."""
+    want = unicodedata.normalize("NFC", name + ".json")
+    for e in _entries(path):
+        if unicodedata.normalize("NFC", e) == want:
+            return os.path.join(path, e)
+    return None
+
+
+def _num(v, lo, hi, what):
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise SketchBlockError("%s must be a number" % what)
+    v = float(v)
+    if not math.isfinite(v) or not lo <= v <= hi:
+        raise SketchBlockError("%s is out of range" % what)
+    return v
+
+
+def _check_members(members):
+    """The members of a library file or a definition, checked and copied: {key: {'t', 'g', 'c'}}."""
+    if not isinstance(members, dict) or not members:
+        raise SketchBlockError("the block has no members")
+    if len(members) > _MAX_MEMBERS:
+        raise SketchBlockError("the block has too many members (%d at most)" % _MAX_MEMBERS)
+    out = {}
+    for key, m in members.items():
+        if not isinstance(key, str) or not key or len(key) > 64 or any(ord(ch) < 32 for ch in key):
+            raise SketchBlockError("a member key is not valid")
+        if not isinstance(m, dict) or set(m) != {"t", "g", "c"}:
+            raise SketchBlockError("member '%s' must have exactly t, g and c" % key)
+        t, g, c = m["t"], m["g"], m["c"]
+        if not isinstance(t, str) or t not in _KINDS:
+            raise SketchBlockError("member '%s' has an unknown kind" % key)
+        if not isinstance(c, bool):
+            raise SketchBlockError("member '%s': c must be true or false" % key)
+        if not isinstance(g, list) or len(g) != _KINDS[t]:
+            raise SketchBlockError("member '%s' needs %d numbers" % (key, _KINDS[t]))
+        nums = []
+        for i, v in enumerate(g):
+            angle = t == "a" and i >= 3
+            nums.append(_num(v, -_MAX_ANGLE if angle else -_MAX_COORD, _MAX_ANGLE if angle else _MAX_COORD, "a number of member '%s'" % key))
+        if t in "ca" and not nums[2] > 0:
+            raise SketchBlockError("member '%s' needs a positive radius" % key)
+        if t == "a" and not 0 < nums[4] - nums[3] <= TWO_PI + 1e-9:
+            raise SketchBlockError("member '%s' has an arc that is empty or longer than a turn" % key)
+        out[key] = {"t": t, "g": nums, "c": c}
+    _check_distinct(list(out.values()))
+    return out
+
+
+def _no_duplicates(pairs):
+    d = {}
+    for k, v in pairs:
+        if k in d:
+            raise ValueError("the key '%s' appears twice" % k)
+        d[k] = v
+    return d
+
+
+def _refuse_constant(text):
+    raise ValueError("%s is not a number a sketch can hold" % text)
+
+
+def _read_block(path, name):
+    """Read and check one block file; returns its members.  Raises SketchBlockError and nothing else."""
+    try:
+        real = os.path.realpath(path)
+        folder = os.path.realpath(os.path.dirname(path))
+        if os.path.commonpath([real, folder]) != folder:
+            raise SketchBlockError("the file of block '%s' is a link to somewhere outside the library folder" % name)
+        if not os.path.isfile(real):
+            raise SketchBlockError("block '%s' is not a file" % name)
+        if os.path.getsize(real) > _MAX_FILE:
+            raise SketchBlockError("the file of block '%s' is too large to be a block" % name)
+        with open(real, "rb") as fh:
+            raw = fh.read(_MAX_FILE + 1)
+        if len(raw) > _MAX_FILE:
+            raise SketchBlockError("the file of block '%s' is too large to be a block" % name)
+        try:
+            doc = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicates, parse_constant=_refuse_constant)
+        except (ValueError, RecursionError) as exc:
+            raise SketchBlockError("the file of block '%s' is not a block file (%s)" % (name, str(exc).splitlines()[0][:80]))
+        if not isinstance(doc, dict) or doc.get("format") != LIBRARY_FORMAT:
+            raise SketchBlockError("the file of block '%s' is not a sketch block file" % name)
+        version = doc.get("version")
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise SketchBlockError("the file of block '%s' has no version number" % name)
+        if version > LIBRARY_VERSION:
+            raise SketchBlockError("the file of block '%s' is from a newer version of the format (%d); this one reads up to %d" % (name, version, LIBRARY_VERSION))
+        if version < 1:
+            raise SketchBlockError("the file of block '%s' has an unknown version" % name)
+        if set(doc) != {"format", "version", "name", "units", "members"}:
+            raise SketchBlockError("the file of block '%s' lacks or adds keys" % name)
+        if not isinstance(doc["name"], str) or doc["units"] != "mm":
+            raise SketchBlockError("the file of block '%s' must have a name and units 'mm'" % name)
+        return _check_members(doc["members"])
+    except SketchBlockError:
+        raise
+    except Exception as exc:  # nothing but a refusal leaves this function
+        raise SketchBlockError("the file of block '%s' cannot be read (%s)" % (name, type(exc).__name__))
+
+
+def library_list(folder=None):
+    """What the library holds: a list of {'name', 'members' (count or None), 'error' (reason or None)}, sorted by name.
+    A file that cannot be read as a block is listed with its reason and costs no good entry.  A missing or empty folder
+    gives an empty list; files that do not end in .json, hidden files and sub-folders are ignored."""
+    path = library_folder(folder)
+    if not os.path.isdir(path):
+        return []
+    out = []
+    for e in _entries(path):
+        stem, ext = os.path.splitext(e)
+        full = os.path.join(path, e)
+        if ext != ".json" or e.startswith(".") or os.path.isdir(full):
+            continue
+        try:
+            out.append({"name": stem, "members": len(_read_block(full, stem)), "error": None})
+        except SketchBlockError as exc:
+            out.append({"name": stem, "members": None, "error": str(exc)})
+    out.sort(key=lambda r: (_norm(r["name"]), r["name"]))
+    return out
+
+
+def library_save(sk, name, folder=None, overwrite=False):
+    """Write the definition `name` of the sketch to the library as ``<name>.json`` and return the path.  Refuses an
+    unknown block, a name that is not a plain file name, an existing file unless `overwrite`, and a file whose name
+    differs from an existing one only by case.  The write is atomic: a failure leaves the old file whole and no
+    temporary file.  The sketch and its undo stack are not touched."""
+    data = _load(sk)
+    if name not in data["defs"]:
+        raise SketchBlockError("there is no block called '%s'" % (name if isinstance(name, str) else "?"))
+    _file_name_ok(name)
+    members = _check_members(data["defs"][name]["members"])
+    path = _folder_for(folder, True)
+    target = name + ".json"
+    for e in _entries(path):
+        if e != target and _norm(e) == _norm(target):
+            raise SketchBlockError("the library already has '%s', which differs from '%s' only by case" % (e[: -len(".json")], name))
+    full = os.path.join(path, target)
+    if os.path.isdir(full):
+        raise SketchBlockError("'%s' is a folder in the library, not a block file" % name)
+    if os.path.lexists(full) and not overwrite:
+        raise SketchBlockError("the library already has a block called '%s'; save with overwrite to replace it" % name)
+    text = json.dumps(
+        {"format": LIBRARY_FORMAT, "version": LIBRARY_VERSION, "name": name, "units": "mm", "members": members},
+        sort_keys=True,
+        indent=1,
+        ensure_ascii=True,
+    ) + "\n"
+    import tempfile
+
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".block-", suffix=".tmp", dir=path)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, full)
+        tmp = None
+    except OSError as exc:
+        raise SketchBlockError("the block could not be saved (%s)" % (exc.strerror or exc))
+    finally:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+    return full
+
+
+def library_load(sk, name, folder=None, as_name=None):
+    """Copy the block `name` from the library into the sketch as a definition and return its name in the sketch
+    (`as_name` if given).  The sketch keeps its own copy: no link to the file remains.  A block of that name already in
+    the sketch with the very same members is reused and nothing changes; with different members the call is refused,
+    unless `as_name` gives it another name, which follows the rules of :func:`define`.  One undo entry."""
+    _file_name_ok(name)
+    path = _folder_for(folder, False)
+    full = _file_of(path, name)
+    if full is None:
+        raise SketchBlockError("the library has no block called '%s'" % name)
+    members = _read_block(full, name)
+    data = _load(sk)
+    if as_name is not None:
+        _name_ok(data, as_name)
+        target = as_name
+    else:
+        target = name
+        if target in data["inst"]:
+            raise SketchBlockError("'%s' is the name of a block instance; load it with as_name" % target)
+        if target in data["defs"]:
+            if data["defs"][target]["members"] == members:
+                return target
+            raise SketchBlockError("the sketch already has a different block called '%s'; load it with as_name to keep both" % target)
+    data["defs"][target] = {"members": members}
+    with _transaction(sk, "Load block"):
+        sk.BlockData = _dump(data)
+    return target
+
+
+def library_delete(name, folder=None):
+    """Remove the file of block `name` from the library.  Sketches that loaded it are unaffected."""
+    _file_name_ok(name)
+    path = _folder_for(folder, False)
+    full = _file_of(path, name)
+    if full is None:
+        raise SketchBlockError("the library has no block called '%s'" % name)
+    if os.path.isdir(full) and not os.path.islink(full):
+        raise SketchBlockError("'%s' is a folder, not a block file" % name)
+    try:
+        os.remove(full)
+    except OSError as exc:
+        raise SketchBlockError("the block could not be deleted (%s)" % (exc.strerror or exc))
