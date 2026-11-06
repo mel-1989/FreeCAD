@@ -51,6 +51,9 @@ from SketcherTests.TestSketchBlockLibrary import TestInsertMany
 from SketcherTests.TestSketchBlockLibrary import TestOneMemberRigid
 from SketcherTests.TestSketchBlockLibrary import TestHandAssignedShape
 from SketcherTests.TestSketchBlockLibrary import TestPlacementQuantities
+from SketcherTests.TestSketchBlockCurves import TestCurveDOF
+from SketcherTests.TestSketchBlockCurves import TestCurveRigidity
+from SketcherTests.TestSketchBlockCurves import TestCurvePlacement
 from SketcherTests.TestSketchSolverCore import TestSketchSolverCore
 from SketcherTests.TestSketchSolverCore import TestDegenerateLine
 from SketcherTests.TestSketchSolverCore import TestPartitionedDiagnosis

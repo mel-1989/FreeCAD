@@ -86,6 +86,11 @@ public:
      *
      * type is 'p' (point: x0, y0), 'l' (line: x0, y0 to x1, y1), 'c' (circle: centre x0, y0 and
      * radius r) or 'a' (arc: centre x0, y0, radius r, start angle a0, end angle a1)
+     *
+     * 'e' is an ellipse (centre x0, y0, first focus x1, y1, minor radius r), 'o' an arc of ellipse
+     * (the same and the start and end parameters a0, a1, measured from the ellipse's own major axis, so
+     * they do not turn with the instance) and 's' a B-spline: degree, periodic, poles (x, y), weights,
+     * knots and multiplicities, where only the poles and weights are solver parameters
      */
     struct BlockMember
     {
@@ -93,6 +98,12 @@ public:
         char type = 'p';
         double x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0, r = 0.0, a0 = 0.0, a1 = 0.0;
         bool construction = false;  ///< the definition's construction flag, kept by every instance
+        int degree = 0;             ///< 's' only
+        bool periodic = false;      ///< 's' only
+        std::vector<double> poles;  ///< 's' only: x, y of each pole
+        std::vector<double> weights;
+        std::vector<double> knots;
+        std::vector<int> mult;
     };
     struct BlockInstance
     {

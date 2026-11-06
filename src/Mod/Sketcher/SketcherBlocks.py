@@ -88,7 +88,13 @@ _TYPES = {
     "Part::GeomLineSegment": "l",
     "Part::GeomCircle": "c",
     "Part::GeomArcOfCircle": "a",
+    "Part::GeomEllipse": "e",
+    "Part::GeomArcOfEllipse": "o",
+    "Part::GeomBSplineCurve": "s",
 }
+_MIN_FOCAL = 1e-3  # an arc of ellipse whose focus is nearer its centre than this has no usable major axis (mm)
+_MAX_POLES = 1000
+_MAX_DEGREE = 25
 
 
 class SketchBlockError(Exception):
@@ -138,28 +144,72 @@ def _numbers(geo):
     """(type letter, numbers in world or local coordinates) of a supported geometry."""
     t = _TYPES.get(geo.TypeId)
     if t is None:
-        raise SketchBlockError("a %s cannot be part of a block (points, lines, circles and arcs can)" % geo.TypeId.split("::")[-1].replace("Geom", "").lower())
+        raise SketchBlockError(
+            "a %s cannot be part of a block (points, lines, circles, arcs, ellipses, arcs of ellipse and B-splines can)"
+            % geo.TypeId.split("::")[-1].replace("Geom", "").lower()
+        )
     if t == "p":
         return t, [geo.X, geo.Y]
     if t == "l":
         return t, [geo.StartPoint.x, geo.StartPoint.y, geo.EndPoint.x, geo.EndPoint.y]
     if t == "c":
         return t, [geo.Center.x, geo.Center.y, geo.Radius]
+    if t in "eo":
+        cx, cy = geo.Center.x, geo.Center.y
+        a, b = geo.MajorRadius, geo.MinorRadius
+        f = math.sqrt(max(0.0, a * a - b * b))
+        d = geo.XAxis
+        out = [cx, cy, cx + f * d.x, cy + f * d.y, b]
+        if t == "e":
+            return t, out
+        a0, a1 = geo.FirstParameter, geo.LastParameter
+        if geo.Axis.z < 0:  # the sketch reads such an arc as counter-clockwise: the same points at the negated parameters
+            a0, a1 = -a1, -a0
+        while a1 <= a0:
+            a1 += TWO_PI
+        return t, out + [a0, a1]
+    if t == "s":
+        poles = geo.getPoles()
+        weights = geo.getWeights()
+        knots = geo.getKnots()
+        mults = geo.getMultiplicities()
+        g = [int(geo.Degree), 1 if geo.isPeriodic() else 0, len(poles)]
+        for p in poles:
+            g += [p.x, p.y]
+        g += [float(w) for w in weights]
+        g += [len(knots)] + [float(k) for k in knots] + [int(m) for m in mults]
+        return t, g
     a0, a1 = geo.FirstParameter, geo.LastParameter
     if a1 <= a0:
         a1 += TWO_PI
     return t, [geo.Center.x, geo.Center.y, geo.Radius, a0, a1]
 
 
+def _spline_parts(g):
+    """(degree, periodic, poles [(x, y)], weights, knots, mults) of an 's' member's numbers."""
+    n = int(g[2])
+    poles = [(g[3 + 2 * i], g[4 + 2 * i]) for i in range(n)]
+    weights = list(g[3 + 2 * n : 3 + 3 * n])
+    m = int(g[3 + 3 * n])
+    knots = list(g[4 + 3 * n : 4 + 3 * n + m])
+    mults = [int(v) for v in g[4 + 3 * n + m : 4 + 3 * n + 2 * m]]
+    return int(g[0]), int(g[1]), poles, weights, knots, mults
+
+
+def _slots(t, g):
+    """The index pairs of `g` that are points of the member's frame (they move and turn with the instance)."""
+    if t in "pca":
+        return [(0, 1)]
+    if t in "leo":
+        return [(0, 1), (2, 3)]
+    return [(3 + 2 * i, 4 + 2 * i) for i in range(int(g[2]))]
+
+
 def _points(t, g):
     """The member's points, for the distinctness test and the placement."""
-    if t == "p":
-        return [(g[0], g[1])]
-    if t == "l":
-        return [(g[0], g[1]), (g[2], g[3])]
-    if t == "c":
-        return [(g[0], g[1])]
-    return [(g[0], g[1]), (g[0] + g[2] * math.cos(g[3]), g[1] + g[2] * math.sin(g[3]))]
+    if t == "a":
+        return [(g[0], g[1]), (g[0] + g[2] * math.cos(g[3]), g[1] + g[2] * math.sin(g[3]))]
+    return [(g[i], g[j]) for i, j in _slots(t, g)]
 
 
 def _rotate(x, y, c, s):
@@ -168,28 +218,23 @@ def _rotate(x, y, c, s):
 
 def _to_local(t, g, ox, oy):
     g = list(g)
-    g[0] -= ox
-    g[1] -= oy
-    if t == "l":
-        g[2] -= ox
-        g[3] -= oy
+    for i, j in _slots(t, g):
+        g[i] -= ox
+        g[j] -= oy
     return g
 
 
 def _to_world(t, g, X, Y, th):
     c, s = math.cos(th), math.sin(th)
     out = list(g)
-    out[0], out[1] = _rotate(g[0], g[1], c, s)
-    out[0] += X
-    out[1] += Y
-    if t == "l":
-        out[2], out[3] = _rotate(g[2], g[3], c, s)
-        out[2] += X
-        out[3] += Y
-    elif t == "a":
+    for i, j in _slots(t, g):
+        out[i], out[j] = _rotate(g[i], g[j], c, s)
+        out[i] += X
+        out[j] += Y
+    if t == "a":
         out[3] = g[3] + th
         out[4] = g[4] + th
-    return out
+    return out  # an ellipse's and an arc of ellipse's parameters, weights and knots do not turn
 
 
 def _make(t, g):
@@ -199,7 +244,22 @@ def _make(t, g):
         return Part.LineSegment(V(g[0], g[1], 0), V(g[2], g[3], 0))
     if t == "c":
         return Part.Circle(V(g[0], g[1], 0), V(0, 0, 1), g[2])
+    if t in "eo":
+        ell = _make_ellipse(g)
+        return ell if t == "e" else Part.ArcOfEllipse(ell, g[5], g[6])
+    if t == "s":
+        deg, periodic, poles, weights, knots, mults = _spline_parts(g)
+        spl = Part.BSplineCurve()
+        spl.buildFromPolesMultsKnots([V(x, y, 0) for x, y in poles], mults, knots, bool(periodic), deg, weights)
+        return spl
     return Part.ArcOfCircle(Part.Circle(V(g[0], g[1], 0), V(0, 0, 1), g[2]), g[3], g[4])
+
+
+def _make_ellipse(g):
+    major = math.hypot(math.hypot(g[2] - g[0], g[3] - g[1]), g[4])
+    ell = Part.Ellipse(V(g[0], g[1], 0), max(major, g[4]), g[4])
+    ell.AngleXU = math.atan2(g[3] - g[1], g[2] - g[0])
+    return ell
 
 
 def _text(value, what):
@@ -348,11 +408,30 @@ def _members_in_instances(data, idmap_ids):
     return used & set(idmap_ids)
 
 
+def _internal_pairs(sk):
+    """[(element GeoId, curve GeoId)] of the sketch's InternalAlignment constraints: an ellipse's axes and foci, a
+    B-spline's pole circles and knot points are held to their curve by these."""
+    return [(c.First, c.Second) for c in sk.Constraints if c.Type == "InternalAlignment"]
+
+
+def _internal_elements(sk, curves):
+    """The GeoIds of the internal geometry of the curves `curves` (a set of GeoIds)."""
+    return {e for e, cur in _internal_pairs(sk) if cur in curves}
+
+
 def define(sk, name, geo_ids):
     """Register a definition from existing geometry (which stays as plain geometry).
 
     The definition's frame has its origin at the first point of the first member.
-    Returns the name."""
+    Internal geometry of an ellipse, an arc of ellipse or a B-spline (axes, foci, pole circles, knot points) is left
+    out of the definition when its curve is listed, and refused when its curve is not; :func:`define_report` says what
+    was left out.  Returns the name."""
+    return define_report(sk, name, geo_ids)["name"]
+
+
+def define_report(sk, name, geo_ids):
+    """As :func:`define`, returning {'name': name, 'left_out': [GeoIds of internal geometry that was listed with its
+    curve and not made a member]}; the same is said on the console."""
     data = _load(sk)
     _name_ok(data, name)
     geo_ids = list(geo_ids)
@@ -364,6 +443,21 @@ def define(sk, name, geo_ids):
     for g in geo_ids:
         if not isinstance(g, int) or g < 0 or g >= n:
             raise SketchBlockError("geometry %r is not in the sketch (external geometry cannot be part of a block)" % (g,))
+    listed = set(geo_ids)
+    left_out = []
+    for el, cur in _internal_pairs(sk):
+        if el in listed:
+            if cur not in listed:
+                raise SketchBlockError(
+                    "geometry %d is internal geometry of curve %d; list the curve to define it, the internal geometry follows from it" % (el, cur)
+                )
+            left_out.append(el)
+    if left_out:
+        geo_ids = [g for g in geo_ids if g not in set(left_out)]
+        FreeCAD.Console.PrintMessage(
+            "Sketch block '%s': left out internal geometry %s; a block holds the curve alone, the pole circles and axes can be exposed again on an instance\n"
+            % (name, ", ".join(str(g) for g in sorted(left_out)))
+        )
     ids = [sk.getGeometryId(g) for g in geo_ids]
     busy = set(ids) & {gid for inst in data["inst"].values() for gid in inst["m"].values()}
     if busy:
@@ -376,11 +470,13 @@ def define(sk, name, geo_ids):
     members = {}
     for i, (t, nums, constr) in enumerate(raw):
         members["m%04d" % i] = {"t": t, "g": _to_local(t, nums, ox, oy), "c": constr}
+        if t in "eos":
+            members["m%04d" % i]["g"] = _check_curve("m%04d" % i, t, members["m%04d" % i]["g"])
     _check_distinct(list(members.values()))
     data["defs"][name] = {"members": members}
     with _transaction(sk, "Define block"):
         sk.BlockData = _dump(data)
-    return name
+    return {"name": name, "left_out": sorted(left_out)}
 
 
 def _flagged(geo, flag):
@@ -526,7 +622,8 @@ def delete_instance(sk, instance):
     if instance not in data["inst"]:
         raise SketchBlockError("there is no block instance called '%s'" % instance)
     idmap = _id_map(sk)
-    gone = sorted({idmap[gid] for gid in data["inst"][instance]["m"].values() if gid in idmap})
+    gone = {idmap[gid] for gid in data["inst"][instance]["m"].values() if gid in idmap}
+    gone = sorted(gone | _internal_elements(sk, gone))  # as deleting a stock curve does: its exposed axes and pole circles go too
     cons = list(sk.Constraints)
     drop = [i for i, c in enumerate(cons) if {c.First, c.Second, c.Third} & set(gone)]
     names = [_constraint_label(cons[i], i) for i in drop]
@@ -600,7 +697,7 @@ def update_definition(sk, name, changes):
         raise SketchBlockError("nothing to change")
     defn = data["defs"][name]
     new_def = json.loads(json.dumps(defn))
-    removed, added, moved = [], [], []
+    removed, added, moved, replaced = [], [], [], []
     flags = {}  # key -> construction flag, for a member given as (geometry, construction)
     for key, geo in changes.items():
         _key_ok(key)
@@ -615,13 +712,18 @@ def update_definition(sk, name, changes):
             del new_def["members"][key]
             continue
         t, nums = _numbers(geo)
+        if t in "eos":
+            nums = _check_curve(key, t, nums)
         if key in defn["members"]:
             if defn["members"][key]["t"] != t:
                 raise SketchBlockError("member '%s' cannot change its kind" % key)
             new_def["members"][key]["g"] = nums
             if key in flags:
                 new_def["members"][key]["c"] = flags[key]
-            moved.append(key)
+            if _same_structure(t, defn["members"][key]["g"], nums):
+                moved.append(key)
+            else:
+                replaced.append(key)  # a new degree, knot vector or pole count: a new curve, not a moved one
         else:
             new_def["members"][key] = {"t": t, "g": nums, "c": flags.get(key, False)}
             added.append(key)
@@ -637,11 +739,16 @@ def update_definition(sk, name, changes):
             raise SketchBlockError("instance '%s' is missing geometry" % n)
         placements[n] = _placement(defn, _instance_world(sk, defn, inst, idmap))
     conflicts_before = list(sk.ConflictingConstraints)
-    result = {"removed_constraints": [], "redundant_constraints": [], "instances": sorted(insts)}
+    result = {"removed_constraints": [], "redundant_constraints": [], "instances": sorted(insts), "replaced": sorted(replaced)}
+    if replaced:
+        FreeCAD.Console.PrintMessage(
+            "Sketch block '%s': the structure of %s changed, so each instance's curve was replaced and its constraints were removed\n" % (name, ", ".join(sorted(replaced)))
+        )
 
     with _transaction(sk, "Edit block definition"):
         # 1. the constraints on removed members go, by name, before the geometry does
-        gone = sorted({idmap[insts[n]["m"][k]] for n in insts for k in removed if k in insts[n]["m"]})
+        gone = {idmap[insts[n]["m"][k]] for n in insts for k in removed + replaced if k in insts[n]["m"]}
+        gone = sorted(gone | _internal_elements(sk, gone))
         cons = list(sk.Constraints)
         drop = [i for i, c in enumerate(cons) if {c.First, c.Second, c.Third} & set(gone)]
         result["removed_constraints"] = [_constraint_label(cons[i], i) for i in drop]
@@ -651,7 +758,7 @@ def update_definition(sk, name, changes):
         #    a moved member back; removed members leave their instances (the geometry goes in step 5)
         data["defs"][name] = new_def
         for inst in insts.values():
-            for k in removed:
+            for k in removed + replaced:
                 inst["m"].pop(k, None)
         sk.BlockData = _dump(data)
         # 3. moved members: the same geometry (so its id and constraints stay) with new numbers
@@ -670,7 +777,7 @@ def update_definition(sk, name, changes):
         # 4. added members
         for n, inst in insts.items():
             X, Y, th = placements[n]
-            inst["m"].update(_add_instance_geometry(sk, new_def, X, Y, th, keys=added))
+            inst["m"].update(_add_instance_geometry(sk, new_def, X, Y, th, keys=added + replaced))
         sk.BlockData = _dump(data)
         # 5. removed members' geometry
         if gone:
@@ -689,12 +796,7 @@ def update_definition(sk, name, changes):
                 m = new_def["members"][k]
                 want = _to_world(m["t"], m["g"], X, Y, th)
                 have = _numbers(sk.Geometry[idmap2[gid]])[1]
-                n_cmp = 3 if m["t"] == "a" else len(want)  # an arc's angles are compared mod a turn below
-                bad = any(abs(a - b) > _PLACE_TOL for a, b in zip(want[:n_cmp], have[:n_cmp]))
-                if m["t"] == "a":
-                    bad = bad or abs(math.remainder(have[3] - want[3], TWO_PI)) > 1e-9
-                    bad = bad or abs(math.remainder(have[4] - want[4], TWO_PI)) > 1e-9
-                if bad:
+                if _differs(m["t"], want, have, _PLACE_TOL):
                     raise SketchBlockError("an instance would move by more than %g mm; nothing was changed" % _PLACE_TOL)
     return result
 
@@ -713,13 +815,36 @@ def to_local(t, g, X, Y, th):
     """The inverse of the placement (X, Y, th) on a member's numbers."""
     c, s = math.cos(-th), math.sin(-th)
     out = list(g)
-    out[0], out[1] = _rotate(g[0] - X, g[1] - Y, c, s)
-    if t == "l":
-        out[2], out[3] = _rotate(g[2] - X, g[3] - Y, c, s)
-    elif t == "a":
+    for i, j in _slots(t, g):
+        out[i], out[j] = _rotate(g[i] - X, g[j] - Y, c, s)
+    if t == "a":
         out[3] = g[3] - th
         out[4] = g[4] - th
     return out
+
+
+def _differs(t, a, b, tol, wtol=1e-9):
+    """Do the numbers `a` and `b` of one member kind differ: coordinates and radii by more than `tol`, parameters and
+    weights and knots by more than 1e-9 (an angle modulo a turn), a structure (degree, periodic flag, pole count, knot
+    count, multiplicities) at all?"""
+    if len(a) != len(b):
+        return True
+    if t == "s":
+        da, pa, polesa, wa, ka, ma = _spline_parts(a)
+        db, pb, polesb, wb, kb, mb = _spline_parts(b)
+        if (da, pa, len(polesa), len(ka), ma) != (db, pb, len(polesb), len(kb), mb):
+            return True
+        if any(abs(x - y) > tol for p, q in zip(polesa, polesb) for x, y in zip(p, q)):
+            return True
+        return any(abs(x - y) > wtol for x, y in zip(wa + ka, wb + kb))
+    k = {"a": 3, "o": 5}.get(t, len(a))
+    if any(abs(x - y) > tol for x, y in zip(a[:k], b[:k])):
+        return True
+    return any(abs(math.remainder(x - y, TWO_PI)) > 1e-9 for x, y in zip(a[k:], b[k:]))
+
+
+def _same_structure(t, a, b):
+    return t != "s" or not (len(a) != len(b) or _differs(t, a, b, float("inf"), float("inf")))
 
 
 _SAME = 1e-9  # a member whose numbers moved by less than this has not changed
@@ -741,11 +866,18 @@ def rigid_fit(defn, world, keys=None):
     keys = [k for k in sorted(world) if k in defn["members"]] if keys is None else keys
     if not keys:
         return None
-    pairs, radii = [], []
+    pairs, radii, others = [], [], []
     for k in keys:
         m = defn["members"][k]
         if m["t"] in "ca":
             radii.append((m["g"][2], world[k][2]))
+        elif m["t"] in "eo":
+            radii.append((m["g"][4], world[k][4]))
+            others.append((m["t"], m["g"], world[k]))
+        elif m["t"] == "s":
+            others.append((m["t"], m["g"], world[k]))
+        if len(world[k]) != len(m["g"]):
+            return None  # a structure that changed is not a placement
         pairs += list(zip(_fit_points(m["t"], m["g"]), _fit_points(m["t"], world[k])))
     lp = [a for a, _ in pairs]
     if not any(math.hypot(p[0] - lp[0][0], p[1] - lp[0][1]) > _EPS for p in lp[1:]):
@@ -766,6 +898,12 @@ def rigid_fit(defn, world, keys=None):
             return None
     if any(abs(a - b) > _PLACE_TOL for a, b in radii):
         return None
+    # what does not turn with the instance: an arc of ellipse's parameters, a spline's weights and knots and structure
+    for t, a, b in others:
+        if t == "o" and any(abs(math.remainder(x - y, TWO_PI)) > 1e-9 for x, y in zip(a[5:], b[5:])):
+            return None
+        if t == "s" and _differs("s", a, b, float("inf")):
+            return None
     return X, Y, th
 
 
@@ -815,20 +953,18 @@ def session_changes(sk, name, placement, member_ids, known_ids):
             raise SketchBlockError("member '%s' changed its kind; a block member cannot" % key)
         local = to_local(t, nums, X, Y, th)
         flag = bool(sk.getConstruction(i))
-        n_cmp = 3 if t == "a" else len(local)
-        same = all(abs(a - b) <= _SAME for a, b in zip(local[:n_cmp], m["g"][:n_cmp]))
+        same = not _differs(t, local, m["g"], _SAME)
         if fit is not None:
             same = True  # the fit has accepted every member's numbers within the tolerance
-        elif t == "a":
-            same = same and abs(math.remainder(local[3] - m["g"][3], TWO_PI)) <= _SAME and abs(math.remainder(local[4] - m["g"][4], TWO_PI)) <= _SAME
         if same and flag == bool(m.get("c")):
             continue
         changes[key] = (_make(t, local), flag)
         moved.append(key)
     nxt = 1 + max([int(k[1:]) for k in defn["members"] if k[1:].isdigit()] + [-1])
+    internal = _internal_elements(sk, {idmap[g] for g in member_ids.values() if g in idmap})
     for i in range(len(geo)):
         gid = sk.getGeometryId(i)
-        if gid in known_ids:
+        if gid in known_ids or i in internal:  # the axes and pole circles of a member's curve are not members
             continue
         t, nums = _numbers(geo[i])
         key = "m%04d" % nxt
@@ -1053,6 +1189,21 @@ def _reshape(geo, t, g):
         geo.X, geo.Y = g[0], g[1]
     elif t == "l":
         geo.StartPoint, geo.EndPoint = V(g[0], g[1], 0), V(g[2], g[3], 0)
+    elif t in "eo":
+        major = max(math.hypot(math.hypot(g[2] - g[0], g[3] - g[1]), g[4]), g[4])
+        geo.Center = V(g[0], g[1], 0)
+        if major >= geo.MinorRadius:
+            geo.MajorRadius, geo.MinorRadius = major, g[4]
+        else:
+            geo.MinorRadius, geo.MajorRadius = g[4], major
+        geo.AngleXU = math.atan2(g[3] - g[1], g[2] - g[0])
+        if t == "o":
+            geo.setParameterRange(g[5], g[6])
+    elif t == "s":
+        _, _, poles, weights, _, _ = _spline_parts(g)
+        for i, ((x, y), w) in enumerate(zip(poles, weights)):
+            geo.setPole(i + 1, V(x, y, 0))
+            geo.setWeight(i + 1, w)
     else:
         geo.Center, geo.Radius = V(g[0], g[1], 0), g[2]
         if t == "a":
@@ -1064,13 +1215,14 @@ def _reshape(geo, t, g):
 # ---------------------------------------------------------------------------
 
 LIBRARY_FORMAT = "cadfork-sketch-block"
-LIBRARY_VERSION = 1
+LIBRARY_VERSION = 2  # the newest version this code reads; a file with only version-1 kinds is written as version 1
 LIBRARY_PARAM = "User parameter:BaseApp/Preferences/Mod/Sketcher/Blocks"
 _MAX_FILE = 2 * 1024 * 1024  # bytes; 200 members come to about 20 kB
 _MAX_MEMBERS = 5000
 _MAX_COORD = 1.0e6  # mm; a sketch is not a kilometre wide
 _MAX_ANGLE = 1.0e3  # rad
-_KINDS = {"p": 2, "l": 4, "c": 3, "a": 5}
+_KINDS = {"p": 2, "l": 4, "c": 3, "a": 5, "e": 5, "o": 7, "s": None}  # None: a B-spline's length depends on its poles and knots
+_CURVE_KINDS = "eos"  # the kinds added in format version 2
 _RESERVED = {"CON", "PRN", "AUX", "NUL"} | {"COM%d" % i for i in range(1, 10)} | {"LPT%d" % i for i in range(1, 10)}
 _BAD_CHARS = set('/\\:*?"<>|')
 
@@ -1160,6 +1312,61 @@ def _num(v, lo, hi, what):
     return v
 
 
+def _int(v, lo, hi, what):
+    if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+        raise SketchBlockError("%s must be a whole number from %d to %d" % (what, lo, hi))
+    return v
+
+
+def _check_curve(key, t, g):
+    """The numbers `g` of an ellipse ('e'), an arc of ellipse ('o') or a B-spline ('s') member `key`, checked and
+    copied (integers stay integers).  Raises SketchBlockError with a sentence."""
+    what = "member '%s'" % key
+    if not isinstance(g, list):
+        raise SketchBlockError("%s needs a list of numbers" % what)
+    if t in "eo":
+        need = 5 if t == "e" else 7
+        if len(g) != need:
+            raise SketchBlockError("%s needs %d numbers" % (what, need))
+        out = [_num(v, -_MAX_COORD, _MAX_COORD, "a number of " + what) for v in g[:5]]
+        if not out[4] > 0:
+            raise SketchBlockError("%s needs a positive minor radius" % what)
+        if math.hypot(math.hypot(out[2] - out[0], out[3] - out[1]), out[4]) > _MAX_COORD:
+            raise SketchBlockError("%s has a major axis longer than %g mm" % (what, _MAX_COORD))
+        if t == "o":
+            out += [_num(v, -_MAX_ANGLE, _MAX_ANGLE, "an angle of " + what) for v in g[5:]]
+            if not 0 < out[6] - out[5] <= TWO_PI + 1e-9:
+                raise SketchBlockError("%s has an arc that is empty or longer than a turn" % what)
+            if math.hypot(out[2] - out[0], out[3] - out[1]) < _MIN_FOCAL:
+                raise SketchBlockError("%s is an arc of ellipse that is nearly a circle (its focus is within %g mm of its centre); use an arc of circle" % (what, _MIN_FOCAL))
+        return out
+    if len(g) < 5:
+        raise SketchBlockError("%s is too short to be a B-spline" % what)
+    deg = _int(g[0], 1, _MAX_DEGREE, "the degree of " + what)
+    per = _int(g[1], 0, 1, "the periodic flag of " + what)
+    n = _int(g[2], 2, _MAX_POLES, "the pole count of " + what)
+    if len(g) <= 3 + 3 * n:
+        raise SketchBlockError("%s has fewer numbers than its pole count needs" % what)
+    m = _int(g[3 + 3 * n], 2, 2 * _MAX_POLES + _MAX_DEGREE + 2, "the knot count of " + what)
+    if len(g) != 4 + 3 * n + 2 * m:
+        raise SketchBlockError("%s has a length that does not match its pole and knot counts" % what)
+    poles = [_num(v, -_MAX_COORD, _MAX_COORD, "a pole of " + what) for v in g[3 : 3 + 2 * n]]
+    weights = [_num(v, -_MAX_COORD, _MAX_COORD, "a weight of " + what) for v in g[3 + 2 * n : 3 + 3 * n]]
+    if not all(w > 0 for w in weights):
+        raise SketchBlockError("%s has a weight that is zero or negative" % what)
+    knots = [_num(v, -_MAX_COORD, _MAX_COORD, "a knot of " + what) for v in g[4 + 3 * n : 4 + 3 * n + m]]
+    if any(b <= a for a, b in zip(knots, knots[1:])):
+        raise SketchBlockError("%s has knots that are not strictly increasing" % what)
+    mults = [_int(v, 1, deg if per else deg + 1, "a multiplicity of " + what) for v in g[4 + 3 * n + m :]]
+    if per:
+        ok = sum(mults) - mults[0] == n and mults[0] == mults[-1]
+    else:
+        ok = sum(mults) == n + deg + 1
+    if not ok:
+        raise SketchBlockError("%s has multiplicities that do not fit its %d poles and degree %d" % (what, n, deg))
+    return [deg, per, n] + poles + weights + [m] + knots + mults
+
+
 def _check_members(members):
     """The members of a library file or a definition, checked and copied: {key: {'t', 'g', 'c'}}."""
     if not isinstance(members, dict) or not members:
@@ -1176,6 +1383,9 @@ def _check_members(members):
             raise SketchBlockError("member '%s' has an unknown kind" % key)
         if not isinstance(c, bool):
             raise SketchBlockError("member '%s': c must be true or false" % key)
+        if t in _CURVE_KINDS:
+            out[key] = {"t": t, "g": _check_curve(key, t, g), "c": c}
+            continue
         if not isinstance(g, list) or len(g) != _KINDS[t]:
             raise SketchBlockError("member '%s' needs %d numbers" % (key, _KINDS[t]))
         nums = []
@@ -1237,7 +1447,10 @@ def _read_block(path, name):
         if not isinstance(doc["name"], str) or doc["units"] != "mm":
             raise SketchBlockError("the file of block '%s' must have a name and units 'mm'" % name)
         _text(doc["name"], "the name in the file of block '%s'" % name)
-        return _check_members(doc["members"])
+        members = _check_members(doc["members"])
+        if version < 2 and any(m["t"] in _CURVE_KINDS for m in members.values()):
+            raise SketchBlockError("the file of block '%s' holds ellipses or B-splines, which need version 2" % name)
+        return members
     except SketchBlockError:
         raise
     except Exception as exc:  # nothing but a refusal leaves this function
@@ -1288,7 +1501,13 @@ def library_save(sk, name, folder=None, overwrite=False):
     if os.path.lexists(full) and not overwrite:
         raise SketchBlockError("the library already has a block called '%s'; save with overwrite to replace it" % name)
     text = json.dumps(
-        {"format": LIBRARY_FORMAT, "version": LIBRARY_VERSION, "name": name, "units": "mm", "members": members},
+        {
+            "format": LIBRARY_FORMAT,
+            "version": 2 if any(m["t"] in _CURVE_KINDS for m in members.values()) else 1,
+            "name": name,
+            "units": "mm",
+            "members": members,
+        },
         sort_keys=True,
         indent=1,
         ensure_ascii=True,

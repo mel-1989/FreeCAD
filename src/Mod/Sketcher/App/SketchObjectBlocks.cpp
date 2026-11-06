@@ -43,10 +43,91 @@ using namespace Sketcher;
 
 namespace
 {
+constexpr size_t kMaxPoles = 4096;
+constexpr size_t kMaxKnots = 8192;
+
+// a number the file holds, finite; nothing here throws
+bool numberOf(const nlohmann::json& v, double& out)
+{
+    if (!v.is_number()) {
+        return false;
+    }
+    out = v.get<double>();
+    return std::isfinite(out);
+}
+
+// a whole number in 0..limit
+bool countOf(const nlohmann::json& v, size_t limit, size_t& out)
+{
+    double d;
+    if (!numberOf(v, d) || d < 0 || d > static_cast<double>(limit) || d != std::floor(d)) {
+        return false;
+    }
+    out = static_cast<size_t>(d);
+    return true;
+}
+
+// the 's' layout: degree, periodic, n, n poles (x, y), n weights, m, m knots, m multiplicities.
+// Anything that is not a valid B-spline of that shape is refused, never solved.
+bool splineFromJson(const nlohmann::json& g, Sketch::BlockMember& m)
+{
+    size_t degree, periodic, n, k;
+    if (g.size() < 5 || !countOf(g[0], 25, degree) || degree < 1 || !countOf(g[1], 1, periodic)
+        || !countOf(g[2], kMaxPoles, n) || n < 2) {
+        return false;
+    }
+    size_t at = 3 + 3 * n;
+    if (g.size() <= at || !countOf(g[at], kMaxKnots, k) || k < 2 || g.size() != at + 1 + 2 * k) {
+        return false;
+    }
+    m.degree = static_cast<int>(degree);
+    m.periodic = periodic == 1;
+    for (size_t i = 0; i < 2 * n; ++i) {
+        double v;
+        if (!numberOf(g[3 + i], v)) {
+            return false;
+        }
+        m.poles.push_back(v);
+    }
+    for (size_t i = 0; i < n; ++i) {
+        double v;
+        if (!numberOf(g[3 + 2 * n + i], v) || !(v > 0)) {
+            return false;
+        }
+        m.weights.push_back(v);
+    }
+    size_t sum = 0;
+    for (size_t i = 0; i < k; ++i) {
+        double v;
+        size_t u;
+        if (!numberOf(g[at + 1 + i], v) || (i > 0 && !(v > m.knots.back()))
+            || !countOf(g[at + 1 + k + i], degree + 1, u) || u < 1) {
+            return false;
+        }
+        if (m.periodic ? u > degree : (u > degree + 1)) {
+            return false;
+        }
+        m.knots.push_back(v);
+        m.mult.push_back(static_cast<int>(u));
+        sum += u;
+    }
+    // the poles a knot vector carries: all but the first multiplicity again for a closed curve
+    if (m.periodic ? (sum - m.mult.front() != n || m.mult.front() != m.mult.back())
+                   : sum != n + degree + 1) {
+        return false;
+    }
+    m.x0 = m.poles[0];
+    m.y0 = m.poles[1];
+    return true;
+}
+
 // layout of a definition member: type letter and its numbers (see Sketch::BlockMember)
 bool memberFromJson(const nlohmann::json& d, Sketch::BlockMember& m)
 {
     if (!d.is_object() || !d.contains("t") || !d.contains("g")) {
+        return false;
+    }
+    if (!d["t"].is_string()) {
         return false;
     }
     const std::string t = d["t"].get<std::string>();
@@ -56,21 +137,48 @@ bool memberFromJson(const nlohmann::json& d, Sketch::BlockMember& m)
     }
     m.type = t[0];
     m.construction = d.contains("c") && d["c"].is_boolean() && d["c"].get<bool>();
-    size_t need = m.type == 'p' ? 2 : m.type == 'l' ? 4 : m.type == 'c' ? 3 : m.type == 'a' ? 5 : 0;
+    if (m.type == 's') {
+        return splineFromJson(g, m);
+    }
+    size_t need = m.type == 'p' ? 2
+        : m.type == 'l'         ? 4
+        : m.type == 'c'         ? 3
+        : m.type == 'a'         ? 5
+        : m.type == 'e'         ? 5
+        : m.type == 'o'         ? 7
+                                : 0;
     if (need == 0 || g.size() != need) {
         return false;
     }
-    m.x0 = g[0].get<double>();
-    m.y0 = g[1].get<double>();
+    double v[7] = {0, 0, 0, 0, 0, 0, 0};
+    for (size_t i = 0; i < need; ++i) {
+        if (!numberOf(g[i], v[i])) {
+            return false;
+        }
+    }
+    m.x0 = v[0];
+    m.y0 = v[1];
     if (m.type == 'l') {
-        m.x1 = g[2].get<double>();
-        m.y1 = g[3].get<double>();
+        m.x1 = v[2];
+        m.y1 = v[3];
     }
     else if (m.type == 'c' || m.type == 'a') {
-        m.r = g[2].get<double>();
+        m.r = v[2];
         if (m.type == 'a') {
-            m.a0 = g[3].get<double>();
-            m.a1 = g[4].get<double>();
+            m.a0 = v[3];
+            m.a1 = v[4];
+        }
+    }
+    else if (m.type == 'e' || m.type == 'o') {
+        m.x1 = v[2];
+        m.y1 = v[3];
+        m.r = v[4];
+        if (!(m.r > 0)) {
+            return false;
+        }
+        if (m.type == 'o') {
+            m.a0 = v[5];
+            m.a1 = v[6];
         }
     }
     return true;
@@ -119,11 +227,18 @@ namespace
 {
 constexpr double kFitLength = 1e-5;  // mm: a member that deviates more from its definition is not part of it
 constexpr double kFitAngle = 1e-6;   // rad
+constexpr double kFitWeight = 1e-6;  // a weight is relative to 1; the solver holds it far tighter
+constexpr double kFitKnot = 1e-9;    // knots are not solver parameters: they must be the same
 
 struct Numbers
 {
     char t = 0;
-    double v[5] = {0, 0, 0, 0, 0};
+    double v[7] = {0, 0, 0, 0, 0, 0, 0};
+    // 's': the spline as it is now
+    int degree = 0;
+    bool periodic = false;
+    std::vector<double> poles, weights, knots;
+    std::vector<int> mult;
 };
 
 bool numbersOf(const Part::Geometry* g, Numbers& n)
@@ -153,6 +268,44 @@ bool numbersOf(const Part::Geometry* g, Numbers& n)
         n.v[1] = c->getCenter().y;
         n.v[2] = c->getRadius();
     }
+    else if (auto e = dynamic_cast<const Part::GeomEllipse*>(g)) {
+        // the solver's own parameters: centre, first focus, minor radius
+        n.t = 'e';
+        const Base::Vector3d c = e->getCenter();
+        const double a = e->getMajorRadius(), b = e->getMinorRadius();
+        const double f = std::sqrt(std::max(0.0, a * a - b * b));
+        const Base::Vector3d d = e->getMajorAxisDir();
+        n.v[0] = c.x;
+        n.v[1] = c.y;
+        n.v[2] = c.x + f * d.x;
+        n.v[3] = c.y + f * d.y;
+        n.v[4] = b;
+    }
+    else if (auto o = dynamic_cast<const Part::GeomArcOfEllipse*>(g)) {
+        n.t = 'o';
+        const Base::Vector3d c = o->getCenter();
+        const double a = o->getMajorRadius(), b = o->getMinorRadius();
+        const double f = std::sqrt(std::max(0.0, a * a - b * b));
+        const Base::Vector3d d = o->getMajorAxisDir();
+        n.v[0] = c.x;
+        n.v[1] = c.y;
+        n.v[2] = c.x + f * d.x;
+        n.v[3] = c.y + f * d.y;
+        n.v[4] = b;
+        o->getRange(n.v[5], n.v[6], true);
+    }
+    else if (auto s = dynamic_cast<const Part::GeomBSplineCurve*>(g)) {
+        n.t = 's';
+        n.degree = s->getDegree();
+        n.periodic = s->isPeriodic();
+        for (const auto& p : s->getPoles()) {
+            n.poles.push_back(p.x);
+            n.poles.push_back(p.y);
+        }
+        n.weights = s->getWeights();
+        n.knots = s->getKnots();
+        n.mult = s->getMultiplicities();
+    }
     else {
         return false;
     }
@@ -167,8 +320,14 @@ struct Pt
 // the member's points as (definition, current) pairs
 void pointsOf(const Sketch::BlockMember& m, const Numbers& w, std::vector<Pt>& out)
 {
+    if (m.type == 's') {
+        for (size_t i = 0; i + 1 < m.poles.size() && i + 1 < w.poles.size(); i += 2) {
+            out.push_back({m.poles[i], m.poles[i + 1], w.poles[i], w.poles[i + 1]});
+        }
+        return;
+    }
     out.push_back({m.x0, m.y0, w.v[0], w.v[1]});
-    if (m.type == 'l') {
+    if (m.type == 'l' || m.type == 'e' || m.type == 'o') {
         out.push_back({m.x1, m.y1, w.v[2], w.v[3]});
     }
     else if (m.type == 'a') {
@@ -179,6 +338,51 @@ void pointsOf(const Sketch::BlockMember& m, const Numbers& w, std::vector<Pt>& o
              w.v[1] + w.v[2] * std::sin(w.v[3])}
         );
     }
+}
+
+// the numbers that do not turn with the instance, and the structure, of a member: the same as the definition's?
+bool sameKind(const Sketch::BlockMember& m, const Numbers& cur, double th)
+{
+    auto close = [](double a, double b) { return std::abs(a - b) <= kFitLength; };
+    constexpr double twoPi = 2.0 * std::numbers::pi;
+    if (m.type == 'c' || m.type == 'a') {
+        if (!close(m.r, cur.v[2])) {
+            return false;
+        }
+        if (m.type == 'a'
+            && (std::abs(std::remainder(m.a0 + th - cur.v[3], twoPi)) > kFitAngle
+                || std::abs(std::remainder(m.a1 + th - cur.v[4], twoPi)) > kFitAngle)) {
+            return false;
+        }
+    }
+    else if (m.type == 'e' || m.type == 'o') {
+        if (!close(m.r, cur.v[4])) {
+            return false;
+        }
+        if (m.type == 'o'
+            && (std::abs(std::remainder(m.a0 - cur.v[5], twoPi)) > kFitAngle
+                || std::abs(std::remainder(m.a1 - cur.v[6], twoPi)) > kFitAngle)) {
+            return false;
+        }
+    }
+    else if (m.type == 's') {
+        if (m.degree != cur.degree || m.periodic != cur.periodic || m.poles.size() != cur.poles.size()
+            || m.weights.size() != cur.weights.size() || m.knots.size() != cur.knots.size()
+            || m.mult != cur.mult) {
+            return false;
+        }
+        for (size_t i = 0; i < m.weights.size(); ++i) {
+            if (std::abs(m.weights[i] - cur.weights[i]) > kFitWeight * std::max(1.0, m.weights[i])) {
+                return false;
+            }
+        }
+        for (size_t i = 0; i < m.knots.size(); ++i) {
+            if (std::abs(m.knots[i] - cur.knots[i]) > kFitKnot * std::max(1.0, std::abs(m.knots[i]))) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 // does every member of the instance sit where one rigid placement of its definition puts it?
@@ -221,26 +425,28 @@ bool fitsDefinition(const std::vector<Sketch::BlockMember>& members, const std::
         const auto& m = members[k];
         const auto& w = cur[k].v;
         double x, y;
-        place(m.x0, m.y0, x, y);
-        if (!close(x, w[0]) || !close(y, w[1])) {
+        if (m.type == 's') {
+            for (size_t i = 0; i + 1 < m.poles.size(); i += 2) {
+                place(m.poles[i], m.poles[i + 1], x, y);
+                if (!close(x, cur[k].poles[i]) || !close(y, cur[k].poles[i + 1])) {
+                    return false;
+                }
+            }
+        }
+        else {
+            place(m.x0, m.y0, x, y);
+            if (!close(x, w[0]) || !close(y, w[1])) {
+                return false;
+            }
+            if (m.type == 'l' || m.type == 'e' || m.type == 'o') {
+                place(m.x1, m.y1, x, y);
+                if (!close(x, w[2]) || !close(y, w[3])) {
+                    return false;
+                }
+            }
+        }
+        if (!sameKind(m, cur[k], th)) {
             return false;
-        }
-        if (m.type == 'l') {
-            place(m.x1, m.y1, x, y);
-            if (!close(x, w[2]) || !close(y, w[3])) {
-                return false;
-            }
-        }
-        else if (m.type == 'c' || m.type == 'a') {
-            if (!close(m.r, w[2])) {
-                return false;
-            }
-            if (m.type == 'a'
-                && (std::abs(std::remainder(m.a0 + th - w[3], 2.0 * std::numbers::pi)) > kFitAngle
-                    || std::abs(std::remainder(m.a1 + th - w[4], 2.0 * std::numbers::pi))
-                        > kFitAngle)) {
-                return false;
-            }
         }
     }
     return true;

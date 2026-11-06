@@ -348,7 +348,7 @@ class TestLibraryLoad(LibCase):
             "top_array": b"[1, 2, 3]",
             "wrong_format": text(G(format="other")),
             "no_format": text({k: v for k, v in G().items() if k != "format"}),
-            "newer_version": text(G(version=2)),
+            "newer_version": text(G(version=3)),
             "version_string": text(G(version="1")),
             "version_bool": text(G(version=True)),
             "version_zero": text(G(version=0)),
