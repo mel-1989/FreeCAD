@@ -897,6 +897,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
             placement = B.instance_placement(self.sketch, name)
             self.cancel_place()
             snapshot = {p: self.sketch.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData")}
+            start_data = self.sketch.BlockData
             known = {self.sketch.getGeometryId(i) for i in range(len(self.sketch.Geometry))}
             cons = self._constraint_bag()
             entry = tr("Edit block %s") % name
@@ -921,6 +922,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
             "entry": entry,
             "base": base,
             "data": self.sketch.BlockData,
+            "start_data": start_data,
             "rolling": False,
         }
         self.status.setText(tr("Editing %s of '%s'. Change its geometry with the usual tools, then choose Finish or Cancel edit.") % (name, inst["def"]))
@@ -971,7 +973,9 @@ class BlocksPanel(QtWidgets.QDockWidget):
             doc.abortTransaction()
         finally:
             s["rolling"] = False
-        return doc.UndoCount == s["base"]
+        # the stack may have been full: steps pushed off its far end by the session do not come back, so the depth is
+        # not the test; the session's entry is gone from the stack and the block data are what they were
+        return self._stack_depth_to_start() is None and self.sketch.BlockData == s["start_data"]
 
     def _end_session(self, message=None):
         self.session = None

@@ -843,6 +843,42 @@ class TestBlockEditing(BlocksCase):
         with self.assertRaises(B.SketchBlockError):
             B.delete_definition(sk, "nope")
 
+    def test_update_definition_carries_a_construction_flip(self):
+        sk, ids, cs = self.named_scene()
+        res = B.update_definition(sk, "T", {"m0002": (Part.Circle(V(1, 1.5, 0), V(0, 0, 1), 0.5), True)})
+        self.assertEqual(res["removed_constraints"], [])
+        for n in ("T_1", "T_2"):
+            g = B.blocks(sk)["instances"][n]["geo_ids"]
+            self.assertTrue(sk.getConstruction(g[2]), n)
+            self.assertFalse(sk.getConstruction(g[0]), n)
+        self.assertEqual(sk.getBlockInstanceCount(), 2)
+        self.assertTrue(B._load(sk)["defs"]["T"]["members"]["m0002"]["c"])
+
+    def test_session_changes_reads_by_persistent_id_through_the_start_placement(self):
+        sk, ids, cs = self.named_scene()
+        pose = fit_pose(sk, None, "T_1")
+        members = dict(zip(("m0000", "m0001", "m0002"), [sk.getGeometryId(g) for g in B.blocks(sk)["instances"]["T_1"]["geo_ids"]]))
+        known = {sk.getGeometryId(i) for i in range(len(sk.Geometry))}
+        before = B.explode(sk, "T_1", label="Edit block T_1")
+        self.assertEqual(self.doc.UndoNames[0], "Edit block T_1")
+        self.assertEqual(B.session_changes(sk, "T", pose, members, known)["changes"], {})
+        sk.delGeometry(ids["i2"][0])  # a GeoId shift for everything after it: T_2 explodes, T_1's members move down
+        geo = sk.Geometry
+        idmap = {sk.getGeometryId(i): i for i in range(len(sk.Geometry))}
+        ci = idmap[members["m0002"]]
+        geo[ci].Radius = 0.8
+        sk.Geometry = geo
+        sk.addGeometry(Part.LineSegment(V(0, 0, 0), V(1, 1, 0)), False)
+        res = B.session_changes(sk, "T", pose, members, known)
+        self.assertEqual(res["moved"], ["m0002"])
+        self.assertEqual(res["removed"], [])
+        self.assertEqual(len(res["added"]), 1)
+        self.assertAlmostEqual(res["changes"]["m0002"][0].Radius, 0.8, delta=1e-9)
+        sk.delGeometry(idmap[members["m0000"]] if members["m0000"] in {sk.getGeometryId(i) for i in range(len(sk.Geometry))} else 0)
+        res = B.session_changes(sk, "T", pose, members, known)
+        self.assertIn("m0000", res["removed"])
+        self.assertIsNone(res["changes"]["m0000"])
+
     def test_deleting_a_member_explodes_that_instance_only(self):
         sk, ids, cs = self.named_scene()
         g = B.blocks(sk)["instances"]["T_1"]["geo_ids"]

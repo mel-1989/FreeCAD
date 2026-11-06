@@ -1047,6 +1047,25 @@ class TestBlocksPanelSpeed(BlocksGuiCase):
         print("BLOCKS PANEL drag move: open %.3f ms, closed %.3f ms, extra %.3f ms" % (1000 * statistics.median(times_open), 1000 * statistics.median(times_closed), 1000 * extra))
         self.assertLess(extra, 0.001)
 
+    def test_finish_with_200_instances_is_reported(self):
+        sk = self.big("PanelSpeedFinish", instances=200, members=10)
+        self.open_panel(sk)
+        self.choose("inst", "L_1")
+        t0 = time.perf_counter()
+        _widget("blocksEdit").click()
+        t_start = time.perf_counter() - t0
+        self.assertIsNotNone(self.panel.session)
+        sk.Document.openTransaction("Drag")
+        sk.moveGeometry(B.blocks(sk)["instances"] and 0, 2, V(0.4, 0.3, 0), False)
+        sk.Document.commitTransaction()
+        self.settle()
+        t0 = time.perf_counter()
+        _widget("blocksFinish").click()
+        t_finish = time.perf_counter() - t0
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertEqual(len(B.blocks(sk)["instances"]), 200, self.status())
+        print("BLOCKS PANEL Finish on 200 instances of 10: start %.2f s, finish %.2f s; %s" % (t_start, t_finish, self.status()))
+
     def _items(self):
         out = []
         root = self.panel.tree.invisibleRootItem()
