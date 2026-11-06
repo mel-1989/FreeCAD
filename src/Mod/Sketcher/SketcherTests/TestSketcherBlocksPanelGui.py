@@ -1122,3 +1122,438 @@ class TestBlocksPanelReachable(BlocksGuiCase):
                             if arg.value.strip() and not re.fullmatch(r"[0-9.\- ]*( mm| deg)?", arg.value):
                                 bad.append((node.lineno, arg.value))
         self.assertEqual(bad, [])
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Checks 7, 8 and 9: edit in place
+# ---------------------------------------------------------------------------------------------------------------------
+
+TOL = 1e-7
+
+
+def _numbers_of(sk):
+    return [C.member_numbers(g) for g in sk.Geometry]
+
+
+def _cons_of(sk):
+    return [(c.Type, c.First, c.FirstPos, c.Second, c.SecondPos, c.Third, c.ThirdPos, c.Name, round(c.Value, 9)) for c in sk.Constraints]
+
+
+class EditCase(BlocksGuiCase):
+    """Block W (a line, a half circle and a small circle) placed three times; W_1 is tied to the origin."""
+
+    def scene(self, name, extra=None):
+        doc = self.new_doc(name)
+        sk = doc.addObject("Sketcher::SketchObject", "W")
+        sk.addGeometry(
+            [
+                Part.LineSegment(V(0, 0, 0), V(5, 0, 0)),
+                Part.ArcOfCircle(Part.Circle(V(2.5, 0, 0), V(0, 0, 1), 2.5), 0.0, math.pi),
+                Part.Circle(V(2.5, 1.2, 0), V(0, 0, 1), 0.4),
+            ],
+            False,
+        )
+        B.define(sk, "W", [0, 1, 2])
+        sk.delGeometries([0, 1, 2])
+        for p in ((0, 0, 0), (12, 6, 0.4), (-8, 9, -0.6)):
+            B.insert(sk, "W", *p)
+        info = B.blocks(sk)["instances"]
+        g1, g2 = info["W_1"]["geo_ids"], info["W_2"]["geo_ids"]
+        P = sk.addGeometry(Part.LineSegment(V(-20, -3, 0), V(30, -3, 0)), False)
+        Q = sk.addGeometry(Part.Point(V(2.5, 1.2, 0)), False)
+        for c, name_ in (
+            (Sketcher.Constraint("Coincident", g1[0], 1, -1, 1), "orig"),
+            (Sketcher.Constraint("Horizontal", g1[0]), "horiz"),
+            (Sketcher.Constraint("Horizontal", P), "Ph"),
+            (Sketcher.Constraint("PointOnObject", g2[0], 1, P), "onP"),
+            (Sketcher.Constraint("Coincident", g1[2], 3, Q, 1), "cq"),
+        ):
+            sk.renameConstraint(sk.addConstraint(c), name_)
+        sk.solve()
+        doc.recompute()
+        return sk
+
+    def poses(self, sk):
+        return {n: B.instance_placement(sk, n) for n in B.blocks(sk)["instances"]}
+
+    def stock(self, sk, label, fn):
+        """One stock operation: what a tool does, a transaction around some changes."""
+        sk.Document.openTransaction(label)
+        try:
+            return fn()
+        finally:
+            sk.Document.commitTransaction()
+            self.settle()
+
+    def begin(self, sk, inst="W_1"):
+        self.choose("inst", inst)
+        self.click_button("blocksEdit")
+        self.assertIsNotNone(self.panel.session, self.status())
+        return self.panel.session
+
+    def gids(self, sk, inst):
+        return B.blocks(sk)["instances"][inst]["geo_ids"]
+
+    def local_geo(self, sk, gid, pose):
+        """A member's geometry in the frame of `pose`, by plain math written here (no call into the API's helpers)."""
+        X, Y, th = pose
+        g = sk.Geometry[gid]
+        c, s = math.cos(-th), math.sin(-th)
+
+        def pt(p):
+            return V((p.x - X) * c - (p.y - Y) * s, (p.x - X) * s + (p.y - Y) * c, 0)
+
+        if g.TypeId == "Part::GeomLineSegment":
+            return Part.LineSegment(pt(g.StartPoint), pt(g.EndPoint))
+        if g.TypeId == "Part::GeomCircle":
+            return Part.Circle(pt(g.Center), V(0, 0, 1), g.Radius)
+        if g.TypeId == "Part::GeomPoint":
+            return Part.Point(pt(V(g.X, g.Y, 0)))
+        a0, a1 = g.FirstParameter, g.LastParameter
+        return Part.ArcOfCircle(Part.Circle(pt(g.Center), V(0, 0, 1), g.Radius), a0 - th, a1 - th)
+
+    def run_case(self, label, ops, expect_removed=()):
+        """The session `ops` on W_1, then Finish; compared with update_definition called directly on a twin with the
+        changes the test reads from the session's end state."""
+        sk = self.scene("PanelEdit" + label)
+        doc = sk.Document
+        twin = doc.copyObject(sk)
+        self.open_panel(sk)
+        before_poses = self.poses(sk)
+        known = {sk.getGeometryId(i) for i in range(len(sk.Geometry))}
+        member_ids = {k: sk.getGeometryId(g) for k, g in zip(("m0000", "m0001", "m0002"), B.blocks(sk)["instances"]["W_1"]["geo_ids"])}
+        self.begin(sk)
+        pose = before_poses["W_1"]
+        ops(sk)
+        idmap = {sk.getGeometryId(i): i for i in range(len(sk.Geometry))}
+        changes = {}
+        for k, gid in member_ids.items():
+            if gid not in idmap:
+                changes[k] = None
+            else:
+                changes[k] = (self.local_geo(sk, idmap[gid], pose), bool(sk.getConstruction(idmap[gid])))
+        new = [i for i in range(len(sk.Geometry)) if sk.getGeometryId(i) not in known]
+        for n, i in enumerate(new):
+            changes["n%04d" % (n + 1)] = (self.local_geo(sk, i, pose), bool(sk.getConstruction(i)))
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        text = self.status()
+        ref = B.update_definition(twin, "W", changes)
+        self.assertEqual(sorted(ref["removed_constraints"]), sorted(expect_removed))
+        for r in expect_removed:
+            self.assertIn(r, text)
+        after_poses = self.poses(sk)
+        self.assertEqual(sorted(after_poses), ["W_1", "W_2", "W_3"])
+        for n in after_poses:
+            for a, b in zip(after_poses[n], before_poses[n]):
+                self.assertAlmostEqual(a, b, delta=TOL, msg=n)
+        self.assertEqual(len(sk.Geometry), len(twin.Geometry))
+        for (ta, na), (tb, nb) in zip(_numbers_of(sk), _numbers_of(twin)):
+            self.assertEqual(ta, tb)
+            for x, y in zip(na, nb):
+                self.assertAlmostEqual(x, y, delta=TOL)
+        self.assertEqual(_cons_of(sk), _cons_of(twin))
+        a, b = B._load(sk), B._load(twin)
+        self.assertEqual(sorted(a["inst"]), sorted(b["inst"]))
+        self.assertEqual(sorted(a["defs"]["W"]["members"].values(), key=str), sorted(b["defs"]["W"]["members"].values(), key=str))
+        for i in range(len(sk.Geometry)):
+            self.assertEqual(bool(sk.getConstruction(i)), bool(twin.getConstruction(i)))
+        self.assertEqual(sk.DoF, twin.DoF)
+        newdef = a["defs"]["W"]["members"]
+        for n, inst in a["inst"].items():
+            world = B._instance_world(sk, a["defs"]["W"], inst)
+            X, Y, th = after_poses[n]
+            for k, nums in world.items():
+                want = B._to_world(newdef[k]["t"], newdef[k]["g"], X, Y, th)
+                cut = 3 if newdef[k]["t"] == "a" else len(want)
+                for x, y in zip(nums[:cut], want[:cut]):
+                    self.assertAlmostEqual(x, y, delta=TOL, msg=(n, k))
+        return sk, text
+
+
+class TestBlocksPanelEditResults(EditCase):
+    def test_a_moved_member(self):
+        def ops(sk):
+            self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(7.0, 0, 0), False))  # the end of the line
+
+        sk, text = self.run_case("Moved", ops)
+        self.assertIn("1 changed", text)
+
+    def test_an_arc_changed_member(self):
+        def ops(sk):
+            self.stock(sk, "Drag", lambda: sk.moveGeometry(1, 1, V(0.5, 1.5, 0), False))  # the arc's start point
+
+            def datum():
+                i = sk.addConstraint(Sketcher.Constraint("Radius", 1, 2.0))
+                sk.setDatum(i, 3.1)
+
+            self.stock(sk, "Radius", datum)
+
+        sk, text = self.run_case("Arc", ops)
+        self.assertIn("1 changed", text)
+        self.assertIn("added during the edit were not kept", text)
+
+    def test_an_added_member(self):
+        def ops(sk):
+            self.stock(sk, "Line", lambda: sk.addGeometry(Part.LineSegment(V(1.0, 1.0, 0), V(2.0, 3.0, 0)), False))
+
+        sk, text = self.run_case("Added", ops)
+        self.assertIn("1 added", text)
+        for n in ("W_1", "W_2", "W_3"):
+            self.assertEqual(len(B.blocks(sk)["instances"][n]["geo_ids"]), 4)
+
+    def test_two_added_members_and_a_construction_flip(self):
+        def ops(sk):
+            self.stock(sk, "Lines", lambda: sk.addGeometry([Part.LineSegment(V(1.0, 1.0, 0), V(2.0, 3.0, 0)), Part.Point(V(4.0, 2.0, 0))], False))
+            self.stock(sk, "Construction", lambda: sk.setConstruction(2, True))
+
+        sk, text = self.run_case("Added2", ops)
+        self.assertIn("2 added", text)
+        for n in ("W_1", "W_2", "W_3"):
+            ids = B.blocks(sk)["instances"][n]["geo_ids"]
+            self.assertTrue(sk.getConstruction(ids[2]), n)
+
+    def test_a_removed_member_returns_the_constraints_on_it_by_name(self):
+        def ops(sk):
+            self.stock(sk, "Delete", lambda: sk.delGeometry(2))  # the small circle, tied to Q by cq
+
+        sk, text = self.run_case("Removed", ops, expect_removed=["cq"])
+        self.assertIn("1 removed", text)
+        for n in ("W_1", "W_2", "W_3"):
+            self.assertEqual(len(B.blocks(sk)["instances"][n]["geo_ids"]), 2)
+
+    def test_the_constraint_to_plain_geometry_on_a_surviving_member_survives(self):
+        def ops(sk):
+            self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(6.0, 0, 0), False))
+
+        sk, text = self.run_case("Survive", ops)
+        onp = [c for c in sk.Constraints if c.Name == "onP"][0]
+        self.assertEqual(onp.Type, "PointOnObject")
+        self.assertEqual(B.blocks(sk)["instances"]["W_2"]["geo_ids"][0], onp.First)
+
+    def test_a_session_that_changed_nothing_is_a_no_op(self):
+        sk = self.scene("PanelEditNone")
+        self.open_panel(sk)
+        before = _snapshot(sk)
+        self.begin(sk)
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session)
+        self.assertSameSketch(sk, before)
+        self.assertEqual(sk.Document.UndoCount, before["undo"])
+        self.assertIn("nothing had changed", self.status())
+
+
+class TestBlocksPanelEditUndo(EditCase):
+    def many_ops(self, sk):
+        n = len(sk.Geometry)
+        self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(7.0, 0, 0), False))
+        self.stock(sk, "Line", lambda: sk.addGeometry(Part.LineSegment(V(1.0, 1.0, 0), V(2.0, 3.0, 0)), False))
+        self.stock(sk, "Point", lambda: sk.addGeometry(Part.Point(V(4.0, 2.0, 0)), False))
+        self.stock(sk, "Construction", lambda: sk.setConstruction(n + 1, True))
+        self.stock(sk, "Drag again", lambda: sk.moveGeometry(1, 1, V(0.5, 1.5, 0), False))
+        self.stock(sk, "Delete", lambda: sk.delGeometry(2))
+
+    def test_finish_is_one_undo_entry_and_redo_gives_the_result(self):
+        sk = self.scene("PanelUndoF")
+        self.open_panel(sk)
+        before = _snapshot(sk)
+        self.begin(sk)
+        self.many_ops(sk)
+        self.assertGreater(sk.Document.UndoCount, before["undo"] + 3)
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        after = _snapshot(sk)
+        self.assertEqual(after["undo"], before["undo"] + 1)
+        self.assertEqual(sk.Document.UndoNames[0], "Edit block definition")
+        self.assertEqual(sk.Document.RedoCount, 0)
+        sk.Document.undo()
+        self.settle()
+        self.assertSameSketch(sk, before)
+        self.assertEqual(sk.Document.UndoCount, before["undo"])
+        sk.Document.redo()
+        self.settle()
+        self.assertSameSketch(sk, after)
+        self.assertEqual(sk.Document.UndoCount, before["undo"] + 1)
+        self.assertPanelEqualsApi(sk)
+
+    def test_cancel_restores_the_sketch_and_the_depth_with_redo_empty(self):
+        sk = self.scene("PanelUndoC")
+        self.open_panel(sk)
+        before = _snapshot(sk)
+        self.begin(sk)
+        self.many_ops(sk)
+        self.click_button("blocksCancel")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertSameSketch(sk, before)
+        self.assertEqual(sk.Document.UndoCount, before["undo"])
+        self.assertEqual(sk.Document.RedoCount, 0)
+        self.assertEqual(sk.Document.UndoNames, before["names"])
+        self.assertPanelEqualsApi(sk)
+        self.assertIn("W_1", B.blocks(sk)["instances"])
+
+    def test_an_empty_session_leaves_depth_and_redo_alone_on_both_ends(self):
+        sk = self.scene("PanelUndoE")
+        self.open_panel(sk)
+        before = _snapshot(sk)
+        for button in ("blocksCancel", "blocksFinish"):
+            self.begin(sk)
+            self.click_button(button)
+            self.assertSameSketch(sk, before)
+            self.assertEqual(sk.Document.UndoCount, before["undo"], button)
+            self.assertEqual(sk.Document.RedoCount, 0, button)
+
+    def test_a_refused_finish_stays_in_the_session_with_its_work_intact(self):
+        sk = self.scene("PanelUndoR")
+        g3 = self.gids(sk, "W_3")
+        sk.addConstraint(Sketcher.Constraint("Distance", g3[0], 5.0))  # redundant while rigid; a longer line cannot hold
+        sk.solve()
+        self.open_panel(sk)
+        before = _snapshot(sk)
+        self.begin(sk)
+        self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(7.0, 0, 0), False))
+        mid = _snapshot(sk)
+        geo_mid = _numbers_of(sk)
+        self.click_button("blocksFinish")
+        self.assertIsNotNone(self.panel.session, "a refused Finish ended the session")
+        self.assertIn("cannot be solved", self.status())
+        self.assertEqual(sk.Document.UndoCount, mid["undo"])
+        self.assertEqual(_numbers_of(sk), geo_mid)
+        self.assertTrue(_widget("blocksFinish").isVisibleTo(self.panel.widget()))
+        self.click_button("blocksCancel")
+        self.assertIsNone(self.panel.session)
+        self.assertSameSketch(sk, before)
+        self.assertEqual(sk.Document.UndoCount, before["undo"])
+
+
+class TestBlocksPanelEditLeaving(EditCase):
+    def started(self, name):
+        sk = self.scene(name)
+        self.open_panel(sk)
+        self.begin(sk)
+        self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(7.0, 0, 0), False))
+        return sk
+
+    def assertFits(self, sk, n):
+        """Every instance left fits its definition: none was exploded behind the test's back, and the solver is fine."""
+        self.assertEqual(len(B.blocks(sk)["instances"]), n)
+        self.assertEqual(sk.getBlockInstanceCount(), n)
+        self.assertEqual(sk.solve(), 0)
+
+    def assertOneMessage(self, count_before):
+        import SketcherBlocksPanel as P
+
+        self.assertEqual(len(P.messages), count_before + 1, P.messages[count_before:])
+        return P.messages[-1]
+
+    def test_leaving_the_editor_keeps_the_edits_with_the_instance_exploded(self):
+        import SketcherBlocksPanel as P
+
+        n0 = len(P.messages)
+        sk = self.started("PanelLeave")
+        moved = sk.Geometry[0].EndPoint.x
+        Gui.ActiveDocument.resetEdit()
+        self.assertTrue(_wait(lambda: P.current_panel() is None))
+        self.assertIn("exploded", self.assertOneMessage(n0))
+        self.assertFits(sk, 2)
+        self.assertAlmostEqual(sk.Geometry[0].EndPoint.x, moved, delta=1e-9)
+        self.panel = None
+
+    def test_undoing_past_the_start_ends_the_session_with_the_instance_whole(self):
+        import SketcherBlocksPanel as P
+
+        n0 = len(P.messages)
+        sk = self.started("PanelUndoPast")
+        sk.Document.undo()  # undoing one of the session's own steps is the user's right; the session goes on
+        self.settle()
+        self.assertIsNotNone(self.panel.session)
+        self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(6.0, 0, 0), False))
+        for _ in range(2):  # the drag, then the explosion itself: past the start
+            sk.Document.undo()
+        self.assertTrue(_wait(lambda: self.panel.session is None))
+        self.assertIn("undo", self.assertOneMessage(n0))
+        self.assertFits(sk, 3)
+        self.assertEqual(sorted(B.blocks(sk)["instances"]), ["W_1", "W_2", "W_3"])
+        self.assertTrue(_wait(lambda: not _widget("blocksFinish").isVisibleTo(self.panel.widget())))
+
+    def test_closing_the_document_and_deleting_the_sketch_do_not_crash_or_hang(self):
+        import SketcherBlocksPanel as P
+
+        n0 = len(P.messages)
+        sk = self.started("PanelCloseDoc")
+        FreeCAD.closeDocument(sk.Document.Name)
+        self.assertTrue(_wait(lambda: P.current_panel() is None))
+        self.assertEqual(len(P.messages), n0 + 1)
+        self.panel = None
+        n1 = len(P.messages)
+        sk = self.started("PanelDelSketch")
+        sk.Document.removeObject(sk.Name)
+        self.assertTrue(_wait(lambda: P.current_panel() is None))
+        self.assertEqual(len(P.messages), n1 + 1)
+        self.panel = None
+
+    def test_a_second_session_is_refused(self):
+        sk = self.started("PanelSecond")
+        depth = sk.Document.UndoCount
+        self.assertFalse(_widget("blocksEdit").isEnabled())
+        self.assertFalse(self.panel.start_session())
+        self.assertIn("already", self.status())
+        self.assertEqual(sk.Document.UndoCount, depth)
+        self.assertIsNotNone(self.panel.session)
+        self.click_button("blocksCancel")
+
+    def test_a_macro_changing_the_block_data_ends_the_session(self):
+        import SketcherBlocksPanel as P
+
+        n0 = len(P.messages)
+        sk = self.started("PanelMacro")
+        moved = sk.Geometry[0].EndPoint.x
+        B.define(sk, "Other", [len(sk.Geometry) - 2, len(sk.Geometry) - 1])  # P and Q
+        self.assertTrue(_wait(lambda: self.panel.session is None))
+        self.assertIn("block data", self.assertOneMessage(n0))
+        self.assertFits(sk, 2)
+        self.assertAlmostEqual(sk.Geometry[0].EndPoint.x, moved, delta=1e-9)
+
+    def test_a_fit_rule_explosion_of_a_sibling_ends_the_session(self):
+        import SketcherBlocksPanel as P
+
+        n0 = len(P.messages)
+        sk = self.started("PanelSibling")
+        g2 = self.gids(sk, "W_2")[0]
+        geo = sk.Geometry
+        geo[g2].StartPoint = V(40, 40, 0)
+        sk.Geometry = geo
+        self.assertTrue(_wait(lambda: self.panel.session is None))
+        self.assertOneMessage(n0)
+        self.assertFits(sk, 1)
+
+    def test_save_and_reopen_during_the_session_gives_a_valid_file_with_the_instance_exploded(self):
+        import tempfile
+
+        sk = self.started("PanelSave")
+        moved = sk.Geometry[0].EndPoint.x
+        path = os.path.join(tempfile.mkdtemp(prefix="blocks-save-"), "s.FCStd")
+        sk.Document.saveAs(path)
+        _pump(50)
+        FreeCAD.closeDocument(sk.Document.Name)
+        self.assertTrue(_wait(lambda: self.P.current_panel() is None))
+        self.panel = None
+        doc = FreeCAD.openDocument(path)
+        self._docs.append(doc.Name)
+        sk2 = doc.getObject("W")
+        self.assertEqual(sorted(B.blocks(sk2)["instances"]), ["W_2", "W_3"])
+        self.assertEqual(sk2.getBlockInstanceCount(), 2)
+        self.assertAlmostEqual(sk2.Geometry[0].EndPoint.x, moved, delta=1e-9)
+        self.assertEqual(sk2.solve(), 0)
+
+    def test_a_result_that_cannot_be_read_at_finish_is_refused_and_the_session_goes_on(self):
+        sk = self.started("PanelUnread")
+        self.stock(sk, "Ellipse", lambda: sk.addGeometry(Part.Ellipse(V(30, 30, 0), 3.0, 1.0), False))
+        depth = sk.Document.UndoCount
+        self.click_button("blocksFinish")
+        self.assertIsNotNone(self.panel.session)
+        self.assertTrue(self.status().endswith("."))
+        self.assertNotIn("Traceback", self.status())
+        self.assertEqual(sk.Document.UndoCount, depth)
+        self.click_button("blocksCancel")
+        self.assertIsNone(self.panel.session)
+        self.assertFits(sk, 3)

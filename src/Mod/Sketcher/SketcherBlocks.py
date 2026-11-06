@@ -362,14 +362,15 @@ def insert(sk, name, x=0.0, y=0.0, angle=0.0):
     return iname
 
 
-def explode(sk, instance):
+def explode(sk, instance, label="Explode block"):
     """Turn an instance into plain geometry: same coordinates, same external
-    constraints, its three placement freedoms become the members' own."""
+    constraints, its three placement freedoms become the members' own.  `label`
+    names the undo entry."""
     data = _load(sk)
     if instance not in data["inst"]:
         raise SketchBlockError("there is no block instance called '%s'" % instance)
     del data["inst"][instance]
-    with _transaction(sk, "Explode block"):
+    with _transaction(sk, label):
         sk.BlockData = _dump(data)
         sk.solve()
 
@@ -443,7 +444,8 @@ def update_definition(sk, name, changes):
     `changes` maps a member key (see :func:`blocks`) to the member's new
     geometry in the block's own frame, a Part geometry of the same kind; a key
     not in the definition adds a member (a new key of your choosing); ``None``
-    removes the member.  Each instance keeps its placement.  Constraints on
+    removes the member; a member may also be given as ``(geometry, construction)``
+    to change the construction flag the definition carries.  Each instance keeps its placement.  Constraints on
     surviving members survive on the same element; constraints on removed
     members are removed and returned by name, never retargeted.  The construction
     flag is part of the definition: an instance member whose flag differs from
@@ -457,7 +459,10 @@ def update_definition(sk, name, changes):
     defn = data["defs"][name]
     new_def = json.loads(json.dumps(defn))
     removed, added, moved = [], [], []
+    flags = {}  # key -> construction flag, for a member given as (geometry, construction)
     for key, geo in changes.items():
+        if isinstance(geo, tuple) and len(geo) == 2:
+            geo, flags[key] = geo[0], bool(geo[1])
         if geo is not None and not hasattr(geo, "TypeId"):
             raise SketchBlockError("member '%s' must be a Part geometry or None" % (key,))
         if geo is None:
@@ -471,9 +476,11 @@ def update_definition(sk, name, changes):
             if defn["members"][key]["t"] != t:
                 raise SketchBlockError("member '%s' cannot change its kind" % key)
             new_def["members"][key]["g"] = nums
+            if key in flags:
+                new_def["members"][key]["c"] = flags[key]
             moved.append(key)
         else:
-            new_def["members"][key] = {"t": t, "g": nums, "c": False}
+            new_def["members"][key] = {"t": t, "g": nums, "c": flags.get(key, False)}
             added.append(key)
     if not new_def["members"]:
         raise SketchBlockError("a block needs at least one member")
@@ -513,6 +520,10 @@ def update_definition(sk, name, changes):
                 _reshape(geo[idmap[inst["m"][key]]], m["t"], _to_world(m["t"], m["g"], X, Y, th))
         if moved:
             sk.Geometry = geo
+            for n, inst in insts.items():
+                for key in moved:
+                    if bool(defn["members"][key].get("c")) != bool(new_def["members"][key].get("c")):
+                        sk.setConstruction(idmap[inst["m"][key]], bool(new_def["members"][key].get("c")))
         # 4. added members
         for n, inst in insts.items():
             X, Y, th = placements[n]
@@ -543,6 +554,83 @@ def update_definition(sk, name, changes):
                 if bad:
                     raise SketchBlockError("an instance would move by more than %g mm; nothing was changed" % _PLACE_TOL)
     return result
+
+
+def instance_placement(sk, instance):
+    """(X, Y, angle) of an instance fitted to its members as they are now."""
+    data = _load(sk)
+    if instance not in data["inst"]:
+        raise SketchBlockError("there is no block instance called '%s'" % instance)
+    inst = data["inst"][instance]
+    defn = data["defs"][inst["def"]]
+    return _placement(defn, _instance_world(sk, defn, inst))
+
+
+def to_local(t, g, X, Y, th):
+    """The inverse of the placement (X, Y, th) on a member's numbers."""
+    c, s = math.cos(-th), math.sin(-th)
+    out = list(g)
+    out[0], out[1] = _rotate(g[0] - X, g[1] - Y, c, s)
+    if t == "l":
+        out[2], out[3] = _rotate(g[2] - X, g[3] - Y, c, s)
+    elif t == "a":
+        out[3] = g[3] - th
+        out[4] = g[4] - th
+    return out
+
+
+_SAME = 1e-9  # a member whose numbers moved by less than this has not changed
+
+
+def session_changes(sk, name, placement, member_ids, known_ids):
+    """The `changes` of :func:`update_definition` that make the definition `name` say what the sketch's geometry says now.
+
+    `placement` is the instance's (X, Y, angle) when the edit began and `member_ids` its member key -> persistent id.
+    Members are read by persistent id, so GeoId shifts do not matter: a member whose geometry is gone is removed, a
+    member whose numbers or construction flag moved is changed, and every geometry whose persistent id is not in
+    `known_ids` (the ids that existed when the edit began) is a new member.  Returns
+    {'changes': {...}, 'moved': [keys], 'removed': [keys], 'added': [keys]}; an empty `changes` means nothing differs."""
+    data = _load(sk)
+    if name not in data["defs"]:
+        raise SketchBlockError("there is no block called '%s'" % name)
+    defn = data["defs"][name]
+    X, Y, th = placement
+    idmap = _id_map(sk)
+    geo = sk.Geometry
+    changes, moved, removed, added = {}, [], [], []
+    for key, gid in sorted(member_ids.items()):
+        if key not in defn["members"]:
+            continue
+        if gid not in idmap:
+            changes[key] = None
+            removed.append(key)
+            continue
+        i = idmap[gid]
+        t, nums = _numbers(geo[i])
+        m = defn["members"][key]
+        if t != m["t"]:
+            raise SketchBlockError("member '%s' changed its kind; a block member cannot" % key)
+        local = to_local(t, nums, X, Y, th)
+        flag = bool(sk.getConstruction(i))
+        n_cmp = 3 if t == "a" else len(local)
+        same = all(abs(a - b) <= _SAME for a, b in zip(local[:n_cmp], m["g"][:n_cmp]))
+        if t == "a":
+            same = same and abs(math.remainder(local[3] - m["g"][3], TWO_PI)) <= _SAME and abs(math.remainder(local[4] - m["g"][4], TWO_PI)) <= _SAME
+        if same and flag == bool(m.get("c")):
+            continue
+        changes[key] = (_make(t, local), flag)
+        moved.append(key)
+    nxt = 1 + max([int(k[1:]) for k in defn["members"] if k[1:].isdigit()] + [-1])
+    for i in range(len(geo)):
+        gid = sk.getGeometryId(i)
+        if gid in known_ids:
+            continue
+        t, nums = _numbers(geo[i])
+        key = "m%04d" % nxt
+        nxt += 1
+        changes[key] = (_make(t, to_local(t, nums, X, Y, th)), bool(sk.getConstruction(i)))
+        added.append(key)
+    return {"changes": changes, "moved": moved, "removed": removed, "added": added}
 
 
 def _reshape(geo, t, g):

@@ -72,6 +72,7 @@ CLOSE_NAME = "blocksClose"
 
 _ROLE = QtCore.Qt.UserRole
 _panel = None
+messages = []  # the one-line messages the panel has given about an edit that ended on its own
 _filters = []  # the view event filters that are installed, for the count
 
 
@@ -416,6 +417,8 @@ class BlocksPanel(QtWidgets.QDockWidget):
         self.info = info
         self.member_of = {g: n for n, i in info["instances"].items() for g in i["geo_ids"] if g >= 0}
         self._fill(info, chosen)
+        if self.session is not None:
+            self._update_session_label()
         if self.session is None and not self._placing:
             nd, ni = len(info["definitions"]), len(info["instances"])
             self.status.setText(tr("%d definition(s), %d instance(s).") % (nd, ni) if nd else tr("Select geometry, name it and choose Define to make a block."))
@@ -798,11 +801,39 @@ class BlocksPanel(QtWidgets.QDockWidget):
             self.schedule()
 
     def data_changed(self):
+        if self.session is not None and not self.session["rolling"]:
+            self._session_check()
         self.schedule()
 
     def on_undo_redo(self):
         if self._alive():
+            if self.session is not None and not self.session["rolling"]:
+                self._session_check()
             self.schedule()
+
+    def _session_check(self):
+        """Something moved under an edit session: end it, with one message, if it can no longer be finished safely."""
+        if self.session is None:
+            return
+        if self.sketch.BlockData != self.session["data"] or self._stack_depth_to_start() is None:
+            self._session_broken_deferred()
+
+    def _session_broken_deferred(self):
+        if self.session is None or self.session.get("broken"):
+            return
+        self.session["broken"] = True
+        QtCore.QTimer.singleShot(0, self._broken_now)
+
+    def _broken_now(self):
+        if self.session is None or not self._alive():
+            return
+        s = self.session
+        if self._stack_depth_to_start() is None:
+            self._session_broken(tr("the undo steps of the edit are gone (undone, or more steps than the undo stack keeps)"))
+        elif self.sketch.BlockData != s["data"]:
+            self._session_broken(tr("the block data changed during the edit"))
+        else:
+            s["broken"] = False
 
     def schedule(self):
         if not self._pending:
@@ -820,20 +851,256 @@ class BlocksPanel(QtWidgets.QDockWidget):
         if not self._alive():
             return
         self.cancel_place()
-        self.status.setText(reason)
+        if self.session is not None:
+            name = self.session["instance"]
+            self.session = None
+            self._say(tr("The edit of %s ended: %s The instance stays exploded with the changes made so far.") % (name, reason))
+        else:
+            self.status.setText(reason)
         if close:
             self._closing = True
             QtCore.QTimer.singleShot(0, self.close)
 
-    # -- the edit session (phase 2) --------------------------------------------------------------
+    # -- the edit session -------------------------------------------------------------------------------------
+    # Edit in place.  The chosen instance is exploded in an undo entry named for the session, so its members are plain
+    # geometry that every stock tool can change while the siblings stay rigid.  Finish reads the result by persistent id
+    # through the placement the instance had at the start, rolls the session's undo entries back, and gives the result to
+    # update_definition, so the session is one undo entry and every instance follows.  Cancel rolls back alone.
+    # A rollback is a number of undos found by the session entry's name on the undo stack, never a count kept here.
+
+    def _session_entry(self):
+        return self.session["entry"]
+
+    def _stack_depth_to_start(self):
+        """How many undo steps lie on the stack above (and including) the session's first entry, or None if it is gone."""
+        names = list(self.sketch.Document.UndoNames)  # newest first
+        entry = self._session_entry()
+        return names.index(entry) + 1 if entry in names else None
+
     def start_session(self):
-        self.status.setText(tr("Edit in place is not available yet."))
+        c = self.chosen()
+        if self.session is not None:
+            self.status.setText(tr("An edit is already going on; finish or cancel it first."))
+            return False
+        if c is None or c[0] != "inst":
+            self.status.setText(tr("Choose an instance first."))
+            return False
+        if not self._editing_ok():
+            return False
+        name = c[1]
+        doc = self.sketch.Document
+        try:
+            data = B._load(self.sketch)
+            if name not in data["inst"]:
+                raise B.SketchBlockError(tr("There is no block instance called '%s'.") % name)
+            inst = data["inst"][name]
+            placement = B.instance_placement(self.sketch, name)
+            self.cancel_place()
+            snapshot = {p: self.sketch.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData")}
+            known = {self.sketch.getGeometryId(i) for i in range(len(self.sketch.Geometry))}
+            cons = self._constraint_bag()
+            entry = tr("Edit block %s") % name
+            base = doc.UndoCount
+            B.explode(self.sketch, name, label=entry)
+        except B.SketchBlockError as exc:
+            self.status.setText(_sentence(str(exc)))
+            self.refresh()
+            return False
+        except Exception as exc:
+            self.status.setText(tr("The edit could not start (%s).") % _sentence(str(exc)).rstrip("."))
+            self.refresh()
+            return False
+        self.session = {
+            "instance": name,
+            "definition": inst["def"],
+            "placement": placement,
+            "members": dict(inst["m"]),
+            "known": known,
+            "snapshot": snapshot,
+            "constraints": cons,
+            "entry": entry,
+            "base": base,
+            "data": self.sketch.BlockData,
+            "rolling": False,
+        }
+        self.status.setText(tr("Editing %s of '%s'. Change its geometry with the usual tools, then choose Finish or Cancel edit.") % (name, inst["def"]))
+        self._update_session_label()
+        self.refresh()
+        return True
+
+    def _constraint_bag(self):
+        bag = {}
+        for c in self.sketch.Constraints:
+            key = hash(bytes(c.dumpContent()) if not isinstance(c.dumpContent(), str) else c.dumpContent().encode())
+            bag[key] = bag.get(key, 0) + 1
+        return bag
+
+    def session_added_constraints(self):
+        """How many constraints now in the sketch were not there when the edit began."""
+        if self.session is None:
+            return 0
+        now = self._constraint_bag()
+        kept = sum(min(n, self.session["constraints"].get(k, 0)) for k, n in now.items())
+        return max(0, sum(now.values()) - kept)
+
+    def _update_session_label(self):
+        if self.session is None:
+            self.session_label.setText("")
+            return
+        n = self.session_added_constraints()
+        self.session_label.setText(
+            tr("Editing %s. Finish keeps the geometry as it is now and every instance follows. New geometry becomes a member of every instance. Constraints added during this edit are not kept: %d added so far.")
+            % (self.session["instance"], n)
+        )
+
+    def _rollback(self):
+        """Undo the session's entries (found by name) and clear what is left to redo.  Returns False when they are gone."""
+        s = self.session
+        doc = self.sketch.Document
+        n = self._stack_depth_to_start()
+        if n is None:
+            return False
+        s["rolling"] = True
+        try:
+            for _ in range(n):
+                doc.undo()
+            # undo leaves the session's steps on the redo stack; a change inside a transaction that is then abandoned
+            # empties it, and nothing else
+            doc.openTransaction("Clear redo")
+            self.sketch.Placement = self.sketch.Placement
+            doc.abortTransaction()
+        finally:
+            s["rolling"] = False
+        return doc.UndoCount == s["base"]
+
+    def _end_session(self, message=None):
+        self.session = None
+        self.session_label.setText("")
+        if message:
+            self.status.setText(message)
+        self._update_buttons()
+
+    def _session_broken(self, why):
+        """The session cannot go on and cannot be rolled back safely: it ends, the sketch stays as it is, one message."""
+        if self.session is None:
+            return
+        name = self.session["instance"]
+        self._end_session(None)
+        self._say(tr("The edit of %s ended: %s. Nothing was changed by ending it.") % (name, why))
+        self.refresh()
+
+    def _say(self, text):
+        messages.append(text)
+        self.status.setText(text)
+        App.Console.PrintMessage("Sketch blocks: %s\n" % text)
+
+    def _session_valid(self):
+        """False, with the reason said, when something other than the user's own stock operations changed the session."""
+        s = self.session
+        if self._stack_depth_to_start() is None:
+            self._session_broken(tr("the undo steps of the edit are gone (undone, or more steps than the undo stack keeps)"))
+            return False
+        if self.sketch.BlockData != s["data"]:
+            self._session_broken(tr("the block data changed during the edit"))
+            return False
+        return True
 
     def finish_session(self):
-        pass
+        if self.session is None:
+            self.status.setText(tr("No edit is going on."))
+            return False
+        if not self._editing_ok() or not self._session_valid():
+            return False
+        s = self.session
+        sk = self.sketch
+        doc = sk.Document
+        try:
+            res = B.session_changes(sk, s["definition"], s["placement"], s["members"], s["known"])
+        except B.SketchBlockError as exc:
+            self.status.setText(_sentence(str(exc)))
+            return False
+        except Exception as exc:
+            self.status.setText(tr("The result cannot be read (%s); the edit goes on.") % _sentence(str(exc)).rstrip("."))
+            return False
+        dropped = self.session_added_constraints()
+        changes = res["changes"]
+        if changes:
+            ok, why = self._dry_run(s, changes)
+            if not ok:
+                self.status.setText(_sentence(why) + " " + tr("The edit goes on; nothing was lost."))
+                return False
+        final = {p: sk.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData")}
+        if not self._rollback():
+            self._restore(final)
+            self._session_broken(tr("the undo steps of the edit could not be rolled back"))
+            return False
+        removed_constraints = []
+        if changes:
+            try:
+                out = B.update_definition(sk, s["definition"], changes)
+            except Exception as exc:  # the dry run said it would work: put the session's result back and say so
+                self._restore(final)
+                self._session_broken(tr("applying the result failed (%s)") % _sentence(str(exc)).rstrip("."))
+                return False
+            removed_constraints = out["removed_constraints"]
+        self._end_session(None)
+        self.refresh()
+        text = tr("Finished: %d changed, %d added, %d removed member(s); every instance follows.") % (len(res["moved"]), len(res["added"]), len(res["removed"]))
+        if removed_constraints:
+            text += " " + tr("Constraints removed with their members: %s.") % ", ".join(removed_constraints)
+        if dropped:
+            text += " " + tr("%d constraint(s) added during the edit were not kept.") % dropped
+        if not changes:
+            text = tr("Finished: nothing had changed, the sketch is as it was.")
+        self.status.setText(text)
+        return True
+
+    def _dry_run(self, s, changes):
+        """Would update_definition accept the result?  Tried on a hidden copy of the sketch as it was at the start."""
+        import SketcherDiagnosis as SD
+
+        scratch = SD._Scratch(self.sketch)
+        try:
+            cp = scratch.copy()
+            for prop, content in s["snapshot"].items():
+                cp.restorePropertyContent(prop, content)
+            B.update_definition(cp, s["definition"], changes)
+        except B.SketchBlockError as exc:
+            return False, str(exc)
+        except Exception as exc:
+            return False, tr("the result cannot be applied (%s)") % exc
+        finally:
+            scratch.close()
+        return True, ""
+
+    def _restore(self, content):
+        """Last resort: put the session's result back by hand, in one undo entry."""
+        doc = self.sketch.Document
+        doc.openTransaction(tr("Restore edit"))
+        try:
+            for prop, c in content.items():
+                if self.sketch.dumpPropertyContent(prop) != c:
+                    self.sketch.restorePropertyContent(prop, c)
+            self.sketch.solve()
+        finally:
+            doc.commitTransaction()
 
     def cancel_session(self):
-        pass
+        if self.session is None:
+            self.status.setText(tr("No edit is going on."))
+            return False
+        if not self._editing_ok() or not self._session_valid():
+            return False
+        s = self.session
+        final = {p: self.sketch.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData")}
+        if not self._rollback():
+            self._restore(final)
+            self._session_broken(tr("the undo steps of the edit could not be rolled back"))
+            return False
+        self._end_session(tr("The edit was cancelled; the sketch is as it was before it."))
+        self.refresh()
+        self.status.setText(tr("The edit was cancelled; the sketch is as it was before it."))
+        return True
 
     # -- keys -------------------------------------------------------------------------------------
     def keyPressEvent(self, event):
@@ -845,6 +1112,11 @@ class BlocksPanel(QtWidgets.QDockWidget):
 
     # -- closing -------------------------------------------------------------------------------------
     def closeEvent(self, event):
+        if self.session is not None and self.state != "closed":
+            name = self.session["instance"]
+            self.session = None
+            messages.append(tr("The edit of %s ended because the panel was closed. The instance stays exploded with the changes made so far.") % name)
+            App.Console.PrintMessage("Sketch blocks: %s\n" % messages[-1])
         self.state = "closed"
         self.end_place(None)
         for fn, name in ((App.removeDocumentObserver, "_dw"), (Gui.removeDocumentObserver, "_gw"), (Gui.Selection.removeObserver, "_sw")):
