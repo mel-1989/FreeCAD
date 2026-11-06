@@ -155,17 +155,17 @@ class BlocksGuiCase(SketcherGuiTestCase):
         _pump()
 
     def choose(self, kind, name):
-        it = self.panel.tree.invisibleRootItem()
-        stack = [it.child(i) for i in range(it.childCount())]
-        while stack:
-            item = stack.pop()
-            d = item.data(0, QtCore.Qt.UserRole) or {}
-            if d.get("kind") == kind and d.get("name") == name:
+        """Choose the row the user would click: found by the words on it, a definition at the top and an instance
+        under it."""
+        root = self.panel.tree.invisibleRootItem()
+        tops = [root.child(i) for i in range(root.childCount())]
+        rows = tops if kind == "def" else [t.child(j) for t in tops for j in range(t.childCount())]
+        for item in rows:
+            if item.text(0).startswith(name + ":"):
                 self.panel.tree.setCurrentItem(item)
                 item.setSelected(True)
                 self.settle()
                 return item
-            stack += [item.child(i) for i in range(item.childCount())]
         self.fail("no %s row %s" % (kind, name))
 
     def select(self, sk, *subs):
@@ -763,6 +763,8 @@ class TestBlocksPanelSelection(BlocksGuiCase):
         # a GeoId shift: delete the first instance, then choose the second again
         self.choose("inst", "M_1")
         self.click_button("blocksDelete")
+        Gui.Selection.clearSelection()  # the names of the deleted members mean other geometry now
+        self.settle()
         self.choose("inst", "M_2")
         self.assertEqual(sorted(_selected_names()), self.expected_names(sk, "M_2"))
         self.assertNotIn("M_1", B.blocks(sk)["instances"])

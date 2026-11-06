@@ -73,8 +73,11 @@ mutant(
 )
 mutant(
     "click_also_selects",
-    "the placing click is not taken on release, so the editor also selects what is under it",
-    [(PANEL, "        self.place_at(ev.position())\n        return True", "        self.place_at(ev.position())\n        return False")],
+    "the placing click is not taken, so the editor also selects what is under it",
+    [
+        (PANEL, "        if t == E.MouseButtonPress or t == E.MouseButtonDblClick:\n            self._pressed = True\n            return True", "        if t == E.MouseButtonPress or t == E.MouseButtonDblClick:\n            self._pressed = True\n            return False"),
+        (PANEL, "        self.place_at(ev.position())\n        return True", "        self.place_at(ev.position())\n        return False"),
+    ],
     [MODE],
 )
 mutant(
