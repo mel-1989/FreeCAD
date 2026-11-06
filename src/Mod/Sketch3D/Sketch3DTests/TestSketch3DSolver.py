@@ -34,6 +34,8 @@ from Sketch3DTests.Sketch3DCorpus import (
 SCALE = float(os.environ.get("SKETCH3D_SCALE", "1"))
 QUICK = bool(os.environ.get("SKETCH3D_QUICK"))  # the mutant script skips the two slow corpora
 TOL = 1e-9
+KNOWN_ANSWER_BAR = 0.995
+KNOWN_ANSWER_FLOOR = 0.985  # measured 98.6% on 2,000 systems when this was written
 
 
 def count(n):
@@ -1395,12 +1397,19 @@ class TestSolveRate(unittest.TestCase):
 
     def test_start_moved_by_5_percent(self):
         rigid_n, rigid_wrong = self._run(0.05, 0.995)
-        # The brief asks for the known answer on rigid systems. A rigid system can still have a
-        # second exact root near the truth (a quadratic in one coordinate, say), and the solver
-        # may land on it from a start 5% away. _run has already checked every success against
-        # an independent residual, so each such case is a valid solution; the share is reported
-        # and guarded at 95%, not claimed as 99.5%.
-        self.assertGreaterEqual(1.0 - rigid_wrong / max(1, rigid_n), 0.95)
+        # The brief asks for the known answer within 1e-6 mm on 99.5% of the rigid systems. A
+        # rigid system can still have a second exact root (a quadratic in one coordinate, say) and
+        # the solver may land on it from a start 5% away; _run has already checked every success
+        # against an independent residual, so each such case is a valid solution, but not the
+        # answer the brief asks for. The share is printed against the bar. The floor is the
+        # measured share less a small margin; it is not the bar.
+        share = 1.0 - rigid_wrong / max(1, rigid_n)
+        verdict = "met" if share >= KNOWN_ANSWER_BAR else "MISSED"
+        print("[check 8] known-answer share on rigid systems: %.2f%% (%d of %d), bar 99.5%%: %s, guard floor %.1f%%"
+              % (100 * share, rigid_n - rigid_wrong, rigid_n, verdict, 100 * KNOWN_ANSWER_FLOOR))
+        self.assertGreaterEqual(
+            share, KNOWN_ANSWER_FLOOR,
+            "check 8 known-answer bar 99.5%% missed (share %.2f%%) and the guard floor %.1f%% broken" % (100 * share, 100 * KNOWN_ANSWER_FLOOR))
 
     def test_start_moved_by_25_percent(self):
         self._run(0.25, 0.90)
