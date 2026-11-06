@@ -554,24 +554,54 @@ class TestBlocksPanelClick(BlocksGuiCase):
         self.assertIsNone(self.panel._placing if self.panel else None)
         self.assertEqual(self.P.active_filter_count(), 0)
 
-    def click_places(self, sk, target):
+    def stock_point_at(self, sk, pos):
+        """The oracle for a click: the stock Create point tool, given the same real press and release at the same widget
+        pixel, creates a point; that point's sketch coordinates are what a click means.  The point is removed again."""
         gl = self.viewport()
+        n0, c0 = len(sk.Geometry), len(sk.Constraints)
+        Gui.runCommand("Sketcher_CreatePoint")
+        _pump(120)
+        self.click_at(gl, pos)
+        made = [sk.Geometry[i] for i in range(n0, len(sk.Geometry))]
+        self.assertEqual([g.TypeId for g in made], ["Part::GeomPoint"], "the stock tool made no point at that pixel")
+        snapped = len(sk.Constraints) != c0  # near an axis or a line the tool adds a constraint and moves the point
+        point = (made[0].X, made[0].Y)
+        for t in (QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease):  # the tool is continuous; one Escape leaves it (a second would leave the editor)
+            QtWidgets.QApplication.sendEvent(gl, QtGui.QKeyEvent(t, QtCore.Qt.Key_Escape, QtCore.Qt.NoModifier))
+        _pump(60)
+        self.assertEqual(_editing(), (sk.Document.Name, sk.Name))
+        sk.Document.openTransaction("remove oracle point")
+        sk.delGeometries(list(range(n0, len(sk.Geometry))))
+        sk.Document.commitTransaction()
+        self.settle()
+        self.assertEqual((len(sk.Geometry), len(sk.Constraints)), (n0, c0))
+        return None if snapped else point
+
+    def click_places(self, sk, fraction):
+        """One click at the widget pixel `fraction` (of the viewport's width and height) places the instance where the
+        stock Create point tool puts a point for the same pixel, at the device pixel ratio the process runs at."""
+        gl = self.viewport()
+        pos = QtCore.QPointF(round(gl.width() * fraction[0]), round(gl.height() * fraction[1]))
+        want = self.stock_point_at(sk, pos)
+        for nudge in range(1, 6):  # a pixel next to an axis or a line is snapped by the stock tool: move on over empty space
+            if want is not None:
+                break
+            pos = QtCore.QPointF(pos.x() + 37, pos.y() - 23)
+            want = self.stock_point_at(sk, pos)
+        self.assertIsNotNone(want, ("no pixel over empty space", self.kind))
         self.place_mode()
         n = len(B.blocks(sk)["instances"])
         sel_before = _selected_names()
         undo = sk.Document.UndoCount
-        self.click_at(gl, self.pixel_of(sk, *target))
+        self.click_at(gl, pos)
         self.assertEqual(len(B.blocks(sk)["instances"]), n + 1)
         self.assertEqual(sk.Document.UndoCount, undo + 1)
         self.assertEqual(_selected_names(), sel_before)
         self.assertNoMode()
         g = sk.Geometry[B.blocks(sk)["instances"][_latest(sk)]["geo_ids"][0]]
-        # within one pixel: the view's own projection of the placed origin against the clicked point
-        view = Gui.getDocument(sk.Document.Name).ActiveView
-        gp = sk.getGlobalPlacement()
-        hx, hy = view.getPointOnViewport(gp.multVec(V(g.StartPoint.x, g.StartPoint.y, 0)))
-        tx, ty = view.getPointOnViewport(gp.multVec(V(target[0], target[1], 0)))
-        self.assertLessEqual(max(abs(hx - tx), abs(hy - ty)), 1, ("pixels", (hx, hy), (tx, ty)))
+        # the stock tool's own mapping is the truth; a device pixel is far more than this (about 0.005 mm at these zooms)
+        self.assertAlmostEqual(g.StartPoint.x, want[0], delta=1e-4, msg=("x", self.kind, pos.x(), pos.y(), gl.devicePixelRatioF()))
+        self.assertAlmostEqual(g.StartPoint.y, want[1], delta=1e-4, msg=("y", self.kind, pos.x(), pos.y(), gl.devicePixelRatioF()))
         return g.StartPoint.x, g.StartPoint.y
 
     def body_sketch(self, doc):
@@ -597,17 +627,30 @@ class TestBlocksPanelClick(BlocksGuiCase):
         )
         for label, make in kinds:
             for top in (True, False):
+                self.kind = (label, "top" if top else "iso")
                 doc = self.new_doc("PanelClick%s%d" % (label, top))
                 sk = make(doc)
                 self.open_panel(sk)
                 self.frame(sk, top)
                 self.choose("def", "T")
                 _widget("blocksAngle").setText("0 deg")
-                self.click_places(sk, (3.5, 2.25))
-                self.click_places(sk, (-6.0, 4.0))
+                self.click_places(sk, (0.62, 0.37))
+                self.click_places(sk, (0.27, 0.68))
                 self.close_panel()
                 Gui.ActiveDocument.resetEdit()
                 _pump(50)
+
+    def test_the_click_places_with_the_angle_field(self):
+        self.kind = ("xy", "angle")
+        doc = self.new_doc("PanelClickAngle")
+        sk = self.line_block_sketch(doc, "A", placements=((0, 0, 0),))
+        gl = self.prepare(sk)
+        self.frame(sk)
+        _widget("blocksAngle").setText("90 deg")
+        x, y = self.click_places(sk, (0.62, 0.37))
+        pose = B.instance_placement(sk, _latest(sk))
+        self.assertAlmostEqual(pose[2], math.pi / 2, delta=1e-7)
+        self.assertAlmostEqual(pose[0], x, delta=1e-7)
 
     def test_every_way_out_of_the_mode_changes_nothing_and_frees_the_next_click(self):
         doc = self.new_doc("PanelCancel")
@@ -1208,6 +1251,12 @@ class EditCase(BlocksGuiCase):
             sk.Document.commitTransaction()
             self.settle()
 
+    def finish_accepting(self):
+        """Finish as a user does when it names what it will undo and the user accepts: a second press."""
+        self.click_button("blocksFinish")
+        if self.panel.session is not None and "Press Finish again" in self.status():
+            self.click_button("blocksFinish")
+
     def begin(self, sk, inst="W_1"):
         self.choose("inst", inst)
         self.click_button("blocksEdit")
@@ -1258,7 +1307,7 @@ class EditCase(BlocksGuiCase):
         new = [i for i in range(len(sk.Geometry)) if sk.getGeometryId(i) not in known]
         for n, i in enumerate(new):
             changes["n%04d" % (n + 1)] = (self.local_geo(sk, i, pose), bool(sk.getConstruction(i)))
-        self.click_button("blocksFinish")
+        self.finish_accepting()
         self.assertIsNone(self.panel.session, "Finish did not finish: " + self.status())
         text = self.status()
         ref = B.update_definition(twin, "W", changes)
@@ -1466,6 +1515,303 @@ class TestBlocksPanelEditUndo(EditCase):
         self.assertIsNone(self.panel.session)
         self.assertSameSketch(sk, before)
         self.assertEqual(sk.Document.UndoCount, before["undo"])
+
+
+class TestBlocksPanelEditRepairs(EditCase):
+    """Repairs after the verifier's round: what Finish undoes is named first, a rigid move is the instance's, the undo
+    depth is counted from the session's start, and the stack's limits are met with a sentence."""
+
+    def plain_line(self, sk):
+        return [c.First for c in sk.Constraints if c.Name == "Ph"][0]
+
+    def constraint_names(self, sk):
+        return [c.Name for c in sk.Constraints]
+
+    def with_stack_limit(self, n):
+        """Documents made while this is in force keep at most `n` undo entries (the limit is read when a document is made)."""
+        grp = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Document")
+        old = grp.GetInt("MaxUndoSize", 20)
+        grp.SetInt("MaxUndoSize", n)
+        self.addCleanup(grp.SetInt, "MaxUndoSize", old)
+
+    # -- item 1 --------------------------------------------------------------------------------------------------------
+    def test_edits_outside_the_block_are_named_before_finish_and_undone_by_the_second_press(self):
+        sk = self.scene("RepOutside")
+        self.open_panel(sk)
+        P = self.plain_line(sk)
+        start = _numbers_of(sk)
+        start_cons = _cons_of(sk)
+        self.begin(sk)
+        self.stock(sk, "move plain", lambda: sk.moveGeometry(P, 1, V(-25.0, -3.0, 0), False))
+        self.stock(sk, "del Ph", lambda: sk.delConstraint(self.constraint_names(sk).index("Ph")))
+        moved = _numbers_of(sk)
+        depth = sk.Document.UndoCount
+        self.click_button("blocksFinish")
+        self.assertIsNotNone(self.panel.session, "the first Finish went on: " + self.status())
+        text = self.status()
+        self.assertRegex(text, r"^Finish will undo \d+ moved elements? \(Edge\d+.*\) and 1 deleted constraint \('Ph'\) that are not part of the block\. Press Finish again to accept, or Cancel\.$")
+        self.assertEqual(_numbers_of(sk), moved, "the warning changed the sketch")
+        self.assertEqual(sk.Document.UndoCount, depth)
+        self.assertNotIn("Ph", self.constraint_names(sk))
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        after = self.status()
+        self.assertNotIn("nothing had changed", after)
+        self.assertIn("Undone because they are not part of the block", after)
+        self.assertIn("1 deleted constraint ('Ph')", after)
+        self.assertRegex(after, r"moved elements? \(Edge")
+        self.assertEqual(_cons_of(sk), start_cons, "the deleted constraint is back")
+        for (ta, na), (tb, nb) in zip(_numbers_of(sk), start):
+            for x, y in zip(na, nb):
+                self.assertAlmostEqual(x, y, delta=TOL)
+
+    def test_a_further_change_after_the_warning_asks_again_and_cancel_still_restores(self):
+        sk = self.scene("RepRearm")
+        self.open_panel(sk)
+        P = self.plain_line(sk)
+        before = _snapshot(sk)
+        self.begin(sk)
+        self.stock(sk, "move plain", lambda: sk.moveGeometry(P, 1, V(-25.0, -3.0, 0), False))
+        self.click_button("blocksFinish")
+        self.assertIn("Press Finish again", self.status())
+        self.stock(sk, "move plain again", lambda: sk.moveGeometry(P, 2, V(40.0, -3.0, 0), False))
+        self.click_button("blocksFinish")
+        self.assertIsNotNone(self.panel.session, "a change after the warning went through without asking again")
+        self.assertIn("Press Finish again", self.status())
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        # and a session that is warned and then cancelled
+        sk2 = self.scene("RepRearm2")
+        self.close_panel()
+        Gui.ActiveDocument.resetEdit()
+        _pump(40)
+        self.open_panel(sk2)
+        before = _snapshot(sk2)
+        self.begin(sk2)
+        self.stock(sk2, "move plain", lambda: sk2.moveGeometry(self.plain_line(sk2), 1, V(-25.0, -3.0, 0), False))
+        self.click_button("blocksFinish")
+        self.assertIn("Press Finish again", self.status())
+        self.click_button("blocksCancel")
+        self.assertIsNone(self.panel.session)
+        self.assertSameSketch(sk2, before)
+
+    def test_nothing_had_changed_is_said_only_when_nothing_changed(self):
+        sk = self.scene("RepNothing")
+        self.open_panel(sk)
+        self.begin(sk)
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session)
+        self.assertIn("nothing had changed", self.status())
+        # a constraint added and no geometry changed: the constraint is undone, and the status says so
+        self.begin(sk)
+        n = len(sk.Constraints)
+        self.stock(sk, "Dist", lambda: sk.addConstraint(Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 5.0)))
+        self.assertEqual(len(sk.Constraints), n + 1)
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertNotIn("nothing had changed", self.status())
+        self.assertIn("1 constraint(s) added during the edit were not kept", self.status())
+        self.assertEqual(len(sk.Constraints), n)
+
+    # -- item 2 --------------------------------------------------------------------------------------------------------
+    def test_members_moved_together_do_not_change_the_block_or_the_siblings(self):
+        sk = self.scene("RepRigid", bare=True)
+        self.open_panel(sk)
+        before = _snapshot(sk)
+        poses = self.poses(sk)
+        ids = self.gids(sk, "W_1")
+        self.begin(sk)
+        self.stock(sk, "drag all", lambda: sk.moveGeometries([(i, 0) for i in ids], V(2.0, 1.0, 0), True))
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertIn("The members moved together, which moves the instance rather than changing the block, so the move was not kept.", self.status())
+        self.assertNotIn("changed,", self.status())
+        for n, pose in self.poses(sk).items():
+            for a, b in zip(pose, poses[n]):
+                self.assertAlmostEqual(a, b, delta=TOL, msg=n)
+        self.assertSameSketch(sk, before)
+
+    def test_a_rigid_move_with_a_new_member_gives_only_the_new_member(self):
+        sk = self.scene("RepRigidAdd", bare=True)
+        self.open_panel(sk)
+        poses = self.poses(sk)
+        ids = self.gids(sk, "W_1")
+        self.begin(sk)
+        self.stock(sk, "drag all", lambda: sk.moveGeometries([(i, 0) for i in ids], V(2.0, 1.0, 0), True))
+        self.stock(sk, "Line", lambda: sk.addGeometry(Part.LineSegment(V(3.0, 3.0, 0), V(4.0, 5.0, 0)), False))
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertIn("0 changed, 1 added, 0 removed", self.status())
+        self.assertIn("moved together", self.status())
+        for n, pose in self.poses(sk).items():
+            for a, b in zip(pose, poses[n]):
+                self.assertAlmostEqual(a, b, delta=TOL, msg=n)
+        for n in ("W_1", "W_2", "W_3"):
+            self.assertEqual(len(self.gids(sk, n)), 4)
+
+    # -- item 4 --------------------------------------------------------------------------------------------------------
+    def test_the_panel_follows_document_activation_and_comes_back_with_its_status(self):
+        sk = self.scene("RepActA")
+        other = self.new_doc("RepActB")
+        other.addObject("Sketcher::SketchObject", "O")
+        other.recompute()
+        self.open_panel(sk)
+        self.assertTrue(hasattr(self.panel, "sync_activation"))
+        status = self.status()
+        Gui.setActiveDocument(other.Name)
+        _pump(40)
+        self.assertTrue(self.panel._dormant)
+        self.assertFalse(_widget("blocksDefine").isEnabled())
+        self.assertNotIn("not being edited", self.status())
+        self.assertNotEqual(self.status(), status)
+        Gui.setActiveDocument(sk.Document.Name)
+        _pump(40)
+        self.assertFalse(self.panel._dormant)
+        self.assertEqual(self.status(), status)
+        self.assertNotIn("not being edited", self.status())
+        self.assertTrue(_widget("blocksName").isEnabled())
+
+    # -- item 5 --------------------------------------------------------------------------------------------------------
+    def test_cancel_and_finish_count_from_the_start_when_a_later_entry_has_the_sessions_name(self):
+        for how in ("cancel", "finish"):
+            sk = self.scene("RepName" + how, bare=True)
+            self.open_panel(sk)
+            before = _snapshot(sk)
+            self.begin(sk)
+            self.stock(sk, "mv", lambda: sk.moveGeometry(0, 2, V(7.0, 0, 0), False))
+            self.stock(sk, "Edit block W_1", lambda: sk.moveGeometry(1, 1, V(0.5, 1.5, 0), False))
+            self.stock(sk, "mv2", lambda: sk.moveGeometry(0, 1, V(0.0, 0.5, 0), False))
+            self.click_button("blocksCancel" if how == "cancel" else "blocksFinish")
+            self.assertIsNone(self.panel.session, self.status())
+            if how == "cancel":
+                self.assertSameSketch(sk, before)
+                self.assertEqual(sk.Document.UndoNames, before["names"])
+            else:
+                self.assertEqual(sk.Document.UndoCount, before["undo"] + 1)
+                self.assertEqual(sk.Document.UndoNames[0], "Edit block definition")
+                self.assertEqual(sorted(B.blocks(sk)["instances"]), ["W_1", "W_2", "W_3"])
+            self.close_panel()
+            Gui.ActiveDocument.resetEdit()
+            _pump(40)
+
+    # -- item 8c and 8d ------------------------------------------------------------------------------------------------------
+    def test_a_stack_that_is_already_full_at_the_start_does_not_matter(self):
+        self.with_stack_limit(6)
+        sk = self.scene("RepFull", bare=True)
+        for i in range(9):  # the stack holds six entries and is full when the session begins
+            sk.Document.openTransaction("filler%d" % i)
+            sk.Placement = FreeCAD.Placement(V(0, 0, i), FreeCAD.Rotation())
+            sk.Document.commitTransaction()
+        self.open_panel(sk)
+        self.assertEqual(sk.Document.UndoCount, 6)
+        before = _snapshot(sk)
+        self.begin(sk)
+        self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(7.0, 0, 0), False))
+        self.stock(sk, "Line", lambda: sk.addGeometry(Part.LineSegment(V(1.0, 1.0, 0), V(2.0, 3.0, 0)), False))
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertIn("1 changed, 1 added", self.status())
+        self.assertEqual(sk.Document.UndoNames[0], "Edit block definition")
+        rest = list(sk.Document.UndoNames[1:])
+        self.assertEqual(rest, before["names"][: len(rest)])  # what the stack keeps below is the newest of what it held (a full stack loses its oldest entries to the session's)
+
+    def test_a_session_longer_than_the_undo_stack_ends_with_a_message_and_keeps_the_edits(self):
+        import SketcherBlocksPanel as P
+
+        self.with_stack_limit(6)
+        sk = self.scene("RepLong", bare=True)
+        self.open_panel(sk)
+        n0 = len(P.messages)
+        self.begin(sk)
+        for i in range(8):  # more steps than the stack keeps: the explosion falls off its far end
+            self.stock(sk, "op%d" % i, lambda i=i: sk.moveGeometry(0, 2, V(5.0 + 0.1 * i, 0, 0), False))
+        self.assertEqual(sk.Document.UndoCount, 6)
+        end = _numbers_of(sk)
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertEqual(len(P.messages), n0 + 1)
+        self.assertIn("undo", P.messages[-1])
+        self.assertEqual(_numbers_of(sk), end, "ending the session changed the sketch")
+        self.assertEqual(sorted(B.blocks(sk)["instances"]), ["W_2", "W_3"])
+
+    def test_undo_mode_zero_changes_nothing_here_and_a_stack_of_nothing_refuses_the_edit(self):
+        sk = self.scene("RepMode0", bare=True)
+        sk.Document.UndoMode = 0
+        self.assertEqual(sk.Document.UndoMode, 1, "UndoMode is not settable in this build: undo cannot be switched off")
+        self.open_panel(sk)
+        self.begin(sk)
+        self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(7.0, 0, 0), False))
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertIn("1 changed", self.status())
+        self.close_panel()
+        Gui.ActiveDocument.resetEdit()
+        _pump(40)
+        # the one way to have no undo history: a limit of nothing on the stack
+        self.with_stack_limit(0)
+        sk = self.scene("RepStackZero", bare=True)
+        self.open_panel(sk)
+        before = _snapshot(sk)
+        self.choose("inst", "W_1")
+        self.click_button("blocksEdit")
+        self.assertIsNone(self.panel.session)
+        self.assertIn("undo history", self.status())
+        self.assertSameSketch(sk, before)
+        self.assertEqual(sorted(B.blocks(sk)["instances"]), ["W_1", "W_2", "W_3"])
+
+    def test_an_operation_left_open_refuses_the_start_and_the_finish(self):
+        """(Called straight, in one turn of the event loop: the application closes an open transaction when it goes idle.)"""
+        sk = self.scene("RepOpen", bare=True)
+        self.open_panel(sk)
+        doc = sk.Document
+        before = _snapshot(sk)
+        self.choose("inst", "W_1")
+        doc.openTransaction("macro")
+        sk.addGeometry(Part.LineSegment(V(50, 50, 0), V(60, 60, 0)), False)  # (a transaction is pending once something has changed in it)
+        self.assertTrue(doc.HasPendingTransaction)
+        self.assertFalse(self.panel.start_session())
+        self.assertIsNone(self.panel.session)
+        self.assertIn("operation open", self.status())
+        doc.commitTransaction()
+        self.settle()
+        doc.undo()
+        self.settle()
+        self.assertEqual(_content(sk), before["content"])
+        self.begin(sk)
+        self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(7.0, 0, 0), False))
+        doc.openTransaction("macro again")
+        sk.addGeometry(Part.LineSegment(V(50, 50, 0), V(60, 60, 0)), False)
+        self.assertFalse(self.panel.finish_session())
+        self.assertIsNotNone(self.panel.session)
+        self.assertIn("operation open", self.status())
+        self.assertFalse(self.panel.cancel_session())
+        self.assertIsNotNone(self.panel.session)
+        doc.commitTransaction()
+        self.settle()
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertIn("1 changed, 1 added", self.status())
+
+    # -- item 6 ------------------------------------------------------------------------------------------------------
+    def test_finish_does_nothing_when_the_sketch_is_no_longer_in_the_editor_even_if_no_event_arrived(self):
+        import SketcherBlocksPanel as P
+
+        n0 = len(P.messages)
+        sk = self.scene("RepNoEdit")
+        self.open_panel(sk)
+        self.begin(sk)
+        self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(7.0, 0, 0), False))
+        panel = self.panel
+        FreeCAD.removeDocumentObserver(panel._dw)  # nobody tells the panel that the editor is gone
+        Gui.removeDocumentObserver(panel._gw)
+        Gui.ActiveDocument.resetEdit()
+        _pump(40)
+        before = _snapshot(sk)
+        self.assertFalse(panel.finish_session())
+        self.assertEqual(_snapshot(sk), before, "Finish acted on a sketch that is not in the editor")
+        self.assertEqual(sorted(B.blocks(sk)["instances"]), ["W_2", "W_3"], "the rollback ran")
+        self.assertEqual(len(P.messages), n0 + 1)
+        self.panel = None
 
 
 class TestBlocksPanelEditLeaving(EditCase):

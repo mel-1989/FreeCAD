@@ -263,6 +263,8 @@ def _name_ok(data, name):
         raise SketchBlockError("a block needs a name")
     if name in data["defs"]:
         raise SketchBlockError("a block called '%s' already exists" % name)
+    if name in data["inst"]:
+        raise SketchBlockError("'%s' is the name of a block instance; a block needs a name of its own" % name)
 
 
 def _members_in_instances(data, idmap_ids):
@@ -348,6 +350,8 @@ def insert(sk, name, x=0.0, y=0.0, angle=0.0):
     except SketchBlockError:
         raise SketchBlockError("block '%s' has a degenerate definition and cannot be placed" % name)
     data["n"] += 1
+    while "%s_%d" % (name, data["n"]) in data["inst"] or "%s_%d" % (name, data["n"]) in data["defs"]:
+        data["n"] += 1  # a name already taken by an instance or by a block of that name is skipped
     iname = "%s_%d" % (name, data["n"])
     with _transaction(sk, "Insert block"):
         try:
@@ -582,6 +586,49 @@ def to_local(t, g, X, Y, th):
 _SAME = 1e-9  # a member whose numbers moved by less than this has not changed
 
 
+def _fit_points(t, g):
+    """The member's points for the rigid fit: its defining points, an arc's far end too."""
+    pts = _points(t, g)
+    if t == "a":
+        pts = pts + [(g[0] + g[2] * math.cos(g[4]), g[1] + g[2] * math.sin(g[4]))]
+    return pts
+
+
+def rigid_fit(defn, world, keys=None):
+    """The one rigid placement (X, Y, angle) that takes every listed member of `defn` to the numbers in `world` (key ->
+    numbers) within the fit tolerance, or None.  Needs at least two members and two distinct points; a rigid move of a
+    lone member cannot be told from a change of the definition, so it is not read as one."""
+    keys = [k for k in sorted(world) if k in defn["members"]] if keys is None else keys
+    if len(keys) < 2:
+        return None
+    pairs, radii = [], []
+    for k in keys:
+        m = defn["members"][k]
+        if m["t"] in "ca":
+            radii.append((m["g"][2], world[k][2]))
+        pairs += list(zip(_fit_points(m["t"], m["g"]), _fit_points(m["t"], world[k])))
+    lp = [a for a, _ in pairs]
+    if not any(math.hypot(p[0] - lp[0][0], p[1] - lp[0][1]) > _EPS for p in lp[1:]):
+        return None
+    n = float(len(pairs))
+    lcx, lcy = sum(a[0] for a, _ in pairs) / n, sum(a[1] for a, _ in pairs) / n
+    wcx, wcy = sum(b[0] for _, b in pairs) / n, sum(b[1] for _, b in pairs) / n
+    dot = cross = 0.0
+    for (ax, ay), (bx, by) in pairs:
+        ax, ay, bx, by = ax - lcx, ay - lcy, bx - wcx, by - wcy
+        dot += ax * bx + ay * by
+        cross += ax * by - ay * bx
+    th = math.atan2(cross, dot)
+    c, s = math.cos(th), math.sin(th)
+    X, Y = wcx - (lcx * c - lcy * s), wcy - (lcx * s + lcy * c)
+    for (ax, ay), (bx, by) in pairs:
+        if math.hypot(ax * c - ay * s + X - bx, ax * s + ay * c + Y - by) > _PLACE_TOL:
+            return None
+    if any(abs(a - b) > _PLACE_TOL for a, b in radii):
+        return None
+    return X, Y, th
+
+
 def session_changes(sk, name, placement, member_ids, known_ids):
     """The `changes` of :func:`update_definition` that make the definition `name` say what the sketch's geometry says now.
 
@@ -589,14 +636,30 @@ def session_changes(sk, name, placement, member_ids, known_ids):
     Members are read by persistent id, so GeoId shifts do not matter: a member whose geometry is gone is removed, a
     member whose numbers or construction flag moved is changed, and every geometry whose persistent id is not in
     `known_ids` (the ids that existed when the edit began) is a new member.  Returns
-    {'changes': {...}, 'moved': [keys], 'removed': [keys], 'added': [keys]}; an empty `changes` means nothing differs."""
+    {'changes': {...}, 'moved': [keys], 'removed': [keys], 'added': [keys], 'moved_together': bool, 'frame': (X, Y, angle)};
+    an empty `changes` means nothing differs.  When the surviving members (at least two, with two distinct points) all
+    fit one rigid placement within the fit tolerance they have moved together: that moves the instance and not the
+    block, so they are read through that placement ('frame'), `moved_together` says whether it differs from `placement`,
+    and an added member is read in that frame too."""
     data = _load(sk)
     if name not in data["defs"]:
         raise SketchBlockError("there is no block called '%s'" % name)
     defn = data["defs"][name]
-    X, Y, th = placement
     idmap = _id_map(sk)
     geo = sk.Geometry
+    # Members that all keep one rigid pose relative to each other have moved together: that moves the instance, it does
+    # not change the block.  Then they are read through that pose, so only what else changed shows (an added member).
+    alive, kinds = {}, True
+    for k, g in member_ids.items():
+        if k in defn["members"] and g in idmap:
+            t, nums = _numbers(geo[idmap[g]])
+            alive[k] = nums
+            kinds = kinds and t == defn["members"][k]["t"]
+    fit = rigid_fit(defn, alive) if kinds else None
+    together = False
+    if fit is not None:
+        together = abs(fit[0] - placement[0]) > _PLACE_TOL or abs(fit[1] - placement[1]) > _PLACE_TOL or abs(math.remainder(fit[2] - placement[2], TWO_PI)) > 1e-9
+    X, Y, th = fit if fit is not None else placement
     changes, moved, removed, added = {}, [], [], []
     for key, gid in sorted(member_ids.items()):
         if key not in defn["members"]:
@@ -614,7 +677,9 @@ def session_changes(sk, name, placement, member_ids, known_ids):
         flag = bool(sk.getConstruction(i))
         n_cmp = 3 if t == "a" else len(local)
         same = all(abs(a - b) <= _SAME for a, b in zip(local[:n_cmp], m["g"][:n_cmp]))
-        if t == "a":
+        if fit is not None:
+            same = True  # the fit has accepted every member's numbers within the tolerance
+        elif t == "a":
             same = same and abs(math.remainder(local[3] - m["g"][3], TWO_PI)) <= _SAME and abs(math.remainder(local[4] - m["g"][4], TWO_PI)) <= _SAME
         if same and flag == bool(m.get("c")):
             continue
@@ -630,7 +695,83 @@ def session_changes(sk, name, placement, member_ids, known_ids):
         nxt += 1
         changes[key] = (_make(t, to_local(t, nums, X, Y, th)), bool(sk.getConstruction(i)))
         added.append(key)
-    return {"changes": changes, "moved": moved, "removed": removed, "added": added}
+    return {"changes": changes, "moved": moved, "removed": removed, "added": added, "moved_together": together, "frame": (X, Y, th)}
+
+
+_OUTSIDE_TOL = 1e-7  # plain geometry that moved by less than this (mm) has not moved
+
+
+def _outside_numbers(geo):
+    """The numbers that say where a plain geometry is: its own for the supported kinds, its bounding box and length otherwise."""
+    try:
+        return _numbers(geo)[1]
+    except SketchBlockError:
+        try:
+            shape = geo.toShape()
+            box = shape.BoundBox
+            return [box.XMin, box.YMin, box.XMax, box.YMax, shape.Length]
+        except Exception:
+            return []
+
+
+def _constraint_key(c, gid_of):
+    """A constraint's identity that survives a GeoId shift: its kind and the persistent ids of what it names."""
+    def ref(g, pos):
+        return (("g", gid_of[g]) if g in gid_of else ("x", g), pos)
+
+    return (c.Type, ref(c.First, c.FirstPos), ref(c.Second, c.SecondPos), ref(c.Third, c.ThirdPos))
+
+
+def session_outside_state(sk, member_gids):
+    """What an edit session must not lose without saying so, taken before it begins: where every geometry that is not one
+    of the instance's members is (by persistent id), and every constraint (by what it names, with its value and a label)."""
+    member_gids = set(member_gids)
+    geo = sk.Geometry
+    gid_of = {i: sk.getGeometryId(i) for i in range(len(geo))}
+    plain = {gid_of[i]: _outside_numbers(g) for i, g in enumerate(geo) if gid_of[i] not in member_gids}
+    cons = [(_constraint_key(c, gid_of), float(c.Value), _constraint_label(c, k)) for k, c in enumerate(sk.Constraints)]
+    return {"plain": plain, "cons": cons}
+
+
+def session_outside_changes(sk, state, member_gids):
+    """What differs from `state` (see :func:`session_outside_state`) outside the instance's members, and which constraints are
+    new.  Finish keeps only the block's own change, so everything listed here other than 'added' is undone by it.
+    Returns {'moved': [current GeoIds], 'deleted': [count of deleted plain geometries], 'deleted_constraints': [labels],
+    'changed_constraints': [labels], 'added_constraints': count}.  A constraint that went with a deleted member is the
+    block change's business and is not listed."""
+    member_gids = set(member_gids)
+    geo = sk.Geometry
+    idmap = {sk.getGeometryId(i): i for i in range(len(geo))}
+    gid_of = {i: g for g, i in idmap.items()}
+    moved, deleted = [], 0
+    for gid, nums in state["plain"].items():
+        if gid not in idmap:
+            deleted += 1
+            continue
+        now = _outside_numbers(geo[idmap[gid]])
+        if len(now) != len(nums) or any(abs(a - b) > _OUTSIDE_TOL for a, b in zip(now, nums)):
+            moved.append(idmap[gid])
+    pool = {}
+    for k, c in enumerate(sk.Constraints):
+        pool.setdefault(_constraint_key(c, gid_of), []).append(float(c.Value))
+    lost_members = {g for g in member_gids if g not in idmap}
+    gone, changed = [], []
+    for key, value, label in state["cons"]:
+        have = pool.get(key)
+        if not have:
+            if not any(r[0][0] == "g" and r[0][1] in lost_members for r in key[1:]):
+                gone.append(label)
+            continue
+        v = have.pop(0)
+        if abs(v - value) > 1e-9 * max(1.0, abs(value)):
+            changed.append(label)
+    return {
+        "moved": sorted(moved),
+        "deleted": deleted,
+        "deleted_constraints": gone,
+        "changed_constraints": changed,
+        "added_constraints": sum(len(v) for v in pool.values()),
+    }
 
 
 def _reshape(geo, t, g):

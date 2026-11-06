@@ -37,6 +37,8 @@ Behaviour follows public descriptions of sketch blocks (a definition placed many
 plain geometry); the layout is the plain list-and-buttons form of FreeCAD's task panels, and no layout, icon, text or
 file format comes from another product."""
 
+import math
+
 import FreeCAD as App
 import FreeCADGui as Gui
 from PySide import QtCore, QtGui, QtWidgets
@@ -98,8 +100,6 @@ def parse_length(text):
 
 def parse_angle(text):
     """An angle in radians from text a FreeCAD quantity field accepts; a bare number is degrees."""
-    import math
-
     q = _parse(text, tr("an angle"))
     if q.Unit == App.Units.Unit():
         return math.radians(float(q.Value))
@@ -171,15 +171,28 @@ def find_viewport():
     return None
 
 
+def _editing_placement(sketch):
+    """The placement of the sketch plane in the frame the editor's view works in: the document's editing transform, which
+    is what the stock tools use.  For a sketch in a Body it is the sketch's placement within the Body (the editor shows the
+    Body in its own frame), not the global placement."""
+    try:
+        m = Gui.getDocument(sketch.Document.Name).EditingTransform
+        return App.Placement(m)
+    except Exception:
+        return sketch.getGlobalPlacement()
+
+
 def point_in_sketch(sketch, view, gl, pos):
     """The sketch-frame point under a Qt position of the viewport: the pixel's ray meets the sketch plane taken
-    through the sketch's global placement (inside a Body that includes the Body's own placement)."""
-    w, h = view.getSize()
+    through the editor's own placement of the sketch, which is what the stock drawing tools do."""
     dpr = gl.devicePixelRatioF()
-    x = int(round(pos.x() * dpr))
-    y = int(round(h - 1 - pos.y() * dpr))
+    # the viewer's own conversion (Quarter's InputDevice::toDevicePixelPosition): the flip is done in logical pixels,
+    # on the widget's logical height, and the result is scaled to device pixels and rounded half away from zero; flipping in
+    # device pixels is one device pixel off at a pixel ratio of 2
+    x = int(math.floor(pos.x() * dpr + 0.5))
+    y = int(math.floor((gl.height() - pos.y() - 1.0) * dpr + 0.5))
     p0, p1 = view.projectPointToLine(x, y)
-    gp = sketch.getGlobalPlacement()
+    gp = _editing_placement(sketch)
     normal = gp.Rotation.multVec(App.Vector(0, 0, 1))
     d = p1 - p0
     denom = normal.dot(d)
@@ -211,11 +224,15 @@ class _DocWatch:
 
     def slotUndoDocument(self, doc):
         if doc.Name == self.panel.doc_name:
-            self.panel.on_undo_redo()
+            self.panel.on_undo_redo(-1)
 
     def slotRedoDocument(self, doc):
         if doc.Name == self.panel.doc_name:
-            self.panel.on_undo_redo()
+            self.panel.on_undo_redo(+1)
+
+    def slotCommitTransaction(self, doc):
+        if doc.Name == self.panel.doc_name:
+            self.panel.on_commit()
 
     def slotDeletedObject(self, obj):
         if self._mine(obj):
@@ -279,6 +296,8 @@ class BlocksPanel(QtWidgets.QDockWidget):
         self._placing = None  # the definition being placed by a click
         self._pressed = False
         self._pointer_busy = False
+        self._dormant = False  # the sketch is still in edit, but its document is not the one in view
+        self._status_when_active = ""
         self._viewport = None
         self._viewer = None
         self._view_filter = None
@@ -480,7 +499,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
         return (self.tree.selectedItems()[0].data(0, _ROLE) or {}).get("def")
 
     def _update_buttons(self):
-        ok = self._alive() and self.broken is None
+        ok = self._alive() and self.broken is None and not self._dormant
         busy = self.session is not None
         c = self.chosen()
         d = self._chosen_def()
@@ -495,12 +514,44 @@ class BlocksPanel(QtWidgets.QDockWidget):
         self.finish_button.setVisible(busy)
         self.cancel_button.setVisible(busy)
         self.session_label.setVisible(busy)
-        self.finish_button.setEnabled(busy)
-        self.cancel_button.setEnabled(busy)
+        self.finish_button.setEnabled(busy and not self._dormant)
+        self.cancel_button.setEnabled(busy and not self._dormant)
 
     # -- running an action -----------------------------------------------------------
+    def _edit_now(self, active=None):
+        try:
+            if self.doc_name not in App.listDocuments() or App.getDocument(self.doc_name).getObject(self.sketch_name) is None:
+                return "gone"
+        except Exception:
+            return "gone"
+        return DP.edit_state(self.sketch, active)
+
+    def sync_activation(self, active=None):
+        """Bring the panel in line with where the editor is, as the other sketch docks do: go quiet while the sketch's
+        document is out of view and pick up again, with the status it had, when the user comes back; close if the sketch
+        is gone from the editor.  (The shared document watch calls this on every document activation.)"""
+        if not self._alive():
+            return
+        state = self._edit_now(active)
+        if state == "inactive":
+            if not self._dormant:
+                self._dormant = True
+                self._status_when_active = self.status.text()
+                self.cancel_place()
+                self.status.setText(tr("The sketch is in another document's tab. Come back to it to go on."))
+                self._update_buttons()
+        elif state == "gone":
+            self.invalidate(tr("The sketch is no longer being edited."), close=True)
+        elif self._dormant:
+            self._dormant = False
+            self.status.setText(self._status_when_active)
+            self._update_buttons()
+
     def _editing_ok(self):
         if not self._alive():
+            return False
+        self.sync_activation()
+        if self._dormant or not self._alive():
             return False
         if DP.edit_state(self.sketch) != "editing":
             self.status.setText(tr("The sketch is not being edited."))
@@ -805,11 +856,19 @@ class BlocksPanel(QtWidgets.QDockWidget):
             self._session_check()
         self.schedule()
 
-    def on_undo_redo(self):
+    def on_undo_redo(self, step=0):
+        """An undo (step -1) or a redo (+1) of the document: the session's depth on the undo stack moves with it."""
         if self._alive():
             if self.session is not None and not self.session["rolling"]:
+                self.session["depth"] += step
                 self._session_check()
             self.schedule()
+
+    def on_commit(self):
+        """A transaction went onto the undo stack.  The session's depth counts them from its own start, by this count and
+        never by a name, because the stack drops its oldest entries when it is full and names repeat."""
+        if self._alive() and self.session is not None and not self.session["rolling"]:
+            self.session["depth"] += 1
 
     def _session_check(self):
         """Something moved under an edit session: end it, with one message, if it can no longer be finished safely."""
@@ -872,10 +931,19 @@ class BlocksPanel(QtWidgets.QDockWidget):
         return self.session["entry"]
 
     def _stack_depth_to_start(self):
-        """How many undo steps lie on the stack above (and including) the session's first entry, or None if it is gone."""
+        """How many undo steps lie on the stack from the newest down to the session's first entry, counted from the
+        session's start (one for its own explosion, one more for each transaction committed since, one less for each
+        undo), or None when that cannot be proved: the stack must hold at least that many entries, the one at that depth
+        must carry the session's name, and everything below it must be what lay below the session's start (the stack drops
+        its oldest entries when it is full, so what lies below may be shorter, never different)."""
+        s = self.session
         names = list(self.sketch.Document.UndoNames)  # newest first
-        entry = self._session_entry()
-        return names.index(entry) + 1 if entry in names else None
+        n = s["depth"]
+        if n < 1 or n > len(names) or names[n - 1] != s["entry"]:
+            return None
+        if names[n:] != s["tail"][: len(names) - n]:
+            return None
+        return n
 
     def start_session(self):
         c = self.chosen()
@@ -895,21 +963,23 @@ class BlocksPanel(QtWidgets.QDockWidget):
                 raise B.SketchBlockError(tr("There is no block instance called '%s'.") % name)
             inst = data["inst"][name]
             placement = B.instance_placement(self.sketch, name)
+            if getattr(doc, "HasPendingTransaction", False):
+                raise B.SketchBlockError(tr("A tool or macro still has an operation open. Let it finish, then start the edit."))
             self.cancel_place()
             snapshot = {p: self.sketch.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData")}
             start_data = self.sketch.BlockData
             known = {self.sketch.getGeometryId(i) for i in range(len(self.sketch.Geometry))}
-            cons = self._constraint_bag()
+            outside = B.session_outside_state(self.sketch, inst["m"].values())
             entry = tr("Edit block %s") % name
-            base = doc.UndoCount
+            tail = list(doc.UndoNames)
             B.explode(self.sketch, name, label=entry)
         except B.SketchBlockError as exc:
-            self.status.setText(_sentence(str(exc)))
             self.refresh()
+            self.status.setText(_sentence(str(exc)))
             return False
         except Exception as exc:
-            self.status.setText(tr("The edit could not start (%s).") % _sentence(str(exc)).rstrip("."))
             self.refresh()
+            self.status.setText(tr("The edit could not start (%s).") % _sentence(str(exc)).rstrip("."))
             return False
         self.session = {
             "instance": name,
@@ -918,32 +988,40 @@ class BlocksPanel(QtWidgets.QDockWidget):
             "members": dict(inst["m"]),
             "known": known,
             "snapshot": snapshot,
-            "constraints": cons,
+            "outside": outside,
             "entry": entry,
-            "base": base,
+            "tail": tail,
+            "depth": 1,
             "data": self.sketch.BlockData,
             "start_data": start_data,
             "rolling": False,
+            "warned": None,
         }
-        self.status.setText(tr("Editing %s of '%s'. Change its geometry with the usual tools, then choose Finish or Cancel edit.") % (name, inst["def"]))
+        if self._stack_depth_to_start() is None:
+            # the undo history did not take the explosion (a stack limited to nothing): the edit could never be rolled back
+            self.session = None
+            self._restore(snapshot, "Restore block")
+            self.refresh()
+            self.status.setText(tr("Edit in place needs the document's undo history to put the sketch back, and it did not keep the first step of the edit, so the edit was not started and the sketch is as it was."))
+            return False
+        self.status.setText(
+            tr("Editing %s of '%s'. Change its geometry with the usual tools, then choose Finish or Cancel edit. Finish keeps only the changes to the block's own members: if anything else in the sketch has moved, or a constraint has been deleted or changed, Finish says so first and undoes it.")
+            % (name, inst["def"])
+        )
         self._update_session_label()
         self.refresh()
         return True
 
-    def _constraint_bag(self):
-        bag = {}
-        for c in self.sketch.Constraints:
-            key = hash(bytes(c.dumpContent()) if not isinstance(c.dumpContent(), str) else c.dumpContent().encode())
-            bag[key] = bag.get(key, 0) + 1
-        return bag
+    def _outside(self):
+        """What differs from the start outside the instance's members (see SketcherBlocks.session_outside_changes)."""
+        s = self.session
+        return B.session_outside_changes(self.sketch, s["outside"], s["members"].values())
 
     def session_added_constraints(self):
         """How many constraints now in the sketch were not there when the edit began."""
         if self.session is None:
             return 0
-        now = self._constraint_bag()
-        kept = sum(min(n, self.session["constraints"].get(k, 0)) for k, n in now.items())
-        return max(0, sum(now.values()) - kept)
+        return self._outside()["added_constraints"]
 
     def _update_session_label(self):
         if self.session is None:
@@ -951,12 +1029,42 @@ class BlocksPanel(QtWidgets.QDockWidget):
             return
         n = self.session_added_constraints()
         self.session_label.setText(
-            tr("Editing %s. Finish keeps the geometry as it is now and every instance follows. New geometry becomes a member of every instance. Constraints added during this edit are not kept: %d added so far.")
+            tr("Editing %s. Finish keeps the geometry of the block's members as it is now and every instance follows. New geometry becomes a member of every instance. Constraints added during this edit are not kept: %d added so far. Changes to anything else, such as plain geometry that moved or a constraint that was deleted or changed, are undone, and Finish says so first.")
             % (self.session["instance"], n)
         )
 
+    def _undone_text(self, out):
+        """The items Finish undoes because they are not part of the block, in words: '1 moved element (Edge3) and 1 deleted constraint ('Ph')'."""
+        parts = []
+
+        def names(items):
+            items = list(items)
+            return ", ".join(items[:4]) + (tr(", and %d more") % (len(items) - 4) if len(items) > 4 else "")
+
+        if out["moved"]:
+            n = len(out["moved"])
+            parts.append((tr("%d moved element (%s)") if n == 1 else tr("%d moved elements (%s)")) % (n, names(member_names(self.sketch, out["moved"]))))
+        if out["deleted"]:
+            n = out["deleted"]
+            parts.append((tr("%d deleted element") if n == 1 else tr("%d deleted elements")) % n)
+        if out["deleted_constraints"]:
+            n = len(out["deleted_constraints"])
+            parts.append((tr("%d deleted constraint (%s)") if n == 1 else tr("%d deleted constraints (%s)")) % (n, names("'%s'" % x for x in out["deleted_constraints"])))
+        if out["changed_constraints"]:
+            n = len(out["changed_constraints"])
+            parts.append((tr("%d constraint with a changed value (%s)") if n == 1 else tr("%d constraints with a changed value (%s)")) % (n, names("'%s'" % x for x in out["changed_constraints"])))
+        if not parts:
+            return ""
+        return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + tr(" and ") + parts[-1]
+
+    def _signature(self):
+        """Changes in a way that any further change to the sketch or its undo stack shows."""
+        sk = self.sketch
+        return (sk.Document.UndoCount, sk.Document.RedoCount, hash(bytes(sk.dumpPropertyContent("Geometry"))), hash(bytes(sk.dumpPropertyContent("Constraints"))))
+
     def _rollback(self):
-        """Undo the session's entries (found by name) and clear what is left to redo.  Returns False when they are gone."""
+        """Undo the session's entries, counted from its start, and clear what is left to redo.  Returns False when their
+        place on the stack cannot be proved or the sketch is not what it was at the start afterwards."""
         s = self.session
         doc = self.sketch.Document
         n = self._stack_depth_to_start()
@@ -973,9 +1081,8 @@ class BlocksPanel(QtWidgets.QDockWidget):
             doc.abortTransaction()
         finally:
             s["rolling"] = False
-        # the stack may have been full: steps pushed off its far end by the session do not come back, so the depth is
-        # not the test; the session's entry is gone from the stack and the block data are what they were
-        return self._stack_depth_to_start() is None and self.sketch.BlockData == s["start_data"]
+        names = list(doc.UndoNames)
+        return names == s["tail"][: len(names)] and self.sketch.BlockData == s["start_data"]
 
     def _end_session(self, message=None):
         self.session = None
@@ -1009,24 +1116,40 @@ class BlocksPanel(QtWidgets.QDockWidget):
             return False
         return True
 
+    def _busy_elsewhere(self):
+        """True, with the reason said, while a tool or a macro has a transaction open: an undo would close it as an entry of
+        its own and the depth counted from the session's start would be one short."""
+        if getattr(self.sketch.Document, "HasPendingTransaction", False):
+            self.status.setText(tr("A tool or macro still has an operation open. Let it finish, then choose Finish or Cancel edit."))
+            return True
+        return False
+
     def finish_session(self):
         if self.session is None:
             self.status.setText(tr("No edit is going on."))
             return False
-        if not self._editing_ok() or not self._session_valid():
+        if not self._editing_ok() or self._busy_elsewhere() or not self._session_valid():
             return False
         s = self.session
         sk = self.sketch
         doc = sk.Document
         try:
             res = B.session_changes(sk, s["definition"], s["placement"], s["members"], s["known"])
+            out = self._outside()
         except B.SketchBlockError as exc:
             self.status.setText(_sentence(str(exc)))
             return False
         except Exception as exc:
             self.status.setText(tr("The result cannot be read (%s); the edit goes on.") % _sentence(str(exc)).rstrip("."))
             return False
-        dropped = self.session_added_constraints()
+        undone = self._undone_text(out)
+        if undone and s["warned"] != self._signature():
+            # Finish keeps only the block's change; the rest of the session is rolled back.  Say so, and wait for a second Finish
+            # with nothing further changed.
+            s["warned"] = self._signature()
+            self.status.setText(tr("Finish will undo %s that are not part of the block. Press Finish again to accept, or Cancel.") % undone)
+            return False
+        dropped = out["added_constraints"]
         changes = res["changes"]
         if changes:
             ok, why = self._dry_run(s, changes)
@@ -1041,21 +1164,28 @@ class BlocksPanel(QtWidgets.QDockWidget):
         removed_constraints = []
         if changes:
             try:
-                out = B.update_definition(sk, s["definition"], changes)
+                applied = B.update_definition(sk, s["definition"], changes)
             except Exception as exc:  # the dry run said it would work: put the session's result back and say so
                 self._restore(final)
                 self._session_broken(tr("applying the result failed (%s)") % _sentence(str(exc)).rstrip("."))
                 return False
-            removed_constraints = out["removed_constraints"]
+            removed_constraints = applied["removed_constraints"]
         self._end_session(None)
         self.refresh()
-        text = tr("Finished: %d changed, %d added, %d removed member(s); every instance follows.") % (len(res["moved"]), len(res["added"]), len(res["removed"]))
+        if changes:
+            text = tr("Finished: %d changed, %d added, %d removed member(s); every instance follows.") % (len(res["moved"]), len(res["added"]), len(res["removed"]))
+        elif not (undone or dropped or res["moved_together"]):
+            text = tr("Finished: nothing had changed, the sketch is as it was.")
+        else:
+            text = tr("Finished: the block itself did not change.")
         if removed_constraints:
             text += " " + tr("Constraints removed with their members: %s.") % ", ".join(removed_constraints)
+        if res["moved_together"]:
+            text += " " + tr("The members moved together, which moves the instance rather than changing the block, so the move was not kept.")
+        if undone:
+            text += " " + tr("Undone because they are not part of the block: %s.") % undone
         if dropped:
             text += " " + tr("%d constraint(s) added during the edit were not kept.") % dropped
-        if not changes:
-            text = tr("Finished: nothing had changed, the sketch is as it was.")
         self.status.setText(text)
         return True
 
@@ -1077,10 +1207,10 @@ class BlocksPanel(QtWidgets.QDockWidget):
             scratch.close()
         return True, ""
 
-    def _restore(self, content):
+    def _restore(self, content, label=None):
         """Last resort: put the session's result back by hand, in one undo entry."""
         doc = self.sketch.Document
-        doc.openTransaction(tr("Restore edit"))
+        doc.openTransaction(label or tr("Restore edit"))
         try:
             for prop, c in content.items():
                 if self.sketch.dumpPropertyContent(prop) != c:
@@ -1093,7 +1223,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
         if self.session is None:
             self.status.setText(tr("No edit is going on."))
             return False
-        if not self._editing_ok() or not self._session_valid():
+        if not self._editing_ok() or self._busy_elsewhere() or not self._session_valid():
             return False
         s = self.session
         final = {p: self.sketch.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData")}

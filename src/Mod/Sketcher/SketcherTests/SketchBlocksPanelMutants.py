@@ -66,9 +66,9 @@ def mutant(name, desc, patches, tests):
 
 
 mutant(
-    "click_not_mapped_through_the_global_placement",
-    "a click is mapped through the sketch's own Placement, not its global placement (wrong inside a Body)",
-    [(PANEL, "    gp = sketch.getGlobalPlacement()\n    normal =", "    gp = sketch.Placement\n    normal =")],
+    "click_not_mapped_through_the_editing_placement",
+    "a click is mapped through the sketch's global placement, not the editor's own placement (wrong inside a Body)",
+    [(PANEL, "    gp = _editing_placement(sketch)\n    normal =", "    gp = sketch.getGlobalPlacement()\n    normal =")],
     [CLICK],
 )
 mutant(
