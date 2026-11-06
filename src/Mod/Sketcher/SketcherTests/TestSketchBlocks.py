@@ -1454,13 +1454,15 @@ class TestBlockSessionReading(BlocksCase):
         res = B.session_changes(sk, "W", pose, members, known)
         self.assertEqual(res["moved"], ["m0000"])
         self.assertFalse(res["moved_together"])
-        # a block of one member that is moved rigidly: one member cannot be told apart from the block changing, as before
+        # a block of one line moved rigidly: since slice 5b1 (check 9) that is the instance's move, not a change of the
+        # block, because a lone line has two distinct points to fit; before 5b1 it was read as a changed block
         sk = self.blocksketch(members=1)
         pose, members, known = self.begin(sk)
         self.rigid(sk, [0], 3.0, 3.0, 0.5)
         res = B.session_changes(sk, "W", pose, members, known)
-        self.assertEqual(res["moved"], ["m0000"])
-        self.assertFalse(res["moved_together"])
+        self.assertEqual(res["moved"], [])
+        self.assertEqual(res["changes"], {})
+        self.assertTrue(res["moved_together"])
 
     def test_two_members_with_a_shared_centre_have_no_rigid_pose_to_fit(self):
         defn = {"members": {"m0": {"t": "c", "g": [0.0, 0.0, 1.0], "c": False}, "m1": {"t": "c", "g": [0.0, 0.0, 2.0], "c": False}}}

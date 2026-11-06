@@ -103,6 +103,11 @@ def main(argv):
         original = fh.read()
     # the helper some mutants call
     helper = b"\n\ndef shutil_copy(a, b):\n    import shutil\n\n    shutil.copyfile(a, b)\n"
+    # the unmutated tree has to pass every test a mutant is judged by, or "caught" means nothing
+    wanted = sorted({t for _, _, tests, _ in MUTANTS for t in tests} if not only else {t for n, _, tests, _ in MUTANTS if n in only for t in tests})
+    broken = [t for t in wanted if not run(binary, t, env)]
+    if broken:
+        sys.exit("the unmutated tree fails %s; nothing was planted" % broken)
     caught = ran = 0
     for name, edits, tests, what in MUTANTS:
         if only and name not in only:
@@ -132,7 +137,7 @@ def main(argv):
         assert sha(open(path, "rb").read()) == sha(original), "restore failed"
         ran += 1
         caught += bool(failed)
-        print("%-42s %-8s %4.0fs  %s" % (name, "CAUGHT" if failed else "SURVIVED", time.time() - t0, ", ".join(failed)), flush=True)
+        print("%-42s %-8s %4.1fs  %s" % (name, "CAUGHT" if failed else "SURVIVED", time.time() - t0, ", ".join(failed)), flush=True)
     print("caught %d of %d" % (caught, ran))
     return 0 if caught == ran else 1
 
