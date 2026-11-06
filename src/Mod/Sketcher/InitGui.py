@@ -63,7 +63,9 @@ FreeCAD.__unit_test__ += ["TestSketcherGui"]
 import CommandDiagnoseSketch
 import CommandFullyDefine
 import CommandRelations
+import CommandBlocks
 
 FreeCAD.__unit_test__ += ["TestSketcherDiagnosisPanelGui"]
 FreeCAD.__unit_test__ += ["TestSketcherFullyDefinePanelGui"]
 FreeCAD.__unit_test__ += ["TestSketcherRelationsPanelGui"]
+FreeCAD.__unit_test__ += ["TestSketcherBlocksPanelGui"]
