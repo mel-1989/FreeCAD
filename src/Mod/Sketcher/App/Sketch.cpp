@@ -256,10 +256,20 @@ bool Sketch::analyseBlockedGeometry(
     return doesBlockAffectOtherConstraints;
 }
 
-void Sketch::addBlockInstances()
+void Sketch::addBlockInstances(const std::vector<Constraint*>& constraints)
 {
     using Mode = GCS::ConstraintBlockPlacement::Mode;
     constexpr double twoPi = 2.0 * std::numbers::pi;
+
+    // a B-spline's first and last knot points, once exposed, are held to the curve by InternalAlignment
+    // constraints that fix its start and end points too; a tie on those points would repeat them
+    std::set<std::pair<int, int>> knotAligned;
+    for (const auto* c : constraints) {
+        if (c->Type == Sketcher::InternalAlignment && c->AlignmentType == Sketcher::BSplineKnotPoint
+            && c->isActive) {
+            knotAligned.insert({c->Second, c->InternalAlignmentIndex});
+        }
+    }
 
     for (const auto& inst : blockInstances) {
         // resolve the members to the solver's parameters
@@ -426,8 +436,11 @@ void Sketch::addBlockInstances()
                 }
                 // end points not made coincident with a pole by addBSpline are free parameters of
                 // the solver that the curve does not depend on; they follow the instance
-                bool startFree = r.m->periodic || r.m->mult.front() <= r.m->degree;
-                bool endFree = r.m->periodic || r.m->mult.back() <= r.m->degree;
+                const int lastKnot = static_cast<int>(r.m->knots.size()) - 1;
+                bool startFree = (r.m->periodic || r.m->mult.front() <= r.m->degree)
+                    && !knotAligned.count({r.m->geoId, 0});
+                bool endFree = (r.m->periodic || r.m->mult.back() <= r.m->degree)
+                    && !knotAligned.count({r.m->geoId, lastKnot});
                 double lx, ly;
                 if (startFree) {
                     localOf(r.bstart, lx, ly);
@@ -570,7 +583,7 @@ int Sketch::setUpSketch(
     }
     clearTemporaryConstraints();
     if (!blockInstances.empty()) {
-        addBlockInstances();
+        addBlockInstances(ConstraintList);
     }
     GCSsys.declareUnknowns(Parameters);
     GCSsys.declareDrivenParams(DrivenParameters);

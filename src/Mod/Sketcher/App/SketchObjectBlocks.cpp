@@ -489,6 +489,22 @@ std::vector<bool> SketchObject::validBlockInstances()
     return ok;
 }
 
+bool SketchObject::isValidBlockMember(int geoId)
+{
+    if (BlockData.getStrValue().empty() || geoId < 0 || geoId >= static_cast<int>(getInternalGeometry().size())) {
+        return false;
+    }
+    const long id = GeometryFacade::getFacade(getInternalGeometry()[geoId])->getId();
+    const auto& parsed = parsedBlocks();
+    const std::vector<bool> ok = validBlockInstances();
+    for (size_t n = 0; n < parsed.size(); ++n) {
+        if (ok[n] && std::find(parsed[n].ids.begin(), parsed[n].ids.end(), id) != parsed[n].ids.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void SketchObject::syncBlocks()
 {
     if (BlockData.getStrValue().empty()) {

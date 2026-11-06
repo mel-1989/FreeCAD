@@ -129,7 +129,6 @@ class TestCurveDOF(CurvesCase):
 
     def test_three_dof_per_instance(self):
         rng = random.Random(21)
-        redundant_after = {}
         for spec in self.specs:
             n = 1 + rng.randrange(3)
             places = [(rng.uniform(-30, 30), rng.uniform(-30, 30), rng.uniform(-6.5, 6.5)) for _ in range(n)]
@@ -150,18 +149,11 @@ class TestCurveDOF(CurvesCase):
             self.assertEqual(sk.DoF, dof, spec.name)
             self.assertEqual(list(sk.ConflictingConstraints), [], spec.name)
             self.assertEqual(sk.getBlockInstanceCount(), n, spec.name)
-            has_spline = any(g.TypeId == "Part::GeomBSplineCurve" for g in spec.geos)
-            red = list(sk.RedundantConstraints)
-            if not has_spline:
-                self.assertEqual(red, [], spec.name)
-            else:
-                # the constraints the stock tool adds to a spline's pole circles (their radii equal the weights, which
-                # the block already fixes) are the only ones that may be redundant
-                for i in red:
-                    self.assertIn(sk.Constraints[i - 1].Type, ("Weight", "Equal"), spec.name)
-                redundant_after[spec.name] = len(red)
+            # exposing adds no Weight or Equal constraint on a block's spline, which would hold its weights twice
+            self.assertEqual(list(sk.RedundantConstraints), [], spec.name)
+            self.assertEqual(list(sk.PartiallyRedundantConstraints), [], spec.name)
             self.doc.removeObject(sk.Name)
-        report("DOF: %d blocks, 3 per instance before and after exposeInternalGeometry; redundant (stock Weight/Equal on pole circles) after exposing: %s" % (len(self.specs), redundant_after))
+        report("DOF: %d blocks, 3 per instance before and after exposeInternalGeometry, no conflict or redundancy either time" % len(self.specs))
 
     def test_a_lone_nearly_circular_ellipse_is_refused(self):
         sk = self.doc.addObject("Sketcher::SketchObject", "L")
@@ -629,10 +621,8 @@ class TestCurveInternal(CurvesCase):
                 self.assertLess(max(math.hypot(p.x - q[0], p.y - q[1]) for p, q in zip(sk.Geometry[g].getPoles(), poles)), 1e-9)
                 self.assertEqual([round(w, 9) for w in sk.Geometry[g].getWeights()], [round(w, 9) for w in weights])
             self.assertEqual(list(sk.ConflictingConstraints), [], kind)
-            twin = plain(self.doc, [rng_geos()[kind]], "Tw_" + kind)
-            twin.exposeInternalGeometry(0)
-            twin.solve()
-            self.assertEqual(sk.DoF, twin.DoF, kind)  # the freedoms of the same curve and exposure in a plain sketch
+            # the curve's own freedoms, counted by hand: 7 for an arc of ellipse, poles and weights (3 per pole) for a spline
+            self.assertEqual(sk.DoF, 7 if kind == "aoe" else 3 * len(rng_geos()[kind].getPoles()), kind)
             self.doc.undo()
             self.assertEqual((sk.BlockData, len(sk.Constraints)), (snap[0], snap[2]), kind)
             self.assertLess(max(math.hypot(a[0] - b[0], a[1] - b[1]) for s1, s2 in zip(snap[1], [C.samples(x) for x in sk.Geometry]) for a, b in zip(s1, s2)), 1e-9, kind)

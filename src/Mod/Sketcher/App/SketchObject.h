@@ -1196,6 +1196,8 @@ private:
     /// hands the instances in BlockData to the solver sketch, with the GeoIds they have now
     void syncBlocks();
     std::vector<bool> validBlockInstances();
+    /// is the geometry a member of a block instance that still fits its definition?
+    bool isValidBlockMember(int geoId);
     int explodeInvalidBlocks();
     int explodeBlocksOf(const std::vector<int>& geoIds);
     int blockGuard = 0;

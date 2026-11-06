@@ -649,7 +649,7 @@ private:
     int ConstraintsCounter;
     std::vector<BlockInstance> blockInstances;
     int blockInstancesUsed = 0;
-    void addBlockInstances();
+    void addBlockInstances(const std::vector<Constraint*>& constraints);
     std::vector<int> Conflicting;
     std::vector<int> Redundant;
     std::vector<int> PartiallyRedundant;
