@@ -420,13 +420,13 @@ class BlocksPanel(QtWidgets.QDockWidget):
         )
         self.lib_list.itemSelectionChanged.connect(self._on_lib_choice)
         lay.addWidget(self.lib_list)
-        lrow = QtWidgets.QHBoxLayout()
         self.lib_save_button = self._button(tr("Save"), LIB_SAVE_NAME, tr("Saves the chosen definition to the library folder"), self.library_save_chosen)
         self.lib_load_button = self._button(tr("Load"), LIB_LOAD_NAME, tr("Copies the chosen library block into this sketch as a definition"), self.library_load_chosen)
         self.lib_insert_button = self._button(tr("Load and insert"), LIB_INSERT_NAME, tr("Copies the chosen library block into this sketch and places it at X, Y and the angle"), self.library_load_and_insert)
         self.lib_delete_button = self._button(tr("Delete file"), LIB_DELETE_NAME, tr("Deletes the chosen block's file from the library folder. Press twice. Sketches that loaded it are not changed"), self.library_delete_chosen)
-        for b in (self.lib_save_button, self.lib_load_button, self.lib_insert_button, self.lib_delete_button):
-            lrow.addWidget(b)
+        lrow = QtWidgets.QGridLayout()
+        for i, b in enumerate((self.lib_save_button, self.lib_load_button, self.lib_insert_button, self.lib_delete_button)):
+            lrow.addWidget(b, i // 2, i % 2)  # two by two: four buttons in a row overlap in a narrow dock
         lay.addLayout(lrow)
 
         self.session_label = QtWidgets.QLabel("")
