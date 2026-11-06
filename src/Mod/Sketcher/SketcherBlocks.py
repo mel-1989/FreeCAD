@@ -74,6 +74,13 @@ text that reads back to the same double, so a save, a load and a second save are
 ``User parameter:BaseApp/Preferences/Mod/Sketcher/Blocks`` replaces it, and every library call takes ``folder=``.
 Loading copies the definition into the sketch: there is no link back to the file, so changing or deleting the file
 later changes nothing in a sketch.  A file with a newer ``version`` than 2 is refused.
+A stored B-spline never has exactly one weight equal to 1.0: the solver's start-value tweak (``Sketch::addBSpline``) turns such a
+lone weight into 0.99 times the last other weight on the first solve, which would rewrite the curve of an exploded or edited
+instance.  Where a B-spline's numbers enter a definition (``define``, ``update_definition``, an edit session's Finish, a library
+file read or written) its weights are all multiplied by the smallest power of 2 (2, 4, 8, ...) that leaves none equal to 1.0; the
+curve is the same, the scaling is said on the console and in the ``scaled`` entry of ``define_report`` and ``update_definition``'s
+result, and an exposed pole circle shows the scaled radius.  An ellipse or arc of ellipse whose focus is nearer its centre than
+about 0.001 mm is refused as nearly a circle.
 Supported members: points, line segments, circles, arcs of circle, ellipses, arcs of ellipse, B-splines (hyperbolas
 and parabolas are refused).  Anything
 else, an empty or degenerate set, a duplicate name and the like raise
