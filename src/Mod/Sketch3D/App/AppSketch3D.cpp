@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include <cmath>
+#include <cstring>
+#include <initializer_list>
 #include <string>
 
 #include <Python.h>
@@ -96,6 +98,38 @@ std::array<double, 3> vec3(PyObject* o, int position, const std::string& what)
     return v;
 }
 
+// Every key of dict must be one of the allowed ones: a misspelt key would otherwise be dropped
+// silently and the solver would run on a different spec than the one written.
+void onlyKeys(PyObject* dict, std::initializer_list<const char*> allowed, int position, const std::string& what)
+{
+    PyObject* key = nullptr;
+    PyObject* value = nullptr;
+    Py_ssize_t pos = 0;
+    while (PyDict_Next(dict, &pos, &key, &value)) {
+        const char* name = PyUnicode_Check(key) ? PyUnicode_AsUTF8(key) : nullptr;
+        if (!name) {
+            PyErr_Clear();
+            raiseSpec(position, what + ": every key must be a string");
+        }
+        bool known = false;
+        for (const char* a : allowed) {
+            known = known || std::strcmp(a, name) == 0;
+        }
+        if (!known) {
+            raiseSpec(position, what + ": unknown key '" + name + "'");
+        }
+    }
+}
+
+// A flag is a bool: "yes", 1 and None are errors, not true.
+bool flag(PyObject* o, int position, const std::string& what)
+{
+    if (!o || !PyBool_Check(o)) {
+        raiseSpec(position, what + " must be True or False");
+    }
+    return o == Py_True;
+}
+
 PyObject* item(PyObject* dict, const char* key)
 {
     return PyDict_GetItemString(dict, key);  // borrowed
@@ -121,6 +155,7 @@ Spec parseSpec(PyObject* obj)
         raiseSpec(-1, "spec must be a dict");
     }
     Spec spec;
+    onlyKeys(obj, {"points", "lines", "planes", "constraints", "algorithm", "diagnose"}, -1, "spec");
     {
         Ref pts = listOf(obj, "points");
         const Py_ssize_t n = PySequence_Fast_GET_SIZE(pts.p);
@@ -133,10 +168,11 @@ Spec parseSpec(PyObject* obj)
                 if (!xyz) {
                     raiseSpec(-1, w + ": missing 'xyz'");
                 }
+                onlyKeys(e, {"xyz", "fixed"}, -1, w);
                 ps.xyz = vec3(xyz, -1, w);
                 PyObject* fx = item(e, "fixed");
                 if (fx) {
-                    ps.fixed = PyObject_IsTrue(fx) == 1;
+                    ps.fixed = flag(fx, -1, w + ": 'fixed'");
                 }
             }
             else {
@@ -169,6 +205,7 @@ Spec parseSpec(PyObject* obj)
             if (!PyDict_Check(e) || !item(e, "point") || !item(e, "normal")) {
                 raiseSpec(-1, w + " must be a dict with 'point' and 'normal'");
             }
+            onlyKeys(e, {"point", "normal"}, -1, w);
             PlaneSpec pl;
             pl.point = vec3(item(e, "point"), -1, w);
             pl.normal = vec3(item(e, "normal"), -1, w);
@@ -186,6 +223,7 @@ Spec parseSpec(PyObject* obj)
                 raiseSpec(pos, w + "must be a dict");
             }
             ConstraintSpec cs;
+            onlyKeys(e, {"type", "operands", "value", "driving", "tag"}, pos, w);
             PyObject* type = item(e, "type");
             if (!type || !PyUnicode_Check(type)) {
                 raiseSpec(pos, w + "missing 'type'");
@@ -219,16 +257,23 @@ Spec parseSpec(PyObject* obj)
             }
             PyObject* drv = item(e, "driving");
             if (drv) {
-                cs.driving = PyObject_IsTrue(drv) == 1;
+                cs.driving = flag(drv, pos, w + "'driving'");
             }
             PyObject* tag = item(e, "tag");
+            // A tag names a constraint in the conflict and redundancy lists. Several constraints
+            // may share one: the lists then name the group once, by that tag (a user relation
+            // made of several constraints is reported as one). The default is the position.
+            // Negative tags are refused: PlaneGCS gives negative tags a meaning of their own.
             cs.tag = tag && tag != Py_None ? integer(tag, pos, w + "tag") : pos;
+            if (cs.tag < 0) {
+                raiseSpec(pos, w + "tag must not be negative");
+            }
             spec.constraints.push_back(std::move(cs));
         }
     }
     PyObject* dg = item(obj, "diagnose");
-    if (dg && dg != Py_None) {
-        spec.diagnose = PyObject_IsTrue(dg) == 1;
+    if (dg) {
+        spec.diagnose = flag(dg, -1, "'diagnose'");
     }
     PyObject* alg = item(obj, "algorithm");
     if (alg && alg != Py_None) {
