@@ -918,6 +918,10 @@ def rigid_fit(defn, world, keys=None):
         if len(world[k]) != len(m["g"]):
             return None  # a structure that changed is not a placement
         pairs += list(zip(_fit_points(m["t"], m["g"]), _fit_points(m["t"], world[k])))
+    if len(keys) == 1:  # a lone member has nothing else to hold it: its own size must not change
+        d = [(math.dist(a, c), math.dist(b, e)) for (a, b), (c, e) in zip(pairs, pairs[1:])]
+        if any(abs(x - y) > _SAME for x, y in d):
+            return None
     lp = [a for a, _ in pairs]
     if not any(math.hypot(p[0] - lp[0][0], p[1] - lp[0][1]) > _EPS for p in lp[1:]):
         return None
@@ -1105,10 +1109,18 @@ def _add_appearance(obj, out):
             out["view " + prop] = hash(repr(getattr(vo, prop)))
 
 
+def _holds_hand_shape(obj):
+    """Part::Feature, and a Part::FeaturePython with no Proxy or a Proxy without an execute (nothing recomputes its Shape).
+    Every other Part::Feature type (a Box, a Pad, a FeaturePython with an execute) makes its own Shape."""
+    if obj.TypeId == "Part::Feature":
+        return True
+    return obj.TypeId == "Part::FeaturePython" and not callable(getattr(getattr(obj, "Proxy", None), "execute", None))
+
+
 def _add_hand_shape(obj, out):
     """A Part::Feature has no inputs: nothing recomputes its Shape, so a Shape in it is what somebody assigned, and
     undoing the session takes it away.  Every other object's Shape is a result and is left out (see _is_input)."""
-    if obj.TypeId == "Part::Feature" and "Shape" in obj.PropertiesList:
+    if _holds_hand_shape(obj) and "Shape" in obj.PropertiesList:
         try:
             out["Shape"] = content_hash(obj, "Shape")
         except Exception:

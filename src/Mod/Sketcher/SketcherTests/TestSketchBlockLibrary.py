@@ -841,6 +841,33 @@ class TestHandAssignedShape(LibCase):
         out = B.session_outside_changes(sk, B.session_outside_state(sk, members), members, full=True)
         self.assertEqual(out["objects_changed"], [])
 
+    def test_a_shape_assigned_to_a_python_feature_without_a_recompute_is_named_and_one_with_an_execute_is_not(self):
+        sk, feat, box, members = self.scene()
+        bare = self.doc.addObject("Part::FeaturePython", "Bare")
+        self.doc.recompute()
+        state = B.session_outside_state(sk, members)
+        bare.Shape = Part.makeBox(1, 2, 3)
+        out = B.session_outside_changes(sk, state, members, full=True)
+        self.assertEqual(out["objects_changed"], ["Bare (Shape)"])
+
+        class Maker:
+            n = [1]  # outside the proxy, which is pickled into the document and would show the change itself
+
+            def __init__(self, o):
+                o.Proxy = self
+
+            def execute(self, o):
+                o.Shape = Part.makeBox(Maker.n[0], 2, 3)
+
+        made = self.doc.addObject("Part::FeaturePython", "Made")
+        Maker(made)
+        self.doc.recompute()
+        state = B.session_outside_state(sk, members)
+        Maker.n[0] = 4
+        made.touch()
+        self.doc.recompute()
+        self.assertEqual(B.session_outside_changes(sk, state, members, full=True)["objects_changed"], [])
+
     def test_no_false_warning_on_no_change_runs_and_on_a_recompute_of_an_ordinary_feature(self):
         sk, feat, box, members = self.scene()
         feat.Shape = Part.makeBox(1, 2, 3)
