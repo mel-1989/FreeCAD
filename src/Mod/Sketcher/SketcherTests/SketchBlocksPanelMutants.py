@@ -57,12 +57,34 @@ REFUSED = t("TestBlocksPanelEditUndo", "test_a_refused_finish_stays_in_the_sessi
 LEAVE = t("TestBlocksPanelEditLeaving", "test_leaving_the_editor_keeps_the_edits_with_the_instance_exploded")
 SECOND = t("TestBlocksPanelEditLeaving", "test_a_second_session_is_refused")
 
+REP = "TestBlocksPanelEditRepairs"
+OUTSIDE = t(REP, "test_edits_outside_the_block_are_named_before_finish_and_undone_by_the_second_press")
+REARM = t(REP, "test_a_further_change_after_the_warning_asks_again_and_cancel_still_restores")
+NOTHING = t(REP, "test_nothing_had_changed_is_said_only_when_nothing_changed")
+RIGID = t(REP, "test_members_moved_together_do_not_change_the_block_or_the_siblings")
+RIGIDADD = t(REP, "test_a_rigid_move_with_a_new_member_gives_only_the_new_member")
+ACT = t(REP, "test_the_panel_follows_document_activation_and_comes_back_with_its_status")
+NAME = t(REP, "test_cancel_and_finish_count_from_the_start_when_a_later_entry_has_the_sessions_name")
+FULL = t(REP, "test_a_stack_that_is_already_full_at_the_start_does_not_matter")
+LONG = t(REP, "test_a_session_longer_than_the_undo_stack_ends_with_a_message_and_keeps_the_edits")
+MODE0 = t(REP, "test_undo_mode_zero_changes_nothing_here_and_a_stack_of_nothing_refuses_the_edit")
+OPEN = t(REP, "test_an_operation_left_open_refuses_the_start_and_the_finish")
+NOEDIT = t(REP, "test_finish_does_nothing_when_the_sketch_is_no_longer_in_the_editor_even_if_no_event_arrived")
+CPLAIN = t(REP, "test_a_constraint_to_plain_geometry_that_moves_a_member_leaves_placements_and_the_plain_geometry_exact")
+ANGLE = t("TestBlocksPanelClick", "test_the_click_places_with_the_angle_field")
+SOLVES = t("TestBlocksPanelActions", "test_an_insert_through_the_panel_solves_once")
+HEAD = "SketcherTests.TestSketchBlocks.TestBlockSessionReading."
+H_RIGID = HEAD + "test_members_moved_together_are_the_instances_move_not_a_change_of_the_block"
+H_LONE = HEAD + "test_a_shape_change_a_lone_member_moved_and_a_first_member_turn_read_as_before"
+H_NAMES = HEAD + "test_a_definition_cannot_take_an_instances_name_and_an_instance_name_never_collides"
+
 M = []
 
 
-def mutant(name, desc, patches, tests):
-    """`patches`: list of (file, old, new); each pattern must match its file exactly once."""
-    M.append(dict(name=name, desc=desc, patches=patches, tests=tests))
+def mutant(name, desc, patches, tests, profile=None):
+    """`patches`: list of (file, old, new); each pattern must match its file exactly once.  `tests`: names in this module's test file,
+    or full dotted names (SketcherTests....).  `profile`: a launch profile of the GUI runner (hidpi) for a defect only that shows."""
+    M.append(dict(name=name, desc=desc, patches=patches, tests=tests, profile=profile))
 
 
 mutant(
@@ -145,8 +167,8 @@ mutant(
     "Finish gives the result to update_definition first and rolls back after, so the rollback undoes the result",
     [(
         PANEL,
-        '        if not self._rollback():\n            self._restore(final)\n            self._session_broken(tr("the undo steps of the edit could not be rolled back"))\n            return False\n        removed_constraints = []\n        if changes:\n            try:\n                out = B.update_definition(sk, s["definition"], changes)',
-        '        removed_constraints = []\n        if changes:\n            try:\n                out = B.update_definition(sk, s["definition"], changes)\n                self._rollback()',
+        '        if not self._rollback():\n            self._restore(final)\n            self._session_broken(tr("the undo steps of the edit could not be rolled back"))\n            return False\n        removed_constraints = []\n        if changes:\n            try:\n                applied = B.update_definition(sk, s["definition"], changes)',
+        '        removed_constraints = []\n        if changes:\n            try:\n                applied = B.update_definition(sk, s["definition"], changes)\n                self._rollback()',
     )],
     [FINISH, MOVED],
 )
@@ -236,6 +258,134 @@ mutant(
 )
 
 
+mutant(
+    "finish_does_not_name_what_it_undoes",
+    "Finish rolls back moved plain geometry and deleted constraints without saying so first",
+    [(PANEL, '        if undone and s["warned"] != self._signature():', '        if False and undone and s["warned"] != self._signature():')],
+    [OUTSIDE, CPLAIN],
+)
+mutant(
+    "the_warning_is_not_rearmed_by_a_further_change",
+    "a second Finish goes on after any further change, because the state it compares never differs",
+    [(PANEL, '        return (sk.Document.UndoCount, sk.Document.RedoCount, hash(bytes(sk.dumpPropertyContent("Geometry"))), hash(bytes(sk.dumpPropertyContent("Constraints"))))', "        return 0")],
+    [REARM],
+)
+mutant(
+    "nothing_had_changed_whatever_happened",
+    "the status says nothing had changed whenever the block's definition did not",
+    [(PANEL, '        elif not (undone or dropped or res["moved_together"]):', "        elif True:")],
+    [NOTHING, OUTSIDE],
+)
+mutant(
+    "moved_plain_geometry_is_not_seen",
+    "the comparison with the start never finds plain geometry that moved",
+    [(API, "        if len(now) != len(nums) or any(abs(a - b) > _OUTSIDE_TOL for a, b in zip(now, nums)):", "        if False:")],
+    [OUTSIDE, CPLAIN],
+)
+mutant(
+    "a_deleted_constraint_is_not_seen",
+    "the comparison with the start never finds a constraint that was deleted",
+    [(API, "                gone.append(label)\n", "                pass\n")],
+    [OUTSIDE],
+)
+mutant(
+    "a_rigid_move_is_absorbed_into_the_definition",
+    "the members that moved together are read through the start placement, so the definition changes and every sibling shifts",
+    [(API, "    fit = rigid_fit(defn, alive) if kinds else None", "    fit = None")],
+    [RIGID, RIGIDADD, H_RIGID],
+)
+mutant(
+    "a_lone_member_counts_as_a_rigid_move",
+    "one member moved is read as the instance moving",
+    [(API, "    if len(keys) < 2:", "    if len(keys) < 1:")],
+    [H_LONE],
+)
+mutant(
+    "the_discarded_move_is_not_said",
+    "a rigid move that is not kept is not mentioned in the status",
+    [(PANEL, '        if res["moved_together"]:\n            text +=', '        if False:\n            text +=')],
+    [RIGID],
+)
+mutant(
+    "rollback_depth_found_by_name",
+    "the depth to roll back is found by the session entry's name on the stack, so a later entry with that name stops Cancel short",
+    [(PANEL, '        n = s["depth"]\n', '        n = (names.index(s["entry"]) + 1) if s["entry"] in names else 0\n')],
+    [NAME],
+)
+mutant(
+    "commits_are_not_counted",
+    "the session's depth does not grow with the steps committed during it",
+    [(PANEL, '            self.session["depth"] += 1', '            self.session["depth"] += 0')],
+    [FULL, NAME],
+)
+mutant(
+    "a_session_beyond_the_stack_is_rolled_back_anyway",
+    "the proof that the session's first entry is still on the stack is dropped",
+    [
+        (PANEL, '        if n < 1 or n > len(names) or names[n - 1] != s["entry"]:\n            return None\n', "        if n < 1:\n            return None\n"),
+        (PANEL, '        if names[n:] != s["tail"][: len(names) - n]:\n            return None\n', ""),
+    ],
+    [LONG],
+)
+mutant(
+    "a_stack_of_nothing_is_not_noticed",
+    "a session starts although the undo history did not take its first step",
+    [(PANEL, "        if self._stack_depth_to_start() is None:\n            # the undo history did not take", "        if False and self._stack_depth_to_start() is None:\n            # the undo history did not take")],
+    [MODE0],
+)
+mutant(
+    "an_open_operation_is_not_noticed",
+    "Finish, Cancel and the start of an edit ignore a transaction a tool or macro still has open",
+    [(PANEL, '        if getattr(self.sketch.Document, "HasPendingTransaction", False):\n            self.status.setText(tr("A tool or macro still has an operation open. Let it finish, then choose', '        if False:\n            self.status.setText(tr("A tool or macro still has an operation open. Let it finish, then choose'),
+     (PANEL, '            if getattr(doc, "HasPendingTransaction", False):\n', "            if False:\n")],
+    [OPEN],
+)
+mutant(
+    "the_panel_ignores_document_activation",
+    "the panel has no way to go quiet when the user looks at another document",
+    [(PANEL, "    def sync_activation(self, active=None):", "    def sync_activation_unused(self, active=None):"),
+     (PANEL, "        self.sync_activation()\n        if self._dormant or not self._alive():", "        if self._dormant or not self._alive():")],
+    [ACT],
+)
+mutant(
+    "finish_skips_the_editing_check",
+    "Finish acts on a sketch the editor no longer has open",
+    [(PANEL, "        if not self._editing_ok() or self._busy_elsewhere() or not self._session_valid():\n            return False\n        s = self.session\n        sk = self.sketch\n", "        if self._busy_elsewhere() or not self._session_valid():\n            return False\n        s = self.session\n        sk = self.sketch\n")],
+    [NOEDIT],
+)
+mutant(
+    "place_by_click_ignores_the_angle_field",
+    "a placing click inserts at angle 0 whatever the form says",
+    [(PANEL, '            return B.insert(self.sketch, d, x, y, parse_angle(self.angle_edit.text()))\n\n        res = self._run(go)\n        if res and res is not True:\n            self.status.setText(tr("Inserted %s.") % res)\n\n    # -- explode', '            return B.insert(self.sketch, d, x, y, 0.0)\n\n        res = self._run(go)\n        if res and res is not True:\n            self.status.setText(tr("Inserted %s.") % res)\n\n    # -- explode')],
+    [ANGLE],
+)
+mutant(
+    "a_definition_may_take_an_instances_name",
+    "define accepts the name of an existing instance",
+    [(API, "    if name in data[\"inst\"]:\n        raise SketchBlockError(\"'%s' is the name of a block instance; a block needs a name of its own\" % name)\n", "")],
+    [H_NAMES],
+)
+mutant(
+    "an_instance_name_may_collide",
+    "insert numbers its instance without stepping over a name that is taken",
+    [(API, "    while \"%s_%d\" % (name, data[\"n\"]) in data[\"inst\"] or \"%s_%d\" % (name, data[\"n\"]) in data[\"defs\"]:\n        data[\"n\"] += 1  # a name already taken by an instance or by a block of that name is skipped\n", "")],
+    [H_NAMES],
+)
+mutant(
+    "click_flipped_in_device_pixels",
+    "a click's y is flipped in device pixels, one device pixel off at a pixel ratio of 2 (only the hidpi launch shows it)",
+    [(PANEL, "    y = int(math.floor((gl.height() - pos.y() - 1.0) * dpr + 0.5))", "    y = int(math.floor(gl.height() * dpr - 1.0 - pos.y() * dpr + 0.5))")],
+    [CLICK],
+    profile="hidpi",
+)
+mutant(
+    "insert_solves_twice",
+    "the API's insert solves the sketch a second time",
+    [(API, "        sk.BlockData = _dump(data)\n        sk.solve()\n    return iname", "        sk.BlockData = _dump(data)\n        sk.solve()\n        sk.solve()\n    return iname")],
+    [SOLVES],
+)
+
+
 def target(fname, build):
     return os.path.join(build, "Mod", "Sketcher", fname)
 
@@ -268,9 +418,9 @@ def run_tests(m, runner):
     with tempfile.TemporaryDirectory() as tmp:
         script = os.path.join(tmp, "run_selected.py")
         with open(script, "w") as f:
-            f.write(DRIVER % ([MOD + "." + n for n in m["tests"]],))
+            f.write(DRIVER % ([n if n.startswith("SketcherTests.") else MOD + "." + n for n in m["tests"]],))
         p = subprocess.Popen(
-            [sys.executable, "-I", runner, "script", script, "--timeout", "300"],
+            [sys.executable, "-I", runner, "script", script, "--timeout", "300"] + (["--profile", m["profile"]] if m.get("profile") else []),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

@@ -455,6 +455,47 @@ class TestBlocksPanelActions(BlocksGuiCase):
             self.assertEqual(sk.Document.UndoNames[0], "Insert block")
         self.assertPanelEqualsApi(sk)
 
+    def test_an_insert_through_the_panel_solves_once(self):
+        """Check 3's one solve, counted: every solve() the API asks of the sketch during a panel insert goes through a proxy.  (addGeometry
+        and setConstruction do not solve inside the C++ sketch, as SketchObjectGeometry.cpp shows, and the panel only reads afterwards, so
+        the calls through the proxy are all of them; a solve made inside the C++ code cannot be counted from Python.)"""
+        sk = self.line_block_sketch(self.new_doc("PanelSolves"), placements=())
+        self.open_panel(sk)
+        self.choose("def", "T")
+
+        class Counting:
+            def __init__(self, inner):
+                object.__setattr__(self, "_inner", inner)
+                object.__setattr__(self, "solves", 0)
+
+            def solve(self):
+                object.__setattr__(self, "solves", self.solves + 1)
+                return self._inner.solve()
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+            def __setattr__(self, name, value):
+                setattr(self._inner, name, value)
+
+        seen = []
+        real = B.insert
+
+        def counted(sketch, *args, **kw):
+            proxy = Counting(sketch)
+            try:
+                return real(proxy, *args, **kw)
+            finally:
+                seen.append(proxy.solves)
+
+        B.insert = counted
+        try:
+            self.click_button("blocksInsert")
+        finally:
+            B.insert = real
+        self.assertEqual(len(B.blocks(sk)["instances"]), 1)
+        self.assertEqual(seen, [1])
+
     def test_a_bad_value_refuses_with_a_sentence_and_changes_nothing(self):
         sk = self.line_block_sketch(self.new_doc("PanelNumBad"), placements=())
         self.open_panel(sk)
@@ -1791,6 +1832,111 @@ class TestBlocksPanelEditRepairs(EditCase):
         self.click_button("blocksFinish")
         self.assertIsNone(self.panel.session, self.status())
         self.assertIn("1 changed, 1 added", self.status())
+
+    # -- item 8a and 8b: stock operations that reach beyond the members ----------------------------------------------------------
+    def assertInstancesFollow(self, sk, poses):
+        """Every instance sits at the placement it had at the start and its members are the definition's, to 1e-7 mm."""
+        data = B._load(sk)
+        for n, pose in self.poses(sk).items():
+            for a, b in zip(pose, poses[n]):
+                self.assertAlmostEqual(a, b, delta=TOL, msg=n)
+        for n, inst in data["inst"].items():
+            defn = data["defs"][inst["def"]]
+            X, Y, th = poses[n]
+            for k, nums in B._instance_world(sk, defn, inst).items():
+                want = B._to_world(defn["members"][k]["t"], defn["members"][k]["g"], X, Y, th)
+                cut = 3 if defn["members"][k]["t"] == "a" else len(want)
+                for x, y in zip(nums[:cut], want[:cut]):
+                    self.assertAlmostEqual(x, y, delta=TOL, msg=(n, k))
+
+    def test_a_constraint_to_plain_geometry_that_moves_a_member_leaves_placements_and_the_plain_geometry_exact(self):
+        sk = self.scene("RepCPlain", bare=True)
+        self.open_panel(sk)
+        plain = [i for i in range(len(sk.Geometry)) if sk.getGeometryId(i) not in {g for n in B._load(sk)["inst"].values() for g in n["m"].values()}][0]
+        g1 = self.gids(sk, "W_1")
+        poses, start = self.poses(sk), _numbers_of(sk)
+        self.begin(sk)
+        self.stock(sk, "Coincident", lambda: sk.addConstraint(Sketcher.Constraint("Coincident", g1[0], 2, plain, 1)))
+        self.assertNotEqual(_numbers_of(sk)[plain], start[plain], "control: the constraint moves the plain line")
+        self.click_button("blocksFinish")
+        self.assertIn("Press Finish again", self.status())
+        self.assertRegex(self.status(), r"1 moved element \(Edge%d\)" % (plain + 1))
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertInstancesFollow(sk, poses)
+        self.assertEqual(len(sk.Constraints), 0)
+        for (ta, na), (tb, nb) in zip(_numbers_of(sk), start):
+            for x, y in zip(na, nb):
+                self.assertAlmostEqual(x, y, delta=TOL)
+
+    def test_a_constraint_to_a_sibling_that_moves_the_session_and_the_sibling_leaves_every_placement_exact(self):
+        sk = self.scene("RepCSibling", bare=True)
+        self.open_panel(sk)
+        g1, g2 = self.gids(sk, "W_1"), self.gids(sk, "W_2")
+        poses = self.poses(sk)
+        self.begin(sk)
+        self.stock(sk, "Coincident", lambda: sk.addConstraint(Sketcher.Constraint("Coincident", g1[0], 2, g2[0], 1)))
+        moved = self.poses(sk)
+        self.assertNotEqual(moved["W_2"], poses["W_2"], "control: the constraint moves the sibling")
+        self.click_button("blocksFinish")
+        self.assertRegex(self.status(), r"3 moved elements \(Edge%d, Edge%d, Edge%d\)" % tuple(g + 1 for g in g2))
+        self.click_button("blocksFinish")
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertInstancesFollow(sk, poses)
+        self.assertEqual(len(sk.Constraints), 0)
+
+    def test_stock_split_on_a_member_gives_a_shorter_member_and_a_new_one_and_no_constraint_moves(self):
+        sk = self.scene("RepSplit", bare=False)
+        self.open_panel(sk)
+        poses, cons = self.poses(sk), _cons_of(sk)
+        member = self.gids(sk, "W_1")[0]
+        self.begin(sk)
+        self.stock(sk, "Split", lambda: sk.split(member, V(2.0, 0.0, 0)))
+        self.assertGreater(len(sk.Constraints), len(cons), "control: the tool adds its own constraint")
+        self.finish_accepting()
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertIn("1 changed, 1 added, 0 removed", self.status())
+        self.assertRegex(self.status(), r"\d+ constraint\(s\) added during the edit were not kept")
+        self.assertInstancesFollow(sk, poses)
+        self.assertEqual(_cons_of(sk), cons, "a constraint was retargeted or dropped")
+        for n in ("W_1", "W_2", "W_3"):
+            ids = self.gids(sk, n)
+            self.assertEqual(len(ids), 4)
+            lines = sorted(_numbers_of(sk)[i][1] for i in ids if _numbers_of(sk)[i][0] == "l")
+            self.assertEqual(len(lines), 2)
+            self.assertAlmostEqual(math.hypot(lines[0][2] - lines[0][0], lines[0][3] - lines[0][1]) + math.hypot(lines[1][2] - lines[1][0], lines[1][3] - lines[1][1]), 5.0, delta=TOL, msg=n)
+
+    def test_stock_trim_in_the_middle_of_a_member_keeps_the_first_piece_and_adds_the_second(self):
+        sk = self.scene("RepTrim", bare=False)
+        self.open_panel(sk)
+        poses, cons = self.poses(sk), _cons_of(sk)
+        member = self.gids(sk, "W_1")[0]
+        self.begin(sk)
+        self.stock(sk, "crossings", lambda: sk.addGeometry([Part.LineSegment(V(1, -1, 0), V(1, 1, 0)), Part.LineSegment(V(3, -1, 0), V(3, 1, 0))], False))
+        self.stock(sk, "Trim", lambda: sk.trim(member, V(2.0, 0.0, 0)))
+        self.finish_accepting()
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertIn("1 changed, 3 added, 0 removed", self.status())
+        self.assertInstancesFollow(sk, poses)
+        self.assertEqual(_cons_of(sk), cons, "a constraint was retargeted or dropped")
+
+    def test_stock_fillet_at_a_corner_of_a_member_gives_a_shorter_member_a_new_line_and_an_arc(self):
+        sk = self.scene("RepFillet", bare=False)
+        self.open_panel(sk)
+        poses, cons = self.poses(sk), _cons_of(sk)
+        member = self.gids(sk, "W_1")[0]
+        self.begin(sk)
+        self.stock(sk, "Line", lambda: sk.addGeometry(Part.LineSegment(V(5, 0, 0), V(5, 4, 0)), False))
+        new = len(sk.Geometry) - 1
+        self.stock(sk, "Corner", lambda: sk.addConstraint(Sketcher.Constraint("Coincident", member, 2, new, 1)))
+        self.stock(sk, "Fillet", lambda: sk.fillet(member, 2, 0.5, True, False))
+        self.finish_accepting()
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertIn("1 changed, 2 added, 0 removed", self.status())
+        self.assertInstancesFollow(sk, poses)
+        self.assertEqual(_cons_of(sk), cons, "a constraint was retargeted or dropped")
+        for n in ("W_1", "W_2", "W_3"):
+            self.assertEqual(len(self.gids(sk, n)), 5)
 
     # -- item 6 ------------------------------------------------------------------------------------------------------
     def test_finish_does_nothing_when_the_sketch_is_no_longer_in_the_editor_even_if_no_event_arrived(self):
