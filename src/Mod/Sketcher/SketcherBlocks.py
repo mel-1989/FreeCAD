@@ -219,11 +219,23 @@ def _key_ok(key):
     _text(key, "a member key")
 
 
-def _real(v):
-    """A placement number as a float.  A bool, a string, bytes and anything float() refuses are refused, and so is a
-    number too large for a float.  Ints, floats, numpy numbers, Fractions, Decimals and Quantities pass."""
+def _real(v, kind=None):
+    """A placement number as a float.  `kind` is "length" for x and y (millimetres) or "angle" (radians).  A bool, a
+    string, bytes and anything float() refuses are refused, and so is a number too large for a float.  Ints, floats,
+    numpy numbers, Fractions and Decimals pass as they are.  A Quantity is converted to the unit the block code
+    works in: a length to mm, an angle to radians; a Quantity of any other dimension is refused (a mass is not a
+    position), and so is a length where an angle is wanted and the other way round."""
     if isinstance(v, (bool, str, bytes)):
         raise SketchBlockError("the placement must be numbers")
+    if isinstance(v, FreeCAD.Units.Quantity):
+        want = {"length": (FreeCAD.Units.Length, "mm", "a length such as 3 mm"), "angle": (FreeCAD.Units.Angle, "rad", "an angle such as 90 deg")}.get(kind)
+        if want is not None and v.Unit != FreeCAD.Units.Unit():  # a Quantity without a unit is a plain number
+            if v.Unit != want[0]:
+                raise SketchBlockError("the placement %s must be %s, not %s" % ("angle" if kind == "angle" else "position", want[2], v.UserString))
+            try:
+                return float(v.getValueAs(want[1]).Value)
+            except (OverflowError, ValueError):
+                raise SketchBlockError("the placement must be finite numbers")
     try:
         return float(v)
     except TypeError:
@@ -404,7 +416,7 @@ def insert(sk, name, x=0.0, y=0.0, angle=0.0):
     data = _load(sk)
     if name not in data["defs"]:
         raise SketchBlockError("there is no block called '%s'" % name)
-    x, y, angle = _real(x), _real(y), _real(angle)
+    x, y, angle = _real(x, "length"), _real(y, "length"), _real(angle, "angle")
     if not all(map(math.isfinite, (x, y, angle))):
         raise SketchBlockError("the placement must be finite numbers")
     defn = data["defs"][name]
@@ -449,7 +461,7 @@ def insert_many(sk, name, placements):
         try:
             if isinstance(p, (dict, set, frozenset, str, bytes)) or len(p) != 3:
                 raise SketchBlockError("")
-            x, y, a = (_real(v) for v in p)
+            x, y, a = (_real(v, k) for v, k in zip(p, ("length", "length", "angle")))
         except (SketchBlockError, TypeError):
             raise SketchBlockError("placement %d must be three numbers (x, y, angle); nothing was changed" % (i + 1))
         if not all(map(math.isfinite, (x, y, a))):

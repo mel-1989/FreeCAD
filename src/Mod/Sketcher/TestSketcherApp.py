@@ -50,6 +50,7 @@ from SketcherTests.TestSketchBlockLibrary import TestLibraryList
 from SketcherTests.TestSketchBlockLibrary import TestInsertMany
 from SketcherTests.TestSketchBlockLibrary import TestOneMemberRigid
 from SketcherTests.TestSketchBlockLibrary import TestHandAssignedShape
+from SketcherTests.TestSketchBlockLibrary import TestPlacementQuantities
 from SketcherTests.TestSketchSolverCore import TestSketchSolverCore
 from SketcherTests.TestSketchSolverCore import TestDegenerateLine
 from SketcherTests.TestSketchSolverCore import TestPartitionedDiagnosis
