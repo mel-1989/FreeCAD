@@ -32,6 +32,7 @@ from Sketch3DTests.Sketch3DCorpus import (
 )
 
 SCALE = float(os.environ.get("SKETCH3D_SCALE", "1"))
+QUICK = bool(os.environ.get("SKETCH3D_QUICK"))  # the mutant script skips the two slow corpora
 TOL = 1e-9
 
 
@@ -1184,6 +1185,7 @@ def clean_planar_system(seed, rotate):
     return None
 
 
+@unittest.skipIf(QUICK, "quick run")
 class TestAgreesWithPlaneGCS(unittest.TestCase):
     N = 200
 
@@ -1278,6 +1280,7 @@ def corpus8(seed):
     return b, rigid
 
 
+@unittest.skipIf(QUICK, "quick run")
 class TestSolveRate(unittest.TestCase):
     N = 2000
     stats = {}
