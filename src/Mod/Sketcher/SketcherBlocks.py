@@ -42,6 +42,7 @@ another product.
     delete_definition(sk, name)          remove a definition that has no instance
     update_definition(sk, name, changes) edit a definition, every instance follows
     blocks(sk)                           what the sketch holds
+    define_report(sk, name, geo_ids)     as define, saying which internal geometry was left out
     insert_many(sk, name, placements)    place many instances in one undo entry and one solve
     library_folder(folder=None)          the folder of the block library
     library_list(folder=None)            the blocks in the library, bad files marked with their reason
@@ -52,18 +53,29 @@ another product.
 The block library (slice 5b1) is a plain folder holding one JSON file per block, ``<name>.json``, in a format of our
 own.  The file is data only and is never executed or evaluated::
 
-    {"format": "cadfork-sketch-block", "version": 1, "name": "<name>", "units": "mm",
-     "members": {"<key>": {"t": "p|l|c|a", "g": [numbers], "c": true|false}, ...}}
+    {"format": "cadfork-sketch-block", "version": 1 or 2, "name": "<name>", "units": "mm",
+     "members": {"<key>": {"t": "p|l|c|a|e|o|s", "g": [numbers], "c": true|false}, ...}}
 
 ``members`` is the definition's ``BlockData`` entry as the sketch keeps it, in the block's own frame: ``t`` is the kind
-(point, line, circle, arc), ``g`` its numbers (point x, y; line x1, y1, x2, y2; circle x, y, r; arc x, y, r and the
-start and end angles in radians), ``c`` the construction flag.  Keys are sorted, numbers are written with the shortest
+(point, line, circle, arc, and from slice 5b2 ellipse, arc of ellipse, B-spline), ``g`` its numbers (point x, y; line
+x1, y1, x2, y2; circle x, y, r; arc x, y, r and the start and end angles in radians), ``c`` the construction flag.
+Slice 5b2 adds three kinds, which make a file ``version`` 2 (a file with only the first four kinds stays version 1 and
+byte-identical to before): ``e`` ellipse ``[cx, cy, fx, fy, b]`` (centre, first focus, minor radius); ``o`` arc of
+ellipse ``[cx, cy, fx, fy, b, a0, a1]`` (the same and the start and end parameters, measured from the ellipse's own
+major axis, so they do not turn with an instance); ``s`` B-spline ``[degree, periodic, n, x1, y1, ... xn, yn, w1, ...
+wn, m, k1, ... km, mult1, ... multm]`` with ``periodic`` 0 or 1, ``n`` poles, their ``n`` weights, ``m`` knots and their
+``m`` multiplicities (an open spline's multiplicities sum to ``n + degree + 1``, a periodic one's to ``n`` plus its first
+multiplicity).  Members are primary curves only: an ellipse's axes and foci and a B-spline's pole circles and knot
+points are separate geometry held to the curve by InternalAlignment constraints and are never members.  ``define``
+leaves them out and says so (``define_report``), ``insert`` does not create them, and ``exposeInternalGeometry`` on an
+instance's curve brings them back under their own constraints.  Keys are sorted, numbers are written with the shortest
 text that reads back to the same double, so a save, a load and a second save are byte-identical.  The default folder is
 ``SketchBlocks`` in the user's data directory; the string parameter ``LibraryFolder`` under
 ``User parameter:BaseApp/Preferences/Mod/Sketcher/Blocks`` replaces it, and every library call takes ``folder=``.
 Loading copies the definition into the sketch: there is no link back to the file, so changing or deleting the file
-later changes nothing in a sketch.  A file with a newer ``version`` than 1 is refused.
-Supported members: points, line segments, circles, arcs of circle.  Anything
+later changes nothing in a sketch.  A file with a newer ``version`` than 2 is refused.
+Supported members: points, line segments, circles, arcs of circle, ellipses, arcs of ellipse, B-splines (hyperbolas
+and parabolas are refused).  Anything
 else, an empty or degenerate set, a duplicate name and the like raise
 :class:`SketchBlockError` before anything is touched."""
 

@@ -81,12 +81,12 @@ MUTANTS = [
 
 # C++ mutants: (name, file under the worktree, [(old, new)], tests, what it plants)
 CPP = [
-    ("aoe_parameters_tied_as_circular", "src/Mod/Sketcher/App/Sketch.cpp", [("                    constantTie(r.ang0, r.m->a0);\n                    constantTie(r.ang1, r.m->a1);", "                    angleTie(r.ang0, r.m->a0);\n                    angleTie(r.ang1, r.m->a1);")], PLACE, "an arc of ellipse's parameters follow the instance's angle"),
+    ("aoe_parameters_tied_as_circular", "src/Mod/Sketcher/App/Sketch.cpp", [("                Mode::Constant, p, nullptr, nullptr, nullptr, 0.0, 0.0, local + k * twoPi", "                Mode::Angle, p, pX, pY, pA, 0.0, 0.0, local + k * twoPi")], PLACE, "an arc of ellipse's parameters follow the instance's angle"),
     ("weight_tie_dropped", "src/Mod/Sketcher/App/Sketch.cpp", [("                    GCSsys.addConstraintBlockPlacement(\n                        Mode::Constant, r.wts[i], nullptr, nullptr, nullptr, 0.0, 0.0, r.m->weights[i]\n                    );", "")], PLACE + ("TestCurveDOF",), "a spline's weights are free"),
     ("one_pole_tie_dropped", "src/Mod/Sketcher/App/Sketch.cpp", [("                for (size_t i = 0; i < r.poles.size(); ++i) {\n                    point(r.poles[i]", "                for (size_t i = 0; i + 1 < r.poles.size(); ++i) {\n                    point(r.poles[i]")], PLACE + ("TestCurveDOF",), "the last pole of a spline is free"),
     ("focus_tie_dropped", "src/Mod/Sketcher/App/Sketch.cpp", [("            if (r.m->type == 'l' || r.m->type == 'e' || r.m->type == 'o') {\n                point(r.p1, r.m->x1, r.m->y1);", "            if (r.m->type == 'l') {\n                point(r.p1, r.m->x1, r.m->y1);")], PLACE + ("TestCurveDOF",), "an ellipse's focus is free"),
     ("second_multiplicity_list_not_compared", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("            || m.weights.size() != cur.weights.size() || m.knots.size() != cur.knots.size()\n            || m.mult != cur.mult) {", "            || m.weights.size() != cur.weights.size() || m.knots.size() != cur.knots.size()) {")], FIT, "a changed multiplicity list still fits"),
-    ("weights_not_compared", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("            if (std::abs(m.weights[i] - cur.weights[i]) > kFitWeight * std::max(1.0, m.weights[i])) {\n                return false;\n            }", "")], FIT, "a changed weight still fits"),
+    ("weights_compared_with_a_huge_tolerance", "src/Mod/Sketcher/App/SketchObjectBlocks.cpp", [("constexpr double kFitWeight = 1e-6;", "constexpr double kFitWeight = 1e6;")], FIT, "a changed weight still fits"),
 ]
 
 
@@ -146,7 +146,10 @@ def main(argv):
             with open(path, "wb") as fh:
                 fh.write(mutated)
             if cpp:
-                subprocess.run([os.path.join(harness, "build.sh")], check=True, capture_output=True, env=dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL="8"))
+                b = subprocess.run([os.path.join(harness, "build.sh")], capture_output=True, env=dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL="8"))
+                if b.returncode:
+                    print("%-44s DOES NOT BUILD, not counted" % name, flush=True)
+                    raise SystemExit("a C++ mutant must compile")
             for t in tests:
                 if not run(binary, t, env):
                     failed.append(t)
