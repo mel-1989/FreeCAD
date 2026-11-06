@@ -869,6 +869,14 @@ class BlocksPanel(QtWidgets.QDockWidget):
         never by a name, because the stack drops its oldest entries when it is full and names repeat."""
         if self._alive() and self.session is not None and not self.session["rolling"]:
             self.session["depth"] += 1
+            self._update_session_label()
+
+    def _stack_limit(self):
+        """The number of undo steps a document keeps (the preference it reads when it is made)."""
+        try:
+            return int(App.ParamGet("User parameter:BaseApp/Preferences/Document").GetInt("MaxUndoSize", 20))
+        except Exception:
+            return 20
 
     def _session_check(self):
         """Something moved under an edit session: end it, with one message, if it can no longer be finished safely."""
@@ -1028,10 +1036,11 @@ class BlocksPanel(QtWidgets.QDockWidget):
             self.session_label.setText("")
             return
         n = self.session_added_constraints()
-        self.session_label.setText(
-            tr("Editing %s. Finish keeps the geometry of the block's members as it is now and every instance follows. New geometry becomes a member of every instance. Constraints added during this edit are not kept: %d added so far. Changes to anything else, such as plain geometry that moved or a constraint that was deleted or changed, are undone, and Finish says so first.")
-            % (self.session["instance"], n)
-        )
+        text = tr("Editing %s. Finish keeps the geometry of the block's members as it is now and every instance follows. New geometry becomes a member of every instance. Constraints added during this edit are not kept: %d added so far. Changes to anything else, such as plain geometry that moved or a constraint that was deleted or changed, are undone, and Finish says so first.") % (self.session["instance"], n)
+        limit = self._stack_limit()
+        if limit and self.session["depth"] >= limit - 2:
+            text += " " + tr("This edit has used %d of the %d undo steps the document keeps. Past that, Finish and Cancel can no longer put the sketch back, so finish before then.") % (self.session["depth"], limit)
+        self.session_label.setText(text)
 
     def _undone_text(self, out):
         """The items Finish undoes because they are not part of the block, in words: '1 moved element (Edge3) and 1 deleted constraint ('Ph')'."""

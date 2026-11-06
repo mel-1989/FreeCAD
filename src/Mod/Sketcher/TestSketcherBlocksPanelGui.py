@@ -4,6 +4,7 @@ from SketcherTests.TestSketcherBlocksPanelGui import (
     TestBlocksPanelClick,
     TestBlocksPanelContents,
     TestBlocksPanelEditLeaving,
+    TestBlocksPanelEditRepairs,
     TestBlocksPanelEditResults,
     TestBlocksPanelEditUndo,
     TestBlocksPanelOthers,
@@ -18,6 +19,7 @@ True if (
     and TestBlocksPanelClick
     and TestBlocksPanelContents
     and TestBlocksPanelEditLeaving
+    and TestBlocksPanelEditRepairs
     and TestBlocksPanelEditResults
     and TestBlocksPanelEditUndo
     and TestBlocksPanelOthers

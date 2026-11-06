@@ -1766,12 +1766,19 @@ class TestBlocksPanelEditRepairs(EditCase):
         self.begin(sk)
         for i in range(8):  # more steps than the stack keeps: the explosion falls off its far end
             self.stock(sk, "op%d" % i, lambda i=i: sk.moveGeometry(0, 2, V(5.0 + 0.1 * i, 0, 0), False))
+            if i == 0:
+                self.assertNotIn("undo steps the document keeps", self.panel.session_label.text())
+            if i == 3:
+                self.assertIn("used 5 of the 6 undo steps the document keeps", self.panel.session_label.text())
         self.assertEqual(sk.Document.UndoCount, 6)
         end = _numbers_of(sk)
+        stack = list(sk.Document.UndoNames)
         self.click_button("blocksFinish")
         self.assertIsNone(self.panel.session, self.status())
         self.assertEqual(len(P.messages), n0 + 1)
         self.assertIn("undo", P.messages[-1])
+        self.assertEqual(list(sk.Document.UndoNames), stack, "the session's steps were undone or the stack was written to: nothing may touch it")
+        self.assertEqual(sk.Document.RedoCount, 0)
         self.assertEqual(_numbers_of(sk), end, "ending the session changed the sketch")
         self.assertEqual(sorted(B.blocks(sk)["instances"]), ["W_2", "W_3"])
 
@@ -1957,6 +1964,7 @@ class TestBlocksPanelEditRepairs(EditCase):
         self.assertEqual(_snapshot(sk), before, "Finish acted on a sketch that is not in the editor")
         self.assertEqual(sorted(B.blocks(sk)["instances"]), ["W_2", "W_3"], "the rollback ran")
         self.assertEqual(len(P.messages), n0 + 1)
+        self.assertIn("no longer being edited", P.messages[-1])  # said for that reason, not for another that happens to end the session too
         self.panel = None
 
 
