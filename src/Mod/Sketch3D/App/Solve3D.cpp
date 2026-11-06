@@ -442,9 +442,15 @@ struct Model
     void tune()
     {
         // PlaneGCS stops at an error of 1e-10 by default, which leaves coordinates a few 1e-9
-        // off an ill-conditioned solution; the rows here are cheap, so ask for rounding level.
-        sys.DL_tolf = 1e-22;
+        // off an ill-conditioned solution, so ask for rounding level. 1e-15 is the rounding
+        // floor of a residual made of lengths of order one. A smaller value (this was 1e-22)
+        // can never be reached on a grid of lines, whose residual stalls near 1e-16: the solver
+        // ran all 100 iterations, 600 ms at 297 unknowns and 20 s at 969, where 10 will do.
+        // On a system of very large coordinates the floor is higher and the limit is the
+        // iteration count, as before.
+        sys.DL_tolf = 1e-15;
         sys.LM_eps = 1e-13;
+        sys.LM_tau = lmTau;
         // sparse Jacobians pay from a few hundred unknowns on: every row touches at most 12
         sys.sparseSolveThreshold = 200;
         sys.partitionThreshold = 200;

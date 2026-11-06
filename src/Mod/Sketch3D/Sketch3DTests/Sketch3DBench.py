@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-"""Speed of Sketch3D.solve (G10 slice 6a, check 9): a grounded chain and a comb of lines at
+"""Speed of Sketch3D.solve (G10 slice 6a, check 9): a grounded chain and a true grid of lines (closed loops, redundant relations) at
 about 300, 1000 and 3000 unknowns, the median of three processes.
 
     FreeCADCmd Sketch3DBench.py            # parent: runs every case three times, prints the table
@@ -39,27 +39,31 @@ def chain(unknowns, rng):
     return pts, lines, cons
 
 
-def comb(unknowns, rng):
+def grid(unknowns, rng):
+    """An m x m grid of axis lines: every row of points joined by lines along X, every column
+    by lines along Y, each with a length of 1. The squares are closed loops, so the length and
+    direction relations are redundant (and consistent) and the system is rank deficient."""
     m = max(2, int(round((unknowns / 3.0 + 1) ** 0.5)))
     idx = lambda i, j: j * m + i
     pts = [[float(i), float(j), 0.0] for j in range(m) for i in range(m)]
     lines = []
     cons = []
-    for j in range(m - 1):
-        lines.append([idx(0, j), idx(0, j + 1)])
-        cons.append({"type": "along_y", "operands": [len(lines) - 1]})
-        cons.append({"type": "length", "operands": [len(lines) - 1], "value": 1.0})
     for j in range(m):
         for i in range(m - 1):
             lines.append([idx(i, j), idx(i + 1, j)])
             cons.append({"type": "along_x", "operands": [len(lines) - 1]})
+            cons.append({"type": "length", "operands": [len(lines) - 1], "value": 1.0})
+    for i in range(m):
+        for j in range(m - 1):
+            lines.append([idx(i, j), idx(i, j + 1)])
+            cons.append({"type": "along_y", "operands": [len(lines) - 1]})
             cons.append({"type": "length", "operands": [len(lines) - 1], "value": 1.0})
     return pts, lines, cons
 
 
 def make_spec(kind, unknowns):
     rng = random.Random(unknowns)
-    pts, lines, cons = {"chain": chain, "comb": comb}[kind](unknowns, rng)
+    pts, lines, cons = {"chain": chain, "grid": grid}[kind](unknowns, rng)
     # 5% of a typical line length, per coordinate
     size = sum(sum((a - b) ** 2 for a, b in zip(pts[i], pts[j])) ** 0.5 for i, j in lines) / len(lines)
     moved = [
@@ -95,7 +99,7 @@ def parent():
 
     def median_of_three(kind, size, diagnose):
         runs = []
-        for _ in range(3):
+        for _ in range(int(os.environ.get("SKETCH3D_BENCH_RUNS", "3"))):
             env = dict(os.environ, SKETCH3D_BENCH_CASE="%s:%d" % (kind, size), SKETCH3D_BENCH_DIAGNOSE="1" if diagnose else "0")
             out = subprocess.run([exe, os.path.abspath(__file__)], env=env, capture_output=True, text=True, timeout=600).stdout
             line = [l for l in out.splitlines() if l.startswith("S3DBENCH ")]
@@ -103,18 +107,20 @@ def parent():
         return statistics.median(r["ms"] for r in runs), runs[0]
 
     rows = []
-    for kind in ("chain", "comb"):
+    for kind in ("chain", "grid"):
         prev = None
         for size in SIZES:
             med, r = median_of_three(kind, size, True)
-            med_nd, _ = median_of_three(kind, size, False)
+            med_nd, _ = median_of_three(kind, size, False) if not os.environ.get("SKETCH3D_BENCH_SKIP_NODIAG") else (float("nan"), None)
             growth = "" if prev is None else "x%.1f for x%.1f unknowns" % (med / prev[1], r["n"] / prev[0])
-            rows.append((kind, r["n"], med, med_nd, r["iterations"], r["algorithm"], r["code"], r["dof"], r["maxres"], growth))
+            bar = BARS_MS.get(size)
+            verdict = "no bar" if bar is None else ("PASS (< %d ms)" % bar if med < bar and r["code"] == 0 else "MISS (bar %d ms)" % bar)
+            rows.append((kind, r["n"], med, med_nd, r["iterations"], r["algorithm"], r["code"], r["dof"], r["maxres"], growth, verdict))
             prev = (r["n"], med)
-    print("| case | unknowns | median ms | median ms, diagnose false | iterations | algorithm | code | dof | max residual | growth |")
-    print("|---|---:|---:|---:|---:|---|---:|---:|---:|---|")
+    print("| case | unknowns | median ms | median ms, diagnose false | iterations | algorithm | code | dof | max residual | growth | bar |")
+    print("|---|---:|---:|---:|---:|---|---:|---:|---:|---|---|")
     for row in rows:
-        print("| %s | %d | %.1f | %.1f | %d | %s | %d | %d | %.1e | %s |" % row)
+        print("| %s | %d | %.1f | %.1f | %d | %s | %d | %d | %.1e | %s | %s |" % row)
 
 
 if CASE:
