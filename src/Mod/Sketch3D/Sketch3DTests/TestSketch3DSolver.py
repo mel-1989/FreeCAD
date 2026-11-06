@@ -103,6 +103,16 @@ class TestEntryPoint(unittest.TestCase):
         self.assertAlmostEqual(r["coordinates"][1][0], 1.0, places=9)
         self.assertEqual(r["coordinates"][0], [0.0, 0.0, 0.0])
 
+    def test_diagnosis_returns_the_users_tags(self):
+        spec = {"points": [[0, 0, 0], [1, 1, 1]],
+                "constraints": [{"type": "distance_pp", "operands": [0, 1], "value": 1.0, "tag": 101},
+                                {"type": "distance_pp", "operands": [0, 1], "value": 2.0, "tag": 202},
+                                {"type": "distance_pp", "operands": [0, 1], "value": 2.0, "tag": 303}]}
+        r = Sketch3D.solve(spec)
+        self.assertNotEqual(r["code"], 0)
+        self.assertTrue(set(r["conflicting"]) <= {101, 202, 303}, r["conflicting"])
+        self.assertTrue(r["conflicting"])
+
     def test_driven_constraint_reports_and_does_not_move(self):
         spec = small_spec()
         r = Sketch3D.solve(spec)

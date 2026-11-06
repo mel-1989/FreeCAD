@@ -5,7 +5,7 @@
 Each mutant is a text replacement in one C++ file of the module. The script applies it (bytes in,
 bytes out), builds through the harness, runs the Sketch3D tests without their two slow corpora
 (SKETCH3D_QUICK) and puts the file back. A mutant is caught when at least one test fails or
-errors, or the build breaks on it is NOT counted: a build failure is reported as such.
+errors. A mutant that does not build is reported as such and not counted as caught.
 
     CADFORK_CTL=<cad-fork folder> python3 Sketch3DMutants.py <freecad worktree> [name ...]
 
@@ -23,8 +23,8 @@ SOLVE = "src/Mod/Sketch3D/App/Solve3D.cpp"
 MUTANTS = [
     ("fixed_coordinate_sign", REL, "return x[axis] - value;", "return x[axis] + value;", "fixed coordinate: sign of the value"),
     ("coincident_wrong_axis", REL, "return x[row] - x[3 + row];", "return x[row] - x[3 + (row + 1) % 3];", "coincident: second point read on the next axis"),
-    ("point_on_line_wrong_end", REL, "return dot(row == 0 ? u1 : u2, sub(p, a));", "return dot(row == 0 ? u1 : u2, sub(p, b));", "point on line: offset taken from the far end"),
-    ("point_on_line_operand_swap", REL, "const V3<T> p = pt(x, 0), a = pt(x, 1), b = pt(x, 2);\n            V3<T> u1, u2;\n            perpBasis(sub(b, a), u1, u2);\n            return dot(row == 0", "const V3<T> p = pt(x, 1), a = pt(x, 0), b = pt(x, 2);\n            V3<T> u1, u2;\n            perpBasis(sub(b, a), u1, u2);\n            return dot(row == 0", "point on line: point and line end swapped"),
+    ("point_on_line_offset_from_direction", REL, "return dot(row == 0 ? u1 : u2, sub(p, a));", "return dot(row == 0 ? u1 : u2, sub(p, sub(b, a)));", "point on line: offset taken from the line direction instead of its start"),
+    ("midpoint_operand_swap", REL, "return x[row] - 0.5 * (x[3 + row] + x[6 + row]);", "return x[3 + row] - 0.5 * (x[row] + x[6 + row]);", "midpoint: point and line end swapped"),
     ("point_on_plane_dropped_term", REL, "return dot(n, sub(pt(x, 0), q0));", "return dot(n, pt(x, 0));", "point on plane: the plane's point dropped"),
     ("distance_pp_sign", REL, "return nrm(sub(pt(x, 0), pt(x, 1))) - value;", "return nrm(sub(pt(x, 0), pt(x, 1))) + value;", "point distance: sign of the value"),
     ("distance_pl_dropped_term", REL, "return nrm(cross(sub(p, a), d)) / nrm(d) - value;", "return nrm(cross(sub(p, a), d)) - value;", "point to line distance: division by the line length dropped"),
@@ -32,17 +32,17 @@ MUTANTS = [
     ("midpoint_dropped_term", REL, "return x[row] - 0.5 * (x[3 + row] + x[6 + row]);", "return x[row] - 0.5 * x[3 + row];", "midpoint: one end dropped"),
     ("length_dropped_term", REL, "return nrm(sub(pt(x, 1), pt(x, 0))) - value;", "return nrm(sub(pt(x, 1), pt(x, 0)));", "length: the value dropped"),
     ("equal_length_wrong_point", REL, "- nrm(sub(pt(x, 3), pt(x, 2)));", "- nrm(sub(pt(x, 3), pt(x, 1)));", "equal length: second line starts at the wrong point"),
-    ("along_axis_wrong_axis", REL, "const int c = row < k ? row : row + 1;", "const int c = row;", "along axis: the axis itself is constrained"),
+    ("along_axis_wrong_axis", REL, "const int c = row < k ? row : row + 1;", "const int c = row + 0 * k;", "along axis: the axis itself is constrained"),
     ("parallel_one_row", REL, "perpBasis(sub(pt(x, 1), pt(x, 0)), u1, u2);\n            return dot(row == 0 ? u1 : u2, sub(pt(x, 3), pt(x, 2)));", "perpBasis(sub(pt(x, 1), pt(x, 0)), u1, u2);\n            return dot(u1, sub(pt(x, 3), pt(x, 2)));", "parallel: both rows are the first basis vector"),
     ("parallel_three_rows", REL, '{"parallel", "ll", false, 2},', '{"parallel", "ll", false, 3},', "parallel: declared with three rows"),
-    ("perpendicular_self_dot", REL, "return dot(v, w) / nrm(v);", "return dot(v, v) / nrm(v);", "perpendicular: dot of the first line with itself"),
+    ("perpendicular_self_dot", REL, "return dot(v, w) / nrm(v);", "return dot(v, v) / nrm(v) + 0.0 * dot(w, w);", "perpendicular: dot of the first line with itself"),
     ("parallel_plane_wrong_vector", REL, "return dot(sub(pt(x, 1), pt(x, 0)), n);", "return dot(sub(pt(x, 1), pt(x, 0)), q0);", "line parallel to plane: dot with the plane point"),
     ("normal_plane_one_row", REL, "return dot(row == 0 ? w1 : w2, sub(pt(x, 1), pt(x, 0)));", "return dot(w1, sub(pt(x, 1), pt(x, 0)));", "line normal to plane: both rows are the first basis vector"),
     ("angle_sin_for_cos", REL, "- std::cos(value);", "- std::sin(value);", "angle: sine of the target"),
     ("grad_doubled", REL, "x[i] = {*pvec[i], pvec[i] == param ? 1.0 : 0.0};", "x[i] = {*pvec[i], pvec[i] == param ? 2.0 : 0.0};", "gradient: derivative direction doubled"),
     ("grad_second_point_lost", REL, "x[i] = {*pvec[i], pvec[i] == param ? 1.0 : 0.0};", "x[i] = {*pvec[i], (pvec[i] == param && i < 3) ? 1.0 : 0.0};", "gradient: nothing for any point after the first"),
     ("grad_scale_dropped", REL, "return scale * evalRow<D>(kindValue, row, axis, value, plane, x).d;", "return -evalRow<D>(kindValue, row, axis, value, plane, x).d;", "gradient: sign flipped"),
-    ("plane_normal_not_normalised", SOLVE, "d.n[i] = s.normal[i] / len;", "d.n[i] = s.normal[i];", "plane normal used as given"),
+    ("plane_normal_not_normalised", SOLVE, "d.n[i] = s.normal[i] / len;", "d.n[i] = s.normal[i] + 0.0 * len;", "plane normal used as given"),
     ("driving_ignored", SOLVE, "if (!spec.constraints[ci].driving) {\n                own[ci] = std::move(rows);", "if (false) {\n                own[ci] = std::move(rows);", "a constraint with driving false is solved like any other"),
     ("tag_lost", SOLVE, "std::make_unique<Rel>(cs.kind, r, axis, cs.value, plane, params, ci + 1)", "std::make_unique<Rel>(cs.kind, r, axis, cs.value, plane, params, 1)", "every row carries tag 1"),
     ("user_tag_lost", SOLVE, "out.insert(spec.constraints[t - 1].tag);", "out.insert(t);", "diagnosis tags returned as positions, not as the user's tags"),
