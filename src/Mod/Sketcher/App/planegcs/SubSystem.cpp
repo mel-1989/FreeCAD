@@ -268,6 +268,40 @@ void SubSystem::calcResidual(Eigen::VectorXd& r, double& err)
 void SubSystem::calcJacobi(VEC_pD& params, Eigen::MatrixXd& jacobi)
 {
     jacobi.setZero(csize, params.size());
+    // Large systems: ask each constraint only for the parameters it holds (c2p) instead of every
+    // pair of constraint and parameter. A constraint's grad of a parameter it does not hold is
+    // zero, and jacobi starts at zero, so the matrix is the same. Small systems keep the plain
+    // double loop below.
+    if (static_cast<long long>(csize) * static_cast<long long>(params.size()) >= 40000) {
+        // columns by slot of pvals: reduced parameters share a slot and so share a grad
+        std::vector<int> firstCol(psize, -1);
+        std::vector<int> nextCol(params.size(), -1);
+        for (int j = int(params.size()) - 1; j >= 0; j--) {
+            MAP_pD_pD::const_iterator pmapfind = pmap.find(params[j]);
+            if (pmapfind != pmap.end()) {
+                const int slot = static_cast<int>(pmapfind->second - pvals.data());
+                nextCol[j] = firstCol[slot];
+                firstCol[slot] = j;
+            }
+        }
+        for (int i = 0; i < csize; i++) {
+            auto it = c2p.find(clist[i]);
+            if (it == c2p.end()) {
+                continue;
+            }
+            for (double* p : it->second) {
+                const int slot = static_cast<int>(p - pvals.data());
+                if (firstCol[slot] < 0) {
+                    continue;
+                }
+                const double g = clist[i]->grad(p);
+                for (int j = firstCol[slot]; j >= 0; j = nextCol[j]) {
+                    jacobi(i, j) = g;
+                }
+            }
+        }
+        return;
+    }
     for (int j = 0; j < int(params.size()); j++) {
         MAP_pD_pD::const_iterator pmapfind = pmap.find(params[j]);
         if (pmapfind != pmap.end()) {
