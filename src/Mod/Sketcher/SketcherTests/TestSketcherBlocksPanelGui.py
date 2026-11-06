@@ -715,3 +715,410 @@ class TestBlocksPanelClick(BlocksGuiCase):
         self.assertEqual(len(B.blocks(sk)["instances"]), 1)
         Gui.runCommand("Sketcher_CreateLine")  # leaves the tool again
         _pump(50)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Check 5: selection both ways
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+class TestBlocksPanelSelection(BlocksGuiCase):
+    def mixed_sketch(self, doc):
+        sk = doc.addObject("Sketcher::SketchObject", "M")
+        sk.addGeometry([Part.LineSegment(V(0, 0, 0), V(4, 0, 0)), Part.Point(V(1, 2, 0)), Part.ArcOfCircle(Part.Circle(V(2, 1, 0), V(0, 0, 1), 1.0), 0.3, 2.0), Part.Circle(V(3, 3, 0), V(0, 0, 1), 0.4)], False)
+        B.define(sk, "M", [0, 1, 2, 3])
+        sk.delGeometries([0, 1, 2, 3])
+        for p in ((0, 0, 0), (10, 0, 0.3), (20, 5, 1.0)):
+            B.insert(sk, "M", *p)
+        sk.addGeometry(Part.LineSegment(V(-5, -5, 0), V(30, -5, 0)), False)
+        doc.recompute()
+        return sk
+
+    def expected_names(self, sk, inst):
+        """The editor's names for an instance's members, written out here from the sketch's own vertex table."""
+        names = []
+        vertex = {}
+        i = 0
+        while True:
+            g, p = sk.getGeoVertexIndex(i)
+            if g == -2000:
+                break
+            vertex[(g, p)] = i
+            i += 1
+        for gid in B.blocks(sk)["instances"][inst]["geo_ids"]:
+            if sk.Geometry[gid].TypeId == "Part::GeomPoint":
+                names.append("Vertex%d" % (vertex[(gid, 1)] + 1))
+            else:
+                names.append("Edge%d" % (gid + 1))
+        return sorted(names)
+
+    def test_choosing_a_row_selects_exactly_its_members_with_the_right_names(self):
+        sk = self.mixed_sketch(self.new_doc("PanelSel"))
+        self.open_panel(sk)
+        snap = _snapshot(sk)
+        for inst in ("M_1", "M_2", "M_3"):
+            self.choose("inst", inst)
+            self.assertEqual(sorted(_selected_names()), self.expected_names(sk, inst), inst)
+        self.assertEqual(_snapshot(sk), snap, "selecting touched the document")
+        # a GeoId shift: delete the first instance, then choose the second again
+        self.choose("inst", "M_1")
+        self.click_button("blocksDelete")
+        self.choose("inst", "M_2")
+        self.assertEqual(sorted(_selected_names()), self.expected_names(sk, "M_2"))
+        self.assertNotIn("M_1", B.blocks(sk)["instances"])
+        # the last row chosen still selects members only of its own instance
+        for n in _selected_names():
+            self.assertTrue(n.startswith(("Edge", "Vertex")))
+
+    def test_selecting_a_member_in_the_view_chooses_its_row_and_plain_geometry_clears_it(self):
+        sk = self.mixed_sketch(self.new_doc("PanelSelBack"))
+        self.open_panel(sk)
+        snap = _snapshot(sk)
+        self.choose("def", "M")
+        for inst in ("M_3", "M_1"):
+            gid = B.blocks(sk)["instances"][inst]["geo_ids"][2]
+            self.select(sk, "Edge%d" % (gid + 1))
+            item = self.panel.tree.selectedItems()
+            self.assertEqual(len(item), 1, inst)
+            self.assertTrue(item[0].text(0).startswith(inst + ":"), item[0].text(0))
+        plain = len(sk.Geometry) - 1
+        self.select(sk, "Edge%d" % (plain + 1))
+        self.assertEqual(self.panel.tree.selectedItems(), [])
+        self.assertEqual(_snapshot(sk), snap)
+
+    def test_a_selection_the_sketch_no_longer_has_is_not_reselected(self):
+        sk = self.mixed_sketch(self.new_doc("PanelSelGone"))
+        self.open_panel(sk)
+        self.choose("inst", "M_2")
+        Gui.Selection.clearSelection()
+        B.delete_instance(sk, "M_2")  # no turn yet: the row still names it
+        self.panel._on_choice()
+        self.assertEqual(_selected_names(), [])
+        self.assertFalse(self.panel.select_instance("M_2"))
+        self.settle()
+        self.assertEqual(_selected_names(), [])
+        self.assertPanelEqualsApi(sk)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Check 10: no effect on other work
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+class TestBlocksPanelOthers(BlocksGuiCase):
+    def test_nothing_remains_after_close_and_fifty_openings_leave_nothing_behind(self):
+        sk = self.line_block_sketch(self.new_doc("PanelFifty"))
+        self.edit(sk)
+        import SketcherBlocksPanel as P
+
+        def counts():
+            QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+            return (
+                len(sk.Document.Objects),
+                len([w for w in QtWidgets.QApplication.allWidgets() if isinstance(w, QtWidgets.QDockWidget)]),
+                len([w for w in QtWidgets.QApplication.allWidgets() if w.objectName().startswith("blocks")]),
+                P.active_filter_count(),
+                sk.Document.UndoCount,
+            )
+
+        Gui.runCommand(COMMAND)
+        _pump(30)
+        P.current_panel().close()
+        _pump(50)
+        base = counts()
+        for _ in range(50):
+            Gui.runCommand(COMMAND)
+            _pump()
+            p = P.current_panel()
+            p.start_place() if p.tree.topLevelItemCount() and p._choose_row("def", "T") else None
+            p.close()
+            _pump()
+        _pump(80)
+        self.assertEqual(counts(), base)
+        # no observer remains: every entry point of the panel is spied on
+        Gui.runCommand(COMMAND)
+        _pump(30)
+        p = P.current_panel()
+        calls = []
+        for n in ("on_selection", "on_property", "on_undo_redo", "invalidate", "schedule", "data_changed", "on_view_event", "on_cursor_change"):
+            setattr(p, n, lambda *a, _n=n, **k: calls.append(_n))
+        doc = sk.Document
+        Gui.Selection.addSelection(doc.Name, sk.Name, "Edge1")
+        B.insert(sk, "T", 30, 30, 0)
+        doc.undo()
+        _pump(40)
+        self.assertTrue({"on_selection", "on_property", "on_undo_redo"} <= set(calls), calls)
+        p.close()
+        _pump(40)
+        calls.clear()
+        Gui.Selection.addSelection(doc.Name, sk.Name, "Edge2")
+        Gui.Selection.clearSelection()
+        B.insert(sk, "T", 30, 30, 0)
+        doc.undo()
+        Gui.ActiveDocument.resetEdit()
+        _pump(40)
+        self.assertEqual(calls, [])
+
+    def test_the_other_docks_work_with_the_panel_open_and_it_follows_their_fixes(self):
+        import SketcherDiagnosisPanel as DPm
+        import SketcherFullyDefinePanel as FPm
+        import SketcherRelationsPanel as RPm
+
+        doc = self.new_doc("PanelOthers")
+        sk = self.line_block_sketch(doc, "S", placements=((0, 0, 0), (8, 0, 0.3)))
+        a = sk.addGeometry(Part.LineSegment(V(-10, -10, 0), V(-2, -10, 0)), False)
+        b = sk.addGeometry(Part.LineSegment(V(-2, -10, 0), V(-2, -3, 0)), False)
+        sk.addConstraint(Sketcher.Constraint("Horizontal", a))
+        sk.addConstraint(Sketcher.Constraint("Horizontal", a))  # a redundancy for the diagnosis to fix
+        sk.addConstraint(Sketcher.Constraint("Coincident", a, 2, b, 1))
+        sk.solve()
+        self.open_panel(sk)
+        snap_blocks = B.blocks(sk)
+        # diagnosis
+        Gui.runCommand("Sketcher_DiagnoseSketch")
+        _pump(50)
+        dp = DPm.current_panel()
+        self.assertTrue(_wait(lambda: dp.state in ("ready", "failed", "closed")))
+        self.assertEqual(dp.state, "ready", dp.status.text())
+        fix = None
+        stack = [dp.tree.topLevelItem(k) for k in range(dp.tree.topLevelItemCount())]
+        while stack and fix is None:
+            it = stack.pop(0)
+            if (it.data(0, QtCore.Qt.UserRole) or {}).get("kind") in ("fix", "removal"):
+                fix = it
+            stack += [it.child(j) for j in range(it.childCount())]
+        self.assertIsNotNone(fix, "the diagnosis offered no fix")
+        dp.tree.setCurrentItem(fix)
+        _pump()
+        n_before = len(sk.Constraints)
+        self.assertTrue(dp.apply_chosen())
+        self.settle()
+        self.assertLess(len(sk.Constraints), n_before)
+        self.assertEqual(B.blocks(sk), snap_blocks)
+        self.assertPanelEqualsApi(sk, "after a diagnosis fix")
+        dp.close()
+        _pump(50)
+        # fully define
+        Gui.runCommand("Sketcher_FullyDefine")
+        _pump(50)
+        fp = FPm.current_panel()
+        self.assertTrue(_wait(lambda: fp.state in ("ready", "failed", "closed")))
+        self.assertEqual(fp.state, "ready", fp.status.text())
+        cand = None
+        for k in range(fp.tree.topLevelItemCount()):
+            if (fp.tree.topLevelItem(k).data(0, QtCore.Qt.UserRole) or {}).get("kind") == "candidate":
+                cand = fp.tree.topLevelItem(k)
+                break
+        self.assertIsNotNone(cand, "Fully Define offered no candidate")
+        fp.tree.setCurrentItem(cand)
+        _pump()
+        dof = sk.DoF
+        self.assertTrue(fp.apply_chosen())
+        self.settle()
+        self.assertLess(sk.DoF, dof)
+        self.assertEqual(B.blocks(sk), snap_blocks)
+        self.assertPanelEqualsApi(sk, "after Fully Define")
+        fp.close()
+        _pump(50)
+        # relations, with the panel still open
+        Gui.runCommand("Sketcher_Relations")
+        _pump(50)
+        rp = RPm.current_panel()
+        self.assertIsNotNone(rp)
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(doc.Name, sk.Name, "Edge%d" % (a + 1))
+        self.settle()
+        self.assertGreater(rp.tree.topLevelItemCount(), 0)
+        self.assertIs(self.P.current_panel(), self.panel)
+        self.assertEqual(self.panel.state, "ready")
+        self.assertPanelEqualsApi(sk, "with the relations dock")
+        # the solver messages box of the edit task is still there
+        self.assertIsNotNone(Gui.Control.activeDialog() or [w for w in QtWidgets.QApplication.allWidgets() if "TaskSketcherMessages" in w.metaObject().className()])
+        rp.close()
+        _pump(50)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Check 11: speed
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def _median(f, n=5):
+    xs = []
+    for _ in range(n):
+        t = time.perf_counter()
+        f()
+        xs.append(time.perf_counter() - t)
+    return statistics.median(xs)
+
+
+class TestBlocksPanelSpeed(BlocksGuiCase):
+    def big(self, name, instances=200, members=10):
+        doc = self.new_doc(name)
+        sk = doc.addObject("Sketcher::SketchObject", "Big")
+        sk.addGeometry([Part.LineSegment(V(i, 0, 0), V(i + 1, 0.5 * ((-1) ** i), 0)) for i in range(members)], False)
+        B.define(sk, "L", list(range(members)))
+        sk.delGeometries(list(range(members)))
+        t = time.perf_counter()
+        for k in range(instances):
+            B.insert(sk, "L", (k % 20) * 14.0, (k // 20) * 4.0, 0.0)
+        self.build_seconds = time.perf_counter() - t
+        doc.recompute()
+        return sk
+
+    def test_open_refresh_select_and_drag_at_200_by_10(self):
+        sk = self.big("PanelSpeed")
+        self.edit(sk)
+        import SketcherBlocksPanel as P
+
+        def open_close():
+            p = P.BlocksPanel(sk, Gui.getMainWindow())
+            p.close()
+
+        t_open = _median(open_close)
+        Gui.runCommand(COMMAND)
+        _pump(50)
+        self.panel = P.current_panel()
+        self.assertEqual(len(B.blocks(sk)["instances"]), 200)
+        self.assertPanelEqualsApi(sk)
+        t_refresh = _median(self.panel.refresh)
+        names = ["L_%d" % k for k in (1, 50, 100, 150, 200)]
+        rows = iter(names)
+
+        def select():
+            self.choose("inst", next(rows))
+
+        # choosing includes the settle turns of the helper; time the selection itself
+        def select_only():
+            n = next(rows2)
+            item = [i for i in self._items() if (i.data(0, QtCore.Qt.UserRole) or {}).get("name") == n][0]
+            self.panel.tree.setCurrentItem(item)
+            item.setSelected(True)
+
+        rows2 = iter(names)
+        t_select = _median(select_only)
+        # a refresh after an insert (the insert itself timed apart)
+        t0 = time.perf_counter()
+        B.insert(sk, "L", 300, 300, 0)
+        t_api = time.perf_counter() - t0
+        t = time.perf_counter()
+        self.panel.refresh()
+        t_after_insert = time.perf_counter() - t
+        # the same insert through the panel
+        self.choose("def", "L")
+        _widget("blocksX").setText("320 mm")
+        _widget("blocksY").setText("320 mm")
+        t0 = time.perf_counter()
+        _widget("blocksInsert").click()
+        t_panel_insert = time.perf_counter() - t0
+        print(
+            "BLOCKS PANEL 200x10: open %.0f ms, refresh %.0f ms, refresh after insert %.0f ms, select row %.0f ms; insert via API %.0f ms, via panel %.0f ms (build of 200 inserts %.1f s)"
+            % (1000 * t_open, 1000 * t_refresh, 1000 * t_after_insert, 1000 * t_select, 1000 * t_api, 1000 * t_panel_insert, self.build_seconds)
+        )
+        for label, v in (("open", t_open), ("refresh", t_refresh), ("refresh after insert", t_after_insert), ("select", t_select)):
+            self.assertLess(v, SPEED_BAR, label)
+        # a drag move: the panel must not refresh on every move
+        g = B.blocks(sk)["instances"]["L_7"]["geo_ids"][0]
+        pos = sk.Geometry[g].StartPoint
+        moves = 40
+
+        def drag():
+            for k in range(moves):
+                sk.moveGeometry(g, 1, V(pos.x + 0.01 * (k + 1), pos.y + 0.005 * (k + 1), 0), False)
+            sk.moveGeometry(g, 1, V(pos.x, pos.y, 0), False)
+
+        refreshes = []
+        real = self.panel.refresh
+        self.panel.refresh = lambda *a, **k: refreshes.append(1) or real(*a, **k)
+        times_open, times_closed = [], []
+        for rep in range(3):
+            t = time.perf_counter()
+            drag()
+            times_open.append((time.perf_counter() - t) / (moves + 1))
+        self.assertEqual(refreshes, [], "a drag refreshed the panel")
+        self.panel.refresh = real
+        self.close_panel()
+        _pump(50)
+        for rep in range(3):
+            t = time.perf_counter()
+            drag()
+            times_closed.append((time.perf_counter() - t) / (moves + 1))
+        extra = statistics.median(times_open) - statistics.median(times_closed)
+        print("BLOCKS PANEL drag move: open %.3f ms, closed %.3f ms, extra %.3f ms" % (1000 * statistics.median(times_open), 1000 * statistics.median(times_closed), 1000 * extra))
+        self.assertLess(extra, 0.001)
+
+    def _items(self):
+        out = []
+        root = self.panel.tree.invisibleRootItem()
+        stack = [root.child(i) for i in range(root.childCount())]
+        while stack:
+            it = stack.pop()
+            out.append(it)
+            stack += [it.child(i) for i in range(it.childCount())]
+        return out
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Check 12: reachable and clean
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+class TestBlocksPanelReachable(BlocksGuiCase):
+    def test_the_command_is_registered_active_only_in_the_editor_with_an_icon(self):
+        self.assertIn(COMMAND, Gui.listCommands())
+        cmd = Gui.Command.get(COMMAND)
+        doc = self.new_doc("PanelCmd")
+        sk = self.line_block_sketch(doc)
+        Gui.ActiveDocument = Gui.getDocument(doc.Name)
+        if Gui.ActiveDocument.getInEdit() is not None:
+            Gui.ActiveDocument.resetEdit()
+        _pump(30)
+        self.assertFalse(cmd.isActive())
+        self.edit(sk)
+        self.assertTrue(cmd.isActive())
+        actions = [a for a in Gui.getMainWindow().findChildren(QtGui.QAction) if a.objectName() == COMMAND]
+        self.assertTrue(actions)
+        self.assertFalse(actions[0].icon().isNull(), "the command has no icon")
+        self.assertTrue(actions[0].text())
+
+    def test_the_command_is_in_the_sketch_menu_and_the_palette_index(self):
+        found = []
+
+        def walk(menu, path):
+            for a in menu.actions():
+                if a.menu() is not None:
+                    walk(a.menu(), path + [a.text()])
+                elif a.objectName() == COMMAND:
+                    found.append(path)
+
+        for a in Gui.getMainWindow().menuBar().actions():
+            if a.menu() is not None:
+                walk(a.menu(), [a.text()])
+        self.assertTrue(any("Sketch" in p[0].replace("&", "") for p in found), found)
+        import json
+
+        import AgentCore.palette as pal
+
+        path = os.path.join(os.path.dirname(pal.__file__), "commands_index.json")
+        names = {c["name"]: c for c in json.load(open(path))["commands"]}
+        self.assertIn(COMMAND, names)
+        self.assertEqual(names[COMMAND]["wb"], "SketcherWorkbench")
+
+    def test_every_visible_string_goes_through_tr(self):
+        """No literal text is handed to a label, button, tooltip or status line without tr(); a number-only or empty
+        string and a unit default are allowed."""
+        import SketcherBlocksPanel as P
+
+        tree = ast.parse(open(P.__file__).read())
+        sinks = {"QLabel", "QPushButton", "setText", "setToolTip", "setAccessibleName", "setPlaceholderText", "setWindowTitle", "addRow", "QDockWidget"}
+        bad = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                f = node.func
+                name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+                if name in sinks:
+                    for arg in node.args:
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                            if arg.value.strip() and not re.fullmatch(r"[0-9.\- ]*( mm| deg)?", arg.value):
+                                bad.append((node.lineno, arg.value))
+        self.assertEqual(bad, [])

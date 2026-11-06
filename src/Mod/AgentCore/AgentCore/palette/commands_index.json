@@ -710,6 +710,7 @@
 {"menu": "Toggle B-Spline Knot Multiplicity", "name": "Sketcher_BSplineKnotMultiplicity", "tip": "Toggles the visibility of the knot multiplicity for all B-splines", "wb": "SketcherWorkbench"},
 {"menu": "Toggle B-Spline Control Point Weight", "name": "Sketcher_BSplinePoleWeight", "tip": "Toggles the visibility of control point weights for all B-splines", "wb": "SketcherWorkbench"},
 {"menu": "Toggle B-Spline Control Polygon", "name": "Sketcher_BSplinePolygon", "tip": "Toggles the visibility of the control polygons for all B-splines", "wb": "SketcherWorkbench"},
+{"menu": "Sketch blocks", "name": "Sketcher_Blocks", "tip": "Defines a block from the selected geometry, places it as many times as needed, by numbers or by a click in the view, and edits the definition once for every copy. Copies move as one rigid body.", "wb": "SketcherWorkbench"},
 {"menu": "Cancel Editing", "name": "Sketcher_CancelSketch", "tip": "Leaves 'edit' mode and reverts any changes", "wb": "SketcherWorkbench"},
 {"key": "G, W", "menu": "Carbon Copy", "name": "Sketcher_CarbonCopy", "tip": "Copies the geometry of another sketch", "wb": "SketcherWorkbench"},
 {"menu": "Edit Value", "name": "Sketcher_ChangeDimensionConstraint", "tip": "Edits the value of a dimensional constraint", "wb": "SketcherWorkbench"},
