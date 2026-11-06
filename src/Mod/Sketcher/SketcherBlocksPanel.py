@@ -317,6 +317,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
         self.session = None  # the edit session, see the end of the class
         self._lib_armed = None  # ("delete" | "save", name): the first press of a two-press action
         self._lib_rows = []  # B.library_list() as last read
+        self._lib_shown = None  # the folder the list was read from; a row acts on that folder or on none
         self._build()
         self._dw = _DocWatch(self)
         self._gw = DP._GuiWatch(self)
@@ -835,7 +836,8 @@ class BlocksPanel(QtWidgets.QDockWidget):
         keep = self.chosen_library()
         self._lib_armed = None
         try:
-            self.lib_folder.setText(tr("Folder: %s") % B.library_folder())
+            self._lib_shown = B.library_folder()
+            self.lib_folder.setText(tr("Folder: %s") % self._lib_shown)
             self._lib_rows = B.library_list()
             note = ""
         except B.SketchBlockError as exc:
@@ -885,6 +887,15 @@ class BlocksPanel(QtWidgets.QDockWidget):
     def _lib_run(self, fn, done=None, touches_sketch=True):
         """Like _run for the library: a refusal shows the API's sentence, the list is read again."""
         self._lib_armed = None
+        try:
+            now = B.library_folder()
+        except B.SketchBlockError:
+            now = None
+        shown = self._lib_shown
+        if shown is not None and now != shown:
+            self.refresh_library()
+            self.status.setText(tr("The library folder changed from %s to %s since the list was shown. The list is read again; choose the block again.") % (shown, now))
+            return None
         if touches_sketch and self.session is not None:
             self.status.setText(tr("Finish or cancel the edit first: a block cannot be loaded during one."))
             return None
@@ -935,15 +946,31 @@ class BlocksPanel(QtWidgets.QDockWidget):
 
     def library_load_and_insert(self):
         """Load the chosen block, then place one instance at the X, Y and angle of the form.  The form is read first, so
-        a bad value refuses before anything is loaded; the two steps are the API's two calls, each its own undo entry."""
+        a bad value refuses before anything is loaded; the two steps are the API's two calls, each its own undo entry,
+        and the status says what stands when the second one fails."""
         def go():
             name = self._lib_name()
             x, y = parse_length(self.x_edit.text()), parse_length(self.y_edit.text())
             angle = parse_angle(self.angle_edit.text())
+            had = name in B._load(self.sketch)["defs"]
             loaded = B.library_load(self.sketch, name)
-            return loaded, B.insert(self.sketch, loaded, x, y, angle)
+            new = not had
+            try:
+                inst = B.insert(self.sketch, loaded, x, y, angle)
+            except B.SketchBlockError as exc:
+                if new:
+                    raise B.SketchBlockError(
+                        tr("Loaded '%s' into the sketch (one undo step) but it was not inserted: %s Undo once to remove the loaded block.") % (loaded, _sentence(str(exc)))
+                    )
+                raise
+            return loaded, inst, new
 
-        res = self._lib_run(go, lambda r: tr("Loaded '%s' and inserted %s.") % r)
+        def done(r):
+            if r[2]:
+                return tr("Loaded '%s' and inserted %s. That took two undo steps: the load and the insert.") % (r[0], r[1])
+            return tr("'%s' was already in the sketch; inserted %s (one undo step).") % (r[0], r[1])
+
+        res = self._lib_run(go, done)
         if res and res is not True:
             self._pick_loaded(res[0])
         return res

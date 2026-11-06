@@ -35,6 +35,7 @@ import struct
 import tempfile
 import time
 import unittest
+from fractions import Fraction
 from unittest import mock
 
 import FreeCAD
@@ -277,18 +278,30 @@ class TestLibrarySave(LibCase):
         afile = os.path.join(self.root, "afile")
         open(afile, "w").close()
         self.assertRefused(sk, lambda: B.library_save(sk, "L", folder=afile), "a file as the folder")
-        default = os.path.join(self.root, "deep", "SketchBlocks")
+        configured = os.path.join(self.root, "deep", "SketchBlocks")
         param = FreeCAD.ParamGet(B.LIBRARY_PARAM)
         old = param.GetString("LibraryFolder", "")
         try:
-            param.SetString("LibraryFolder", default)
-            self.assertEqual(B.library_folder(), default)
-            self.assertFalse(os.path.exists(default))
-            B.library_save(sk, "L")
-            self.assertTrue(os.path.isfile(os.path.join(default, "L.json")))
-            self.assertEqual([r["name"] for r in B.library_list()], ["L"])
-            B.library_delete("L")
-            self.assertEqual(B.library_list(), [])
+            # a configured folder that has gone is reported, not made again
+            param.SetString("LibraryFolder", configured)
+            self.assertEqual(B.library_folder(), configured)
+            text = self.assertRefused(sk, lambda: B.library_save(sk, "L"), "a configured folder that vanished")
+            self.assertIn("does not exist", text)
+            self.assertFalse(os.path.exists(configured))
+            self.assertRefused(sk, lambda: B.library_save(sk, "L", folder=configured), "a named folder that vanished")
+            self.assertFalse(os.path.exists(configured))
+            # the built-in default is created
+            param.SetString("LibraryFolder", "")
+            fake = os.path.join(self.root, "userdata") + os.sep
+            with mock.patch.object(FreeCAD, "getUserAppDataDir", lambda: fake):
+                default = os.path.join(fake, "SketchBlocks")
+                self.assertEqual(B.library_folder(), default)
+                self.assertFalse(os.path.exists(default))
+                B.library_save(sk, "L")
+                self.assertTrue(os.path.isfile(os.path.join(default, "L.json")))
+                self.assertEqual([r["name"] for r in B.library_list()], ["L"])
+                B.library_delete("L")
+                self.assertEqual(B.library_list(), [])
         finally:
             param.SetString("LibraryFolder", old)
         self.assertEqual(B.library_folder("x"), "x")
@@ -848,3 +861,211 @@ class TestHandAssignedShape(LibCase):
         box.Length = 11.0
         self.doc.recompute()
         self.assertEqual(B.session_outside_changes(sk, state, members, full=True)["objects_changed"], ["Box (Length)"])
+
+
+def lone_line_doc(key="m0000", name="x", extra=None):
+    members = {key: member("l", [0.0, 0.0, 5.0, 0.0]), "m_b": member("l", [0.0, 0.0, 0.0, 5.0])}
+    members.update(extra or {})
+    return good_doc(name=name, members=members)
+
+
+class TestRepairRound(LibCase):
+    """Run 062's repair round: what comes in from outside must be what the sketch's C++ reader accepts."""
+
+    def write(self, name, doc, raw=None):
+        with open(os.path.join(self.lib, name + ".json"), "wb") as fh:
+            fh.write(raw if raw is not None else json.dumps(doc).encode())
+
+    def is_rigid(self, sk, inst):
+        """The C++ reader took the block data: a line of the instance cannot be dragged to another length."""
+        m = B._load(sk)["inst"][inst]["m"]
+        gid = B._id_map(sk)[m["m_b" if "m_b" in m else "m0000"]]
+        before = (sk.Geometry[gid].EndPoint - sk.Geometry[gid].StartPoint).Length
+        sk.moveGeometry(gid, 2, V(37.0, 29.0, 0), False)
+        g = sk.Geometry[gid]
+        return abs((g.EndPoint - g.StartPoint).Length - before) < 1e-6
+
+    def load_insert_rigid(self, doc, name="P", as_name=None):
+        self.write(name, doc)
+        sk = self.sketch(None, "R%d" % len(self.docs[0].Objects))
+        target = B.library_load(sk, name, folder=self.lib, as_name=as_name)
+        inst = B.insert(sk, target, 3, 4, 0.5)
+        sk.solve()
+        self.doc.recompute()
+        self.assertEqual(sk.DoF, 3, doc)
+        self.assertTrue(self.is_rigid(sk, inst), "the sketch stopped treating the instance as rigid: %r" % (doc,))
+        return sk
+
+    def test_an_unpaired_surrogate_is_refused_wherever_a_string_enters(self):
+        lone = "\ud800"
+        pair = "\ud83d\ude00"  # a surrogate pair written as two Python characters; in a file it reads back as one valid character
+        for bad in (lone, pair, "a" + lone):
+            if bad == pair:
+                ok = self.simple("L")
+                self.assertRefused(ok, lambda: B.define(ok, bad, [0, 1, 2]), "define a split pair")
+                self.assertRefused(ok, lambda: B.library_save(ok, bad, folder=self.lib), "save a split pair")
+                continue
+            self.write("P", lone_line_doc(key=bad))
+            sk = self.sketch(None, "A")
+            text = self.assertRefused(sk, lambda: B.library_load(sk, "P", folder=self.lib), "key %r" % bad)
+            self.assertIn("cannot be stored", text)
+            self.write("P", lone_line_doc(name=bad))
+            self.assertRefused(sk, lambda: B.library_load(sk, "P", folder=self.lib), "name field %r" % bad)
+            self.assertEqual([r["error"] is None for r in B.library_list(self.lib)], [False])
+            ok = self.simple("L")
+            self.assertRefused(ok, lambda: B.define(ok, bad, [0, 1, 2]), "define %r" % bad)
+            self.write("P", lone_line_doc())
+            self.assertRefused(ok, lambda: B.library_load(ok, "P", folder=self.lib, as_name=bad), "as_name %r" % bad)
+            self.assertRefused(ok, lambda: B.library_save(ok, bad, folder=self.lib), "save %r" % bad)
+            self.assertRefused(ok, lambda: B.library_load(ok, bad, folder=self.lib), "load %r" % bad)
+            self.assertRaises(B.SketchBlockError, B.library_delete, bad, self.lib)
+        # a hand-edited definition holding one is refused on save, with a sentence and not a UnicodeEncodeError
+        sk = self.simple("L")
+        data = json.loads(sk.BlockData)
+        data["defs"]["L"]["members"][lone] = data["defs"]["L"]["members"].pop("m0000")
+        sk.BlockData = json.dumps(data)
+        self.assertRefused(sk, lambda: B.library_save(sk, "L", folder=self.lib), "a stored key")
+        self.assertEqual(os.listdir(self.lib), ["P.json"])
+
+    def test_everything_library_load_accepts_is_read_by_the_cpp_parser(self):
+        extras = {
+            "astral \U0001F600 key": member("p", [1.0, 1.0]),
+            'quote" and \\ back': member("c", [1.0, 1.0, 0.5]),
+            "del\x7f and \u2028 and \u00e9": member("p", [2.0, 2.0]),
+            "e\u0301 nfd": member("p", [3.0, 2.0]),
+            "x" * 64: member("p", [1.0, 3.0]),
+        }
+        docs = [
+            lone_line_doc(extra=extras),
+            lone_line_doc(name="Caf\u00e9 \U0001F600 \"q\" \\"),
+            lone_line_doc(extra={"d": member("p", [1e-320, -0.0]), "e": member("p", [5e-324, 1e6]), "f": member("p", [-1e6, 1e-300])}),
+            lone_line_doc(extra={"i": member("a", [0, 0, 2, 994, 1000]), "j": member("a", [0, 0, 2, -1000, -994])}),
+            lone_line_doc(extra={"k": member("p", [1, 2]), "l": member("c", [1, 2, 3])}),  # ints in the file
+            lone_line_doc(extra={"\u00ff": member("p", [1.0, 1.0]), "\uffff": member("p", [2.0, 1.0]), "\ufffe": member("p", [1.0, 2.0])}),
+        ]
+        for i, d in enumerate(docs):
+            self.load_insert_rigid(d)
+        # the name a file calls itself and as_name need not be the file's name
+        self.load_insert_rigid(docs[1], as_name="Caf\u00e9 \U0001F600 as \"q\" \\")
+        self.load_insert_rigid(docs[0], name="Caf\u00e9 \U0001F600 file")
+
+    def test_an_instance_of_a_hand_defined_unicode_name_is_rigid(self):
+        sk = self.simple("L")
+        B.define(sk, "Caf\u00e9 \U0001F600", [0, 1])
+        inst = B.insert(sk, "Caf\u00e9 \U0001F600", 3, 4, 0.5)
+        sk.solve()
+        self.assertTrue(self.is_rigid(sk, inst))
+
+    def spec_alternating(self, n):
+        # line, construction line, line, ...: flags alternate; arcs and circles ride along
+        members = []
+        for i in range(n):
+            members.append(("l", [i * 1.0, (i * 7) % 5, i * 1.0 + 2, (i * 3) % 7]))
+        return C.Spec("Alt%d" % n, members)
+
+    def flagged_sketch(self, spec, pattern, doc=None):
+        sk = self.defined(spec, "blk", doc=doc, keep=False)
+        data = json.loads(sk.BlockData)
+        for i, key in enumerate(sorted(data["defs"]["blk"]["members"])):
+            data["defs"]["blk"]["members"][key]["c"] = pattern(i)
+        sk.BlockData = json.dumps(data, sort_keys=True, separators=(",", ":"))
+        return sk
+
+    def test_construction_members_cost_no_solve_per_member_and_land_where_insert_puts_them(self):
+        spec = self.spec_alternating(10)
+        for label, pattern in (("all", lambda i: True), ("alternating", lambda i: i % 2 == 0), ("none", lambda i: False), ("one", lambda i: i == 3)):
+            one = self.flagged_sketch(spec, pattern)
+            many = self.flagged_sketch(spec, pattern, doc=self.new_doc("Cm_" + label))
+            places = [(i * 2.0, i * 3.0, 0.1 * i) for i in range(40)]
+            for p in places:
+                B.insert(one, "blk", *p)
+            proxy = Proxy(many)
+            B.insert_many(proxy, "blk", places)
+            self.assertEqual(proxy.calls.get("setConstruction", 0), 0, label)
+            self.assertEqual(proxy.calls.get("toggleConstruction", 0), 0, label)
+            self.assertLessEqual(proxy.calls.get("solve", 0), 2, label)
+            self.assertEqual(proxy.calls.get("addGeometry", 0), 1, label)
+            flags1 = [bool(one.getConstruction(i)) for i in range(len(one.Geometry))]
+            flags2 = [bool(many.getConstruction(i)) for i in range(len(many.Geometry))]
+            self.assertEqual(flags1, flags2, label)
+            self.assertEqual(sum(flags2), 40 * sum(1 for i in range(10) if pattern(i)), label)
+            self.assertEqual(B.blocks(one)["instances"], B.blocks(many)["instances"], label)
+        # single insert: also no setConstruction
+        sk = self.flagged_sketch(spec, lambda i: i % 2 == 0, doc=self.new_doc("Cm_single"))
+        proxy = Proxy(sk)
+        B.insert(proxy, "blk", 1, 2, 0.3)
+        self.assertEqual(proxy.calls.get("setConstruction", 0), 0)
+        self.assertLessEqual(proxy.calls.get("solve", 0), 1)
+        self.assertEqual([bool(sk.getConstruction(i)) for i in range(10)], [i % 2 == 0 for i in range(10)])
+
+    def timed_flags(self, n_members, m, pattern, runs=3):
+        spec = self.spec_alternating(n_members)
+        rng = random.Random(1)
+        places = [(rng.uniform(-300, 300), rng.uniform(-300, 300), rng.uniform(0, 6)) for _ in range(m)]
+        ts = []
+        for _ in range(runs):
+            d = self.new_doc("TF%d" % len(self.docs))
+            sk = self.flagged_sketch(spec, pattern, doc=d)
+            t = time.perf_counter()
+            B.insert_many(sk, "blk", places)
+            ts.append(time.perf_counter() - t)
+            FreeCAD.closeDocument(d.Name)
+            self.docs.remove(d)
+        return statistics.median(ts)
+
+    def test_construction_batch_insert_is_within_twice_the_time_without_construction_members(self):
+        for n, m in ((10, 500), (40, 500)):
+            base = self.timed_flags(n, m, lambda i: False)
+            allc = self.timed_flags(n, m, lambda i: True)
+            alt = self.timed_flags(n, m, lambda i: i % 2 == 0)
+            report("insert_many %d x %d: no construction %.2f s, all construction %.2f s, alternating %.2f s (median of 3)" % (m, n, base, allc, alt))
+            self.assertLess(allc, 2.0 * base + 0.05)
+            self.assertLess(alt, 2.0 * base + 0.05)
+
+    def test_placement_errors_are_plain_sentences(self):
+        sk = self.simple("L")
+        for bad in (10**400, -(10**400), 1e999):
+            self.assertRefused(sk, lambda: B.insert(sk, "L", bad, 0, 0), "insert %r" % bad)
+            self.assertRefused(sk, lambda: B.insert_many(sk, "L", [(0, 0, 0), (bad, 0, 0)]), "insert_many %r" % bad)
+        # a hand-edited definition with a short g
+        data = json.loads(sk.BlockData)
+        data["defs"]["L"]["members"]["m0000"]["g"] = [0.0]
+        sk.BlockData = json.dumps(data)
+        self.assertRefused(sk, lambda: B.insert(sk, "L", 0, 0, 0), "short g")
+        self.assertRefused(sk, lambda: B.insert_many(sk, "L", [(0, 0, 0)]), "short g, many")
+        # huge integers in a file
+        for g in ([0, 0, 10**400, 0], [0, 0, 5, 0, 1], [0, 0, 5]):
+            self.write("H", lone_line_doc(extra={"z": member("l", g)}))
+            skh = self.sketch(None, "H%d" % len(g))
+            text = self.assertRefused(skh, lambda: B.library_load(skh, "H", folder=self.lib), "file %r" % g)
+            self.assertNotIn("Error", text)
+        self.write("H", lone_line_doc(extra={"z": member("l", [0, 0, 10**400, 0])}))
+        sk2 = self.sketch(None, "H9")
+        self.assertIn("1e6 mm", self.assertRefused(sk2, lambda: B.library_load(sk2, "H", folder=self.lib), "range"))
+        self.assertEqual(os.path.isfile(os.path.join(self.lib, "H.json")), True)
+
+    def test_a_normalisation_clash_is_not_called_a_case_clash_only(self):
+        sk = self.simple("Caf\u00e9")
+        B.define(sk, "Cafe\u0301", [0, 1])
+        B.library_save(sk, "Caf\u00e9", folder=self.lib)
+        before = self.folder_bytes()
+        text = self.assertRefused(sk, lambda: B.library_save(sk, "Cafe\u0301", folder=self.lib, overwrite=True), "nfd")
+        self.assertIn("accented letter", text)
+        self.assertIn("case", text)
+        self.assertEqual(self.folder_bytes(), before)
+
+    def test_insert_many_takes_what_insert_takes_and_refuses_a_dict(self):
+        sk = self.simple("L")
+        one = B.insert(sk, "L", Fraction(1, 2), 2, Fraction(1, 3))
+        many = B.insert_many(sk, "L", [(Fraction(1, 2), 2, Fraction(1, 3)), (3, 4, 5)])
+        self.assertEqual(len(many), 2)
+        X, Y, th = B.instance_placement(sk, many[0])
+        self.assertAlmostEqual(X, 0.5, delta=MM)
+        self.assertAlmostEqual(th, 1 / 3, delta=1e-9)
+
+        for bad in ("1", True, None, [1]):
+            self.assertRaises(B.SketchBlockError, B.insert, sk, "L", bad, 0, 0)
+            self.assertRaises(B.SketchBlockError, B.insert_many, sk, "L", [(bad, 0, 0)])
+        self.assertRefused(sk, lambda: B.insert_many(sk, "L", {(1, 2, 3): 1}), "dict")
+        self.assertRefused(sk, lambda: B.insert_many(sk, "L", {1: 1, 2: 2, 3: 3}), "dict")
+        self.assertRefused(sk, lambda: B.insert_many(sk, "L", [{1: 1, 2: 2, 3: 3}]), "dict as a placement")

@@ -70,11 +70,13 @@ else, an empty or degenerate set, a duplicate name and the like raise
 import contextlib
 import json
 import math
+import numbers
 import os
 import unicodedata
 
 import FreeCAD
 import Part
+import Sketcher
 
 V = FreeCAD.Vector
 TWO_PI = 2.0 * math.pi
@@ -196,10 +198,34 @@ def _make(t, g):
     return Part.ArcOfCircle(Part.Circle(V(g[0], g[1], 0), V(0, 0, 1), g[2]), g[3], g[4])
 
 
+def _text(value, what):
+    """`value`, a string that comes from outside, can be stored in the block data.  A lone surrogate (``"\\ud800"``) can
+    be written by Python's json but the sketch's reader refuses it and then ignores all block data, so the blocks would
+    stop being rigid; refuse it where it enters."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise SketchBlockError("%s contains a character that cannot be stored (an unpaired surrogate)" % what)
+
+
+def _real(v):
+    """A placement number as a float; a bool, a string and anything that is not a real number is refused, and so is a
+    number too large for a float.  Python ints, floats, numpy numbers and Fractions all pass."""
+    if isinstance(v, bool) or not isinstance(v, numbers.Real):
+        raise SketchBlockError("the placement must be numbers")
+    try:
+        return float(v)
+    except (OverflowError, ValueError, TypeError):
+        raise SketchBlockError("the placement must be finite numbers")
+
+
 def _check_distinct(members):
     pts = []
-    for m in members:
-        pts += _points(m["t"], m["g"])
+    try:
+        for m in members:
+            pts += _points(m["t"], m["g"])
+    except (IndexError, KeyError, TypeError, ValueError):
+        raise SketchBlockError("a block definition is malformed: a member lacks its kind or its numbers")
     if not pts:
         raise SketchBlockError("a block needs at least one member")
     p0 = pts[0]
@@ -283,6 +309,7 @@ def _transaction(sk, label):
 def _name_ok(data, name):
     if not isinstance(name, str) or not name.strip():
         raise SketchBlockError("a block needs a name")
+    _text(name, "the block's name")
     if name in data["defs"]:
         raise SketchBlockError("a block called '%s' already exists" % name)
     if name in data["inst"]:
@@ -331,23 +358,27 @@ def define(sk, name, geo_ids):
     return name
 
 
+def _flagged(geo, flag):
+    """`geo`, carrying the construction flag when `flag`.  The flag travels with the geometry into ``addGeometry``;
+    ``setConstruction`` after the fact costs one solve per call."""
+    if flag:
+        ext = Sketcher.SketchGeometryExtension()
+        ext.Construction = True
+        geo.setExtension(ext)
+    return geo
+
+
 def _add_instance_geometry(sk, defn, X, Y, th, keys=None):
     """Add the members of `defn` at the placement; returns {key: persistent id}."""
     keys = sorted(defn["members"]) if keys is None else keys
-    geos, flags = [], []
+    geos = []
     for key in keys:
         m = defn["members"][key]
-        geos.append(_make(m["t"], _to_world(m["t"], m["g"], X, Y, th)))
-        flags.append(bool(m.get("c")))
+        geos.append(_flagged(_make(m["t"], _to_world(m["t"], m["g"], X, Y, th)), bool(m.get("c"))))
     gids = sk.addGeometry(geos, False)
     if isinstance(gids, int):
         gids = [gids]
-    out = {}
-    for key, gid, flag in zip(keys, gids, flags):
-        if flag:
-            sk.setConstruction(gid, True)
-        out[key] = sk.getGeometryId(gid)
-    return out
+    return {key: sk.getGeometryId(gid) for key, gid in zip(keys, gids)}
 
 
 def insert(sk, name, x=0.0, y=0.0, angle=0.0):
@@ -360,10 +391,7 @@ def insert(sk, name, x=0.0, y=0.0, angle=0.0):
     data = _load(sk)
     if name not in data["defs"]:
         raise SketchBlockError("there is no block called '%s'" % name)
-    try:
-        x, y, angle = float(x), float(y), float(angle)
-    except (TypeError, ValueError):
-        raise SketchBlockError("the placement must be numbers")
+    x, y, angle = _real(x), _real(y), _real(angle)
     if not all(map(math.isfinite, (x, y, angle))):
         raise SketchBlockError("the placement must be finite numbers")
     defn = data["defs"][name]
@@ -397,6 +425,8 @@ def insert_many(sk, name, placements):
     data = _load(sk)
     if name not in data["defs"]:
         raise SketchBlockError("there is no block called '%s'" % name)
+    if isinstance(placements, (dict, set, frozenset, str, bytes)):
+        raise SketchBlockError("the placements must be a list of (x, y, angle)")
     try:
         placements = list(placements)
     except TypeError:
@@ -404,12 +434,11 @@ def insert_many(sk, name, placements):
     clean = []
     for i, p in enumerate(placements):
         try:
-            ok = len(p) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in p)
-        except TypeError:
-            ok = False
-        if not ok:
+            if isinstance(p, (dict, set, frozenset, str, bytes)) or len(p) != 3:
+                raise SketchBlockError("")
+            x, y, a = (_real(v) for v in p)
+        except (SketchBlockError, TypeError):
             raise SketchBlockError("placement %d must be three numbers (x, y, angle); nothing was changed" % (i + 1))
-        x, y, a = (float(v) for v in p)
         if not all(map(math.isfinite, (x, y, a))):
             raise SketchBlockError("placement %d must be finite numbers; nothing was changed" % (i + 1))
         clean.append((x, y, a))
@@ -430,18 +459,14 @@ def insert_many(sk, name, placements):
     keys = sorted(defn["members"])
     with _transaction(sk, "Insert blocks"):
         try:
-            geos, flags = [], []
+            geos = []
             for x, y, a in clean:
                 for key in keys:
                     m = defn["members"][key]
-                    geos.append(_make(m["t"], _to_world(m["t"], m["g"], x, y, a)))
-                    flags.append(bool(m.get("c")))
+                    geos.append(_flagged(_make(m["t"], _to_world(m["t"], m["g"], x, y, a)), bool(m.get("c"))))
             gids = sk.addGeometry(geos, False)
             if isinstance(gids, int):
                 gids = [gids]
-            for g, flag in zip(gids, flags):
-                if flag:
-                    sk.setConstruction(g, True)
             persistent = [sk.getGeometryId(g) for g in gids]
         except SketchBlockError:
             raise
@@ -1040,19 +1065,25 @@ def library_folder(folder=None):
     return custom or os.path.join(FreeCAD.getUserAppDataDir(), "SketchBlocks")
 
 
+def _is_default_folder(folder):
+    """True when `folder` is the built-in default: no argument and no configured ``LibraryFolder``."""
+    return folder is None and not FreeCAD.ParamGet(LIBRARY_PARAM).GetString("LibraryFolder", "").strip()
+
+
 def _folder_for(folder, create):
-    """The folder; a missing default one is created when `create`."""
+    """The folder; only the built-in default one is created when missing and `create`: a folder somebody named, in an
+    argument or in the parameter, that has gone is reported, not silently made again."""
     path = library_folder(folder)
     if not os.path.isdir(path):
         if os.path.exists(path):
             raise SketchBlockError("the block library folder is a file, not a folder")
-        if folder is None and create:
+        if create and _is_default_folder(folder):
             try:
                 os.makedirs(path, exist_ok=True)
             except OSError as exc:
                 raise SketchBlockError("the block library folder cannot be created (%s)" % exc.strerror)
         else:
-            raise SketchBlockError("the block library folder does not exist")
+            raise SketchBlockError("the block library folder does not exist (%s)" % path)
     return path
 
 
@@ -1060,6 +1091,7 @@ def _file_name_ok(name):
     """`name` may be the name of a file in the library folder, or raises."""
     if not isinstance(name, str) or not name.strip():
         raise SketchBlockError("a library block needs a name")
+    _text(name, "the library name")
     if name != name.strip() or name.endswith("."):
         raise SketchBlockError("a library name cannot start or end with a space or end with a dot")
     if name.startswith("."):
@@ -1091,9 +1123,13 @@ def _file_of(path, name):
 def _num(v, lo, hi, what):
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise SketchBlockError("%s must be a number" % what)
-    v = float(v)
+    limit = "at most 1e6 mm either way" if hi == _MAX_COORD else "at most 1e3 rad either way"
+    try:
+        v = float(v)
+    except OverflowError:
+        raise SketchBlockError("%s is out of range (%s)" % (what, limit))
     if not math.isfinite(v) or not lo <= v <= hi:
-        raise SketchBlockError("%s is out of range" % what)
+        raise SketchBlockError("%s is out of range (%s)" % (what, limit))
     return v
 
 
@@ -1107,6 +1143,7 @@ def _check_members(members):
     for key, m in members.items():
         if not isinstance(key, str) or not key or len(key) > 64 or any(ord(ch) < 32 for ch in key):
             raise SketchBlockError("a member key is not valid")
+        _text(key, "a member key")
         if not isinstance(m, dict) or set(m) != {"t", "g", "c"}:
             raise SketchBlockError("member '%s' must have exactly t, g and c" % key)
         t, g, c = m["t"], m["g"], m["c"]
@@ -1174,6 +1211,7 @@ def _read_block(path, name):
             raise SketchBlockError("the file of block '%s' lacks or adds keys" % name)
         if not isinstance(doc["name"], str) or doc["units"] != "mm":
             raise SketchBlockError("the file of block '%s' must have a name and units 'mm'" % name)
+        _text(doc["name"], "the name in the file of block '%s'" % name)
         return _check_members(doc["members"])
     except SketchBlockError:
         raise
@@ -1216,7 +1254,9 @@ def library_save(sk, name, folder=None, overwrite=False):
     target = name + ".json"
     for e in _entries(path):
         if e != target and _norm(e) == _norm(target):
-            raise SketchBlockError("the library already has '%s', which differs from '%s' only by case" % (e[: -len(".json")], name))
+            raise SketchBlockError(
+                "the library already has '%s', which differs from '%s' only by case or by how an accented letter is written" % (e[: -len(".json")], name)
+            )
     full = os.path.join(path, target)
     if os.path.isdir(full):
         raise SketchBlockError("'%s' is a folder in the library, not a block file" % name)

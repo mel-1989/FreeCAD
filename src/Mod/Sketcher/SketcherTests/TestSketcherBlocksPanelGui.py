@@ -2661,6 +2661,73 @@ class TestBlocksPanelLibrary(EditCase):
         self.click_button("blocksCancel")
         self.assertIsNone(self.panel.session, self.status())
 
+    def test_load_and_insert_says_both_steps_when_the_insert_fails_and_that_a_success_took_two_undo_steps(self):
+        self.put("blk")
+        doc = self.new_doc("LibBoth")
+        sk = doc.addObject("Sketcher::SketchObject", "E")
+        doc.recompute()
+        self.open_panel(sk)
+        self.lib_choose("blk")
+        real = B.insert
+
+        def refuse(*a, **k):
+            raise B.SketchBlockError("the sketch has no room")
+
+        B.insert = refuse
+        count = doc.UndoCount
+        try:
+            self.click_button("blocksLibInsert")
+        finally:
+            B.insert = real
+        text = self.status()
+        self.assertIn("The sketch has no room", text)
+        self.assertIn("Loaded 'blk'", text)
+        self.assertIn("one undo step", text)
+        self.assertEqual(sorted(B.blocks(sk)["definitions"]), ["blk"])  # the load stands
+        self.assertEqual(doc.UndoCount, count + 1)
+        self.click_button("blocksLibInsert")
+        self.assertIn("already in the sketch", self.status())  # the definition is there now: one step
+        self.doc_undo(sk)
+        B.delete_definition(sk, "blk")
+        self.refresh_panel()
+        self.lib_choose("blk")
+        self.click_button("blocksLibInsert")
+        self.assertIn("two undo steps", self.status())
+
+    def test_a_row_acts_on_the_folder_it_was_listed_from_or_refuses_when_the_folder_changed(self):
+        self.put("blk")
+        other = os.path.join(self.root, "other")
+        os.mkdir(other)
+        sk = self.sketch()
+        self.open_panel(sk)
+        try:
+            for button in ("blocksLibLoad", "blocksLibInsert", "blocksLibDelete"):
+                self.param.SetString("LibraryFolder", self.lib)
+                self.refresh_panel()
+                self.panel.refresh_library()
+                self.settle()
+                self.lib_choose("blk")
+                if button == "blocksLibDelete":
+                    self.click_button(button)  # the first press only asks
+                snap = _snapshot(sk)
+                self.param.SetString("LibraryFolder", other)
+                self.click_button(button)
+                self.assertIn("folder changed", self.status(), button)
+                self.assertSameSketch(sk, snap)
+                self.assertTrue(os.path.isfile(os.path.join(self.lib, "blk.json")), button)
+                self.assertEqual(os.listdir(other), [])
+                self.assertIn(other, _widget("blocksLibFolder", QtWidgets.QLabel).text())
+            # Save is the same call path
+            self.param.SetString("LibraryFolder", self.lib)
+            self.panel.refresh_library()
+            self.panel._lib_shown = self.lib
+            self.param.SetString("LibraryFolder", other)
+            self.assertIsNone(self.panel._lib_run(lambda: B.library_save(sk, "T", overwrite=True), touches_sketch=False))
+            self.assertEqual(os.listdir(other), [])
+            self.assertIn("folder changed", self.status())
+        finally:
+            self.param.SetString("LibraryFolder", self.lib)
+
     def test_a_refused_load_shows_the_apis_sentence(self):
         self.put("T", members={"m0000": {"t": "l", "g": [0.0, 0.0, 9.0, 0.0], "c": False}})
         sk = self.sketch()
