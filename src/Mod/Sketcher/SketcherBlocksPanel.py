@@ -28,6 +28,12 @@ geometry), inserts an instance from a form or by one click in the 3D view, selec
 deletes instances and definitions, and edits a definition in place through an edit session.  The dock is non-modal, so
 the sketch's task dialog stays active.
 
+The Library section (slice 5b1) lists the block files in the library folder of :mod:`SketcherBlocks`, with the folder in use,
+and saves the chosen definition to it, loads a library block into the sketch (alone, or followed by one insert at the
+form's X, Y and angle) and deletes a file after a second press.  A file that cannot be read is listed with its reason and
+offers no action.  A load during an edit session is refused, since the session's rollback is a document undo.  The list is
+read when the panel opens and after each library action; the API refuses a row whose file has gone.
+
 Rows are keyed by name, never by position.  The panel reads the sketch again, deferred by one event-loop turn, after a
 change to ``BlockData`` or to the number of geometries, and after undo and redo; a drag moves geometry without
 changing either, so it costs the panel nothing.  An action on a row that has gone is refused by the API with a
@@ -71,6 +77,12 @@ FINISH_NAME = "blocksFinish"
 CANCEL_NAME = "blocksCancel"
 SESSION_NAME = "blocksSession"
 CLOSE_NAME = "blocksClose"
+LIB_FOLDER_NAME = "blocksLibFolder"
+LIB_LIST_NAME = "blocksLibList"
+LIB_SAVE_NAME = "blocksLibSave"
+LIB_LOAD_NAME = "blocksLibLoad"
+LIB_INSERT_NAME = "blocksLibInsert"
+LIB_DELETE_NAME = "blocksLibDelete"
 
 _ROLE = QtCore.Qt.UserRole
 _panel = None
@@ -303,6 +315,9 @@ class BlocksPanel(QtWidgets.QDockWidget):
         self._viewer = None
         self._view_filter = None
         self.session = None  # the edit session, see the end of the class
+        self._lib_armed = None  # ("delete" | "save", name): the first press of a two-press action
+        self._lib_rows = []  # B.library_list() as last read
+        self._lib_shown = None  # the folder the list was read from; a row acts on that folder or on none
         self._build()
         self._dw = _DocWatch(self)
         self._gw = DP._GuiWatch(self)
@@ -311,6 +326,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
         Gui.addDocumentObserver(self._gw)
         Gui.Selection.addObserver(self._sw)
         self.refresh()
+        self.refresh_library()
 
     # -- widgets -----------------------------------------------------------
     def _build(self):
@@ -382,6 +398,37 @@ class BlocksPanel(QtWidgets.QDockWidget):
         arow.addWidget(self.delete_button)
         arow.addWidget(self.edit_button)
         lay.addLayout(arow)
+
+        head = QtWidgets.QLabel(tr("Library"))
+        head.setObjectName("blocksLibHead")
+        lay.addWidget(head)
+        self.lib_folder = QtWidgets.QLabel("")
+        self.lib_folder.setObjectName(LIB_FOLDER_NAME)
+        self.lib_folder.setWordWrap(True)
+        self.lib_folder.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        lay.addWidget(self.lib_folder)
+        self.lib_list = QtWidgets.QListWidget()
+        self.lib_list.setObjectName(LIB_LIST_NAME)
+        self.lib_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.lib_list.setWordWrap(True)
+        self.lib_list.setTextElideMode(QtCore.Qt.ElideNone)
+        self.lib_list.setMinimumHeight(70)
+        self.lib_list.setAccessibleName(tr("Blocks in the library folder"))
+        self.lib_list.setToolTip(tr("Blocks saved as files. Loading copies one into this sketch; the sketch keeps no link to the file"))
+        self.lib_list.setStyleSheet(
+            "QListWidget::item:selected, QListWidget::item:selected:!active "
+            "{ background: palette(highlight); color: palette(highlighted-text); }"
+        )
+        self.lib_list.itemSelectionChanged.connect(self._on_lib_choice)
+        lay.addWidget(self.lib_list)
+        self.lib_save_button = self._button(tr("Save"), LIB_SAVE_NAME, tr("Saves the chosen definition to the library folder"), self.library_save_chosen)
+        self.lib_load_button = self._button(tr("Load"), LIB_LOAD_NAME, tr("Copies the chosen library block into this sketch as a definition"), self.library_load_chosen)
+        self.lib_insert_button = self._button(tr("Load and insert"), LIB_INSERT_NAME, tr("Copies the chosen library block into this sketch and places it at X, Y and the angle"), self.library_load_and_insert)
+        self.lib_delete_button = self._button(tr("Delete file"), LIB_DELETE_NAME, tr("Deletes the chosen block's file from the library folder. Press twice. Sketches that loaded it are not changed"), self.library_delete_chosen)
+        lrow = QtWidgets.QGridLayout()
+        for i, b in enumerate((self.lib_save_button, self.lib_load_button, self.lib_insert_button, self.lib_delete_button)):
+            lrow.addWidget(b, i // 2, i % 2)  # two by two: four buttons in a row overlap in a narrow dock
+        lay.addLayout(lrow)
 
         self.session_label = QtWidgets.QLabel("")
         self.session_label.setObjectName(SESSION_NAME)
@@ -513,6 +560,11 @@ class BlocksPanel(QtWidgets.QDockWidget):
         self.delete_button.setEnabled(ok and not busy and c is not None)
         self.edit_button.setEnabled(ok and not busy and c is not None and c[0] == "inst")
         self.tree.setEnabled(ok and not busy)
+        lib = self.chosen_library()
+        self.lib_save_button.setEnabled(ok and d is not None)
+        self.lib_load_button.setEnabled(ok and not busy and lib is not None)
+        self.lib_insert_button.setEnabled(ok and not busy and lib is not None)
+        self.lib_delete_button.setEnabled(self._alive() and lib is not None)
         self.finish_button.setVisible(busy)
         self.cancel_button.setVisible(busy)
         self.session_label.setVisible(busy)
@@ -777,6 +829,162 @@ class BlocksPanel(QtWidgets.QDockWidget):
 
             return self._run(lambda: B.delete_instance(self.sketch, name) or [], done)
         return self._run(lambda: B.delete_definition(self.sketch, name), lambda _: tr("Deleted the definition %s.") % name)
+
+    # -- library ---------------------------------------------------------------------------
+    def refresh_library(self):
+        """Read the library folder again and rebuild its list; the chosen row stays chosen if it is still there."""
+        keep = self.chosen_library()
+        self._lib_armed = None
+        try:
+            self._lib_shown = B.library_folder()
+            self.lib_folder.setText(tr("Folder: %s") % self._lib_shown)
+            self._lib_rows = B.library_list()
+            note = ""
+        except B.SketchBlockError as exc:
+            self._lib_rows = []
+            note = _sentence(str(exc))
+        self.lib_list.blockSignals(True)
+        try:
+            self.lib_list.clear()
+            for r in self._lib_rows:
+                if r["error"] is None:
+                    item = QtWidgets.QListWidgetItem(tr("%s: %d member(s)") % (r["name"], r["members"]))
+                else:
+                    item = QtWidgets.QListWidgetItem(tr("%s: cannot be used (%s)") % (r["name"], _sentence(r["error"]).rstrip(".")))
+                    item.setToolTip(r["error"])
+                    item.setFlags(item.flags() & ~QtCore.Qt.ItemIsSelectable & ~QtCore.Qt.ItemIsEnabled)
+                item.setData(_ROLE, {"name": r["name"], "ok": r["error"] is None})
+                self.lib_list.addItem(item)
+                if keep is not None and r["error"] is None and r["name"] == keep:
+                    item.setSelected(True)
+                    self.lib_list.setCurrentItem(item)
+            if note:
+                self.lib_list.addItem(QtWidgets.QListWidgetItem(note))
+                self.lib_list.item(self.lib_list.count() - 1).setFlags(QtCore.Qt.NoItemFlags)
+        finally:
+            self.lib_list.blockSignals(False)
+        self._update_buttons()
+
+    def chosen_library(self):
+        """The name of the chosen library row, or None (a row that cannot be used is never chosen)."""
+        items = self.lib_list.selectedItems()
+        if not items:
+            return None
+        d = items[0].data(_ROLE) or {}
+        return d["name"] if d.get("ok") else None
+
+    def _on_lib_choice(self):
+        self._user_action()
+        self._lib_armed = None
+        self._update_buttons()
+
+    def _lib_name(self):
+        name = self.chosen_library()
+        if name is None:
+            raise B.SketchBlockError(tr("Choose a block in the library first."))
+        return name
+
+    def _lib_run(self, fn, done=None, touches_sketch=True):
+        """Like _run for the library: a refusal shows the API's sentence, the list is read again."""
+        self._lib_armed = None
+        try:
+            now = B.library_folder()
+        except B.SketchBlockError:
+            now = None
+        shown = self._lib_shown
+        if shown is not None and now != shown:
+            self.refresh_library()
+            self.status.setText(tr("The library folder changed from %s to %s since the list was shown. The list is read again; choose the block again.") % (shown, now))
+            return None
+        if touches_sketch and self.session is not None:
+            self.status.setText(tr("Finish or cancel the edit first: a block cannot be loaded during one."))
+            return None
+        res = self._run(fn, done) if touches_sketch else self._run_plain(fn, done)
+        self.refresh_library()
+        return res
+
+    def _run_plain(self, fn, done):
+        if not self._alive():
+            return None
+        try:
+            res = fn()
+        except B.SketchBlockError as exc:
+            self.status.setText(_sentence(str(exc)))
+            return None
+        except Exception as exc:
+            self.status.setText(tr("That could not be done (%s).") % _sentence(str(exc)).rstrip("."))
+            return None
+        if done is not None:
+            self.status.setText(done(res))
+        return res if res is not None else True
+
+    def library_save_chosen(self):
+        d = self._chosen_def()
+        if d is None:
+            self.status.setText(tr("Choose a definition first."))
+            return None
+        again = self._lib_armed == ("save", d)
+        exists = any(r["name"] == d for r in self._lib_rows)
+        if exists and not again:
+            self._lib_armed = ("save", d)
+            self.status.setText(tr("The library already has a block called '%s'. Press Save again to replace it.") % d)
+            return None
+        return self._lib_run(lambda: B.library_save(self.sketch, d, overwrite=again), lambda p: tr("Saved '%s' to the library.") % d, touches_sketch=False)
+
+    def library_load_chosen(self):
+        def go():
+            return B.library_load(self.sketch, self._lib_name())
+
+        name = self.chosen_library()
+        return self._lib_run(go, lambda n: tr("Loaded '%s' into the sketch. The sketch keeps its own copy; changing the file later changes nothing here.") % n) and self._pick_loaded(name)
+
+    def _pick_loaded(self, name):
+        if name is not None:
+            self._choose_row("def", name)
+            self._update_buttons()
+        return True
+
+    def library_load_and_insert(self):
+        """Load the chosen block, then place one instance at the X, Y and angle of the form.  The form is read first, so
+        a bad value refuses before anything is loaded; the two steps are the API's two calls, each its own undo entry,
+        and the status says what stands when the second one fails."""
+        def go():
+            name = self._lib_name()
+            x, y = parse_length(self.x_edit.text()), parse_length(self.y_edit.text())
+            angle = parse_angle(self.angle_edit.text())
+            had = name in B._load(self.sketch)["defs"]
+            loaded = B.library_load(self.sketch, name)
+            new = not had
+            try:
+                inst = B.insert(self.sketch, loaded, x, y, angle)
+            except B.SketchBlockError as exc:
+                if new:
+                    raise B.SketchBlockError(
+                        tr("Loaded '%s' into the sketch (one undo step) but it was not inserted: %s Undo once to remove the loaded block.") % (loaded, _sentence(str(exc)))
+                    )
+                raise
+            return loaded, inst, new
+
+        def done(r):
+            if r[2]:
+                return tr("Loaded '%s' and inserted %s. That took two undo steps: the load and the insert.") % (r[0], r[1])
+            return tr("'%s' was already in the sketch; inserted %s (one undo step).") % (r[0], r[1])
+
+        res = self._lib_run(go, done)
+        if res and res is not True:
+            self._pick_loaded(res[0])
+        return res
+
+    def library_delete_chosen(self):
+        name = self.chosen_library()
+        if name is None:
+            self.status.setText(tr("Choose a block in the library first."))
+            return None
+        if self._lib_armed != ("delete", name):
+            self._lib_armed = ("delete", name)
+            self.status.setText(tr("Press Delete file again to remove '%s' from the library folder. Sketches that loaded it are not changed.") % name)
+            return None
+        return self._lib_run(lambda: B.library_delete(name), lambda _: tr("Deleted '%s' from the library.") % name, touches_sketch=False)
 
     # -- selection both ways --------------------------------------------------------------
     def _user_action(self):

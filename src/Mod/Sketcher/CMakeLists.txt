@@ -42,6 +42,8 @@ set(Sketcher_TestScripts
     SketcherTests/TestSketchBlocks.py
     SketcherTests/SketchBlocksCorpus.py
     SketcherTests/SketchBlocksMutants.py
+    SketcherTests/TestSketchBlockLibrary.py
+    SketcherTests/SketchBlockLibraryMutants.py
 )
 
 if(BUILD_GUI)

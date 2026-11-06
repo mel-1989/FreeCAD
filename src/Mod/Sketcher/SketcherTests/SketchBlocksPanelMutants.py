@@ -229,7 +229,7 @@ mutant(
 mutant(
     "x_and_y_swapped",
     "the form's X and Y fields are read the other way round",
-    [(PANEL, "            x, y = parse_length(self.x_edit.text()), parse_length(self.y_edit.text())", "            x, y = parse_length(self.y_edit.text()), parse_length(self.x_edit.text())")],
+    [(PANEL, "            x, y = parse_length(self.x_edit.text()), parse_length(self.y_edit.text())\n            return B.insert(", "            x, y = parse_length(self.y_edit.text()), parse_length(self.x_edit.text())\n            return B.insert(")],
     [NUMBER],
 )
 mutant(
@@ -295,9 +295,9 @@ mutant(
     [RIGID, RIGIDADD, H_RIGID],
 )
 mutant(
-    "a_lone_member_counts_as_a_rigid_move",
-    "one member moved is read as the instance moving",
-    [(API, "    if len(keys) < 2:", "    if len(keys) < 1:")],
+    "a_lone_member_is_not_a_rigid_move",
+    "a lone member moved rigidly is read as a change of the block, so its siblings shift",
+    [(API, "    if not keys:\n        return None\n    pairs, radii", "    if len(keys) < 2:\n        return None\n    pairs, radii")],
     [H_LONE],
 )
 mutant(
@@ -490,7 +490,7 @@ mutant(
 mutant(
     "appearance_of_other_objects_not_compared",
     "how another object looks is undone by the rollback and nothing says so",
-    [(API, "    if not own:\n        _add_appearance(obj, out)\n", "")],
+    [(API, "        _add_appearance(obj, out)\n        _add_hand_shape", "        _add_hand_shape")],
     [t("TestBlocksPanelOutsideTheSession", "test_how_another_object_looks_is_named_before_finish_and_before_cancel")],
 )
 mutant(

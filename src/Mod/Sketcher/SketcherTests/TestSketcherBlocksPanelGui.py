@@ -13,7 +13,9 @@ import ast
 import math
 import os
 import re
+import shutil
 import statistics
+import tempfile
 import time
 
 import FreeCAD
@@ -2436,3 +2438,343 @@ class TestBlocksPanelOutsideTheSession(EditCase):
         self.assertEqual(len(P.messages), n0 + 1)
         self.assertIn("ended", P.messages[-1])
         self.panel = None
+
+    def test_a_shape_assigned_to_a_feature_with_no_inputs_is_named_before_finish_and_before_cancel(self):
+        """5b1 check 10: a shape somebody assigned is not recomputed, so rolling the session back would take it away."""
+        for n, button in enumerate(("blocksFinish", "blocksCancel")):
+            self.close_panel()
+            if Gui.ActiveDocument is not None:
+                Gui.ActiveDocument.resetEdit()
+                _pump(40)
+            sk = self.scene("OutsideShape%d" % n)
+            doc = sk.Document
+            hand = doc.addObject("Part::Feature", "Hand")
+            doc.addObject("Part::Box", "Box")
+            doc.recompute()
+            self.open_panel(sk)
+            self.begin(sk)
+            self.member_move(sk)
+            self.stock(sk, "assign", lambda: setattr(hand, "Shape", Part.makeBox(1, 2, 3)))
+            self.click_button(button)
+            self.assertIsNotNone(self.panel.session, self.status())
+            self.assertIn("Hand (Shape)", self.status(), button)
+            self.click_button(button)
+            self.assertIsNone(self.panel.session, self.status())
+
+    def test_no_false_shape_warning_on_four_runs_without_a_change(self):
+        for n in range(4):
+            self.close_panel()
+            if Gui.ActiveDocument is not None:
+                Gui.ActiveDocument.resetEdit()
+                _pump(40)
+            sk = self.scene("OutsideShapeQuiet%d" % n)
+            doc = sk.Document
+            hand = doc.addObject("Part::Feature", "Hand")
+            hand.Shape = Part.makeBox(1, 2, 3)
+            box = doc.addObject("Part::Box", "Box")
+            doc.recompute()
+            self.open_panel(sk)
+            self.begin(sk)
+            self.member_move(sk)
+            if n == 1:
+                box.touch()
+                doc.recompute()
+            if n == 2:
+                hand.touch()
+                doc.recompute()
+            self.click_button("blocksFinish" if n % 2 else "blocksCancel")
+            self.assertIsNone(self.panel.session, "run %d: %s" % (n, self.status()))
+            self.assertNotIn("not part of the block", self.status())
+
+
+class TestBlocksPanelLibrary(EditCase):
+    """G10 slice 5b1, check 11: the Library section of the panel, driven through real widgets."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = tempfile.mkdtemp(prefix="panellib_")
+        self.lib = os.path.join(self.root, "lib")
+        os.mkdir(self.lib)
+        self.param = FreeCAD.ParamGet(B.LIBRARY_PARAM)
+        self.old_folder = self.param.GetString("LibraryFolder", "")
+        self.param.SetString("LibraryFolder", self.lib)
+
+    def tearDown(self):
+        try:
+            super().tearDown()
+        finally:
+            self.param.SetString("LibraryFolder", self.old_folder)
+            shutil.rmtree(self.root, ignore_errors=True)
+
+    def sketch(self, name="Lib"):
+        return self.line_block_sketch(self.new_doc(name), "Sk", placements=((0, 0, 0),))
+
+    def put(self, name, **over):
+        d = {"format": "cadfork-sketch-block", "version": 1, "name": name, "units": "mm", "members": {"m0000": {"t": "l", "g": [0.0, 0.0, 5.0, 0.0], "c": False}, "m0001": {"t": "c", "g": [2.0, 1.0, 0.5], "c": True}}}
+        d.update(over)
+        import json
+
+        with open(os.path.join(self.lib, name + ".json"), "w") as fh:
+            json.dump(d, fh)
+
+    def lib_rows(self):
+        lst = _widget("blocksLibList", QtWidgets.QListWidget)
+        return [(lst.item(i).text(), bool(lst.item(i).flags() & QtCore.Qt.ItemIsSelectable)) for i in range(lst.count())]
+
+    def lib_choose(self, name):
+        lst = _widget("blocksLibList", QtWidgets.QListWidget)
+        for i in range(lst.count()):
+            if lst.item(i).text().startswith(name + ":"):
+                lst.setCurrentItem(lst.item(i))
+                lst.item(i).setSelected(True)
+                self.settle()
+                return
+        self.fail("no library row " + name)
+
+    def enabled(self, name):
+        return _widget(name, QtWidgets.QPushButton).isEnabled()
+
+    def test_the_section_lists_what_the_api_lists_shows_bad_files_and_the_folder(self):
+        self.put("good one")
+        self.put("newer", version=2)
+        open(os.path.join(self.lib, "junk.json"), "w").write("{")
+        open(os.path.join(self.lib, "note.txt"), "w").write("x")
+        sk = self.sketch()
+        self.open_panel(sk)
+        self.assertIn(self.lib, _widget("blocksLibFolder", QtWidgets.QLabel).text())
+        api = B.library_list()
+        rows = self.lib_rows()
+        self.assertEqual(len(rows), len(api))
+        for (text, selectable), r in zip(rows, api):
+            self.assertTrue(text.startswith(r["name"] + ":"), text)
+            if r["error"] is None:
+                self.assertEqual(text, "%s: %d member(s)" % (r["name"], r["members"]))
+                self.assertTrue(selectable)
+            else:
+                self.assertIn("cannot be used", text)
+                self.assertFalse(selectable, "a bad file offers an action: " + text)
+        # a bad file is never chosen, so no action is offered on it
+        lst = _widget("blocksLibList", QtWidgets.QListWidget)
+        bad = [lst.item(i) for i in range(lst.count()) if "cannot be used" in lst.item(i).text()][0]
+        lst.setCurrentItem(bad)
+        self.settle()
+        for b in ("blocksLibLoad", "blocksLibInsert", "blocksLibDelete"):
+            self.assertFalse(self.enabled(b), b)
+
+    def test_save_load_and_load_and_insert_equal_the_api_and_delete_takes_two_presses(self):
+        sk = self.sketch()
+        self.open_panel(sk)
+        self.choose("def", "T")
+        self.click_button("blocksLibSave")
+        self.assertTrue(os.path.isfile(os.path.join(self.lib, "T.json")), self.status())
+        self.assertEqual(B.library_list()[0]["name"], "T")
+        self.assertEqual(self.lib_rows()[0][0], "T: 3 member(s)")
+        # a second Save asks first, then replaces
+        mtime = os.path.getmtime(os.path.join(self.lib, "T.json"))
+        self.click_button("blocksLibSave")
+        self.assertIn("Press Save again", self.status())
+        self.assertEqual(os.path.getmtime(os.path.join(self.lib, "T.json")), mtime)
+        self.click_button("blocksLibSave")
+        self.assertIn("Saved", self.status())
+        # load into a second sketch of another document
+        other = self.line_block_sketch(self.new_doc("Lib2"), "Sk2", placements=())
+        B.delete_definition(other, "T")
+        self.close_panel()
+        self.open_panel(other)
+        self.lib_choose("T")
+        snap = B.content_hash(other, "BlockData")
+        self.click_button("blocksLibLoad")
+        self.assertEqual(B.blocks(other)["definitions"], {"T": ["m0000", "m0001", "m0002"]}, self.status())
+        self.assertIn("keeps its own copy", self.status())
+        self.assertPanelEqualsApi(other)
+        self.doc_undo(other)
+        self.assertEqual(B.content_hash(other, "BlockData"), snap)
+        # load and insert through the form
+        _widget("blocksX", QtWidgets.QLineEdit).setText("25.4 mm")
+        _widget("blocksY", QtWidgets.QLineEdit).setText("1 in")
+        _widget("blocksAngle", QtWidgets.QLineEdit).setText("90 deg")
+        count = other.Document.UndoCount
+        self.lib_choose("T")
+        self.click_button("blocksLibInsert")
+        self.assertEqual(sorted(B.blocks(other)["instances"]), ["T_1"], self.status())
+        self.assertEqual(other.Document.UndoCount, count + 2)  # the API's two calls, a load and an insert
+        X, Y, th = B.instance_placement(other, "T_1")
+        self.assertAlmostEqual(X, 25.4, delta=1e-7)
+        self.assertAlmostEqual(Y, 25.4, delta=1e-7)
+        self.assertAlmostEqual(th, math.pi / 2, delta=1e-9)
+        # a bad form value refuses and loads nothing
+        B.delete_instance(other, "T_1")
+        B.delete_definition(other, "T")
+        self.refresh_panel()
+        _widget("blocksX", QtWidgets.QLineEdit).setText("banana")
+        snap = _snapshot(other)
+        self.lib_choose("T")
+        self.click_button("blocksLibInsert")
+        self.assertEqual(B.blocks(other)["definitions"], {}, self.status())
+        self.assertIn("banana", self.status())
+        # delete: first press names, second removes; a sketch that loaded it is unchanged
+        self.click_button("blocksLibDelete")
+        self.assertTrue(os.path.isfile(os.path.join(self.lib, "T.json")))
+        self.assertIn("Press Delete file again", self.status())
+        self.click_button("blocksLibDelete")
+        self.assertFalse(os.path.exists(os.path.join(self.lib, "T.json")))
+        self.assertEqual(self.lib_rows(), [])
+
+    def doc_undo(self, sk):
+        sk.Document.undo()
+        self.settle()
+
+    def refresh_panel(self):
+        self.panel.refresh()
+        self.settle()
+
+    def test_a_stale_row_refuses_with_a_sentence_and_changes_nothing(self):
+        self.put("gone")
+        sk = self.sketch()
+        self.open_panel(sk)
+        self.lib_choose("gone")
+        os.remove(os.path.join(self.lib, "gone.json"))
+        snap = _snapshot(sk)
+        self.click_button("blocksLibLoad")
+        self.assertIn("no block called 'gone'", self.status())
+        self.assertSameSketch(sk, snap)
+        self.assertEqual(self.lib_rows(), [])
+        self.assertNotIn("Traceback", self.status())
+
+    def test_a_load_during_an_edit_session_is_refused_with_a_sentence(self):
+        self.put("blk")
+        sk = self.sketch()
+        self.open_panel(sk)
+        self.choose("inst", "T_1")
+        self.click_button("blocksEdit")
+        self.assertIsNotNone(self.panel.session, self.status())
+        self.lib_choose("blk")
+        snap = _snapshot(sk)
+        self.panel.library_load_chosen()
+        self.settle()
+        self.assertIn("Finish or cancel the edit first", self.status())
+        self.panel.library_load_and_insert()
+        self.settle()
+        self.assertIn("Finish or cancel the edit first", self.status())
+        self.assertFalse(self.enabled("blocksLibLoad"))
+        self.assertEqual(sorted(B.blocks(sk)["definitions"]), ["T"])
+        self.click_button("blocksCancel")
+        self.assertIsNone(self.panel.session, self.status())
+
+    def test_load_and_insert_says_both_steps_when_the_insert_fails_and_that_a_success_took_two_undo_steps(self):
+        self.put("blk")
+        doc = self.new_doc("LibBoth")
+        sk = doc.addObject("Sketcher::SketchObject", "E")
+        doc.recompute()
+        self.open_panel(sk)
+        self.lib_choose("blk")
+        real = B.insert
+
+        def refuse(*a, **k):
+            raise B.SketchBlockError("the sketch has no room")
+
+        B.insert = refuse
+        count = doc.UndoCount
+        try:
+            self.click_button("blocksLibInsert")
+        finally:
+            B.insert = real
+        text = self.status()
+        self.assertIn("The sketch has no room", text)
+        self.assertIn("Loaded 'blk'", text)
+        self.assertIn("one undo step", text)
+        self.assertEqual(sorted(B.blocks(sk)["definitions"]), ["blk"])  # the load stands
+        self.assertEqual(doc.UndoCount, count + 1)
+        self.click_button("blocksLibInsert")
+        self.assertIn("already in the sketch", self.status())  # the definition is there now: one step
+        self.doc_undo(sk)
+        B.delete_definition(sk, "blk")
+        self.refresh_panel()
+        self.lib_choose("blk")
+        self.click_button("blocksLibInsert")
+        self.assertIn("two undo steps", self.status())
+
+    def test_a_row_acts_on_the_folder_it_was_listed_from_or_refuses_when_the_folder_changed(self):
+        self.put("blk")
+        other = os.path.join(self.root, "other")
+        os.mkdir(other)
+        sk = self.sketch()
+        self.open_panel(sk)
+        try:
+            for button in ("blocksLibLoad", "blocksLibInsert", "blocksLibDelete"):
+                self.param.SetString("LibraryFolder", self.lib)
+                self.refresh_panel()
+                self.panel.refresh_library()
+                self.settle()
+                self.lib_choose("blk")
+                if button == "blocksLibDelete":
+                    self.click_button(button)  # the first press only asks
+                snap = _snapshot(sk)
+                self.param.SetString("LibraryFolder", other)
+                self.click_button(button)
+                self.assertIn("folder changed", self.status(), button)
+                self.assertSameSketch(sk, snap)
+                self.assertTrue(os.path.isfile(os.path.join(self.lib, "blk.json")), button)
+                self.assertEqual(os.listdir(other), [])
+                self.assertIn(other, _widget("blocksLibFolder", QtWidgets.QLabel).text())
+            # Save is the same call path
+            self.param.SetString("LibraryFolder", self.lib)
+            self.panel.refresh_library()
+            self.panel._lib_shown = self.lib
+            self.param.SetString("LibraryFolder", other)
+            self.assertIsNone(self.panel._lib_run(lambda: B.library_save(sk, "T", overwrite=True), touches_sketch=False))
+            self.assertEqual(os.listdir(other), [])
+            self.assertIn("folder changed", self.status())
+        finally:
+            self.param.SetString("LibraryFolder", self.lib)
+
+    def test_a_refused_load_shows_the_apis_sentence(self):
+        self.put("T", members={"m0000": {"t": "l", "g": [0.0, 0.0, 9.0, 0.0], "c": False}})
+        sk = self.sketch()
+        self.open_panel(sk)
+        self.lib_choose("T")
+        snap = _snapshot(sk)
+        self.click_button("blocksLibLoad")
+        self.assertIn("different block called 'T'", self.status())
+        self.assertSameSketch(sk, snap)
+
+    def test_opening_the_panel_on_a_200_file_folder_adds_under_50_ms(self):
+        self.put("seed")
+        raw = open(os.path.join(self.lib, "seed.json"), "rb").read()
+        sk = self.sketch()
+        self.edit(sk)
+        import SketcherBlocksPanel as P
+
+        def open_close():
+            p = P.BlocksPanel(sk, Gui.getMainWindow())
+            p.close()
+
+        empty = _median(open_close)
+        for i in range(200):
+            with open(os.path.join(self.lib, "b%03d.json" % i), "wb") as fh:
+                fh.write(raw)
+        full = _median(open_close)
+        print("5b1: panel open with 201 library files: %.1f ms against %.1f ms with one (adds %.1f ms)" % (1000 * full, 1000 * empty, 1000 * (full - empty)), flush=True)
+        self.assertLess(full - empty, 0.05)
+
+    def test_a_block_loaded_from_the_library_edits_in_place_and_every_instance_follows(self):
+        self.put("blk")
+        doc = self.new_doc("LibEdit")
+        sk = doc.addObject("Sketcher::SketchObject", "E")
+        doc.recompute()
+        self.open_panel(sk)
+        self.lib_choose("blk")
+        self.click_button("blocksLibInsert")
+        self.click_button("blocksLibInsert")
+        self.assertEqual(sorted(B.blocks(sk)["instances"]), ["blk_1", "blk_2"], self.status())
+        self.assertEqual(sk.Geometry[0].TypeId, "Part::GeomLineSegment")
+        self.begin(sk, "blk_1")
+        self.stock(sk, "mv member", lambda: sk.moveGeometry(0, 2, V(6.0, 0.4, 0), False))
+        self.finish_accepting()
+        self.assertIsNone(self.panel.session, self.status())
+        end = B._load(sk)["defs"]["blk"]["members"]["m0000"]["g"]
+        self.assertAlmostEqual(end[2], 6.0, delta=1e-7)
+        self.assertAlmostEqual(end[3], 0.4, delta=1e-7)
+        # the other instance follows
+        g2 = B.blocks(sk)["instances"]["blk_2"]["geo_ids"][0]
+        self.assertAlmostEqual(sk.Geometry[g2].EndPoint.y - sk.Geometry[g2].StartPoint.y, 0.4, delta=1e-7)

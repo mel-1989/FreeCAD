@@ -37,6 +37,26 @@ def scene_doc(name="BlocksScene"):
     return Rig(doc, sk)
 
 
+def _scene_library(sketch):
+    """A library at a fixed path, one good block and one bad file: the panel prints its folder, so a folder named for
+    the launch would make every stored picture differ."""
+    import os
+    import shutil
+
+    import FreeCAD
+
+    import SketcherBlocks as B
+
+    folder = "/tmp/fc-sketch-block-scene"
+    shutil.rmtree(folder, ignore_errors=True)
+    os.makedirs(folder)
+    with open(os.path.join(folder, "Damaged.json"), "w", encoding="utf-8") as fh:
+        fh.write("not a block")
+    B.library_save(sketch, "Slot", folder=folder)
+    FreeCAD.ParamGet(B.LIBRARY_PARAM).SetString("LibraryFolder", folder)
+    return folder
+
+
 def scene_panel(rig, instance="Slot_2"):
     """Edit mode on the sketch, the panel opened, `instance` chosen.  The panel is a free-floating dock (not in the main
     window's layout), so its size is the caller's to fix."""
@@ -46,6 +66,7 @@ def scene_panel(rig, instance="Slot_2"):
     Gui.ActiveDocument = Gui.getDocument(rig.doc.Name)
     Gui.ActiveDocument.setEdit(rig.sketch.Name)
     pump()
+    _scene_library(rig.sketch)
     Gui.Selection.clearSelection()
     panel = P.BlocksPanel(rig.sketch, parent=Gui.getMainWindow())
     panel.setFloating(True)
