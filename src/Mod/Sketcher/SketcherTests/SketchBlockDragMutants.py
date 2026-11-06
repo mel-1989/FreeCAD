@@ -50,7 +50,7 @@ TESTS = [
     "TestDragEqualsDense",
     "TestLargeBlockRigidity",
 ]
-EXTRA = {"wrong_factor_falls_back": ["TestDragEqualsDense.test_same_return_code_on_every_move", "TestDragEqualsDense.test_same_geometry_up_to_the_solvers_own_sensitivity"]}
+EXTRA = {"wrong_factor_falls_back": ["TestDragEqualsDense.test_same_return_code_as_often_as_a_noisy_dense_copy", "TestDragEqualsDense.test_same_geometry_as_often_as_a_noisy_dense_copy"]}
 
 # (name, file, [(old, new), ...], what it plants)
 MUTANTS = [
@@ -62,12 +62,12 @@ MUTANTS = [
      "dependent rows are not noticed by the rank count"),
     ("residual_check_removed", QP, [("        if (!closeTo(out - v, absOut, v)) {\n            return Why::Residual;", "        if (false) {\n            return Why::Residual;"), ("    if (!closeTo(out + c, absOut, c)) {\n        return Why::Residual;", "    if (false) {\n        return Why::Residual;")],
      "neither A Y = I nor A x + c = 0 is checked"),
-    ("dense_column_treated_as_sparse", QP, [("colStart[j + 1] - colStart[j] > kDenseColumnNnz", "colStart[j + 1] - colStart[j] > 100000")],
+    ("dense_column_treated_as_sparse", QP, [("colStart[j + 1] - colStart[j] > kDenseColumnNnz", "colStart[j + 1] - colStart[j] > kDenseColumnNnz + 100000")],
      "no column counts as dense, so a frame column sits in a block of the sparse part"),
     ("schur_sign_flipped", QP, [("Atil(rows[ri], jj) -= A(rows[ri], j) * acc;", "Atil(rows[ri], jj) += A(rows[ri], j) * acc;")],
      "the Schur complement of the dense columns has a sign wrong"),
     ("permutation_dropped", QP, [("        Left.block(sIdx[k], 0, 1, nd) = -G.row(k);", "        Left.block(k, 0, 1, nd) = -G.row(k);")],
-     "the rows of the sparse columns are placed without their permutation"),
+     "the rows of the sparse columns are placed without their permutation (caught only by systems whose dense columns are not last)"),
     ("null_column_wrong", QP, [("            Zraw.row(sIdx[k]) = Zs.row(k);", "            Zraw.row(sIdx[k]) = -Zs.row(k);")],
      "the sparse part of the null-space basis has the wrong sign"),
     ("y_left_stale", QP, [("        Y = std::move(Yf);\n        if (zWritten)", "        if (Y.rows() != n || Y.cols() != m) {\n            Y = std::move(Yf);\n        }\n        if (zWritten)")],
@@ -117,6 +117,7 @@ def main(argv):
                 return [t]
         return []
 
+    rebuild()  # start from the unmutated source, whatever an earlier interrupted run left in the binary
     base_failed = [t for t in TESTS if not passes(t)]
     if base_failed:
         sys.exit("the unmutated tree fails %s; nothing was planted" % base_failed)

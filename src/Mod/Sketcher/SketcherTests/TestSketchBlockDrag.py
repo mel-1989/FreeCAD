@@ -159,7 +159,7 @@ class TestQpEqExact(Base):
             ns = 200 + 20 * seed
             frames = 1 + seed % 3
             pins = (0, 1, 2, 0, 1, 3, 0, 2)[seed]
-            H, g, A, c = D.structured_system(seed, ns, frames, pins)
+            H, g, A, c = D.structured_system(seed, ns, frames, pins, shuffle=seed % 2 == 1)  # odd seeds: columns in random order
             r = Sketcher.qpEq(H, g, A, c)
             self.assertEqual(r["path"], 1, "seed %d took path %d" % (seed, r["path"]))
             self.assertEqual(r["status"], 0)

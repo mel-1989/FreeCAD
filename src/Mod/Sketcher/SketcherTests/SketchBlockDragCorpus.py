@@ -281,11 +281,11 @@ def scenarios(full=False):
 # systems for qp_eq itself (checks 4 and 5)
 
 
-def structured_system(seed, ns=200, frames=1, pins=0):
+def structured_system(seed, ns=200, frames=1, pins=0, shuffle=False):
     """The Jacobian of `frames` block instances over `ns` member parameters, as lists for Sketcher.qpEq:
     each row holds one member parameter and up to two frame columns (X or Y, and the angle), like
     ConstraintBlockPlacement; `pins` extra rows hold one or two member parameters (outside constraints).
-    Columns are the member parameters first, then X, Y, a of every frame.  H is a positive definite
+    Columns are the member parameters first, then X, Y, a of every frame (or, with `shuffle`, in a seeded random order).  H is a positive definite
     BFGS-like matrix.  Returns (H, g, A, c) as lists, A as a list of rows."""
     rng = random.Random(seed)
     n = ns + 3 * frames
@@ -314,6 +314,12 @@ def structured_system(seed, ns=200, frames=1, pins=0):
     H = [[(d[i] if i == j else 0.0) + 0.2 * sum(u[k][i] * u[k][j] for k in range(3)) for j in range(n)] for i in range(n)]
     g = [rng.uniform(-1, 1) for _ in range(n)]
     c = [rng.uniform(-1, 1) for _ in rows]
+    if shuffle:
+        perm = list(range(n))
+        rng.shuffle(perm)
+        A = [[row[j] for j in perm] for row in A]
+        H = [[H[i][j] for j in perm] for i in perm]
+        g = [g[j] for j in perm]
     return H, g, A, c
 
 
