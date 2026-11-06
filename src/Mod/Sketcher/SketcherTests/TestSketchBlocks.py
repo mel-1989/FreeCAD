@@ -499,7 +499,7 @@ class TestBlockPersistence(BlocksCase):
         self.assertEqual(sk2.BlockData, want[0])
 
     def snapshot(self, sk):
-        return tuple(sk.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData"))
+        return tuple(B.content_hash(sk, p) for p in ("Geometry", "Constraints", "BlockData"))
 
     def one_entry(self, label, op, expect_name):
         sk, doc = self.sk, self.doc
@@ -672,7 +672,7 @@ class TestBlockEditing(BlocksCase):
         return {n: fit_pose(sk, None, n) for n in B.blocks(sk)["instances"]}
 
     def snapshot(self, sk):
-        return tuple(sk.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData"))
+        return tuple(B.content_hash(sk, p) for p in ("Geometry", "Constraints", "BlockData"))
 
     def test_moved_member_keeps_every_anchor_and_constraints(self):
         sk, ids, cs = self.named_scene()
@@ -1098,7 +1098,7 @@ class TestBlockGuard(BlocksCase):
                 twin.solve()
             f(twin)
             twin.solve()
-            data_before = sk.dumpPropertyContent("BlockData")
+            data_before = B.content_hash(sk, "BlockData")
             self.doc.openTransaction("op")
             f(sk)
             self.doc.commitTransaction()
@@ -1109,7 +1109,7 @@ class TestBlockGuard(BlocksCase):
             self.assertEqual(sk.getBlockInstanceCount(), 1, op)
             # undo restores the instance exactly, in one entry
             self.doc.undo()
-            self.assertEqual(sk.dumpPropertyContent("BlockData"), data_before, op)
+            self.assertEqual(B.content_hash(sk, "BlockData"), data_before, op)
             self.assertEqual(set(B.blocks(sk)["instances"]), {"R_1", "R_2"}, op)
             self.doc.redo()
             self.assertEqual(list(B.blocks(sk)["instances"]), ["R_2"], op)
@@ -1261,10 +1261,10 @@ class TestBlockGuard(BlocksCase):
         res = B.update_definition(sk, "R", {"m0001": Part.LineSegment(V(10, 0, 0), V(10, 6, 0))})
         self.assertTrue(res["redundant_constraints"])
         # an edit that makes the redundant constraint a conflict is refused, nothing changes
-        snap = tuple(sk.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData"))
+        snap = tuple(B.content_hash(sk, p) for p in ("Geometry", "Constraints", "BlockData"))
         with self.assertRaises(B.SketchBlockError):
             B.update_definition(sk, "R", {"m0002": Part.LineSegment(V(10, 6, 0), V(-3, 6, 0))})
-        self.assertEqual(tuple(sk.dumpPropertyContent(p) for p in ("Geometry", "Constraints", "BlockData")), snap)
+        self.assertEqual(tuple(B.content_hash(sk, p) for p in ("Geometry", "Constraints", "BlockData")), snap)
 
     def test_malformed_data_gives_block_errors(self):
         sk = self.instance_sketch("Mal")
@@ -1354,10 +1354,10 @@ class TestBlockGuard(BlocksCase):
         for m in d["defs"]["R"]["members"].values():
             m["g"] = [3.0, 3.0, 3.0, 3.0]
         sk.BlockData = json.dumps(d, sort_keys=True, separators=(",", ":"))
-        snap = sk.dumpPropertyContent("Geometry")
+        snap = B.content_hash(sk, "Geometry")
         with self.assertRaises(B.SketchBlockError):
             B.insert(sk, "R", 1, 1, 0.0)
-        self.assertEqual(sk.dumpPropertyContent("Geometry"), snap)
+        self.assertEqual(B.content_hash(sk, "Geometry"), snap)
 
 
 class TestBlockSessionReading(BlocksCase):
@@ -1471,11 +1471,11 @@ class TestBlockSessionReading(BlocksCase):
     def test_a_definition_cannot_take_an_instances_name_and_an_instance_name_never_collides(self):
         sk = self.blocksketch()
         sk.addGeometry([Part.LineSegment(V(0, 0, 0), V(1, 0, 0)), Part.LineSegment(V(1, 0, 0), V(1, 1, 0))], False)
-        before = sk.dumpPropertyContent("BlockData")
+        before = B.content_hash(sk, "BlockData")
         with self.assertRaises(B.SketchBlockError) as cm:
             B.define(sk, "W_1", [len(sk.Geometry) - 2, len(sk.Geometry) - 1])
         self.assertIn("instance", str(cm.exception))
-        self.assertEqual(sk.dumpPropertyContent("BlockData"), before)
+        self.assertEqual(B.content_hash(sk, "BlockData"), before)
         # a definition named like the next instance of W: the instance steps over it
         B.define(sk, "W_3", [len(sk.Geometry) - 2, len(sk.Geometry) - 1])
         self.assertEqual(B.insert(sk, "W", 20, 0, 0), "W_4")

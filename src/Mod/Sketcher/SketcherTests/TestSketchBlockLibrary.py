@@ -25,6 +25,7 @@
 Check numbers refer to the slice 5b1 acceptance checks in briefs/phase1/G10-sketcher.md.  Measured figures are
 printed with the prefix ``5b1:`` so a run's log carries them."""
 
+import decimal
 import json
 import math
 import os
@@ -119,7 +120,7 @@ class LibCase(unittest.TestCase):
         return sk
 
     def state(self, sk):
-        return (tuple(sk.dumpPropertyContent(p) for p in SNAP), self.doc.UndoCount, "Touched" in sk.State)
+        return (tuple(B.content_hash(sk, p) for p in SNAP), self.doc.UndoCount, "Touched" in sk.State)
 
     def assertRefused(self, sk, call, msg=""):
         """The call raises SketchBlockError with a plain sentence and leaves the sketch, undo stack and touched state."""
@@ -533,7 +534,7 @@ class TestLibraryLoad(LibCase):
         again = FreeCAD.openDocument(fcstd)
         self.docs.append(again)
         sk2 = again.getObject("T")
-        self.assertEqual(sk2.dumpPropertyContent("BlockData"), before[0][2])
+        self.assertEqual(B.content_hash(sk2, "BlockData"), before[0][2])
         self.assertEqual(sorted(B.blocks(sk2)["instances"]), ["L_1"])
         self.assertEqual(sk2.solve(), 0)
         self.doc = again
@@ -1069,3 +1070,47 @@ class TestRepairRound(LibCase):
         self.assertRefused(sk, lambda: B.insert_many(sk, "L", {(1, 2, 3): 1}), "dict")
         self.assertRefused(sk, lambda: B.insert_many(sk, "L", {1: 1, 2: 2, 3: 3}), "dict")
         self.assertRefused(sk, lambda: B.insert_many(sk, "L", [{1: 1, 2: 2, 3: 3}]), "dict as a placement")
+
+    def test_update_definition_refuses_a_key_that_could_not_be_stored_or_load_again(self):
+        sk = self.sketch()
+        sk.addGeometry([Part.LineSegment(V(0, 0, 0), V(5, 0, 0)), Part.LineSegment(V(5, 0, 0), V(5, 5, 0))], False)
+        B.define(sk, "L", [0, 1])
+        before = sk.BlockData
+        line = Part.LineSegment(V(0, 1, 0), V(5, 1, 0))
+        for bad in ("k\ud800", "", "k" * 65, "a\nb", 7):
+            self.assertRaises(B.SketchBlockError, B.update_definition, sk, "L", {bad: line})
+            self.assertEqual(sk.BlockData, before, repr(bad))
+        B.update_definition(sk, "L", {"extra": line})
+        B.library_save(sk, "L", folder=self.lib)
+        other = self.sketch(name="Other")
+        self.assertEqual(B.library_load(other, "L", folder=self.lib), "L")
+
+    def test_block_data_holding_an_unpaired_surrogate_never_reads_as_success(self):
+        sk = self.sketch()
+        sk.addGeometry([Part.LineSegment(V(0, 0, 0), V(5, 0, 0))], False)
+        B.define(sk, "L", [0])
+        good = sk.BlockData
+        sk.BlockData = good.replace("m0000", "k\\ud800")
+        for call in (lambda: B.blocks(sk), lambda: B.insert(sk, "L"), lambda: B.insert_many(sk, "L", [(0, 0, 0)])):
+            self.assertRaises(B.SketchBlockError, call)
+        sk.BlockData = good.replace("m0000", "k\\ud83d\\ude00")  # a proper pair is a valid character
+        self.assertIn("L", B.blocks(sk)["definitions"])
+
+    def test_the_default_folder_is_made_however_it_is_named_and_decimal_and_quantity_place(self):
+        param = FreeCAD.ParamGet(B.LIBRARY_PARAM)
+        default = os.path.join(FreeCAD.getUserAppDataDir(), "SketchBlocks")
+        self.assertTrue(B._is_default_folder(None) or param.GetString("LibraryFolder", ""))
+        self.assertTrue(B._is_default_folder(default))
+        self.assertFalse(B._is_default_folder(self.lib))
+        param.SetString("LibraryFolder", default)
+        try:
+            self.assertTrue(B._is_default_folder(None))
+        finally:
+            param.RemString("LibraryFolder")
+        sk = self.sketch()
+        sk.addGeometry([Part.LineSegment(V(0, 0, 0), V(5, 0, 0))], False)
+        B.define(sk, "L", [0])
+        inst = B.insert(sk, "L", decimal.Decimal("1.5"), FreeCAD.Units.Quantity("25.4 mm"), 0)
+        x, y, _ = B.instance_placement(sk, inst)
+        self.assertAlmostEqual(x, 1.5, delta=1e-7)
+        self.assertAlmostEqual(y, 25.4, delta=1e-7)

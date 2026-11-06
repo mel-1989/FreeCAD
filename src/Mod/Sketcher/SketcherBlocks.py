@@ -107,6 +107,10 @@ def _load(sk):
     try:
         data = json.loads(text)
         data["defs"], data["inst"]
+        if "\\ud" in text.lower():  # only an escape can carry a lone surrogate; the sketch's reader ignores such data
+            json.dumps(data, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError:
+        raise SketchBlockError("the sketch's block data cannot be read (it holds an unpaired surrogate)")
     except Exception as exc:
         raise SketchBlockError("the sketch's block data cannot be read (%s)" % exc)
     data.setdefault("n", 0)
@@ -208,14 +212,23 @@ def _text(value, what):
         raise SketchBlockError("%s contains a character that cannot be stored (an unpaired surrogate)" % what)
 
 
+def _key_ok(key):
+    """A member key can be stored and will load again from a library file."""
+    if not isinstance(key, str) or not key or len(key) > 64 or any(ord(ch) < 32 for ch in key):
+        raise SketchBlockError("a member key is not valid")
+    _text(key, "a member key")
+
+
 def _real(v):
-    """A placement number as a float; a bool, a string and anything that is not a real number is refused, and so is a
-    number too large for a float.  Python ints, floats, numpy numbers and Fractions all pass."""
-    if isinstance(v, bool) or not isinstance(v, numbers.Real):
+    """A placement number as a float.  A bool, a string, bytes and anything float() refuses are refused, and so is a
+    number too large for a float.  Ints, floats, numpy numbers, Fractions, Decimals and Quantities pass."""
+    if isinstance(v, (bool, str, bytes)):
         raise SketchBlockError("the placement must be numbers")
     try:
         return float(v)
-    except (OverflowError, ValueError, TypeError):
+    except TypeError:
+        raise SketchBlockError("the placement must be numbers")
+    except (OverflowError, ValueError):
         raise SketchBlockError("the placement must be finite numbers")
 
 
@@ -578,6 +591,7 @@ def update_definition(sk, name, changes):
     removed, added, moved = [], [], []
     flags = {}  # key -> construction flag, for a member given as (geometry, construction)
     for key, geo in changes.items():
+        _key_ok(key)
         if isinstance(geo, tuple) and len(geo) == 2:
             geo, flags[key] = geo[0], bool(geo[1])
         if geo is not None and not hasattr(geo, "TypeId"):
@@ -1066,8 +1080,9 @@ def library_folder(folder=None):
 
 
 def _is_default_folder(folder):
-    """True when `folder` is the built-in default: no argument and no configured ``LibraryFolder``."""
-    return folder is None and not FreeCAD.ParamGet(LIBRARY_PARAM).GetString("LibraryFolder", "").strip()
+    """True when the folder in use is the built-in default, however it was named."""
+    default = os.path.join(FreeCAD.getUserAppDataDir(), "SketchBlocks")
+    return os.path.abspath(library_folder(folder)) == os.path.abspath(default)
 
 
 def _folder_for(folder, create):
@@ -1141,9 +1156,7 @@ def _check_members(members):
         raise SketchBlockError("the block has too many members (%d at most)" % _MAX_MEMBERS)
     out = {}
     for key, m in members.items():
-        if not isinstance(key, str) or not key or len(key) > 64 or any(ord(ch) < 32 for ch in key):
-            raise SketchBlockError("a member key is not valid")
-        _text(key, "a member key")
+        _key_ok(key)
         if not isinstance(m, dict) or set(m) != {"t", "g", "c"}:
             raise SketchBlockError("member '%s' must have exactly t, g and c" % key)
         t, g, c = m["t"], m["g"], m["c"]
