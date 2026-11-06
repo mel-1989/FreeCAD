@@ -1035,6 +1035,8 @@ class TestBlocksPanelSpeed(BlocksGuiCase):
             t = time.perf_counter()
             drag()
             times_open.append((time.perf_counter() - t) / (moves + 1))
+            _pump()
+            _pump()
         self.assertEqual(refreshes, [], "a drag refreshed the panel")
         self.panel.refresh = real
         self.close_panel()
@@ -1161,7 +1163,7 @@ def _cons_of(sk):
 class EditCase(BlocksGuiCase):
     """Block W (a line, a half circle and a small circle) placed three times; W_1 is tied to the origin."""
 
-    def scene(self, name, extra=None):
+    def scene(self, name, bare=False):
         doc = self.new_doc(name)
         sk = doc.addObject("Sketcher::SketchObject", "W")
         sk.addGeometry(
@@ -1180,7 +1182,7 @@ class EditCase(BlocksGuiCase):
         g1, g2 = info["W_1"]["geo_ids"], info["W_2"]["geo_ids"]
         P = sk.addGeometry(Part.LineSegment(V(-20, -3, 0), V(30, -3, 0)), False)
         Q = sk.addGeometry(Part.Point(V(2.5, 1.2, 0)), False)
-        for c, name_ in (
+        for c, name_ in () if bare else (
             (Sketcher.Constraint("Coincident", g1[0], 1, -1, 1), "orig"),
             (Sketcher.Constraint("Horizontal", g1[0]), "horiz"),
             (Sketcher.Constraint("Horizontal", P), "Ph"),
@@ -1231,18 +1233,18 @@ class EditCase(BlocksGuiCase):
         a0, a1 = g.FirstParameter, g.LastParameter
         return Part.ArcOfCircle(Part.Circle(pt(g.Center), V(0, 0, 1), g.Radius), a0 - th, a1 - th)
 
-    def run_case(self, label, ops, expect_removed=()):
+    def run_case(self, label, ops, expect_removed=(), inst="W_1", bare=False):
         """The session `ops` on W_1, then Finish; compared with update_definition called directly on a twin with the
         changes the test reads from the session's end state."""
-        sk = self.scene("PanelEdit" + label)
+        sk = self.scene("PanelEdit" + label, bare)
         doc = sk.Document
         twin = doc.copyObject(sk)
         self.open_panel(sk)
         before_poses = self.poses(sk)
         known = {sk.getGeometryId(i) for i in range(len(sk.Geometry))}
-        member_ids = {k: sk.getGeometryId(g) for k, g in zip(("m0000", "m0001", "m0002"), B.blocks(sk)["instances"]["W_1"]["geo_ids"])}
-        self.begin(sk)
-        pose = before_poses["W_1"]
+        member_ids = {k: sk.getGeometryId(g) for k, g in zip(("m0000", "m0001", "m0002"), B.blocks(sk)["instances"][inst]["geo_ids"])}
+        self.begin(sk, inst)
+        pose = before_poses[inst]
         ops(sk)
         idmap = {sk.getGeometryId(i): i for i in range(len(sk.Geometry))}
         changes = {}
@@ -1255,7 +1257,7 @@ class EditCase(BlocksGuiCase):
         for n, i in enumerate(new):
             changes["n%04d" % (n + 1)] = (self.local_geo(sk, i, pose), bool(sk.getConstruction(i)))
         self.click_button("blocksFinish")
-        self.assertIsNone(self.panel.session, self.status())
+        self.assertIsNone(self.panel.session, "Finish did not finish: " + self.status())
         text = self.status()
         ref = B.update_definition(twin, "W", changes)
         self.assertEqual(sorted(ref["removed_constraints"]), sorted(expect_removed))
@@ -1274,7 +1276,13 @@ class EditCase(BlocksGuiCase):
         self.assertEqual(_cons_of(sk), _cons_of(twin))
         a, b = B._load(sk), B._load(twin)
         self.assertEqual(sorted(a["inst"]), sorted(b["inst"]))
-        self.assertEqual(sorted(a["defs"]["W"]["members"].values(), key=str), sorted(b["defs"]["W"]["members"].values(), key=str))
+        key = lambda m: (m["t"], m["c"], [round(x, 5) for x in m["g"]])
+        ma, mb = sorted(a["defs"]["W"]["members"].values(), key=key), sorted(b["defs"]["W"]["members"].values(), key=key)
+        self.assertEqual(len(ma), len(mb))
+        for x, y in zip(ma, mb):
+            self.assertEqual((x["t"], x["c"]), (y["t"], y["c"]))
+            for u, v in zip(x["g"], y["g"]):
+                self.assertAlmostEqual(u, v, delta=1e-9)
         for i in range(len(sk.Geometry)):
             self.assertEqual(bool(sk.getConstruction(i)), bool(twin.getConstruction(i)))
         self.assertEqual(sk.DoF, twin.DoF)
@@ -1291,6 +1299,20 @@ class EditCase(BlocksGuiCase):
 
 
 class TestBlocksPanelEditResults(EditCase):
+    def test_a_removed_first_member_shifts_the_ids_and_is_read_by_persistent_id(self):
+        def ops(sk):
+            self.stock(sk, "Delete", lambda: sk.delGeometry(0))  # the line: every id after it moves down
+
+        sk, text = self.run_case("RemovedFirst", ops, expect_removed=["horiz", "onP", "orig"])
+        self.assertIn("1 removed", text)
+
+    def test_a_session_that_turns_the_first_member_keeps_the_start_placement(self):
+        def ops(sk):
+            self.stock(sk, "Drag", lambda: sk.moveGeometry(6, 2, V(-3.0, 8.0, 0), False))  # the end of W_3's line
+
+        sk, text = self.run_case("Turned", ops, inst="W_3", bare=True)
+        self.assertIn("1 changed", text)
+
     def test_a_moved_member(self):
         def ops(sk):
             self.stock(sk, "Drag", lambda: sk.moveGeometry(0, 2, V(7.0, 0, 0), False))  # the end of the line
