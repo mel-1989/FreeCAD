@@ -226,6 +226,10 @@ Spec parseSpec(PyObject* obj)
             spec.constraints.push_back(std::move(cs));
         }
     }
+    PyObject* dg = item(obj, "diagnose");
+    if (dg && dg != Py_None) {
+        spec.diagnose = PyObject_IsTrue(dg) == 1;
+    }
     PyObject* alg = item(obj, "algorithm");
     if (alg && alg != Py_None) {
         const char* a = PyUnicode_Check(alg) ? PyUnicode_AsUTF8(alg) : nullptr;

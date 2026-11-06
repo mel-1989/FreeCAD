@@ -9,6 +9,7 @@
 #include <set>
 
 #include <Mod/Sketcher/App/planegcs/GCS.h>
+#include <Mod/Sketcher/App/planegcs/SubSystem.h>
 
 #include "Solve3D.h"
 
@@ -234,9 +235,16 @@ struct Model
     std::vector<std::vector<std::unique_ptr<Rel>>> own;  // driven relations and ones with no unknown
     std::vector<std::vector<Rel*>> inSystem;
     std::vector<int> staticDriving;
+    std::vector<std::unique_ptr<Rel>> solverRows;  // when not handed to the System
+    std::unique_ptr<GCS::SubSystem> sub;
     int systemRows = 0;
 
-    Model(const Spec& specIn, const std::vector<double>& c0, const std::vector<PlaneData>& planes)
+    Model(
+        const Spec& specIn,
+        const std::vector<double>& c0,
+        const std::vector<PlaneData>& planes,
+        bool forDiagnosis
+    )
         : spec(specIn)
         , coords(c0)
     {
@@ -269,7 +277,12 @@ struct Model
             else {
                 for (auto& r : rows) {
                     inSystem[ci].push_back(r.get());
-                    sys.addConstraint(r.release());
+                    if (forDiagnosis) {
+                        sys.addConstraint(r.release());
+                    }
+                    else {
+                        solverRows.push_back(std::move(r));
+                    }
                     ++systemRows;
                 }
             }
@@ -328,12 +341,39 @@ struct Model
         return b;
     }
 
-    void prepare(GCS::Algorithm alg)
+    // Solve without the System's own initialisation: that runs a diagnosis (a sparse QR of the
+    // whole Jacobian, most of the time of a large solve) which is run once, at the point reached,
+    // by diagnose().
+    GCS::SolveStatus solveDirect(GCS::Algorithm alg)
+    {
+        tune();
+        std::vector<GCS::Constraint*> list;
+        for (auto& r : solverRows) {
+            list.push_back(r.get());
+        }
+        sub = std::make_unique<GCS::SubSystem>(list, unknowns);
+        const GCS::SolveStatus st = sys.solve(sub.get(), alg, false);
+        sub->applySolution();
+        return st;
+    }
+
+    void tune()
     {
         // PlaneGCS stops at an error of 1e-10 by default, which leaves coordinates a few 1e-9
         // off an ill-conditioned solution; the rows here are cheap, so ask for rounding level.
         sys.DL_tolf = 1e-22;
         sys.LM_eps = 1e-13;
+        // sparse Jacobians pay from a few hundred unknowns on: every row touches at most 12
+        sys.sparseSolveThreshold = 200;
+        sys.partitionThreshold = 200;
+        // J J^T with a sparse Cholesky: the sparse QR fills in on chains (0.6 s a step at 3000
+        // unknowns). A rank-deficient J makes it fail and the System falls back to the dense step.
+        sys.dogLegGaussStep = GCS::LeastNormLdlt;
+    }
+
+    void prepare(GCS::Algorithm alg)
+    {
+        tune();
         sys.declareUnknowns(unknowns);
         GCS::VEC_pD driven;
         sys.declareDrivenParams(driven);
@@ -352,8 +392,8 @@ Result solveImpl(const Spec& spec, int depth)
         }
     }
     const std::vector<PlaneData> planes = allPlanes(spec);
-    auto make = [&](const std::vector<double>& c0) {
-        return std::make_unique<Model>(spec, c0, planes);
+    auto make = [&](const std::vector<double>& c0, bool forDiagnosis = false) {
+        return std::make_unique<Model>(spec, c0, planes, forDiagnosis);
     };
 
     std::vector<GCS::Algorithm> order;
@@ -387,12 +427,10 @@ Result solveImpl(const Spec& spec, int depth)
         bool first = true;
         for (GCS::Algorithm alg : order) {
             auto m = make(start);
-            m->prepare(alg);
-            const GCS::SolveStatus st = m->sys.solve(alg);
+            // even a failed run leaves its least-squares point behind (applied by solveDirect);
+            // the diagnosis of conflicts needs that point
+            const GCS::SolveStatus st = m->solveDirect(alg);
             const int iters = m->maxBuilds();
-            // even a failed run leaves its least-squares point behind; the diagnosis of
-            // conflicts needs that point (at the start a contradiction has no dependent rows)
-            m->sys.applySolution();
             const double rr = m->maxDriving();
             const double ss = m->sumSquares();
             if (ss < bestSS) {
@@ -424,9 +462,9 @@ Result solveImpl(const Spec& spec, int depth)
     double residual = mf->maxDriving();
 
     // diagnosis at the point reached
-    res.dof = unknownCount;
-    if (systemRows > 0) {
-        auto md = make(coords);
+    res.dof = spec.diagnose ? unknownCount : -1;
+    if (systemRows > 0 && spec.diagnose) {
+        auto md = make(coords, true);
         md->prepare(used);
         res.dof = md->sys.dofsNumber();
         if (res.dof < 0) {

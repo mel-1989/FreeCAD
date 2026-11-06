@@ -32,6 +32,8 @@ class Spec(TypedDict, total=False):
     planes: Sequence[PlaneSpec]
     constraints: Sequence[ConstraintSpec]
     algorithm: str
+    diagnose: bool
+    """False skips the diagnosis: ``dof`` is -1 and the redundancy lists are empty."""
 
 class Result(TypedDict):
     code: int

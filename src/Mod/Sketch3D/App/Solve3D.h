@@ -53,6 +53,9 @@ struct Spec
     std::vector<PlaneSpec> planes;
     std::vector<ConstraintSpec> constraints;
     std::string algorithm;  // "", "dogleg", "lm" or "bfgs"
+    // false skips the diagnosis (a sparse QR of the Jacobian, most of the time of a large solve):
+    // dof is then -1 and the redundant lists stay empty. For interactive solves.
+    bool diagnose = true;
 };
 
 struct Result
