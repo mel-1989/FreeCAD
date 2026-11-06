@@ -207,64 +207,77 @@ const char* algorithmName(GCS::Algorithm a)
 
 }  // namespace
 
+namespace
+{
+
+Result solveImpl(const Spec& spec, int depth);
+
+}  // namespace
+
 Result solve(const Spec& spec)
 {
     validate(spec);
-    const int np = static_cast<int>(spec.points.size());
-    const int nc = static_cast<int>(spec.constraints.size());
-    std::vector<double> coords(3 * np);
-    for (int i = 0; i < np; ++i) {
-        for (int a = 0; a < 3; ++a) {
-            coords[3 * i + a] = spec.points[i].xyz[a];
-        }
-    }
-    const std::vector<double> start = coords;
-    const std::vector<PlaneData> planes = allPlanes(spec);
+    return solveImpl(spec, 0);
+}
 
-    std::set<double*> unknownSet;
-    GCS::VEC_pD unknowns;
-    for (int i = 0; i < np; ++i) {
-        if (!spec.points[i].fixed) {
-            for (int a = 0; a < 3; ++a) {
-                unknowns.push_back(&coords[3 * i + a]);
-                unknownSet.insert(&coords[3 * i + a]);
-            }
-        }
-    }
+namespace
+{
 
-    Result res;
-    res.residuals.assign(nc, 0.0);
-    std::vector<std::vector<std::unique_ptr<Rel>>> rowsOf(nc);  // static and driven relations
-    std::vector<std::vector<Rel*>> inSystem(nc);
-    std::vector<int> staticDriving;
+// A System with its constraints built on one coordinate array. A fresh Model per attempt keeps
+// the attempts independent: a failed run leaves no solver state behind for the next one.
+struct Model
+{
+    const Spec& spec;
+    std::vector<double> coords;
     GCS::System sys;
+    GCS::VEC_pD unknowns;
+    std::vector<std::vector<std::unique_ptr<Rel>>> own;  // driven relations and ones with no unknown
+    std::vector<std::vector<Rel*>> inSystem;
+    std::vector<int> staticDriving;
     int systemRows = 0;
 
-    for (int ci = 0; ci < nc; ++ci) {
-        auto rows = buildRows(spec, ci, coords.data(), planes);
-        bool touchesUnknown = false;
-        for (double* p : rows.front()->allParams()) {
-            if (unknownSet.count(p)) {
-                touchesUnknown = true;
+    Model(const Spec& specIn, const std::vector<double>& c0, const std::vector<PlaneData>& planes)
+        : spec(specIn)
+        , coords(c0)
+    {
+        const int np = static_cast<int>(spec.points.size());
+        const int nc = static_cast<int>(spec.constraints.size());
+        std::set<double*> unknownSet;
+        for (int i = 0; i < np; ++i) {
+            if (!spec.points[i].fixed) {
+                for (int a = 0; a < 3; ++a) {
+                    unknowns.push_back(&coords[3 * i + a]);
+                    unknownSet.insert(&coords[3 * i + a]);
+                }
             }
         }
-        if (!spec.constraints[ci].driving) {
-            rowsOf[ci] = std::move(rows);
-        }
-        else if (!touchesUnknown) {
-            rowsOf[ci] = std::move(rows);
-            staticDriving.push_back(ci);
-        }
-        else {
-            for (auto& r : rows) {
-                inSystem[ci].push_back(r.get());
-                sys.addConstraint(r.release());
-                ++systemRows;
+        own.resize(nc);
+        inSystem.resize(nc);
+        for (int ci = 0; ci < nc; ++ci) {
+            auto rows = buildRows(spec, ci, coords.data(), planes);
+            bool touchesUnknown = false;
+            for (double* p : rows.front()->allParams()) {
+                touchesUnknown = touchesUnknown || unknownSet.count(p) > 0;
+            }
+            if (!spec.constraints[ci].driving) {
+                own[ci] = std::move(rows);
+            }
+            else if (!touchesUnknown) {
+                own[ci] = std::move(rows);
+                staticDriving.push_back(ci);
+            }
+            else {
+                for (auto& r : rows) {
+                    inSystem[ci].push_back(r.get());
+                    sys.addConstraint(r.release());
+                    ++systemRows;
+                }
             }
         }
     }
 
-    auto residualOf = [&](int ci) {
+    double residualOf(int ci)
+    {
         double m = 0.0;
         if (!inSystem[ci].empty()) {
             for (Rel* r : inSystem[ci]) {
@@ -273,16 +286,70 @@ Result solve(const Spec& spec)
             }
             return m;
         }
-        return maxAbsRow(rowsOf[ci]);
-    };
-    auto maxDriving = [&]() {
+        return maxAbsRow(own[ci]);
+    }
+
+    double maxDriving()
+    {
         double m = 0.0;
-        for (int ci = 0; ci < nc; ++ci) {
+        for (int ci = 0; ci < static_cast<int>(spec.constraints.size()); ++ci) {
             if (spec.constraints[ci].driving) {
                 m = std::max(m, residualOf(ci));
             }
         }
         return m;
+    }
+
+    double sumSquares()
+    {
+        double ss = 0.0;
+        for (int ci = 0; ci < static_cast<int>(spec.constraints.size()); ++ci) {
+            if (!spec.constraints[ci].driving) {
+                continue;
+            }
+            for (Rel* r : inSystem[ci]) {
+                ss += r->rawError() * r->rawError();
+            }
+            for (auto& r : own[ci]) {
+                ss += r->rawError() * r->rawError();
+            }
+        }
+        return ss;
+    }
+
+    int maxBuilds()
+    {
+        int b = 0;
+        for (auto& v : inSystem) {
+            for (Rel* r : v) {
+                b = std::max(b, r->jacobianBuilds());
+            }
+        }
+        return b;
+    }
+
+    void prepare(GCS::Algorithm alg)
+    {
+        sys.declareUnknowns(unknowns);
+        GCS::VEC_pD driven;
+        sys.declareDrivenParams(driven);
+        sys.initSolution(alg);
+    }
+};
+
+Result solveImpl(const Spec& spec, int depth)
+{
+    const int np = static_cast<int>(spec.points.size());
+    const int nc = static_cast<int>(spec.constraints.size());
+    std::vector<double> start(3 * np);
+    for (int i = 0; i < np; ++i) {
+        for (int a = 0; a < 3; ++a) {
+            start[3 * i + a] = spec.points[i].xyz[a];
+        }
+    }
+    const std::vector<PlaneData> planes = allPlanes(spec);
+    auto make = [&](const std::vector<double>& c0) {
+        return std::make_unique<Model>(spec, c0, planes);
     };
 
     std::vector<GCS::Algorithm> order;
@@ -299,71 +366,72 @@ Result solve(const Spec& spec)
         order = {GCS::DogLeg, GCS::LevenbergMarquardt, GCS::BFGS};
     }
 
-    GCS::Algorithm used = order.front();
-    GCS::SolveStatus status = GCS::SolveStatus::Success;
-    double residual = maxDriving();
-    int iterations = 0;
-    bool diagnosed = false;
+    Result res;
+    res.residuals.assign(nc, 0.0);
+    auto m0 = make(start);
+    const int systemRows = m0->systemRows;
+    const int unknownCount = static_cast<int>(m0->unknowns.size());
 
-    if (systemRows > 0) {
-        sys.declareUnknowns(unknowns);
-        GCS::VEC_pD driven;
-        sys.declareDrivenParams(driven);
-        // best attempt so far: lowest residual
-        std::vector<double> best = start;
-        double bestRes = HUGE_VAL;
-        GCS::SolveStatus bestStatus = GCS::SolveStatus::Failed;
-        GCS::Algorithm bestAlg = order.front();
-        int bestIter = 0;
+    std::vector<double> best = start;
+    std::vector<double> leastSquares = start;
+    double bestRes = m0->maxDriving();
+    double bestSS = m0->sumSquares();
+    GCS::SolveStatus bestStatus = GCS::SolveStatus::Failed;
+    GCS::Algorithm used = order.front();
+    int iterations = 0;
+    if (systemRows > 0 && bestRes > SuccessResidual) {
+        bool first = true;
         for (GCS::Algorithm alg : order) {
-            coords = start;
-            sys.initSolution(alg);
-            std::vector<int> before;
-            for (int ci = 0; ci < nc; ++ci) {
-                for (Rel* r : inSystem[ci]) {
-                    before.push_back(r->jacobianBuilds());
+            auto m = make(start);
+            m->prepare(alg);
+            const GCS::SolveStatus st = m->sys.solve(alg);
+            const int iters = m->maxBuilds();
+            // even a failed run leaves its least-squares point behind; the diagnosis of
+            // conflicts needs that point (at the start a contradiction has no dependent rows)
+            m->sys.applySolution();
+            const double rr = m->maxDriving();
+            const double ss = m->sumSquares();
+            if (ss < bestSS) {
+                bestSS = ss;
+                leastSquares = m->coords;
+            }
+            if (rr < bestRes || first) {
+                first = false;
+                if (rr < bestRes || !(bestRes < HUGE_VAL)) {
+                    best = m->coords;
+                    bestRes = rr;
                 }
-            }
-            const GCS::SolveStatus st = sys.solve(alg);
-            int iters = 0;
-            {
-                size_t k = 0;
-                for (int ci = 0; ci < nc; ++ci) {
-                    for (Rel* r : inSystem[ci]) {
-                        iters = std::max(iters, r->jacobianBuilds() - before[k++]);
-                    }
-                }
-            }
-            if (st == GCS::SolveStatus::Success || st == GCS::SolveStatus::Converged) {
-                sys.applySolution();
-            }
-            const double rr = maxDriving();
-            if (rr < bestRes) {
-                best = coords;
-                bestRes = rr;
                 bestStatus = st;
-                bestAlg = alg;
-                bestIter = iters;
+                used = alg;
+                iterations = iters;
             }
             if (rr <= SuccessResidual) {
                 break;
             }
         }
-        coords = best;
-        residual = maxDriving();
-        status = bestStatus;
-        used = bestAlg;
-        iterations = bestIter;
+    }
+    else if (systemRows > 0) {
+        // already satisfied at the start
+        bestStatus = GCS::SolveStatus::Success;
+    }
 
-        // diagnosis at the point reached
-        sys.invalidatedDiagnosis();
-        sys.initSolution(used);
-        res.dof = sys.dofsNumber();
-        diagnosed = res.dof >= 0;
+    std::vector<double> coords = best;
+    auto mf = make(coords);
+    double residual = mf->maxDriving();
+
+    // diagnosis at the point reached
+    res.dof = unknownCount;
+    if (systemRows > 0) {
+        auto md = make(coords);
+        md->prepare(used);
+        res.dof = md->sys.dofsNumber();
+        if (res.dof < 0) {
+            res.dof = unknownCount;
+        }
         GCS::VEC_I conflicting, redundant, partial;
-        sys.getConflicting(conflicting);
-        sys.getRedundant(redundant);
-        sys.getPartiallyRedundant(partial);
+        md->sys.getConflicting(conflicting);
+        md->sys.getRedundant(redundant);
+        md->sys.getPartiallyRedundant(partial);
         auto userTags = [&](const GCS::VEC_I& v) {
             std::set<int> out;
             for (int t : v) {
@@ -377,16 +445,13 @@ Result solve(const Spec& spec)
         res.redundant = userTags(redundant);
         res.partiallyRedundant = userTags(partial);
     }
-    if (!diagnosed) {
-        res.dof = static_cast<int>(unknowns.size());
-    }
 
     // relations with no unknown left: a wrong one conflicts, a right one is redundant
     {
         std::set<int> conf(res.conflicting.begin(), res.conflicting.end());
         std::set<int> red(res.redundant.begin(), res.redundant.end());
-        for (int ci : staticDriving) {
-            if (residualOf(ci) > SuccessResidual) {
+        for (int ci : mf->staticDriving) {
+            if (mf->residualOf(ci) > SuccessResidual) {
                 conf.insert(spec.constraints[ci].tag);
             }
             else {
@@ -397,9 +462,46 @@ Result solve(const Spec& spec)
         res.redundant.assign(red.begin(), red.end());
     }
 
-    for (int ci = 0; ci < nc; ++ci) {
-        res.residuals[ci] = residualOf(ci);
+    // A failed solve: name the constraints that the least-squares point leaves unsatisfied (a
+    // contradiction between nonlinear relations has no dependent Jacobian rows to find), take
+    // them out and solve the rest, repeating until the rest is solvable. The result names every
+    // constraint taken out. This means "not satisfied together with the others at the point
+    // reached"; it is not a proof that a smaller set could not do.
+    if (residual > SuccessResidual && systemRows > 0 && depth < 4) {
+        auto ml = make(leastSquares);
+        double worst = 0.0;
+        for (int ci = 0; ci < nc; ++ci) {
+            if (spec.constraints[ci].driving) {
+                worst = std::max(worst, ml->residualOf(ci));
+            }
+        }
+        const double threshold = std::max(1e-6, 1e-2 * worst);
+        std::set<int> named;
+        for (int ci = 0; ci < nc; ++ci) {
+            if (spec.constraints[ci].driving && ml->residualOf(ci) > threshold) {
+                named.insert(ci);
+            }
+        }
+        if (!named.empty() && std::isfinite(worst)) {
+            Spec rest = spec;
+            rest.constraints.clear();
+            for (int ci = 0; ci < nc; ++ci) {
+                if (!named.count(ci)) {
+                    rest.constraints.push_back(spec.constraints[ci]);
+                }
+            }
+            const Result sub = solveImpl(rest, depth + 1);
+            std::set<int> conf(res.conflicting.begin(), res.conflicting.end());
+            for (int ci : named) {
+                conf.insert(spec.constraints[ci].tag);
+            }
+            for (int t : sub.conflicting) {
+                conf.insert(t);
+            }
+            res.conflicting.assign(conf.begin(), conf.end());
+        }
     }
+
     bool allFinite = true;
     for (double v : coords) {
         allFinite = allFinite && std::isfinite(v);
@@ -412,19 +514,18 @@ Result solve(const Spec& spec)
         res.code = 0;
         res.status = "success";
     }
-    else if (allFinite && status == GCS::SolveStatus::Converged) {
+    else if (allFinite && bestStatus == GCS::SolveStatus::Converged) {
         res.code = 1;
         res.status = "converged";
     }
     else {
         res.code = 2;
         res.status = "failed";
-        if (!(residual < HUGE_VAL) || status == GCS::SolveStatus::Failed) {
-            coords = start;
-            for (int ci = 0; ci < nc; ++ci) {
-                res.residuals[ci] = residualOf(ci);
-            }
-        }
+        coords = start;  // a failed solve returns the input coordinates
+    }
+    auto mr = make(coords);
+    for (int ci = 0; ci < nc; ++ci) {
+        res.residuals[ci] = mr->residualOf(ci);
     }
     res.iterations = iterations;
     res.algorithm = systemRows > 0 ? algorithmName(used) : "none";
@@ -436,6 +537,8 @@ Result solve(const Spec& spec)
     }
     return res;
 }
+
+}  // namespace
 
 std::vector<RowReport> rowReports(const Spec& spec)
 {

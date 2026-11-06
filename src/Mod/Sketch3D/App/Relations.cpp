@@ -131,26 +131,24 @@ T comp(const V3<T>& a, int k)
 
 // Orthonormal pair spanning the plane perpendicular to a. The pair is rebuilt from a on every
 // call, so a relation that uses it (parallel, point on line) stays exactly "zero iff the vectors
-// are parallel" wherever the lines have rotated to; there is no stale reference direction. The
-// auxiliary axis is the one least aligned with a, chosen from the value; when two components tie
-// the pair turns in its plane, which turns the residual vector but not its length.
+// are parallel" wherever the lines have rotated to; there is no stale reference direction.
+// The auxiliary axis e is y, or z when a points mostly along y. The switch happens where
+// a.y^2 = 0.6631 |a|^2, away from the directions a drawing is built from (axes, diagonals,
+// 3-4-5 slopes), and turns the pair in its plane there: the residual vector turns, its length
+// does not.
 template<class T>
 void perpBasis(const V3<T>& a, V3<T>& u1, V3<T>& u2)
 {
-    const double ax = std::fabs(val(a.x));
-    const double ay = std::fabs(val(a.y));
-    const double az = std::fabs(val(a.z));
+    const double ay = val(a.y);
+    const double all = val(a.x) * val(a.x) + ay * ay + val(a.z) * val(a.z);
     const T zero = a.x - a.x;
     const T one = zero + 1.0;
     V3<T> e {zero, zero, zero};
-    if (ax <= ay && ax <= az) {
-        e.x = one;
-    }
-    else if (ay <= az) {
-        e.y = one;
+    if (ay * ay > 0.6631 * all) {
+        e.z = one;
     }
     else {
-        e.z = one;
+        e.y = one;
     }
     u1 = unit(cross(a, e));
     u2 = unit(cross(a, u1));
@@ -299,20 +297,26 @@ Rel::Rel(
     rescale();
 }
 
-double Rel::rawError()
+double Rel::evalAt(const GCS::VEC_pD& params) const
 {
     double x[12];
-    const size_t n = std::min<size_t>(pvec.size(), 12);
+    const size_t n = std::min<size_t>(params.size(), 12);
     for (size_t i = 0; i < n; ++i) {
-        x[i] = *pvec[i];
+        x[i] = *params[i];
     }
     return evalRow<double>(kindValue, row, axis, value, plane, x);
+}
+
+double Rel::rawError()
+{
+    // the real coordinates, whatever the solver has redirected pvec to
+    return evalAt(origpvec);
 }
 
 double Rel::error()
 {
     lastWasGrad = false;
-    return scale * rawError();
+    return scale * evalAt(pvec);
 }
 
 double Rel::grad(double* param)

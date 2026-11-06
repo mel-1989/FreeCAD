@@ -80,7 +80,7 @@ public:
     double error() override;
     double grad(double* param) override;
 
-    // value of this row at the current parameters, without the constraint's scale
+    // value of this row at the real coordinates (not the solver's working copies), unscaled
     double rawError();
     // Jacobian builds seen by this row (a build is a run of grad calls after an error call)
     int jacobianBuilds() const
@@ -101,6 +101,7 @@ public:
     }
 
 private:
+    double evalAt(const GCS::VEC_pD& params) const;
     Kind kindValue;
     int row;
     int axis;
