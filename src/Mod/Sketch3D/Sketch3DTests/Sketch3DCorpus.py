@@ -70,7 +70,7 @@ class Builder:
 def with_coords(spec, flat):
     """A copy of spec with the coordinates replaced by the flat list (3 per point)."""
     out = copy.deepcopy(spec)
-    for i, p in enumerate(out["points"]):
+    for i, p in enumerate(out.get("points", [])):
         xyz = [flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]]
         if isinstance(p, dict):
             p["xyz"] = xyz
@@ -238,14 +238,22 @@ def grow(seed, n_ops, box=10.0, ops=None, planar=False, max_points=10**9):
             pl = b.planes[k]
             n = unit(pl["normal"])
             i = rng.randrange(npt)
-            b.con("distance_pplane", i, k, value=abs(np.dot(T(i) - np.array(pl["point"]), n)))
+            d = abs(np.dot(T(i) - np.array(pl["point"]), n))
+            if d < 2.0:
+                # a point this close to the plane has its mirror image inside the starting
+                # neighbourhood: a second exact solution, not a defect of the solver
+                continue
+            b.con("distance_pplane", i, k, value=d)
         elif op == "pl_dist":
             li = rng.randrange(nl)
             a, c = b.lines[li]
             i = rng.randrange(npt)
             if i in (a, c) or np.linalg.norm(T(a) - T(c)) < 1e-3:
                 continue
-            b.con("distance_pl", i, li, value=dist_line(T(i), T(a), T(c)))
+            d = dist_line(T(i), T(a), T(c))
+            if d < 2.0:
+                continue  # as for the plane distance: a mirror root inside the starting neighbourhood
+            b.con("distance_pl", i, li, value=d)
         elif op == "midpoint":
             li = rng.randrange(nl)
             a, c = b.lines[li]

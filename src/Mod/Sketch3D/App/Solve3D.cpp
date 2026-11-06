@@ -330,6 +330,10 @@ struct Model
 
     void prepare(GCS::Algorithm alg)
     {
+        // PlaneGCS stops at an error of 1e-10 by default, which leaves coordinates a few 1e-9
+        // off an ill-conditioned solution; the rows here are cheap, so ask for rounding level.
+        sys.DL_tolf = 1e-22;
+        sys.LM_eps = 1e-13;
         sys.declareUnknowns(unknowns);
         GCS::VEC_pD driven;
         sys.declareDrivenParams(driven);
