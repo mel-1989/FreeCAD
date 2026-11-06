@@ -761,6 +761,88 @@ class TestBlockEditing(BlocksCase):
         self.assertEqual(sk.getBlockInstanceCount(), 1)
         self.assertEqual(list(B.blocks(sk)["instances"]), ["T_1"])
 
+    def test_delete_instance_removes_its_members_and_constraints_only(self):
+        sk, ids, cs = self.named_scene()
+        i2_before = [C.member_numbers(sk.Geometry[g]) for g in B.blocks(sk)["instances"]["T_2"]["geo_ids"]]
+        plain_before = [C.member_numbers(sk.Geometry[g]) for g in (ids["P"], ids["Q"])]
+        n_geo, n_cons = len(sk.Geometry), len(sk.Constraints)
+        count = self.doc.UndoCount
+        names = B.delete_instance(sk, "T_1")
+        self.assertEqual(self.doc.UndoCount, count + 1)
+        self.assertEqual(self.doc.UndoNames[0], "Delete block instance")
+        # T_1 carried origin, horiz, chain, perp (shared with T_2) and tangent; equal (T_2 and Q) and Ph (P) stay
+        self.assertEqual(sorted(names), sorted(["c_origin", "c_horiz", "c_chain", "c_perp", "c_tangent"]))
+        self.assertEqual(len(sk.Geometry), n_geo - 3)
+        self.assertEqual(len(sk.Constraints), n_cons - 5)
+        self.assertEqual(list(B.blocks(sk)["instances"]), ["T_2"])
+        self.assertEqual(sk.getBlockInstanceCount(), 1)
+        self.assertEqual([c.Name for c in sk.Constraints], ["c_Ph", "c_equal"])
+        i2 = [C.member_numbers(sk.Geometry[g]) for g in B.blocks(sk)["instances"]["T_2"]["geo_ids"]]
+        for (_, a), (_, b) in zip(i2, i2_before):
+            for x, y in zip(a, b):
+                self.assertAlmostEqual(x, y, delta=1e-9)
+        plain = [C.member_numbers(g) for g in sk.Geometry[-2:]]
+        for (_, a), (_, b) in zip(plain, plain_before):
+            for x, y in zip(a, b):
+                self.assertAlmostEqual(x, y, delta=1e-9)
+        # constraints still name the right elements after the GeoId shift
+        eq = [c for c in sk.Constraints if c.Name == "c_equal"][0]
+        self.assertEqual({eq.First, eq.Second}, {B.blocks(sk)["instances"]["T_2"]["geo_ids"][2], len(sk.Geometry) - 1})
+
+    def test_delete_instance_undo_redo_restore_exactly(self):
+        sk, ids, cs = self.named_scene()
+        before = self.snapshot(sk)
+        B.delete_instance(sk, "T_1")
+        after = self.snapshot(sk)
+        self.doc.undo()
+        self.assertEqual(self.snapshot(sk), before)
+        self.doc.redo()
+        self.assertEqual(self.snapshot(sk), after)
+
+    def test_delete_instance_refusals_and_failure_change_nothing(self):
+        sk, ids, cs = self.named_scene()
+        snap = self.snapshot(sk)
+        count = self.doc.UndoCount
+        with self.assertRaises(B.SketchBlockError):
+            B.delete_instance(sk, "nope")
+        self.assertEqual(self.snapshot(sk), snap)
+        self.assertEqual(self.doc.UndoCount, count)
+
+    def test_delete_last_instance_leaves_the_definition(self):
+        sk, ids, cs = self.named_scene()
+        B.delete_instance(sk, "T_1")
+        B.delete_instance(sk, "T_2")
+        self.assertEqual(sk.getBlockInstanceCount(), 0)
+        self.assertEqual(list(B.blocks(sk)["definitions"]), ["T"])
+        self.assertEqual(len(sk.Geometry), 2)
+
+    def test_delete_definition_refuses_with_instances_and_succeeds_without(self):
+        sk, ids, cs = self.named_scene()
+        snap = self.snapshot(sk)
+        count = self.doc.UndoCount
+        with self.assertRaises(B.SketchBlockError) as cm:
+            B.delete_definition(sk, "T")
+        self.assertIn("2 instances", str(cm.exception))
+        self.assertEqual(self.snapshot(sk), snap)
+        self.assertEqual(self.doc.UndoCount, count)
+        B.delete_instance(sk, "T_1")
+        with self.assertRaises(B.SketchBlockError) as cm:
+            B.delete_definition(sk, "T")
+        self.assertIn("1 instance", str(cm.exception))
+        self.assertNotIn("1 instances", str(cm.exception))
+        B.explode(sk, "T_2")
+        before = self.snapshot(sk)
+        count = self.doc.UndoCount
+        B.delete_definition(sk, "T")
+        self.assertEqual(self.doc.UndoCount, count + 1)
+        self.assertEqual(self.doc.UndoNames[0], "Delete block definition")
+        self.assertEqual(B.blocks(sk)["definitions"], {})
+        self.assertEqual(sk.BlockData, "")
+        self.doc.undo()
+        self.assertEqual(self.snapshot(sk), before)
+        with self.assertRaises(B.SketchBlockError):
+            B.delete_definition(sk, "nope")
+
     def test_deleting_a_member_explodes_that_instance_only(self):
         sk, ids, cs = self.named_scene()
         g = B.blocks(sk)["instances"]["T_1"]["geo_ids"]

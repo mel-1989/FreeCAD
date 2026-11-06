@@ -119,6 +119,21 @@ MUTANTS = [
     ("diagnosis_solves_the_real_sketch", "py", PYDIAG, [
         ("            n.restorePropertyContent(prop, src.dumpPropertyContent(prop))\n        for path, expr", "            n.restorePropertyContent(prop, src.dumpPropertyContent(prop))\n        n = src\n        for path, expr"),
     ], "the diagnosis works on the user's sketch instead of a copy"),
+    ("delete_instance_keeps_its_data", "py", PYBLK, [
+        ('    del data["inst"][instance]\n    with _transaction(sk, "Delete block instance"):', '    with _transaction(sk, "Delete block instance"):'),
+    ], "deleting an instance leaves it in BlockData"),
+    ("delete_instance_reports_nothing", "py", PYBLK, [
+        ('    names = [_constraint_label(cons[i], i) for i in drop]\n    del data["inst"][instance]', '    names = []\n    del data["inst"][instance]'),
+    ], "deleting an instance does not report the constraints it removed"),
+    ("delete_instance_deletes_one_member_fewer", "py", PYBLK, [
+        ('        if gone:\n            sk.delGeometries(gone)\n        sk.solve()\n    return names', '        if gone:\n            sk.delGeometries(gone[1:])\n        sk.solve()\n    return names'),
+    ], "deleting an instance leaves one member behind"),
+    ("delete_definition_ignores_instances", "py", PYBLK, [
+        ("    if n:\n        raise SketchBlockError(\"block '%s' still has", "    if False:\n        raise SketchBlockError(\"block '%s' still has"),
+    ], "a definition with instances is deleted"),
+    ("delete_definition_refuses_after_changing", "py", PYBLK, [
+        ("    n = sum(1 for i in data[\"inst\"].values() if i[\"def\"] == name)\n    if n:\n", "    n = sum(1 for i in data[\"inst\"].values() if i[\"def\"] == name)\n    if n:\n        sk.BlockData = sk.BlockData + \" \"\n"),
+    ], "a refused definition delete still touches the sketch"),
     ("shared_id_check_off", "cpp", BLOCKS, [("!used.count(d.ids[k]) && ", "")], "an instance sharing all its ids with another is kept"),
     ("radius_not_fitted", "cpp", BLOCKS, [("            if (!close(m.r, w[2])) {\n                return false;\n            }\n", "")], "a changed radius is pulled back instead of exploding"),
     ("arc_angles_not_fitted", "cpp", BLOCKS, [("std::abs(std::remainder(m.a0 + th - w[3], 2.0 * std::numbers::pi)) > kFitAngle", "(kFitAngle < 0 && th > 1e300)"), ("std::abs(std::remainder(m.a1 + th - w[4], 2.0 * std::numbers::pi))\n                        > kFitAngle", "(kFitAngle < 0 && th > 1e300)")], "a changed arc end is pulled back instead of exploding"),

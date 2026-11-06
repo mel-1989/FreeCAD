@@ -38,6 +38,8 @@ another product.
     define(sk, name, geo_ids)            register a definition from geometry
     insert(sk, name, x, y, angle)        place an instance, returns its name
     explode(sk, instance)                turn an instance into plain geometry
+    delete_instance(sk, instance)        remove an instance with its members and their constraints
+    delete_definition(sk, name)          remove a definition that has no instance
     update_definition(sk, name, changes) edit a definition, every instance follows
     blocks(sk)                           what the sketch holds
 
@@ -370,6 +372,45 @@ def explode(sk, instance):
     with _transaction(sk, "Explode block"):
         sk.BlockData = _dump(data)
         sk.solve()
+
+
+def delete_instance(sk, instance):
+    """Remove an instance: exactly its members and the constraints on them, in one
+    undo entry.  Other instances and plain geometry keep their coordinates.  Returns
+    the names of the constraints removed (a constraint without a name is
+    ``Constraint<number>`` by its number before the deletion)."""
+    data = _load(sk)
+    if instance not in data["inst"]:
+        raise SketchBlockError("there is no block instance called '%s'" % instance)
+    idmap = _id_map(sk)
+    gone = sorted({idmap[gid] for gid in data["inst"][instance]["m"].values() if gid in idmap})
+    cons = list(sk.Constraints)
+    drop = [i for i, c in enumerate(cons) if {c.First, c.Second, c.Third} & set(gone)]
+    names = [_constraint_label(cons[i], i) for i in drop]
+    del data["inst"][instance]
+    with _transaction(sk, "Delete block instance"):
+        for i in reversed(drop):
+            sk.delConstraint(i)
+        # the instance is out of the data first, so deleting its members explodes nothing else
+        sk.BlockData = _dump(data)
+        if gone:
+            sk.delGeometries(gone)
+        sk.solve()
+    return names
+
+
+def delete_definition(sk, name):
+    """Remove a definition.  Refused while any instance of it exists; the geometry
+    of explicit members is not touched (a definition holds only numbers)."""
+    data = _load(sk)
+    if name not in data["defs"]:
+        raise SketchBlockError("there is no block called '%s'" % name)
+    n = sum(1 for i in data["inst"].values() if i["def"] == name)
+    if n:
+        raise SketchBlockError("block '%s' still has %d instance%s; delete or explode %s first" % (name, n, "" if n == 1 else "s", "it" if n == 1 else "them"))
+    del data["defs"][name]
+    with _transaction(sk, "Delete block definition"):
+        sk.BlockData = _dump(data)
 
 
 def blocks(sk):
