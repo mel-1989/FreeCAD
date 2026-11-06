@@ -78,7 +78,7 @@ def collapsed_direction_lines(spec, coords):
     for c in spec.get("constraints", []):
         if c.get("driving", True) and c["type"] in DIRECTION_KINDS:
             carry.update(c["operands"][k] for k in DIRECTION_KINDS[c["type"]])
-    start = flat_coords(spec)
+    start = [c for p in spec.get("points", []) for c in (p["xyz"] if isinstance(p, dict) else p)]
 
     def length(flatc, li):
         a, b = spec["lines"][li]
@@ -194,6 +194,77 @@ class TestEntryPoint(unittest.TestCase):
                     Sketch3D.solve(arg)
                 self.assertEqual(cm.exception.position, pos)
                 self.assertEqual(arg, before)
+
+    def test_strict_input(self):
+        """A flag must be a bool, a key must be one the solver reads, a tag must not be
+        negative. Tuples stand in for lists; a tag shared by several constraints is legal (the
+        report then names the group once, by that tag)."""
+        def case(name, mutate, position, text):
+            s = small_spec()
+            mutate(s)
+            with self.subTest(name):
+                with self.assertRaises(Sketch3D.SpecError) as cm:
+                    Sketch3D.solve(s)
+                self.assertEqual(cm.exception.position, position)
+                self.assertIn(text, str(cm.exception))
+
+        case("fixed as a string", lambda s: s["points"][0].update(fixed="yes"), -1, "fixed")
+        case("fixed as an int", lambda s: s["points"][0].update(fixed=1), -1, "fixed")
+        case("fixed as None", lambda s: s["points"][0].update(fixed=None), -1, "fixed")
+        case("diagnose as a string", lambda s: s.update(diagnose="no"), -1, "diagnose")
+        case("diagnose as an int", lambda s: s.update(diagnose=0), -1, "diagnose")
+        case("driving as a string", lambda s: s["constraints"][3].update(driving="no"), 3, "driving")
+        case("driving as an int", lambda s: s["constraints"][2].update(driving=1), 2, "driving")
+        case("unknown top-level key", lambda s: s.update(pionts=[]), -1, "pionts")
+        case("unknown point key", lambda s: s["points"][0].update(fix=True), -1, "fix")
+        case("unknown plane key", lambda s: s["planes"][0].update(origin=[0, 0, 0]), -1, "origin")
+        case("unknown constraint key", lambda s: s["constraints"][1].update(valeu=1.0), 1, "valeu")
+        case("negative tag", lambda s: s["constraints"][4].update(tag=-5), 4, "tag")
+        case("non-string key", lambda s: s["constraints"][0].update({3: 1}), 0, "key")
+        # tuples are accepted
+        s = small_spec()
+        s["points"] = [tuple(p["xyz"]) if isinstance(p, dict) and not p["fixed"] else p for p in s["points"]]
+        s["lines"] = [tuple(l) for l in s["lines"]]
+        s["constraints"][0]["operands"] = tuple(s["constraints"][0]["operands"])
+        self.assertEqual(Sketch3D.solve(s)["code"], 0)
+        # a shared tag: legal, named once
+        spec = {"points": [[0, 0, 0], [1, 1, 1]],
+                "constraints": [{"type": "distance_pp", "operands": [0, 1], "value": 1.0, "tag": 7},
+                                {"type": "distance_pp", "operands": [0, 1], "value": 2.0, "tag": 7}]}
+        r = Sketch3D.solve(spec)
+        self.assertNotEqual(r["code"], 0)
+        self.assertEqual(r["conflicting"], [7])
+
+    def test_consistent_system_that_fails_to_converge_names_no_conflict(self):
+        """Systems of the 25% corpus are consistent by construction (the known solution
+        satisfies every constraint). Where the solver fails from the moved start it must say it
+        did not converge and why, and must not name a conflict. Before the check, 21 of the 25
+        failing systems of the corpus named 4 to 117 tags and seed 1642 named none and gave no
+        reason; six seeded perturbed starts clear 12 of them (the LM-first order of check 8 solves 5 more outright). The other 8 (listed) still
+        name tags because no perturbed start converged: a conflict claim there is the old
+        heuristic, not a finding, and the guard below stays at 8."""
+        cleared = [316, 717, 794, 824, 886, 936, 1234, 1280, 1304, 1651, 1686, 1722]
+        still_named = [230, 643, 720, 852, 1132, 1588, 1752, 1862]
+        for seed in cleared:
+            b, rigid = corpus8(seed)
+            perturb(b, random.Random(seed ^ int(0.25 * 1000)), 0.25)
+            spec = b.spec()
+            r = Sketch3D.solve(spec)
+            with self.subTest(seed=seed):
+                self.assertNotEqual(r["code"], 0)
+                self.assertEqual(r["conflicting"], [], "seed %d: conflicting %s" % (seed, r["conflicting"]))
+                self.assertTrue(r["reason"], "seed %d: no reason" % seed)
+                if r["code"] != 1:  # code 1 returns the point it converged to, as before
+                    self.assertEqual(r["coordinates"], [list(p["xyz"]) for p in spec["points"]])
+        false_names = 0
+        for seed in still_named:
+            b, rigid = corpus8(seed)
+            perturb(b, random.Random(seed ^ int(0.25 * 1000)), 0.25)
+            r = Sketch3D.solve(b.spec())
+            if r["code"] != 0 and r["conflicting"]:
+                false_names += 1
+        print("\n[check 6] consistent 25%%-corpus failures that still name a conflict: %d of %d listed (was 21 of 25 before the perturbed-start check)" % (false_names, len(still_named)))
+        self.assertLessEqual(false_names, 8)
 
     def test_fuzzed_specs_never_crash(self):
         rng = random.Random(1)

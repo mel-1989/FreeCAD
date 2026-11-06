@@ -18,6 +18,8 @@ import sys
 
 REL = "src/Mod/Sketch3D/App/Relations.cpp"
 SOLVE = "src/Mod/Sketch3D/App/Solve3D.cpp"
+APP = "src/Mod/Sketch3D/App/AppSketch3D.cpp"
+HDR = "src/Mod/Sketch3D/App/Solve3D.h"
 
 # (name, file, old text, new text, what it plants)
 MUTANTS = [
@@ -46,10 +48,21 @@ MUTANTS = [
     ("driving_ignored", SOLVE, "if (!spec.constraints[ci].driving) {\n                own[ci] = std::move(rows);", "if (false) {\n                own[ci] = std::move(rows);", "a constraint with driving false is solved like any other"),
     ("tag_lost", SOLVE, "std::make_unique<Rel>(cs.kind, r, axis, cs.value, plane, params, ci + 1)", "std::make_unique<Rel>(cs.kind, r, axis, cs.value, plane, params, 1)", "every row carries tag 1"),
     ("user_tag_lost", SOLVE, "out.insert(spec.constraints[t - 1].tag);", "out.insert(t);", "diagnosis tags returned as positions, not as the user's tags"),
-    ("return_code_ignored", SOLVE, "if (residual <= SuccessResidual && allFinite) {", "if (allFinite) {", "success reported whatever the residual"),
+    ("return_code_ignored", SOLVE, "else if (residual <= SuccessResidual && allFinite) {", "else if (allFinite) {", "success reported whatever the residual"),
     ("static_conflict_as_redundant", SOLVE, "if (mf->residualOf(ci) > SuccessResidual) {\n                conf.insert", "if (false) {\n                conf.insert", "a wrong relation between fixed points counts as redundant"),
     ("dof_from_row_count", SOLVE, "res.dof = md->sys.dofsNumber();", "res.dof = unknownCount - systemRows;", "dof taken as unknowns minus rows"),
     ("axis_operand_reversed", SOLVE, "default:\n                axis = o;", "default:\n                axis = 2 - o;", "fixed coordinate: axis x and z swapped"),
+    ("collapse_refusal_off", SOLVE, "if (!collapsed.empty()) {\n        res.code = 3;", "if (false) {\n        res.code = 3;", "a collapsed line is reported as a success"),
+    ("collapse_tags_not_named", SOLVE, "res.collapsed = collapsed;\n", "", "code 3 without the tags of the collapsed line's relations"),
+    ("collapse_start_not_restored", SOLVE, "res.reason = \"a line carrying a direction relation shrank to zero length; the relations \"\n                     \"hold only there\";\n        coords = start;", "res.reason = \"a line carrying a direction relation shrank to zero length; the relations \"\n                     \"hold only there\";", "code 3 returns the collapsed coordinates"),
+    ("collapse_threshold_zero", HDR, "constexpr double CollapseLength = 1e-6;", "constexpr double CollapseLength = 1e-300;", "a line has to reach exactly zero to count as collapsed"),
+    ("collapse_retry_off", SOLVE, "if (first.code == 0) {\n            Spec second = spec;", "if (false) {\n            Spec second = spec;", "the retry from the direction rows alone never runs"),
+    ("nonconvergence_check_off", SOLVE, "                    nonConvergence = true;\n                    break;", "                    break;", "a conflict is named although a perturbed start solves the system"),
+    ("nonconvergence_ignores_collapse", SOLVE, "if (collapsedTags(spec, start, flatAgain).empty()) {\n                    nonConvergence = true;", "if (true) {\n                    nonConvergence = true;", "a perturbed start that collapsed a line counts as a solution"),
+    ("nonconvergence_reason_dropped", SOLVE, "    if (res.code != 0 && res.reason.empty() && res.conflicting.empty()) {", "    if (false) {", "a failure with no conflict named gives no reason"),
+    ("strict_flag_off", APP, "if (!o || !PyBool_Check(o)) {\n        raiseSpec(position, what + \" must be True or False\");", "if (!o) {\n        raiseSpec(position, what + \" must be True or False\");", "'yes' accepted for a flag"),
+    ("strict_keys_off", APP, "        if (!known) {\n            raiseSpec(position, what + \": unknown key", "        if (false) {\n            raiseSpec(position, what + \": unknown key", "an unknown key accepted"),
+    ("strict_negative_tag_off", APP, "if (cs.tag < 0) {", "if (cs.tag < -1000000000) {", "a negative tag accepted"),
 ]
 
 

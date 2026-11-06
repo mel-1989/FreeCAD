@@ -5,6 +5,7 @@
 #include <cstring>
 #include <map>
 #include <numbers>
+#include <random>
 #include <memory>
 #include <set>
 
@@ -486,6 +487,7 @@ Result solveImpl(const Spec& spec, int depth, bool retry)
     };
 
     std::vector<GCS::Algorithm> order;
+    std::vector<double> taus;
     if (spec.algorithm == "dogleg") {
         order = {GCS::DogLeg};
     }
@@ -606,13 +608,82 @@ Result solveImpl(const Spec& spec, int depth, bool retry)
         for (int ci : mf->staticDriving) {
             if (mf->residualOf(ci) > SuccessResidual) {
                 conf.insert(spec.constraints[ci].tag);
+                staticConf.insert(spec.constraints[ci].tag);
             }
             else {
                 red.insert(spec.constraints[ci].tag);
+                staticRed.insert(spec.constraints[ci].tag);
             }
         }
         res.conflicting.assign(conf.begin(), conf.end());
         res.redundant.assign(red.begin(), red.end());
+    }
+
+    // A failed solve does not make the system inconsistent: Newton type solvers also fail on
+    // consistent systems that have a root. Before any conflict is named, solve again from a few
+    // seeded perturbed starts; if one reaches a zero residual (without collapsing a line) a
+    // solution exists, the failure is a non-convergence from this start, and naming a
+    // conflicting set would be a false report.
+    bool nonConvergence = false;
+    if (residual > SuccessResidual && systemRows > 0 && depth == 0 && retry && std::isfinite(residual)
+        && spec.constraints.size() > staticConf.size()) {
+        std::vector<double> centre(3, 0.0);
+        for (int i = 0; i < np; ++i) {
+            for (int a = 0; a < 3; ++a) {
+                centre[a] += start[3 * i + a] / std::max(1, np);
+            }
+        }
+        double size2 = 0.0;
+        for (int i = 0; i < np; ++i) {
+            for (int a = 0; a < 3; ++a) {
+                size2 += (start[3 * i + a] - centre[a]) * (start[3 * i + a] - centre[a]) / std::max(1, np);
+            }
+        }
+        const double size = std::max(1e-6, std::sqrt(size2));
+        // (seed, fraction of the size, algorithm): a small and a larger move, Newton and LM
+        const struct
+        {
+            unsigned seed;
+            double fraction;
+            const char* algorithm;
+        } tries[] = {{7919u, 0.03, "dogleg"}, {104729u, 0.08, "lm"}, {1299709u, 0.15, "dogleg"},
+                    {15485863u, 0.05, "dogleg"}, {32452843u, 0.10, "lm"}, {49979687u, 0.20, "dogleg"}};
+        for (const auto& t : tries) {
+            std::mt19937 gen(t.seed);
+            std::uniform_real_distribution<double> uni(-1.0, 1.0);
+            Spec moved = spec;
+            moved.diagnose = false;
+            moved.algorithm = t.algorithm;
+            for (int i = 0; i < np; ++i) {
+                if (!spec.points[i].fixed) {
+                    for (int a = 0; a < 3; ++a) {
+                        moved.points[i].xyz[a] += t.fraction * size * uni(gen);
+                    }
+                }
+            }
+            const Result again = solveImpl(moved, depth + 1, false);
+            if (again.code == 0) {
+                std::vector<double> flatAgain(3 * np);
+                for (int i = 0; i < np; ++i) {
+                    for (int a = 0; a < 3; ++a) {
+                        flatAgain[3 * i + a] = again.coordinates[i][a];
+                    }
+                }
+                if (collapsedTags(spec, start, flatAgain).empty()) {
+                    nonConvergence = true;
+                    break;
+                }
+            }
+        }
+        if (nonConvergence) {
+            res.conflicting.assign(staticConf.begin(), staticConf.end());
+            res.redundant.assign(staticRed.begin(), staticRed.end());
+            res.partiallyRedundant.clear();
+            res.collapsed.clear();
+            res.reason = "no zero-residual point was reached from this start, but one exists (a start "
+                         "moved at random did reach it); the relations are consistent, so no conflict "
+                         "is named";
+        }
     }
 
     // A failed solve that ended with a line carrying a direction relation shrunk to nothing
@@ -632,7 +703,7 @@ Result solveImpl(const Spec& spec, int depth, bool retry)
     // them out and solve the rest, repeating until the rest is solvable. The result names every
     // constraint taken out. This means "not satisfied together with the others at the point
     // reached"; it is not a proof that a smaller set could not do.
-    if (residual > SuccessResidual && systemRows > 0 && depth < 4) {
+    if (residual > SuccessResidual && systemRows > 0 && depth < 4 && !nonConvergence && spec.diagnose) {
         auto ml = make(leastSquares);
         double worst = 0.0;
         for (int ci = 0; ci < nc; ++ci) {
@@ -731,6 +802,9 @@ Result solveImpl(const Spec& spec, int depth, bool retry)
         res.code = 2;
         res.status = "failed";
         coords = start;  // a failed solve returns the input coordinates
+    }
+    if (res.code != 0 && res.reason.empty() && res.conflicting.empty()) {
+        res.reason = "no zero-residual point was reached from this start, and no conflicting set was found";
     }
     auto mr = make(coords);
     for (int ci = 0; ci < nc; ++ci) {
