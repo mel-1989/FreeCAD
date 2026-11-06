@@ -114,6 +114,12 @@ if(BUILD_SKETCHER)
     endif(EIGEN3_FOUND)
 endif(BUILD_SKETCHER)
 
+if(BUILD_SKETCH3D)
+    if(EIGEN3_FOUND)
+      add_subdirectory(Sketch3D)
+    endif(EIGEN3_FOUND)
+endif(BUILD_SKETCH3D)
+
 if(BUILD_SPREADSHEET)
   add_subdirectory(Spreadsheet)
 endif(BUILD_SPREADSHEET)
