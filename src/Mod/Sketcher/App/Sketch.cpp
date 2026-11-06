@@ -256,10 +256,20 @@ bool Sketch::analyseBlockedGeometry(
     return doesBlockAffectOtherConstraints;
 }
 
-void Sketch::addBlockInstances()
+void Sketch::addBlockInstances(const std::vector<Constraint*>& constraints)
 {
     using Mode = GCS::ConstraintBlockPlacement::Mode;
     constexpr double twoPi = 2.0 * std::numbers::pi;
+
+    // a B-spline's first and last knot points, once exposed, are held to the curve by InternalAlignment
+    // constraints that fix its start and end points too; a tie on those points would repeat them
+    std::set<std::pair<int, int>> knotAligned;
+    for (const auto* c : constraints) {
+        if (c->Type == Sketcher::InternalAlignment && c->AlignmentType == Sketcher::BSplineKnotPoint
+            && c->isActive) {
+            knotAligned.insert({c->Second, c->InternalAlignmentIndex});
+        }
+    }
 
     for (const auto& inst : blockInstances) {
         // resolve the members to the solver's parameters
@@ -271,6 +281,10 @@ void Sketch::addBlockInstances()
             double* rad = nullptr;
             double* ang0 = nullptr;
             double* ang1 = nullptr;
+            // 's': the spline's poles, weights and its two end points
+            std::vector<GCS::Point> poles;
+            std::vector<double*> wts;
+            GCS::Point bstart, bend;
         };
         std::vector<Resolved> res;
         bool ok = !inst.members.empty();
@@ -300,6 +314,31 @@ void Sketch::addBlockInstances()
                 r.ang0 = Arcs[g.index].startAngle;
                 r.ang1 = Arcs[g.index].endAngle;
             }
+            else if (m.type == 'e' && g.type == Ellipse) {
+                r.p0 = Ellipses[g.index].center;
+                r.p1 = Ellipses[g.index].focus1;
+                r.rad = Ellipses[g.index].radmin;
+            }
+            else if (m.type == 'o' && g.type == ArcOfEllipse) {
+                r.p0 = ArcsOfEllipse[g.index].center;
+                r.p1 = ArcsOfEllipse[g.index].focus1;
+                r.rad = ArcsOfEllipse[g.index].radmin;
+                r.ang0 = ArcsOfEllipse[g.index].startAngle;
+                r.ang1 = ArcsOfEllipse[g.index].endAngle;
+            }
+            else if (m.type == 's' && g.type == BSpline) {
+                const GCS::BSpline& bs = BSplines[g.index];
+                if (bs.poles.size() * 2 != m.poles.size() || bs.weights.size() != m.weights.size()
+                    || static_cast<int>(bs.mult.size()) != static_cast<int>(m.mult.size())) {
+                    ok = false;
+                    break;
+                }
+                r.poles = bs.poles;
+                r.wts = bs.weights;
+                r.bstart = bs.start;
+                r.bend = bs.end;
+                r.p0 = bs.poles.front();
+            }
             else {
                 ok = false;
                 break;
@@ -317,8 +356,16 @@ void Sketch::addBlockInstances()
         };
         std::vector<Pair> pairs;
         for (const auto& r : res) {
+            if (r.m->type == 's') {
+                for (size_t i = 0; i < r.poles.size(); ++i) {
+                    pairs.push_back(
+                        {r.m->poles[2 * i], r.m->poles[2 * i + 1], *r.poles[i].x, *r.poles[i].y}
+                    );
+                }
+                continue;
+            }
             pairs.push_back({r.m->x0, r.m->y0, *r.p0.x, *r.p0.y});
-            if (r.m->type == 'l') {
+            if (r.m->type == 'l' || r.m->type == 'e' || r.m->type == 'o') {
                 pairs.push_back({r.m->x1, r.m->y1, *r.p1.x, *r.p1.y});
             }
             else if (r.m->type == 'a') {
@@ -364,10 +411,60 @@ void Sketch::addBlockInstances()
                 Mode::Angle, p, pX, pY, pA, 0.0, 0.0, local + k * twoPi
             );
         };
+        // a parameter that does not turn with the instance (an ellipse's parameter, a weight) keeps its
+        // whole-turn branch
+        auto constantTie = [&](double* p, double local) {
+            double k = std::round((*p - local) / twoPi);
+            GCSsys.addConstraintBlockPlacement(
+                Mode::Constant, p, nullptr, nullptr, nullptr, 0.0, 0.0, local + k * twoPi
+            );
+        };
+        // the point of the current geometry in the block's own frame, for end points that stand
+        // apart from the poles
+        auto localOf = [&](const GCS::Point& p, double& lx, double& ly) {
+            double dx = *p.x - X, dy = *p.y - Y;
+            lx = dx * std::cos(angle) + dy * std::sin(angle);
+            ly = -dx * std::sin(angle) + dy * std::cos(angle);
+        };
         for (auto& r : res) {
+            if (r.m->type == 's') {
+                for (size_t i = 0; i < r.poles.size(); ++i) {
+                    point(r.poles[i], r.m->poles[2 * i], r.m->poles[2 * i + 1]);
+                    GCSsys.addConstraintBlockPlacement(
+                        Mode::Constant, r.wts[i], nullptr, nullptr, nullptr, 0.0, 0.0, r.m->weights[i]
+                    );
+                }
+                // end points not made coincident with a pole by addBSpline are free parameters of
+                // the solver that the curve does not depend on; they follow the instance
+                const int lastKnot = static_cast<int>(r.m->knots.size()) - 1;
+                bool startFree = (r.m->periodic || r.m->mult.front() <= r.m->degree)
+                    && !knotAligned.count({r.m->geoId, 0});
+                bool endFree = (r.m->periodic || r.m->mult.back() <= r.m->degree)
+                    && !knotAligned.count({r.m->geoId, lastKnot});
+                double lx, ly;
+                if (startFree) {
+                    localOf(r.bstart, lx, ly);
+                    point(r.bstart, lx, ly);
+                }
+                if (endFree) {
+                    localOf(r.bend, lx, ly);
+                    point(r.bend, lx, ly);
+                }
+                continue;
+            }
             point(r.p0, r.m->x0, r.m->y0);
-            if (r.m->type == 'l') {
+            if (r.m->type == 'l' || r.m->type == 'e' || r.m->type == 'o') {
                 point(r.p1, r.m->x1, r.m->y1);
+            }
+            if (r.m->type == 'e' || r.m->type == 'o') {
+                GCSsys.addConstraintBlockPlacement(
+                    Mode::Constant, r.rad, nullptr, nullptr, nullptr, 0.0, 0.0, r.m->r
+                );
+                if (r.m->type == 'o') {
+                    constantTie(r.ang0, r.m->a0);
+                    constantTie(r.ang1, r.m->a1);
+                }
+                continue;
             }
             if (r.rad) {
                 GCSsys.addConstraintBlockPlacement(
@@ -486,7 +583,7 @@ int Sketch::setUpSketch(
     }
     clearTemporaryConstraints();
     if (!blockInstances.empty()) {
-        addBlockInstances();
+        addBlockInstances(ConstraintList);
     }
     GCSsys.declareUnknowns(Parameters);
     GCSsys.declareDrivenParams(DrivenParameters);

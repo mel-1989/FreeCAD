@@ -1031,6 +1031,12 @@ class SketchObject(Part2DObject):
         """
         ...
 
+    def restoreBlockPoleConstraints(self, geo_ids: List[int], /) -> int:
+        """
+        Internal to SketcherBlocks. Gives the exposed pole circles of the B-splines among geo_ids the Weight and Equal constraints that exposeInternalGeometry gives new ones (an instance of a block ties the weights itself and gets none), unless the spline is still a member of a block instance. Returns the number of constraints added.
+        """
+        ...
+
     def setBlockGuard(self, on: bool, /) -> None:
         """
         Internal to SketcherBlocks; callers must not use it. While on, the rule that explodes block instances whose members no longer fit their definition is off, until cleared with False.

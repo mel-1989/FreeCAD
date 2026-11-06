@@ -643,7 +643,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
                     raise B.SketchBlockError(tr("A constraint cannot be part of a block; select geometry."))
                 el = RP.element_of_selection_name(self.sketch, sub)
                 if el is None:
-                    raise B.SketchBlockError(tr("%s cannot be part of a block; select points, lines, circles or arcs.") % sub)
+                    raise B.SketchBlockError(tr("%s cannot be part of a block; select points, lines, circles, arcs, ellipses or B-splines.") % sub)
                 geo, pos = el
                 if geo in (-1, -2):
                     raise B.SketchBlockError(tr("The origin and the axes cannot be part of a block."))
@@ -658,13 +658,17 @@ class BlocksPanel(QtWidgets.QDockWidget):
 
         def go():
             ids = self.user_geo_ids()
-            return B.define(self.sketch, name, ids), len(ids)
+            rep = B.define_report(self.sketch, name, ids)
+            return rep["name"], len(ids) - len(rep["left_out"]), len(rep["left_out"])
 
         res = self._run(go)
         if res and res is not True:
             self._choose_row("def", res[0])
             self._update_buttons()
-            self.status.setText(tr("Defined '%s' from %d member(s). The geometry is still plain geometry; Insert places copies.") % res)
+            text = tr("Defined '%s' from %d member(s). The geometry is still plain geometry; Insert places copies.") % res[:2]
+            if res[2]:
+                text += " " + tr("Left out %d axes, foci, pole circles or knot points that belong to a curve; a block holds the curve alone.") % res[2]
+            self.status.setText(text)
             self.name_edit.clear()
         return res
 
@@ -1198,6 +1202,7 @@ class BlocksPanel(QtWidgets.QDockWidget):
             entry = tr("Edit block %s") % name
             tail = list(doc.UndoNames)
             B.explode(self.sketch, name, label=entry)
+            outside["cons"] = B.session_constraint_state(self.sketch)  # the Weight and Equal constraints the explode gave exposed pole circles are the start, not an addition
         except B.SketchBlockError as exc:
             self.refresh()
             self.status.setText(_sentence(str(exc)))
@@ -1420,6 +1425,9 @@ class BlocksPanel(QtWidgets.QDockWidget):
                 self._session_broken(tr("applying the result failed (%s)") % _sentence(str(exc)).rstrip("."))
                 return False
             removed_constraints = applied["removed_constraints"]
+            scaled = applied["scaled"]
+        else:
+            scaled = {}
         self._end_session(None)
         self.refresh()
         if changes:
@@ -1430,6 +1438,10 @@ class BlocksPanel(QtWidgets.QDockWidget):
             text = tr("Finished: the block itself did not change.")
         if removed_constraints:
             text += " " + tr("Constraints removed with their members: %s.") % ", ".join(removed_constraints)
+        if scaled:
+            text += " " + tr("A B-spline had exactly one weight equal to 1.0, which the solver would rewrite when its pole circles are exposed, so all its weights were multiplied by a power of 2 (%s); the curve is the same and an exposed pole circle shows the scaled radius.") % ", ".join(
+                "%s: %d" % (k, f) for k, f in sorted(scaled.items())
+            )
         if res["moved_together"]:
             text += " " + tr("The members moved together, which moves the instance rather than changing the block, so the move was not kept.")
         if undone:

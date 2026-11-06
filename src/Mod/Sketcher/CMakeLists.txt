@@ -43,7 +43,10 @@ set(Sketcher_TestScripts
     SketcherTests/SketchBlocksCorpus.py
     SketcherTests/SketchBlocksMutants.py
     SketcherTests/TestSketchBlockLibrary.py
+    SketcherTests/TestSketchBlockCurves.py
+    SketcherTests/SketchBlockCurvesCorpus.py
     SketcherTests/SketchBlockLibraryMutants.py
+    SketcherTests/SketchBlockCurveMutants.py
 )
 
 if(BUILD_GUI)

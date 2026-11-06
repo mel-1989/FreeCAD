@@ -1013,6 +1013,11 @@ public:  // geometry extension functionalities for single element sketch object 
     /// removes the block instances whose members no longer exist (they become plain geometry);
     /// returns how many were removed
     int pruneBlocks();
+    /// gives the exposed pole circles of the B-splines among `geoIds` the Weight and Equal constraints that
+    /// exposeInternalGeometry gives new ones, unless the spline is a member of a block instance that still fits (its
+    /// weights are tied by the instance then); used when an instance turns into plain geometry. Returns the number
+    /// of constraints added.
+    int restoreBlockPoleConstraints(const std::vector<int>& geoIds);
     /// while on, block data is not validated (SketcherBlocks edits geometry and data in several steps)
     void setBlockGuard(bool on)
     {
@@ -1171,6 +1176,17 @@ private:
     /// Add geometry and constraints to `this`, then delete the geometry and constraints in the
     /// vectors Note that the contents of the two vectors are invalid after this call.
     void addAndCleanup(std::vector<Part::Geometry*> igeo, std::vector<Constraint*> icon);
+    /// The Weight and Equal constraints stock gives pole circle `index` (GeoId `circleGeoId`) of a B-spline: a Weight
+    /// on the first when its weight is 1.0, an Equal to the first for a later one with the same weight while the
+    /// first is weight-constrained. Shared by exposeInternalGeometry and restoreBlockPoleConstraints.
+    static void appendPoleWeightConstraints(
+        const std::vector<double>& weights,
+        size_t index,
+        int circleGeoId,
+        int firstCircleGeoId,
+        bool& firstWeightConstrained,
+        std::vector<Constraint*>& out
+    );
 
     /// Flag to allow external geometry from other bodies than the one this sketch belongs to
     bool allowOtherBody;
@@ -1196,10 +1212,16 @@ private:
     /// hands the instances in BlockData to the solver sketch, with the GeoIds they have now
     void syncBlocks();
     std::vector<bool> validBlockInstances();
+    /// is the geometry a member of a block instance that still fits its definition?
+    bool isValidBlockMember(int geoId);
     int explodeInvalidBlocks();
     int explodeBlocksOf(const std::vector<int>& geoIds);
     int blockGuard = 0;
     bool inExplodeBlocks = false;
+    bool restoringPoles = false;
+    std::vector<long> pendingPoleRestore;  // persistent ids waiting for an internal transaction to end
+    int restoreBlockPoleConstraintsOf(const std::vector<long>& persistentIds);
+    void flushPoleRestore();
     bool restoreChecksBlocks = false;
     const std::vector<BlockInstanceData>& parsedBlocks();
 

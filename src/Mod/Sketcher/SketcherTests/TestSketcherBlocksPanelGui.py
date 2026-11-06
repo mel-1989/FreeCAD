@@ -395,7 +395,7 @@ class TestBlocksPanelActions(BlocksGuiCase):
         B.define(sk, "Taken", [0, 1])
         B.insert(sk, "Taken", 20, 20, 0)
         inst_geo = B.blocks(sk)["instances"]["Taken_1"]["geo_ids"][0]
-        sk.addGeometry(Part.Ellipse(V(30, 30, 0), 3.0, 1.0), False)
+        sk.addGeometry(Part.ArcOfHyperbola(Part.Hyperbola(V(30, 30, 0), 3.0, 1.0), 0.0, 1.0), False)
         ell = len(sk.Geometry) - 1
         self.open_panel(sk)
         cases = [
@@ -2092,7 +2092,7 @@ class TestBlocksPanelEditLeaving(EditCase):
 
     def test_a_result_that_cannot_be_read_at_finish_is_refused_and_the_session_goes_on(self):
         sk = self.started("PanelUnread")
-        self.stock(sk, "Ellipse", lambda: sk.addGeometry(Part.Ellipse(V(30, 30, 0), 3.0, 1.0), False))
+        self.stock(sk, "Hyperbola", lambda: sk.addGeometry(Part.ArcOfHyperbola(Part.Hyperbola(V(30, 30, 0), 3.0, 1.0), 0.0, 1.0), False))
         depth = sk.Document.UndoCount
         self.click_button("blocksFinish")
         self.assertIsNotNone(self.panel.session)
@@ -2778,3 +2778,283 @@ class TestBlocksPanelLibrary(EditCase):
         # the other instance follows
         g2 = B.blocks(sk)["instances"]["blk_2"]["geo_ids"][0]
         self.assertAlmostEqual(sk.Geometry[g2].EndPoint.y - sk.Geometry[g2].StartPoint.y, 0.4, delta=1e-7)
+
+
+class TestBlocksPanelCurves(BlocksGuiCase):
+    """Slice 5b2, check 13: ellipses, arcs of ellipse and B-splines through the panel."""
+
+    def curves_sketch(self, name):
+        doc = self.new_doc(name)
+        sk = doc.addObject("Sketcher::SketchObject", "K")
+        spl = Part.BSplineCurve()
+        spl.buildFromPolesMultsKnots([V(-6, 10, 0), V(-2, 16, 0), V(4, 8, 0), V(9, 15, 0), V(14, 10, 0)], [3, 2, 3], [0, 1, 2], False, 2, [1, 2, 1.5, 1, 1])
+        sk.addGeometry([Part.Ellipse(V(0, 0, 0), 9.0, 4.0), Part.ArcOfEllipse(Part.Ellipse(V(14, 3, 0), 6.0, 2.5), 0.4, 4.0), spl], False)
+        doc.recompute()
+        return sk
+
+    def test_define_from_a_selection_with_internal_geometry_says_what_it_left_out(self):
+        sk = self.curves_sketch("PanelCurveDef")
+        sk.exposeInternalGeometry(0)
+        sk.exposeInternalGeometry(2)
+        n = len(sk.Geometry)
+        self.assertGreater(n, 6)
+        twin = sk.Document.copyObject(sk)
+        self.open_panel(sk)
+        count = sk.Document.UndoCount
+        _widget("blocksName").setText("Cv")
+        self.select(sk, "Edge1", "Edge3", *["Edge%d" % (g + 1) for g in range(3, n) if sk.Geometry[g].TypeId != "Part::GeomPoint"])
+        self.click_button("blocksDefine")
+        self.assertEqual(sk.Document.UndoCount, count + 1)
+        self.assertIn("Left out", self.status())
+        self.assertEqual(sorted(t["t"] for t in B._load(sk)["defs"]["Cv"]["members"].values()), ["e", "s"])
+        self.assertEqual(len(sk.Geometry), n)  # still plain geometry, nothing added or removed
+        self.assertPanelEqualsApi(sk)
+        # internal geometry whose curve is not selected: the sentence names the curve and nothing changes
+        snap = _snapshot(sk)
+        _widget("blocksName").setText("Bad")
+        self.select(sk, "Edge4")
+        self.click_button("blocksDefine")
+        self.assertIn("internal geometry of curve", self.status())
+        self.assertEqual(_snapshot(sk), snap)
+
+    def test_instances_of_the_new_kinds_list_select_explode_and_delete(self):
+        sk = self.curves_sketch("PanelCurveInst")
+        B.define(sk, "Cv", [0, 1, 2])
+        sk.delGeometries([0, 1, 2])
+        B.insert(sk, "Cv", 3.0, 4.0, 2.5)
+        B.insert(sk, "Cv", 30.0, 4.0, -1.0)
+        sk.exposeInternalGeometry(B.blocks(sk)["instances"]["Cv_2"]["geo_ids"][2])
+        sk.Document.recompute()
+        self.open_panel(sk)
+        self.assertPanelEqualsApi(sk)
+        self.assertEqual(_tree_rows(self.panel), [("Cv", 3, 2, [("Cv_1", 3), ("Cv_2", 3)])])
+        self.choose("inst", "Cv_1")
+        self.assertEqual(sorted(_selected_names()), sorted("Edge%d" % (g + 1) for g in B.blocks(sk)["instances"]["Cv_1"]["geo_ids"]))
+        count = sk.Document.UndoCount
+        self.click_button("blocksExplode")
+        self.assertEqual(sk.Document.UndoCount, count + 1)
+        self.assertNotIn("Cv_1", B.blocks(sk)["instances"])
+        self.assertPanelEqualsApi(sk)
+        n = len(sk.Geometry)
+        self.choose("inst", "Cv_2")
+        self.click_button("blocksDelete")
+        self.assertNotIn("Cv_2", B.blocks(sk)["instances"])
+        self.assertEqual(len(sk.Geometry), 3)  # the exploded instance's curves stay; the deleted one's and its pole circles are gone
+        self.assertLess(len(sk.Geometry), n)
+        self.assertPanelEqualsApi(sk)
+
+    def test_library_rows_show_the_new_kinds(self):
+        import shutil
+        import tempfile
+
+        sk = self.curves_sketch("PanelCurveLib")
+        B.define(sk, "Cv", [0, 1, 2])
+        folder = tempfile.mkdtemp(prefix="curvepanel_")
+        try:
+            B.library_save(sk, "Cv", folder=folder)
+            FreeCAD.ParamGet(B.LIBRARY_PARAM).SetString("LibraryFolder", folder)
+            self.open_panel(sk)
+            self.assertPanelEqualsApi(sk)
+            self.assertEqual([(r["name"], r["members"], r["error"]) for r in B.library_list(folder)], [("Cv", 3, None)])
+        finally:
+            FreeCAD.ParamGet(B.LIBRARY_PARAM).SetString("LibraryFolder", "")
+            shutil.rmtree(folder, ignore_errors=True)
+
+
+class TestBlocksPanelCurveSessions(EditCase):
+    """Slice 5b2, check 10 (session half), run 063 repair R7: Edit in place, Finish and Cancel on ellipses, arcs of ellipse and
+    B-splines.  A session that changes nothing leaves the definition byte for byte; a weight or axis edit changes every
+    instance; Cancel puts everything back; exposed pole circles of a polynomial spline have stock's constraints during
+    the session and none are left over."""
+
+    def kind_sketch(self, name, kind, weights=None):
+        doc = self.new_doc(name)
+        sk = doc.addObject("Sketcher::SketchObject", "K")
+        if kind == "e":
+            geo = Part.Ellipse(V(1, 2, 0), 9.0, 4.0)
+            geo.AngleXU = 0.5
+        elif kind == "o":
+            e = Part.Ellipse(V(1, 2, 0), 9.0, 4.0)
+            e.AngleXU = 0.5
+            geo = Part.ArcOfEllipse(e, 0.4, 4.0)
+        else:
+            geo = Part.BSplineCurve()
+            geo.buildFromPolesMultsKnots(
+                [V(x, y, 0) for x, y in ((0, 0), (10, 15), (20, -5), (30, 10), (40, 0))], [4, 1, 4], [0.0, 0.5, 1.0], False, 3, [float(w) for w in (weights or [2, 3, 4, 0.5, 1.5])]
+            )
+        sk.addGeometry([geo], False)
+        B.define(sk, "K", [0])
+        sk.delGeometries([0])
+        B.insert(sk, "K", 0.0, 0.0, 0.0)
+        B.insert(sk, "K", 30.0, 40.0, 2.2)
+        sk.addGeometry(Part.LineSegment(V(-50, -30, 0), V(50, -30, 0)), False)
+        sk.solve()
+        doc.recompute()
+        return sk
+
+    def curve_id(self, sk, inst="K_2"):
+        return B.blocks(sk)["instances"][inst]["geo_ids"][0]
+
+    def session_curve(self):
+        """The GeoId of the edited instance's curve while the session runs."""
+        return B._id_map(self.panel.sketch)[list(self.panel.session["members"].values())[0]]
+
+    def exposed_circles(self, sk, first):
+        return [i for i in range(first, len(sk.Geometry)) if sk.Geometry[i].TypeId == "Part::GeomCircle"]
+
+    def test_a_session_that_changes_nothing_leaves_the_definition_byte_for_byte(self):
+        for kind, weights in (("e", None), ("o", None), ("s", None), ("s", [2, 1, 4, 0.5, 1.5]), ("s", [1.0] * 5)):
+            sk = self.kind_sketch("PanelSessNoEdit", kind, weights)
+            self.open_panel(sk)
+            snap = _snapshot(sk)
+            label = "%s %s" % (kind, weights)
+            self.begin(sk, "K_2")
+            self.finish_accepting()
+            self.assertIsNone(self.panel.session, label + ": " + self.status())
+            self.assertEqual(sk.BlockData, snap["block"], label)
+            self.assertSameSketch(sk, snap)
+            self.assertIn("nothing had changed", self.status(), label)
+            self.assertEqual(sorted(B.blocks(sk)["instances"]), ["K_1", "K_2"], label)
+            self.assertEqual(list(sk.ConflictingConstraints), [], label)
+            self.assertEqual(list(sk.RedundantConstraints), [], label)
+            self.close_panel()
+            FreeCAD.closeDocument(sk.Document.Name)
+
+    def test_a_session_on_an_exposed_instance_leaves_nothing_over(self):
+        """Exploding for the session gives the exposed pole circles stock's Weight and Equal constraints; Finish rolls the session
+        back, so the instance is tied again and none of them is left to make it redundant."""
+        for weights in ([1.0] * 5, [2, 3, 4, 0.5, 1.5], [2, 1, 4, 0.5, 1.5]):
+            sk = self.kind_sketch("PanelSessExposed", "s", weights)
+            sk.exposeInternalGeometry(self.curve_id(sk))
+            sk.solve()
+            self.open_panel(sk)
+            snap = _snapshot(sk)
+            n_cons = len(sk.Constraints)
+            self.begin(sk, "K_2")
+            during = len(sk.Constraints)
+            stock = 5 if weights == [1.0] * 5 else 0  # one Weight and four Equal for a polynomial spline
+            self.assertEqual(during, n_cons + stock, weights)
+            self.assertEqual(sum(1 for c in sk.Constraints if c.Type in ("Weight", "Equal")), stock, weights)
+            self.finish_accepting()
+            self.assertIsNone(self.panel.session, self.status())
+            self.assertEqual(sk.BlockData, snap["block"], weights)
+            self.assertEqual(len(sk.Constraints), n_cons, weights)
+            self.assertEqual(sum(1 for c in sk.Constraints if c.Type in ("Weight", "Equal")), 0, weights)
+            self.assertEqual(list(sk.ConflictingConstraints), [], weights)
+            self.assertEqual(list(sk.RedundantConstraints), [], weights)
+            self.assertEqual(sk.getBlockInstanceCount(), 2, weights)
+            self.assertNotIn("added during the edit", self.status(), weights)
+            self.assertSameSketch(sk, snap)
+            self.close_panel()
+            FreeCAD.closeDocument(sk.Document.Name)
+
+    def test_a_weight_edit_changes_every_instance(self):
+        sk = self.kind_sketch("PanelSessWeight", "s")
+        self.open_panel(sk)
+        before = [list(sk.Geometry[self.curve_id(sk, n)].getWeights()) for n in ("K_1", "K_2")]
+        self.begin(sk, "K_2")
+        gid = self.session_curve()
+        first = len(sk.Geometry)
+
+        def ops():
+            sk.exposeInternalGeometry(gid)
+            sk.solve()
+            circles = self.exposed_circles(sk, first)
+            c = sk.Geometry[circles[1]]
+            sk.moveGeometry(circles[1], 0, V(c.Center.x + c.Radius + 2.5, c.Center.y, 0), False)
+            sk.solve()
+
+        self.stock(sk, "Weight", ops)
+        edited = list(sk.Geometry[gid].getWeights())
+        self.assertGreater(abs(edited[1] - before[1][1]), 2.0)
+        self.finish_accepting()
+        self.assertIsNone(self.panel.session, self.status())
+        self.assertIn("1 changed", self.status())
+        after = [list(sk.Geometry[self.curve_id(sk, n)].getWeights()) for n in ("K_1", "K_2")]
+        for w in after:
+            for a, b in zip(w, edited):
+                self.assertAlmostEqual(a, b, delta=1e-6)
+        self.assertNotEqual(after, before)
+        d = B._load(sk)["defs"]["K"]["members"]["m0000"]["g"]
+        self.assertEqual(B._spline_parts(d)[3], after[0])
+        self.assertEqual(list(sk.ConflictingConstraints), [])
+        self.assertEqual(list(sk.RedundantConstraints), [])
+
+    def test_a_weight_set_to_exactly_one_is_scaled_and_the_panel_says_so(self):
+        sk = self.kind_sketch("PanelSessLone", "s")
+        self.open_panel(sk)
+        self.begin(sk, "K_2")
+        gid = self.session_curve()
+
+        def ops():
+            geo = sk.Geometry
+            geo[gid].setWeight(2, 1.0)  # the second weight is now the only 1.0
+            sk.Geometry = geo
+
+        self.stock(sk, "Weight", ops)
+        self.finish_accepting()
+        self.assertIsNone(self.panel.session, self.status())
+        text = self.status()
+        self.assertIn("exactly one weight equal to 1.0", text)
+        want = [8.0, 4.0, 16.0, 2.0, 6.0]  # [2, 1, 4, 0.5, 1.5] times 2 is [4, 2, 8, 1, 3], a new lone 1.0, so times 4
+        self.assertIn("m0000: 4", text)
+        for n in ("K_1", "K_2"):
+            self.assertEqual(list(sk.Geometry[self.curve_id(sk, n)].getWeights()), want, n)
+
+    def test_an_axis_edit_changes_every_instance(self):
+        for kind in ("e", "o"):
+            sk = self.kind_sketch("PanelSessAxis", kind)
+            self.open_panel(sk)
+            r0 = [sk.Geometry[self.curve_id(sk, n)].MajorRadius for n in ("K_1", "K_2")]
+            self.begin(sk, "K_2")
+            gid = self.session_curve()
+            first = len(sk.Geometry)
+
+            def ops():
+                sk.exposeInternalGeometry(gid)
+                sk.solve()
+                line = [i for i in range(first, len(sk.Geometry)) if sk.Geometry[i].TypeId == "Part::GeomLineSegment"][0]
+                e = sk.Geometry[line].EndPoint
+                sk.moveGeometry(line, 2, V(e.x + 3.0, e.y + 1.0, 0), False)
+                sk.solve()
+
+            self.stock(sk, "Axis", ops)
+            major = sk.Geometry[gid].MajorRadius
+            self.assertGreater(abs(major - r0[1]), 0.5, kind)
+            self.finish_accepting()
+            self.assertIsNone(self.panel.session, self.status())
+            self.assertIn("changed", self.status())
+            for n in ("K_1", "K_2"):
+                g = sk.Geometry[self.curve_id(sk, n)]
+                self.assertAlmostEqual(g.MajorRadius, major, delta=1e-6, msg=(kind, n))
+                self.assertAlmostEqual(g.MinorRadius, sk.Geometry[gid].MinorRadius, delta=1e-6, msg=(kind, n))
+            self.assertEqual(list(sk.ConflictingConstraints), [], kind)
+            self.assertEqual(list(sk.RedundantConstraints), [], kind)
+            self.close_panel()
+            FreeCAD.closeDocument(sk.Document.Name)
+
+    def test_cancel_puts_everything_back(self):
+        for kind in ("e", "o", "s"):
+            sk = self.kind_sketch("PanelSessCancel", kind)
+            self.open_panel(sk)
+            snap = _snapshot(sk)
+            self.begin(sk, "K_2")
+            gid = self.session_curve()
+
+            def ops():
+                sk.exposeInternalGeometry(gid)
+                sk.solve()
+                c = sk.Geometry[gid]
+                p = c.value(c.FirstParameter + (c.LastParameter - c.FirstParameter) * 0.3)
+                sk.moveGeometry(gid, 0, V(p.x + 2.0, p.y + 1.5, 0), False)
+                sk.solve()
+
+            self.stock(sk, "Edit", ops)
+            self.click_button("blocksCancel")
+            self.assertIsNone(self.panel.session, self.status())
+            self.assertIn("cancelled", self.status(), kind)
+            self.assertEqual(sk.BlockData, snap["block"], kind)
+            self.assertSameSketch(sk, snap)
+            self.assertEqual(sk.Document.UndoCount, snap["undo"], kind)
+            self.close_panel()
+            FreeCAD.closeDocument(sk.Document.Name)

@@ -348,7 +348,7 @@ class TestLibraryLoad(LibCase):
             "top_array": b"[1, 2, 3]",
             "wrong_format": text(G(format="other")),
             "no_format": text({k: v for k, v in G().items() if k != "format"}),
-            "newer_version": text(G(version=2)),
+            "newer_version": text(G(version=3)),
             "version_string": text(G(version="1")),
             "version_bool": text(G(version=True)),
             "version_zero": text(G(version=0)),
@@ -1114,3 +1114,64 @@ class TestRepairRound(LibCase):
         x, y, _ = B.instance_placement(sk, inst)
         self.assertAlmostEqual(x, 1.5, delta=1e-7)
         self.assertAlmostEqual(y, 25.4, delta=1e-7)
+
+
+class TestPlacementQuantities(LibCase):
+    """A Quantity in a placement is converted (run 062's carried item): lengths to mm, an angle to radians; a Quantity
+    of another dimension is refused with a sentence and nothing changes."""
+
+    def block(self):
+        sk = self.sketch()
+        sk.addGeometry([Part.LineSegment(V(0, 0, 0), V(10, 0, 0)), Part.LineSegment(V(10, 0, 0), V(10, 5, 0))], False)
+        B.define(sk, "L", [0, 1])
+        return sk
+
+    def origin_and_turn(self, sk, name):
+        return B.instance_placement(sk, name)
+
+    def test_lengths_and_angle_convert(self):
+        Q = FreeCAD.Units.Quantity
+        sk = self.block()
+        n1 = B.insert(sk, "L", Q("3 mm"), Q("1 cm"), Q("90 deg"))
+        X, Y, th = B.instance_placement(sk, n1)
+        self.assertAlmostEqual(X, 3.0, delta=MM)
+        self.assertAlmostEqual(Y, 10.0, delta=MM)
+        self.assertAlmostEqual(th, math.pi / 2, delta=MM)
+        n2 = B.insert(sk, "L", Q("0.001 m"), 2.5, 0.5)  # a mixture with plain numbers: those are mm and radians
+        X, Y, th = B.instance_placement(sk, n2)
+        self.assertAlmostEqual(X, 1.0, delta=MM)
+        self.assertAlmostEqual(Y, 2.5, delta=MM)
+        self.assertAlmostEqual(th, 0.5, delta=MM)
+        names = B.insert_many(sk, "L", [(Q("2 in"), 0, Q("180 deg"))])
+        X, Y, th = B.instance_placement(sk, names[0])
+        self.assertAlmostEqual(X, 50.8, delta=1e-9)
+        self.assertAlmostEqual(abs(th), math.pi, delta=MM)
+        report("a Quantity placement converts: 1 cm -> 10 mm, 90 deg -> pi/2, 2 in -> 50.8 mm")
+
+    def test_wrong_dimension_refused(self):
+        Q = FreeCAD.Units.Quantity
+        sk = self.block()
+        before = {p: sk.dumpPropertyContent(p) for p in SNAP}
+        for args in [
+            (Q("3 kg"), 0, 0),
+            (0, Q("3 s"), 0),
+            (0, 0, Q("3 mm")),  # a length where an angle is wanted
+            (Q("90 deg"), 0, 0),  # an angle where a length is wanted
+            (0, 0, Q("3 kg")),
+        ]:
+            with self.assertRaises(B.SketchBlockError) as cm:
+                B.insert(sk, "L", *args)
+            self.assertIn("such as", str(cm.exception))  # it says what is wanted: a length such as 3 mm, an angle such as 90 deg
+            with self.assertRaises(B.SketchBlockError) as many:
+                B.insert_many(sk, "L", [(0, 0, 0), args])
+            # insert_many says the same, naming the placement, and not "must be three numbers"
+            self.assertIn(str(cm.exception), str(many.exception))
+            self.assertIn("placement 2:", str(many.exception))
+            self.assertIn("such as", str(many.exception))
+            self.assertNotIn("three numbers", str(many.exception))
+        # a placement that is not three numbers still says so
+        with self.assertRaises(B.SketchBlockError) as cm:
+            B.insert_many(sk, "L", [(0, 0)])
+        self.assertIn("three numbers", str(cm.exception))
+        self.assertEqual(before, {p: sk.dumpPropertyContent(p) for p in SNAP})
+

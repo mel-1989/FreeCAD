@@ -924,6 +924,44 @@ int SketchObject::exposeInternalGeometryForType<Part::GeomArcOfParabola>(const i
     return incrgeo;  // number of added elements
 }
 
+void SketchObject::appendPoleWeightConstraints(
+    const std::vector<double>& weights,
+    size_t index,
+    int circleGeoId,
+    int firstCircleGeoId,
+    bool& firstWeightConstrained,
+    std::vector<Constraint*>& out
+)
+{
+    if (index == 0) {
+        if (weights[0] == 1.0) {
+            // if the first weight is 1.0 it's probably going to be non-rational
+            auto* weightConstr = new Sketcher::Constraint();
+            weightConstr->Type = Sketcher::Weight;
+            weightConstr->First = circleGeoId;
+            weightConstr->setValue(weights[0]);
+
+            out.push_back(weightConstr);
+
+            firstWeightConstrained = true;
+        }
+        return;
+    }
+
+    if (firstWeightConstrained && weights[0] == weights[index]) {
+        // if pole-weight newly created AND first weight is radius-constrained,
+        // AND these weights are equal, constrain them to be equal
+        auto* equalConstr = new Sketcher::Constraint();
+        equalConstr->Type = Sketcher::Equal;
+        equalConstr->First = circleGeoId;
+        equalConstr->FirstPos = Sketcher::PointPos::none;
+        equalConstr->Second = firstCircleGeoId;
+        equalConstr->SecondPos = Sketcher::PointPos::none;
+
+        out.push_back(equalConstr);
+    }
+}
+
 template <>
 int SketchObject::exposeInternalGeometryForType<Part::GeomBSplineCurve>(const int GeoId)
 {
@@ -936,6 +974,9 @@ int SketchObject::exposeInternalGeometryForType<Part::GeomBSplineCurve>(const in
     std::vector<int> knotgeoids(bsp->countKnots(), GeoEnum::GeoUndef);
 
     bool isfirstweightconstrained = false;
+    // a spline of a block instance has its weights tied to the definition's; the Weight and Equal constraints
+    // below would hold the same parameters a second time and make the sketch redundant, so they are not added
+    const bool blockMember = isValidBlockMember(GeoId);
 
     const std::vector<Sketcher::Constraint*>& vals = Constraints.getValues();
 
@@ -1002,32 +1043,16 @@ int SketchObject::exposeInternalGeometryForType<Part::GeomBSplineCurve>(const in
 
         if (index == 0) {
             controlpointgeoids[0] = currentgeoid + incrgeo;
-            if (weights[0] == 1.0) {
-                // if the first weight is 1.0 it's probably going to be non-rational
-                auto* newConstr3 = new Sketcher::Constraint();
-                newConstr3->Type = Sketcher::Weight;
-                newConstr3->First = controlpointgeoids[0];
-                newConstr3->setValue(weights[0]);
-
-                icon.push_back(newConstr3);
-
-                isfirstweightconstrained = true;
-            }
-
-            continue;
         }
-
-        if (isfirstweightconstrained && weights[0] == weights[index]) {
-            // if pole-weight newly created AND first weight is radius-constrained,
-            // AND these weights are equal, constrain them to be equal
-            auto* newConstr2 = new Sketcher::Constraint();
-            newConstr2->Type = Sketcher::Equal;
-            newConstr2->First = currentgeoid + incrgeo;
-            newConstr2->FirstPos = Sketcher::PointPos::none;
-            newConstr2->Second = controlpointgeoids[0];
-            newConstr2->SecondPos = Sketcher::PointPos::none;
-
-            icon.push_back(newConstr2);
+        if (!blockMember) {
+            appendPoleWeightConstraints(
+                weights,
+                index,
+                currentgeoid + incrgeo,
+                controlpointgeoids[0],
+                isfirstweightconstrained,
+                icon
+            );
         }
     }
 
