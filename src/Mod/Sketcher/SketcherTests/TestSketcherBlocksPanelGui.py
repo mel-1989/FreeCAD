@@ -2171,6 +2171,40 @@ class TestBlocksPanelOutsideTheSession(EditCase):
             self.assertIsNotNone(doc.getObject("Gone"))
             self.assertIn("Undone because they are not part of the block", self.status())
 
+    def test_how_another_object_looks_is_named_before_finish_and_before_cancel(self):
+        for n, button in enumerate(("blocksFinish", "blocksCancel")):
+            self.close_panel()
+            if Gui.ActiveDocument is not None:
+                Gui.ActiveDocument.resetEdit()
+                _pump(40)
+            sk = self.scene("OutsideLooks%d" % n)
+            doc = sk.Document
+            box = doc.addObject("Part::Box", "Box")
+            doc.recompute()
+            self.open_panel(sk)
+            self.begin(sk)
+            self.member_move(sk)
+            self.stock(sk, "colour", lambda: setattr(box.ViewObject, "ShapeColor", (1.0, 0.0, 0.0)))
+            self.stock(sk, "hide", lambda: setattr(box.ViewObject, "Visibility", False))
+            self.click_button(button)
+            self.assertIsNotNone(self.panel.session, self.status())
+            self.assertIn("view ShapeColor", self.status(), button)
+            self.assertIn("Visibility", self.status(), button)
+            self.click_button(button)
+            self.assertIsNone(self.panel.session, self.status())
+
+    def test_a_session_with_only_member_changes_on_a_shown_box_gives_no_warning(self):
+        sk = self.scene("OutsideLooksQuiet")
+        doc = sk.Document
+        doc.addObject("Part::Box", "Box")
+        doc.recompute()
+        self.open_panel(sk)
+        self.begin(sk)
+        self.member_move(sk)
+        doc.recompute()
+        self.click_button("blocksCancel")
+        self.assertIsNone(self.panel.session, self.status())
+
     def test_a_cancel_with_only_member_changes_is_one_press_and_restores_the_sketch(self):
         sk, box = self.started_with("OutsideCancelPlain")
         before = _snapshot(sk)

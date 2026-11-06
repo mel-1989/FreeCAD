@@ -488,6 +488,12 @@ mutant(
     [O_CLEAN],
 )
 mutant(
+    "appearance_of_other_objects_not_compared",
+    "how another object looks is undone by the rollback and nothing says so",
+    [(API, "    if not own:\n        _add_appearance(obj, out)\n", "")],
+    [t("TestBlocksPanelOutsideTheSession", "test_how_another_object_looks_is_named_before_finish_and_before_cancel")],
+)
+mutant(
     "outside_state_at_start_empty",
     "the document's state is not taken when the session starts",
     [(API, "\"doc\": _document_state(sk)}", "\"doc\": {}}")],

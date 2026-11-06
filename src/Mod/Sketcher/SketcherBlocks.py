@@ -771,7 +771,22 @@ def _object_state(obj, own=False):
         except Exception:
             out[prop] = hash(repr(getattr(obj, prop, None)))
     out["\0expr"] = dict(getattr(obj, "ExpressionEngine", None) or [])
+    if not own:
+        _add_appearance(obj, out)
     return out
+
+
+# Document undo also restores how another object looks.  Visibility is flagged Output on the object, so the rule above
+# leaves it out; these few are compared by hand.  Per-face colours are left out on purpose, a recompute rewrites them.
+_VIEW_FIELDS = ("Visibility", "ShapeColor", "LineColor", "PointColor", "Transparency", "DisplayMode")
+
+
+def _add_appearance(obj, out):
+    out["Visibility"] = hash(repr(getattr(obj, "Visibility", None)))
+    vo = getattr(obj, "ViewObject", None)
+    for prop in _VIEW_FIELDS if vo is not None else ():
+        if hasattr(vo, prop):  # ShapeColor is an attribute over ShapeAppearance, not a listed property
+            out["view " + prop] = hash(repr(getattr(vo, prop)))
 
 
 def _state_diff(before, now):
