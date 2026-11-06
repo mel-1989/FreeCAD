@@ -47,6 +47,11 @@ set(Sketcher_TestScripts
     SketcherTests/SketchBlockCurvesCorpus.py
     SketcherTests/SketchBlockLibraryMutants.py
     SketcherTests/SketchBlockCurveMutants.py
+    SketcherTests/TestSketchBlockDrag.py
+    SketcherTests/SketchBlockDragCorpus.py
+    SketcherTests/SketchBlockDragMeasure.py
+    SketcherTests/SketchBlockDragMutants.py
+    SketcherTests/SketchBlockDragSmall.json.gz
 )
 
 if(BUILD_GUI)
@@ -88,6 +93,7 @@ if(BUILD_GUI)
           SketcherTests/TestSketcherBlocksPanelGui.py
           SketcherTests/SketchBlocksPanelMutants.py
           SketcherTests/blocks_gui_fixture.py
+          SketcherTests/SketchBlockDragGui.py
     )
 endif(BUILD_GUI)
 

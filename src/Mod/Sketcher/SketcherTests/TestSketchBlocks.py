@@ -176,8 +176,9 @@ class TestBlockRigidity(BlocksCase):
             sk, names = C.build(self.doc, spec, places, B)
             sk.solve()
             kp = C.key_points(spec)
-            # a drag in a block of 144 or 200 members costs seconds (one dense system of ~900 unknowns)
-            for d in range(self.DRAGS if len(spec.members) <= 34 else 10 if len(spec.members) <= 89 else 3):
+            # a drag in a block of 144 or 200 members was seconds (one dense system of ~900 unknowns) before the fast
+            # path of qp_eq (slice 5b3), so these two sizes were given only 3 drags; they get as many as the 89s now
+            for d in range(self.DRAGS if len(spec.members) <= 34 else 10):
                 name = rng.choice(names)
                 _, ids = member_geos(sk, name)
                 i, pos, _, _ = rng.choice(kp)
