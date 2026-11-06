@@ -6,9 +6,25 @@
  *   Each row of a relation is one GCS::Constraint. A relation with more   *
  *   than one row is several Rel objects that share one tag.               *
  *                                                                         *
- *   Equations come from textbook vector geometry (dot and cross products, *
- *   distances of points to lines and planes); the public descriptions of  *
- *   3D sketch relations only fix which relations exist.                   *
+ *   Where each relation's equations come from (check 13). All of them are  *
+ *   textbook vector geometry, derived here from the definitions:            *
+ *   - norms, differences and the midpoint: Euclidean vector algebra;       *
+ *   - point to line distance |(p - a) x d| / |d|: the cross-product        *
+ *     formula for the distance of a point from a line;                     *
+ *   - point on plane and point to plane distance n.(p - q): the Hesse      *
+ *     normal form of a plane, with a unit normal;                          *
+ *   - perpendicular (v.w = 0) and angle (cos t = v.w / |v||w|): the dot-   *
+ *     product definition of the angle between two vectors;                 *
+ *   - parallel, point on line, along an axis, normal to a plane: a vector  *
+ *     is parallel to d exactly when its components on an orthonormal       *
+ *     basis of the plane perpendicular to d vanish (two rows, built by     *
+ *     two cross products, as in Gram-Schmidt);                             *
+ *   - parallel to a plane: d.n = 0.                                        *
+ *   Which relations exist (the 18 types) is the list in check 2 of the    *
+ *   brief. An earlier commit says it follows public descriptions of 3D    *
+ *   sketch relations without giving titles; no title is recorded in the   *
+ *   tree, so none is claimed here. No commercial product's documentation, *
+ *   UI text, icons or binaries were used for any equation above.          *
  ***************************************************************************/
 
 #pragma once
