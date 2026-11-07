@@ -177,6 +177,7 @@
 #include "encodeFilename.h"
 #include "FaceMakerBullseye.h"
 #include "Interface.h"
+#include "StepSphereLunes.h"
 #include "WireJoiner.h"
 #include "modelRefine.h"
 #include "PartPyCXX.h"
@@ -915,7 +916,8 @@ void TopoShape::exportStep(const char* filename) const
         const Handle(XSControl_TransferWriter) & hTransferWriter = aWriter.WS()->TransferWriter();
         Handle(Transfer_FinderProcess) hFinder = hTransferWriter->FinderProcess();
 
-        if (aWriter.Transfer(this->_Shape, STEPControl_AsIs) != IFSelect_RetDone) {
+        if (aWriter.Transfer(StepSphereLunes::forWriting(this->_Shape), STEPControl_AsIs)
+            != IFSelect_RetDone) {
             throw Base::FileException("Error in transferring STEP", filename);
         }
 

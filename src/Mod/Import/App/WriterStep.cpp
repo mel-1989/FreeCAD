@@ -24,7 +24,13 @@
 #include <Standard_Version.hxx>
 #include <APIHeaderSection_MakeHeader.hxx>
 #include <NCollection_Vector.hxx>
+#include <BRepTools_Modifier.hxx>
 #include <STEPCAFControl_Writer.hxx>
+#include <TDF_Label.hxx>
+#include <TDF_LabelSequence.hxx>
+#include <TNaming_NamedShape.hxx>
+#include <XCAFDoc_DocumentTool.hxx>
+#include <XCAFDoc_ShapeTool.hxx>
 
 
 #include "WriterStep.h"
@@ -33,12 +39,58 @@
 #include <App/Application.h>
 #include <Mod/Part/App/encodeFilename.h>
 #include <Mod/Part/App/Interface.h>
+#include <Mod/Part/App/StepSphereLunes.h>
 
 using namespace Import;
 
 WriterStep::WriterStep(const Base::FileInfo& file)  // NOLINT
     : file {file}
 {}
+
+namespace
+{
+
+/// Faces that are a part of a sphere written as a surface of revolution come back from STEP as
+/// the complementary lune, so the export document's shapes are rewritten with a spherical surface
+/// there (Part::StepSphereLunes). The labels stay, so names, colours and the placed instances of
+/// an assembly survive; only the geometry of the affected shapes and their sub-shape labels is
+/// replaced. The document is the exporter's own, never the FreeCAD document.
+void convertSphereLunes(const Handle(TDocStd_Document)& hDoc)
+{
+    Handle(XCAFDoc_ShapeTool) shapeTool = XCAFDoc_DocumentTool::ShapeTool(hDoc->Main());
+    TDF_LabelSequence labels;
+    shapeTool->GetShapes(labels);
+    for (int i = 1; i <= labels.Length(); ++i) {
+        const TDF_Label label = labels.Value(i);
+        if (!XCAFDoc_ShapeTool::IsSimpleShape(label)) {
+            continue;
+        }
+        const TopoDS_Shape shape = XCAFDoc_ShapeTool::GetShape(label);
+        BRepTools_Modifier modifier;
+        if (shape.IsNull() || !Part::StepSphereLunes::convert(shape, modifier)) {
+            continue;
+        }
+        TDF_LabelSequence subs;
+        XCAFDoc_ShapeTool::GetSubShapes(label, subs);
+        label.ForgetAttribute(TNaming_NamedShape::GetID());
+        shapeTool->SetShape(label, modifier.ModifiedShape(shape));
+        for (int j = 1; j <= subs.Length(); ++j) {
+            const TDF_Label sub = subs.Value(j);
+            const TopoDS_Shape oldSub = XCAFDoc_ShapeTool::GetShape(sub);
+            if (oldSub.IsNull()) {
+                continue;
+            }
+            const TopoDS_Shape newSub = modifier.ModifiedShape(oldSub);
+            if (newSub.IsNull() || newSub.IsSame(oldSub)) {
+                continue;
+            }
+            sub.ForgetAttribute(TNaming_NamedShape::GetID());
+            shapeTool->SetShape(sub, newSub);
+        }
+    }
+}
+
+}  // namespace
 
 void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
 {
@@ -66,6 +118,7 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
                                                 ->GetGroup("STEP");
     bool withProps = stepGrp->GetBool("WriteValidationProperties", true);
     writer.SetPropsMode(withProps);
+    convertSphereLunes(hDoc);
     std::vector<IndependentFigures> independent;
     if (withProps) {
         attachValidationProperties(hDoc, &independent);

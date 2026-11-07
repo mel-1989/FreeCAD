@@ -600,6 +600,8 @@ SET(Part_SRCS
     ImportStep.h
     Interface.cpp
     Interface.h
+    StepSphereLunes.cpp
+    StepSphereLunes.h
     PreCompiled.h
     ProgressIndicator.cpp
     ProgressIndicator.h
