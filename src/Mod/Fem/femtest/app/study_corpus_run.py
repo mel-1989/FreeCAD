@@ -92,6 +92,33 @@ def worker():
 
 
 # ------------------------------------------------------------------------------------------------ orchestrator
+SHIM = r'''
+import re, subprocess, sys
+args = sys.argv[1:]
+rc = subprocess.call(["@REAL@"] + args)
+if args and "@MODE@" == "exit3":
+    sys.exit(3)  # results are on disk, the exit code says the run failed
+if args and "@MODE@" == "nan":
+    job = args[-1].strip()
+    frd = job + ".frd"
+    txt = open(frd).read().split("\n")
+    out, inblock = [], False
+    for ln in txt:
+        if ln.startswith("    -4  DISP"):
+            inblock = True
+        elif ln.startswith(" -3"):
+            inblock = False
+        elif inblock and ln.startswith(" -1"):
+            ln = ln[:13] + " " * 9 + "nan" + ln[25:]  # first displacement component of every node
+        out.append(ln)
+    open(frd, "w").write("\n".join(out))
+    dat = job + ".dat"
+    d = open(dat).read()
+    open(dat, "w").write(re.sub(r"(total internal energy[^\n]*\n\s*\n\s*)\S+", r"\1nan", d))
+sys.exit(rc)
+'''
+
+
 def run_case(case, mode, timeout):
     wd = os.path.join(SCRATCH, "work", case.id)
     shutil.rmtree(wd, ignore_errors=True)
@@ -110,6 +137,18 @@ def run_case(case, mode, timeout):
         os.makedirs(only)
         os.symlink(os.path.join(pixi, "gmsh"), os.path.join(only, "gmsh"))
         env["PATH"] = only + ":/usr/bin:/bin"
+    # groups I12 and I13: a `ccx` shim first on PATH. It runs the real solver, then exits non-zero (exit3) or writes nan into the results (nan).
+    shim = case.params.get("shim")
+    if shim:
+        sd = os.path.join(wd, "shimbin")
+        os.makedirs(sd)
+        real = os.path.join(pixi, "ccx")
+        py = os.path.join(pixi, "python")
+        body = SHIM.replace("@REAL@", real).replace("@MODE@", shim)
+        with open(os.path.join(sd, "ccx"), "w") as f:
+            f.write(f"#!{py}\n" + body)
+        os.chmod(os.path.join(sd, "ccx"), 0o755)
+        env["PATH"] = sd + ":" + env["PATH"]
     t0 = time.time()
     p = subprocess.Popen([os.path.join(FC_BUILD, "bin/FreeCADCmd"), os.path.abspath(__file__)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          start_new_session=True, text=True)

@@ -41,6 +41,7 @@ SET(FemBaseModules_SRCS
     InitGui.py
     ObjectsFem.py
     TestFemApp.py
+    TestFemStudyApp.py
     CreateLabels.py
 )
 
@@ -379,6 +380,21 @@ SET(FemSolverZ88_SRCS
     femsolver/z88/z88utils.py
 )
 
+SET(FemStudy_SRCS
+    femstudy/__init__.py
+    femstudy/__init__.pyi
+    femstudy/spec.py
+    femstudy/spec.pyi
+    femstudy/model.py
+    femstudy/checks.py
+    femstudy/run.py
+    femstudy/deck.py
+    femstudy/convergence.py
+    femstudy/stale.py
+    femstudy/SPEC.md
+    femstudy/BASELINE.md
+)
+
 SET(FemTests_SRCS
     femtest/__init__.py
     femtest/test_commands.sh
@@ -407,6 +423,7 @@ SET(FemTestsApp_SRCS
     femtest/app/study_corpus_run.py
     femtest/app/study_mutants.py
     femtest/app/study_stale_scenarios.py
+    femtest/app/test_study.py
 )
 
 SET(FemTestsFiles_SRCS
@@ -627,6 +644,7 @@ SET(FemAllScripts
     ${FemSolverFenics_SRCS}
     ${FemSolverMystran_SRCS}
     ${FemSolverZ88_SRCS}
+    ${FemStudy_SRCS}
     ${FemTests_SRCS}
     ${FemTestsApp_SRCS}
     ${FemTestsFiles_SRCS}
@@ -667,6 +685,7 @@ INSTALL(FILES ${FemSolverElmerEquations_SRCS} DESTINATION Mod/Fem/femsolver/elme
 INSTALL(FILES ${FemSolverFenics_SRCS} DESTINATION Mod/Fem/femsolver/fenics)
 INSTALL(FILES ${FemSolverMystran_SRCS} DESTINATION Mod/Fem/femsolver/mystran)
 INSTALL(FILES ${FemSolverZ88_SRCS} DESTINATION Mod/Fem/femsolver/z88)
+INSTALL(FILES ${FemStudy_SRCS} DESTINATION Mod/Fem/femstudy)
 INSTALL(FILES ${FemTests_SRCS} DESTINATION Mod/Fem/femtest)
 INSTALL(FILES ${FemTestsApp_SRCS} DESTINATION Mod/Fem/femtest/app)
 INSTALL(FILES ${FemTestsFiles_SRCS} DESTINATION Mod/Fem/femtest/data)

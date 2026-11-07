@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Corpus for the G11 static study (slice 1a, run 067): 72 cases, groups A to J, with closed-form truths.
+"""Corpus for the G11 static study (slice 1a, run 067): 78 cases, groups A to J, with closed-form truths.
 
 Units are mm, N, MPa, tonne/mm^3 (the CalculiX unit system FreeCAD writes). Every truth below is a closed form written out
 here; the textbook is named beside each (names only, no table or worked example is copied):
@@ -282,7 +282,7 @@ def _cases_A(rng):
         sigma = rng.choice([40.0, 50.0, 60.0])
         sec_ = "circle" if sec == "circle" else "rect"
         m = min(dims)
-        h0 = 1.5 * m
+        h0 = (1.0 if sec == "circle" else 1.5) * m  # a round section: the coarsest mesh must not be coarser than the diameter, or Gmsh finds no volume
         build, truth, vol, par = _build_A(sec_, dims, L, matname, sigma, h0)
         c = Case(f"A{i:02d}", "A", f"axial bar {sec} {'x'.join(f'{x:g}' for x in dims)} L={L:g} {matname}", h0, build, truth, {}, par, vol)
         out.append(c)
@@ -338,7 +338,7 @@ def _cases_B(rng):
                 delta = cant_tip(P, L, E, nu, s["I"], s["A"], kap)
                 sig = P * (L - L / 2) * s["c"] / s["I"]  # bending stress at mid-length (Euler-Bernoulli moment, extreme fibre)
                 m = min(SEC_RECT) if kind == "rect" else SEC_CIRC
-                h0 = 4 * m / 3.0
+                h0 = 4 * m / 3.0 if kind == "rect" else m  # round: h0 no coarser than the diameter (Gmsh finds no volume at 4/3 d)
                 direction = (0, -1, 0) if axis == "y" else (0, 0, -1)
 
                 def build(doc, kind=kind, L=L, P=P, matname=matname, direction=direction, h0=h0):
@@ -447,7 +447,7 @@ def _cases_E(rng):
             sig_t_over_p = (b * b + a * a) / (b * b - a * a)
             vm_over_p = math.sqrt(sig_t_over_p**2 + 1 + sig_t_over_p)
             p = float(f"{0.4 * sy / vm_over_p:.2g}")
-            h0 = 4 * (b - a) / 3.0
+            h0 = 4 * (b - a) / 3.0 if ba < 3.0 else (b - a)  # b/a = 3: at 4/3 of the wall the quarter circle has one or two faces and the load delivered misses by 1.9e-3
 
             def build(doc, a=a, b=b, H2=H2, p=p, matname=matname, h0=h0):
                 FreeCAD, Part, V = _fc()
@@ -486,10 +486,13 @@ def _cases_F(rng):
             h0 = 4 * t / 3.0
 
             def build(doc, a=a, b=b, t=t, q=q, matname=matname, h0=h0):
-                # quarter plate [0,a/2] x [0,b/2] x [0,t], split at mid-thickness so an edge exists on each simply supported side
-                body = box_split(doc, (a / 2, b / 2, t), 2, t / 2)
+                # Quarter plate [0,a/2] x [0,b/2] x [0,t]. Symmetry planes x = 0 and y = 0. The two simply supported sides x = a/2 and y = b/2 are a
+                # hard simple support: the whole side face holds z and the in-plane direction along that side (x = a/2 holds y and z; y = b/2 holds
+                # x and z), the condition Navier's solution assumes (a soft support, out of plane only, adds a boundary layer linear in h/a).
+                FreeCAD, Part, V = _fc()
+                body = _feat(doc, Part.makeBox(a / 2, b / 2, t))
                 supports = [sup(planes(body, 0, 0.0), "x"), sup(planes(body, 1, 0.0), "y"),
-                            sup(edges_along(body, 1, {0: a / 2, 2: t / 2}), "z"), sup(edges_along(body, 0, {1: b / 2, 2: t / 2}), "z")]
+                            sup(planes(body, 0, a / 2), "yz"), sup(planes(body, 1, b / 2), "xz")]
                 return {"spec": mkspec(body.Name, mat(matname), supports, [prs(planes(body, 2, t), f"{q:g} MPa")], h0)}
 
             truth = {"disp": w0, "tol_disp": 0.05, "note": "Kirchhoff (no shear deformation); centre deflection"}
@@ -522,7 +525,9 @@ def _cases_G(rng):
         L = 100.0
         dims = {"square": (10.0, 10.0), "rect": (20.0, 10.0), "circle": (12.0,)}[sec]
         m = min(dims)
-        h0 = 2.0 * m
+        h0 = (1.0 if sec == "circle" else 2.0) * m  # round: h0 no coarser than the diameter
+        if kind == "cant":
+            P /= 50.0  # 20 to 60 N: a cantilever of this section at 1 to 3 kN deflects by 30% to 100% of its depth, which the study rightly calls suspect
 
         def build(doc, kind=kind, sec=sec, dims=dims, P=P, L=L, matname=matname, h0=h0, E=E):
             FreeCAD, Part, V = _fc()
@@ -554,10 +559,10 @@ def _cases_H(rng):
     out = []
     MS = mat("steel", with_yield=False)  # no yield value: a large local stress must not turn the verdict into `suspect`
 
-    def b1(doc):  # H01: point force on a vertex of a slender cantilever tip (L/h = 20)
+    def b1(doc):  # H01: point force on a vertex of a slender cantilever tip (L/h = 20), 50 N: tip deflection 7.6% of the depth (100 N gave 15%, which the size rule rightly flags)
         FreeCAD, Part, V = _fc()
         body = _feat(doc, Part.makeBox(200, 10, 10))
-        return {"spec": mkspec(body.Name, MS, [sup(planes(body, 0, 0))], [frc(vertex_at(body, (200, 10, 10)), "100 N", (0, 0, -1))], 8.0)}
+        return {"spec": mkspec(body.Name, MS, [sup(planes(body, 0, 0))], [frc(vertex_at(body, (200, 10, 10)), "50 N", (0, 0, -1))], 8.0)}
 
     def b2(doc):  # H02: 4 mm plate in tension with a 12 mm square notch (two re-entrant 90 degree corners)
         FreeCAD, Part, V = _fc()
@@ -662,6 +667,23 @@ def _cases_I(rng):
         body = _feat(doc, Part.makeBox(100, 10, 2))
         return {"spec": mkspec(body.Name, dict(S), [sup(planes(body, 0, 0))], [frc(planes(body, 0, 100), "5 N", (0, 0, -1))], 4.0)}
 
+    def i11(doc):  # `kip` is not a FreeCAD unit; an unknown unit is refused by name, never guessed
+        body, spec = base(doc)
+        spec["loads"][0]["value"] = "5 kip"
+        return {"spec": spec}
+
+    def i12(doc):  # a `ccx` that writes results and then exits non-zero (shim on PATH, see study_corpus_run.py)
+        return {"spec": base(doc)[1]}
+
+    def i13(doc):  # a `ccx` whose results hold nan
+        return {"spec": base(doc)[1]}
+
+    def i14(doc):  # a small max_elements: refinement must stop and say so
+        body, spec = base(doc)
+        spec["options"]["max_elements"] = 600
+        spec["loads"][0]["value"] = "200 N"  # the default 5 kN deflects 95% of the depth: this case must isolate the cap, not trip another check
+        return {"spec": spec}
+
     rows = [("I01", "no support", i01, "refused", "no_support", 13.3, 10000), ("I02", "no load", i02, "refused", "no_load", 13.3, 10000),
             ("I03", "rotation about a fixed edge left free", i03, "refused", "rigid_body_motion", 26.0, 40000),
             ("I04", "modulus with no unit", i04, "refused", "unit_missing", 13.3, 10000),
@@ -671,8 +693,13 @@ def _cases_I(rng):
             ("I08", "load on a face removed by an edit", i08, "refused", "reference_lost", 12.0, 4000),
             ("I09", "CalculiX missing from PATH", i09, "failed", "solver_missing", 13.3, 10000),
             ("I10", "displacement above 10% of thickness", i10, "suspect", "large_displacement", 4.0, 2000)]
+    rows += [("I11", "load in an unknown unit (kip)", i11, "refused", "unit_unknown", 13.3, 10000),
+             ("I12", "ccx exits non-zero after writing results", i12, "failed", "solver_failed", 13.3, 10000),
+             ("I13", "ccx results hold nan", i13, "failed", "result_nan", 13.3, 10000),
+             ("I14", "max_elements 600 stops the refinement", i14, "unconverged", "element_cap", 13.3, 10000)]
+    shims = {"I12": "exit3", "I13": "nan"}
     for cid, title, bf, verdict, code, h0, vol in rows:
-        out.append(Case(cid, "I", title, h0, bf, {}, {"verdict": verdict, "code": code}, {}, vol))
+        out.append(Case(cid, "I", title, h0, bf, {}, {"verdict": verdict, "code": code}, {"shim": shims[cid]} if cid in shims else {}, vol))
     return out
 
 
@@ -807,16 +834,43 @@ def _cases_J(rng):
     return out
 
 
+# ---------------------------------------------------------------------------------------------------- stubby cantilevers (run 067, mutant M15)
+def _cases_B_stubby():
+    """B13, B14: rectangular cantilevers at L/h = 2, where the shear term is about 16% of the deflection, so that kappa = 1 in the formula would
+    move the truth by 2.7%. Displacement only: Euler-Bernoulli stress at mid-length is not a truth at L/h = 2. Own random stream (the main one
+    stays as it was, so no other case changes)."""
+    rng = random.Random(SEED + 1)
+    out = []
+    for i, axis in ((13, "z"), (14, "y")):
+        matname = rng.choice(["steel", "aluminium"])
+        E, nu, _, _ = MATS[matname]
+        s = _section("rect", axis)
+        L = 2 * s["h"]
+        P = float(f"{(L / 1000.0) * 3 * E * s['I'] / L**3:.3g}")
+        delta = cant_tip(P, L, E, nu, s["I"], s["A"], kappa_rect())
+        h0 = 4 * min(SEC_RECT) / 3.0
+        direction = (0, -1, 0) if axis == "y" else (0, 0, -1)
+
+        def build(doc, L=L, P=P, matname=matname, direction=direction, h0=h0):
+            body = _beam_body(doc, "rect", L)
+            return {"spec": mkspec(body.Name, mat(matname), [sup(planes(body, 0, 0))], [frc(planes(body, 0, L), f"{P:g} N", direction)], h0)}
+
+        par = {"section": "rect", "load_axis": axis, "L_over_h": 2, "L": L, "P_N": P, "material": matname}
+        out.append(Case(f"B{i}", "B", f"stubby cantilever rect L/h=2 load {axis} {matname}", h0, build, {"disp": delta, "tol_disp": 0.03}, {}, par, s["A"] * L))
+    return out
+
+
 # ---------------------------------------------------------------------------------------------------- registry
 def all_cases():
     rng = _rng()
     cases = []
     for fn in (_cases_A, _cases_B, _cases_C, _cases_D, _cases_E, _cases_F, _cases_G, _cases_H, _cases_I, _cases_J):
         cases += fn(rng)
+    cases += _cases_B_stubby()
     return cases
 
 
-EXPECTED_COUNTS = {"A": 8, "B": 12, "C": 6, "D": 8, "E": 6, "F": 6, "G": 6, "H": 6, "I": 10, "J": 4}
+EXPECTED_COUNTS = {"A": 8, "B": 14, "C": 6, "D": 8, "E": 6, "F": 6, "G": 6, "H": 6, "I": 14, "J": 4}
 
 
 def select(spec=None):

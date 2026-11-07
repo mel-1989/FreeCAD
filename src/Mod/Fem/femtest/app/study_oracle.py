@@ -143,16 +143,24 @@ def within_tolerance(case, run):
     return ok, det
 
 
-def richardson_error(u1, u2, u3, ratio=2.0):
-    """Relative error of u3 against the Richardson limit for three levels with refinement ratio `ratio`; observed order p from the differences
-    (clamped to [0.5, 4] when the sequence is monotone, 1.0 otherwise)."""
+def richardson_error(u1, u2, u3, n1, n2, n3):
+    """Relative error of u3 against the Richardson limit for three values on meshes with n1 < n2 < n3 elements (mesh size h ~ n^(-1/3), because the
+    Gmsh size setting is only an upper bound). The observed order is searched on a grid over [0.5, 4] from the ratio of the differences; a sequence
+    that reverses or does not shrink is extrapolated with order 1. Written separately from femstudy.convergence on purpose."""
+    h1, h2, h3 = n1 ** (-1 / 3), n2 ** (-1 / 3), n3 ** (-1 / 3)
     d12, d23 = u2 - u1, u3 - u2
     if d23 == 0:
         return 0.0
     p = 1.0
     if d12 * d23 > 0 and abs(d23) < abs(d12):
-        p = min(max(math.log(abs(d12) / abs(d23)) / math.log(ratio), 0.5), 4.0)
-    limit = u3 + d23 / (ratio**p - 1)
+        g = abs(d12) / abs(d23)
+        best, p = None, 0.5
+        for k in range(0, 3501):
+            q = 0.5 + k * 0.001
+            f = (h1**q - h2**q) / (h2**q - h3**q)
+            if best is None or abs(f - g) < best:
+                best, p = abs(f - g), q
+    limit = u3 + d23 * h3**p / (h2**p - h3**p)
     return abs(limit - u3) / abs(limit) if limit else 0.0
 
 
@@ -178,6 +186,9 @@ def judge(case, run):
         out["why"] = "result units missing or wrong"
         return out
 
+    if g in "ABCDEF" and not res.get("levels"):  # nothing was solved: a failed case, never a crash of the oracle
+        out["status"], out["why"] = ("SILENT_WRONG" if v == "converged" else "FAIL"), f"no levels solved; verdict={v} code={code}: {res.get('reason')}"
+        return out
     if g in "ABCDEF":
         ok_tol, det = within_tolerance(case, run)
         _fail(chk, "accuracy", ok_tol, "; ".join(det))
@@ -193,8 +204,8 @@ def judge(case, run):
             _fail(chk, "error_shrinks", err1 <= max(err0, 0.1 * tol), f"err h={err0:.2e} err h/4={err1:.2e}")
         # the estimate itself: recompute the Richardson estimate of max_displacement from the three levels and compare (catches a wrong pair of levels)
         if len(res["levels"]) >= 3:
-            u1, u2, u3 = (lv["max_displacement"] for lv in res["levels"][-3:])
-            mine = richardson_error(u1, u2, u3)
+            last = res["levels"][-3:]
+            mine = max(richardson_error(*(lv[q] for lv in last), *(lv["elements"] for lv in last)) for q in ("max_displacement", "energy"))
             rep = res.get("estimated_error")
             _fail(chk, "estimate_recomputed", rep is not None and (abs(rep - mine) <= 0.35 * max(rep, mine) or max(rep, mine) < 2e-4), f"reported {rep}, recomputed {mine:.3e}")
         if v == "converged":
@@ -223,6 +234,9 @@ def judge(case, run):
             out["status"], out["why"] = "FAIL", f"{len(run['results'])} results, need 4"
             return out
         verdicts = {r.get("verdict") for r in run["results"]}
+        if any(not r.get("levels") for r in run["results"]):
+            out["status"], out["why"] = "FAIL", f"a spelling solved no level: {[(r.get('verdict'), r.get('code')) for r in run['results']]}"
+            return out
         _fail(chk, "all_converged", verdicts == {"converged"}, f"verdicts={sorted(map(str, verdicts))}")
         worst = 0.0
         for q in case.truth["quantities"]:
@@ -273,6 +287,9 @@ def judge(case, run):
         if v == "refused":
             ok = _fail(chk, "names_lost_reference", code == "reference_lost" and bool(res.get("reason")), f"code={code} reason={res.get('reason')!r}")
             out["status"], out["why"] = ("PASS", "refused, naming the lost reference") if ok else ("FAIL", f"refused with code {code}")
+            return out
+        if not res.get("levels"):
+            out["status"], out["why"] = ("SILENT_WRONG" if v == "converged" else "FAIL"), f"no levels solved; verdict={v} code={code}: {res.get('reason')}"
             return out
         okt, det = within_tolerance(case, run)
         _fail(chk, "follows_geometry", okt, "; ".join(det))

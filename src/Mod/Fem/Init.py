@@ -57,6 +57,7 @@ sys.meta_path.append(FemMigrateApp())
 
 # add FEM App unit tests
 FreeCAD.__unit_test__ += ["TestFemApp"]
+FreeCAD.__unit_test__ += ["TestFemStudyApp"]
 
 
 # add import and export file types
