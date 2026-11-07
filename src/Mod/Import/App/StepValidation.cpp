@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <sstream>
 
 #include <BRep_Builder.hxx>
@@ -450,8 +451,177 @@ std::optional<double> contextLengthFactor(const Handle(StepRepr_RepresentationCo
     return std::nullopt;
 }
 
+/// Recovers the elements of the older AREA_UNIT((#e, ...)) and VOLUME_UNIT((#e, ...)) records.
+/// OCCT's parser drops them, so the file text is read, once and only when such a unit is met.
+/// Nothing here throws: a missing, compressed, malformed or dangling record gives nullopt.
+class ElementlessUnits
+{
+public:
+    ElementlessUnits(const Handle(StepData_StepModel)& m, const char* path)
+        : model {m}
+        , path {path ? path : ""}
+    {}
+
+    std::optional<std::pair<double, double>> resolve(const Handle(StepBasic_NamedUnit)& nu)
+    {
+        try {
+            if (nu.IsNull() || model.IsNull()) {
+                return std::nullopt;
+            }
+            int id = model->IdentLabel(nu);
+            auto hit = cache.find(id);
+            if (hit != cache.end()) {
+                return hit->second;
+            }
+            auto res = resolveId(id, nu->IsKind(STANDARD_TYPE(StepBasic_AreaUnit)) ? "AREA_UNIT" : "VOLUME_UNIT");
+            cache[id] = res;
+            return res;
+        }
+        catch (...) {
+            return std::nullopt;
+        }
+    }
+
+private:
+    Handle(StepData_StepModel) model;
+    std::string path;
+    bool loaded {false};
+    std::string text;
+    std::map<int, Handle(Standard_Transient)> byIdent;
+    std::map<int, std::optional<std::pair<double, double>>> cache;
+
+    void load()
+    {
+        loaded = true;
+        if (path.empty()) {
+            return;
+        }
+        std::ifstream in(path, std::ios::binary);
+        if (!in) {
+            return;
+        }
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        text = ss.str();
+        for (int i = 1; i <= model->NbEntities(); ++i) {
+            Handle(Standard_Transient) e = model->Value(i);
+            byIdent[model->IdentLabel(e)] = e;
+        }
+    }
+
+    /// The text between '=' and ';' of record #id, or empty.
+    std::string record(int id) const
+    {
+        const std::string key = "#" + std::to_string(id);
+        for (size_t pos = text.find(key); pos != std::string::npos; pos = text.find(key, pos + 1)) {
+            size_t q = pos + key.size();
+            while (q < text.size() && std::isspace(static_cast<unsigned char>(text[q]))) {
+                ++q;
+            }
+            if (q >= text.size() || text[q] != '=') {
+                continue;
+            }
+            if (pos > 0 && (std::isalnum(static_cast<unsigned char>(text[pos - 1])) || text[pos - 1] == '_')) {
+                continue;
+            }
+            size_t e = text.find(';', q);
+            return text.substr(q + 1, e == std::string::npos ? std::string::npos : e - q - 1);
+        }
+        return {};
+    }
+
+    /// The text inside the parentheses that follow `keyword` (matched, upper-case) in a record body.
+    static std::string argsOf(const std::string& body, const std::string& keyword)
+    {
+        std::string up = body;
+        for (char& c : up) {
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        }
+        size_t k = up.find(keyword);
+        while (k != std::string::npos) {
+            size_t after = k + keyword.size();
+            bool startOk = k == 0 || !(std::isalnum(static_cast<unsigned char>(up[k - 1])) || up[k - 1] == '_');
+            while (after < up.size() && std::isspace(static_cast<unsigned char>(up[after]))) {
+                ++after;
+            }
+            if (startOk && after < up.size() && up[after] == '(') {
+                int depth = 0;
+                for (size_t i = after; i < up.size(); ++i) {
+                    depth += up[i] == '(' ? 1 : (up[i] == ')' ? -1 : 0);
+                    if (depth == 0) {
+                        return body.substr(after + 1, i - after - 1);
+                    }
+                }
+                return {};
+            }
+            k = up.find(keyword, k + 1);
+        }
+        return {};
+    }
+
+    static std::vector<int> refsIn(const std::string& s)
+    {
+        std::vector<int> out;
+        for (size_t i = 0; i < s.size(); ++i) {
+            if (s[i] == '#') {
+                char* end = nullptr;
+                long v = std::strtol(s.c_str() + i + 1, &end, 10);
+                if (end != s.c_str() + i + 1 && v > 0) {
+                    out.push_back(static_cast<int>(v));
+                }
+            }
+        }
+        return out;
+    }
+
+    std::optional<std::pair<double, double>> resolveId(int id, const char* keyword)
+    {
+        if (!loaded) {
+            load();
+        }
+        if (text.empty() || id <= 0) {
+            return std::nullopt;
+        }
+        std::vector<int> elems = refsIn(argsOf(record(id), keyword));
+        if (elems.empty()) {
+            return std::nullopt;
+        }
+        double f = 1.0;
+        double ex = 0.0;
+        for (int el : elems) {
+            std::string a = argsOf(record(el), "DERIVED_UNIT_ELEMENT");
+            size_t comma = a.rfind(',');
+            std::vector<int> u = refsIn(a);
+            if (comma == std::string::npos || u.size() != 1) {
+                return std::nullopt;
+            }
+            auto ent = byIdent.find(u[0]);
+            if (ent == byIdent.end()) {
+                return std::nullopt;
+            }
+            Handle(StepBasic_NamedUnit) len = Handle(StepBasic_NamedUnit)::DownCast(ent->second);
+            if (len.IsNull() || !(len->IsKind(STANDARD_TYPE(StepBasic_SiUnitAndLengthUnit))
+                                  || len->IsKind(STANDARD_TYPE(StepBasic_ConversionBasedUnitAndLengthUnit)))) {
+                return std::nullopt;
+            }
+            auto uf = namedUnitFactor(len);
+            char* end = nullptr;
+            double e = std::strtod(a.c_str() + comma + 1, &end);
+            if (!uf || end == a.c_str() + comma + 1 || !std::isfinite(e)) {
+                return std::nullopt;
+            }
+            f *= std::pow(*uf, e);
+            ex += e;
+        }
+        if (!std::isfinite(f)) {
+            return std::nullopt;
+        }
+        return std::make_pair(f, ex);
+    }
+};
+
 /// (factor to the SI base unit, exponent of length) for the unit of a measure.
-std::optional<std::pair<double, double>> measureUnit(const StepBasic_Unit& u, std::optional<double> contextLength)
+std::optional<std::pair<double, double>> measureUnit(const StepBasic_Unit& u, ElementlessUnits& elementless)
 {
     if (Handle(StepBasic_DerivedUnit) du = u.DerivedUnit()) {
         double f = 1.0;
@@ -469,14 +639,11 @@ std::optional<std::pair<double, double>> measureUnit(const StepBasic_Unit& u, st
     }
     if (Handle(StepBasic_NamedUnit) nu = u.NamedUnit()) {
         // The older AREA_UNIT((elements)) and VOLUME_UNIT((elements)) arrive as element-less
-        // StepBasic_AreaUnit / StepBasic_VolumeUnit: OCCT's parser drops the elements. We then
-        // take the length unit of the representation's own context, the way those files are written.
+        // StepBasic_AreaUnit / StepBasic_VolumeUnit: OCCT's parser drops the elements. We read them
+        // back from the file text; where the chain cannot be resolved the unit is unusable, and we
+        // do not guess the representation context's length unit (CAx-IF practice 4.2).
         if (nu->IsKind(STANDARD_TYPE(StepBasic_AreaUnit)) || nu->IsKind(STANDARD_TYPE(StepBasic_VolumeUnit))) {
-            if (!contextLength) {
-                return std::nullopt;
-            }
-            double e = nu->IsKind(STANDARD_TYPE(StepBasic_AreaUnit)) ? 2.0 : 3.0;
-            return std::make_pair(std::pow(*contextLength, e), e);
+            return elementless.resolve(nu);
         }
         auto uf = namedUnitFactor(nu);
         if (!uf) {
@@ -520,7 +687,7 @@ bool isGeometricValidationProperty(const Handle(StepRepr_PropertyDefinition)& pd
     return !pd.IsNull() && (lowerTrim(pd->Name()) == marker || lowerTrim(pd->Description()) == marker);
 }
 
-void readRepresentation(const Handle(StepRepr_Representation)& rep, Stated& st)
+void readRepresentation(const Handle(StepRepr_Representation)& rep, Stated& st, ElementlessUnits& elementless)
 {
     if (rep.IsNull()) {
         return;
@@ -539,20 +706,20 @@ void readRepresentation(const Handle(StepRepr_Representation)& rep, Stated& st)
             double val = m->ValueComponent();
             if (type == "VOLUME_MEASURE" && name == "volume measure") {
                 st.seen = st.hasMeasure = true;
-                auto k = toMillimetres(measureUnit(m->UnitComponent(), ctxLen), 3.0);
+                auto k = toMillimetres(measureUnit(m->UnitComponent(), elementless), 3.0);
                 if (!k) { st.unusable = true; }
                 else if (!st.figures.volume) { st.figures.volume = val * *k; }
             }
             else if (type == "AREA_MEASURE" && name == "independent surface area measure") {
                 st.seen = st.hasMeasure = true;
-                auto k = toMillimetres(measureUnit(m->UnitComponent(), ctxLen), 2.0);
+                auto k = toMillimetres(measureUnit(m->UnitComponent(), elementless), 2.0);
                 if (!k) { st.unusable = true; }
                 else if (!st.figures.independentArea) { st.figures.independentArea = val * *k; }
             }
             else if (type == "AREA_MEASURE"
                      && (name == "surface area measure" || name == "wetted area measure")) {
                 st.seen = st.hasMeasure = true;
-                auto k = toMillimetres(measureUnit(m->UnitComponent(), ctxLen), 2.0);
+                auto k = toMillimetres(measureUnit(m->UnitComponent(), elementless), 2.0);
                 if (!k) { st.unusable = true; }
                 else if (!st.figures.area) {
                     st.figures.area = val * *k;
@@ -588,6 +755,8 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
         return;
     }
 
+    ElementlessUnits elementless(model, ws->LoadedFile());
+
     // Pass 1: the validation properties attached at part level, by product definition.
     std::map<Standard_Transient*, Stated> stated;
     // geometry level (practice 4.4): per part, per shape aspect; used only where part level has nothing
@@ -619,7 +788,8 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
                 Handle(StepRepr_ShapeAspect) sa = pd->Definition().ShapeAspect();
                 if (!sa.IsNull() && !sa->OfShape().IsNull() && !sa->OfShape()->Definition().ProductDefinition().IsNull()) {
                     readRepresentation(pdr->UsedRepresentation(),
-                                       aspectStated[sa->OfShape()->Definition().ProductDefinition().get()][sa.get()]);
+                                       aspectStated[sa->OfShape()->Definition().ProductDefinition().get()][sa.get()],
+                                       elementless);
                 }
                 continue;
             }
@@ -627,7 +797,7 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
             if (prod.IsNull()) {
                 continue;  // assembly usage, not a part
             }
-            readRepresentation(pdr->UsedRepresentation(), stated[prod.get()]);
+            readRepresentation(pdr->UsedRepresentation(), stated[prod.get()], elementless);
         }
     }
     // Geometry level fills in for a part that states nothing at part level, when exactly one of its

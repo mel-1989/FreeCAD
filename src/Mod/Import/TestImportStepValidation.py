@@ -546,6 +546,56 @@ class TestVerdicts(StepValidationCase):
         self.assertTrue(_close(part["measured"]["volume"], 6000.0 * 25.4 ** 3, 1e-9))
 
 
+class TestOlderDerivedUnits(StepValidationCase):
+    """AREA_UNIT((#e)) and VOLUME_UNIT((#e)) over DERIVED_UNIT_ELEMENT: OCCT drops the elements, so the
+    checker reads them from the file text and honours the declared unit (CAx-IF practice 4.2). The
+    context here is inch and the declared unit is millimetre, which the context fallback got wrong."""
+
+    def older_form(self, name, volume=1.0, area=1.0, dangle_volume=False):
+        p = self.export([self.shape_object(Part.makeBox(10, 20, 30), "Box")])
+        t = self.flat(p)
+        inch = re.sub(r"(#\d+\s*=\s*)\(\s*LENGTH_UNIT\(\)\s*NAMED_UNIT\(\*\)\s*SI_UNIT\(\.MILLI\.,\.METRE\.\)\s*\)",
+                      r"\1(CONVERSION_BASED_UNIT('INCH',#9001)LENGTH_UNIT()NAMED_UNIT(#9003))", t, count=1)
+        self.assertNotEqual(inch, t)
+        extra = ("#9001=LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),#9002);"
+                 "#9002=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));"
+                 "#9003=DIMENSIONAL_EXPONENTS(1.,0.,0.,0.,0.,0.,0.);")
+        inch = inch.replace("ENDSEC;END-ISO", extra + "ENDSEC;END-ISO")
+        old = re.sub(r"DERIVED_UNIT\(\(", "AREA_UNIT((", inch, count=1)
+        old = re.sub(r"DERIVED_UNIT\(\(", "VOLUME_UNIT((", old, count=1)
+        self.assertIn("AREA_UNIT((", old)
+        self.assertIn("VOLUME_UNIT((", old)
+        if dangle_volume:
+            old = re.sub(r"VOLUME_UNIT\(\(#\d+\)\)", "VOLUME_UNIT((#99999))", old)
+        q = self.save(old, name + "_raw.step")
+        return self.mutate(q, self.path(name + ".step"), volume=volume, area=area)
+
+    def test_declared_mm_unit_in_an_inch_context_agrees_when_stated_in_mm(self):
+        q = self.older_form("older_ok", volume=25.4 ** 3, area=25.4 ** 2)
+        part = self.parts(q)[0]
+        self.assertEqual(part["verdict"], "agree", part)
+        self.assertTrue(_close(part["stated"]["volume"], 6000.0 * 25.4 ** 3))
+        self.assertTrue(_close(part["stated"]["area"], 2200.0 * 25.4 ** 2))
+
+    def test_figure_in_cubic_inches_under_an_mm_element_disagrees(self):
+        q = self.older_form("older_bad", volume=1.0, area=1.0)
+        part = self.parts(q)[0]
+        self.assertEqual(part["verdict"], "disagree", part)
+        self.assertTrue(_close(part["stated"]["volume"], 6000.0))
+        self.assertTrue(part["disagrees"]["volume"])
+
+    def test_dangling_element_is_unusable_not_a_guess_from_the_context(self):
+        q = self.older_form("older_dangle", volume=25.4 ** 3, area=25.4 ** 2, dangle_volume=True)
+        part = self.parts(q)[0]
+        self.assertEqual(part["verdict"], "unusable_properties", part)
+
+    def test_garbled_element_record_never_throws(self):
+        q = self.older_form("older_trunc", volume=25.4 ** 3, area=25.4 ** 2)
+        t = self.text(q)
+        self.write_text(q, re.sub(r"DERIVED_UNIT_ELEMENT\([^;]*;", "DERIVED_UNIT_ELEMENT(;", t))
+        self.assertIn(self.parts(q)[0]["verdict"], ("unusable_properties", "disagree"))
+
+
 class TestImportBehaviour(StepValidationCase):
     def exported_box(self):
         return self.export([self.shape_object(Part.makeBox(10, 20, 30), "Box")])
