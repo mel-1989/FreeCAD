@@ -780,6 +780,15 @@ class Mesh3MFReadCases(unittest.TestCase):
         self.assertAlmostEqual(objs[2].Mesh.BoundBox.XLength, 2.0, places=5)
         self.assertAlmostEqual(objs[2].Mesh.BoundBox.YMin, 5.0, places=5)
 
+    def test_mirroring_transform_is_baked_not_placement(self):
+        body = ("<resources>%s</resources><build><item objectid=\"1\"/>"
+                "<item objectid=\"1\" transform=\"-1 0 0 0 1 0 0 0 1 5 0 0\"/></build>") % self.obj(1, "m")
+        objs = self.load(self.package(body))
+        self.assertEqual(len(objs), 2)
+        self.assertTrue(objs[1].Placement.isIdentity())
+        self.assertAlmostEqual(objs[1].Mesh.BoundBox.XMin, 4.0, places=5)
+        self.assertAlmostEqual(objs[1].Mesh.BoundBox.XMax, 5.0, places=5)
+
     def test_single_item_transform_baked(self):
         tr = "1 0 0 0 1 0 0 0 1 3 0 0"
         o = self.load(self.package("<resources>%s</resources><build><item objectid=\"1\" transform=\"%s\"/></build>" % (self.obj(1), tr)))[0]
