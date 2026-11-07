@@ -70,6 +70,7 @@ struct StepPartFinding
     StepFigures measured;
     bool statedAreaWetted {false};  // the stated area was named 'wetted area measure' (section 4.6.2)
     bool statedUnusable {false};    // some stated figure was zero, non-finite or in an unresolvable unit
+    bool statedUnattributable {false};  // geometry-level figures that cannot be tied to the part's solids (section 4.4)
     bool geometryValid {true};
     double diagonal {0.0};          // bounding-box diagonal of the arrived shape, mm
     std::optional<double> volumeDiff;    // measured - stated, mm^3

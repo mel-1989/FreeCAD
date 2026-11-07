@@ -241,6 +241,14 @@ void judgePart(StepPartFinding& part, bool shapeFailed)
         return;
     }
 
+    if (part.statedUnattributable) {
+        // geometry-level figures (section 4.4) that describe some solid of the part, not known which:
+        // comparing them with the whole part would be a guess either way
+        part.verdict = StepVerdict::unusable_properties;
+        part.reason = "geometry-level figures cannot be attributed to the part's solids";
+        return;
+    }
+
     bool unusable = part.statedUnusable;
     bool anyStated = false;
     bool placeholder = false;
@@ -488,6 +496,7 @@ private:
     bool loaded {false};
     std::string text;
     std::map<int, Handle(Standard_Transient)> byIdent;
+    std::map<int, std::string> bodies;
     std::map<int, std::optional<std::pair<double, double>>> cache;
 
     void load()
@@ -503,31 +512,122 @@ private:
         std::ostringstream ss;
         ss << in.rdbuf();
         text = ss.str();
+        scan();
+        text.clear();
+        text.shrink_to_fit();
         for (int i = 1; i <= model->NbEntities(); ++i) {
             Handle(Standard_Transient) e = model->Value(i);
             byIdent[model->IdentLabel(e)] = e;
         }
     }
 
-    /// The text between '=' and ';' of record #id, or empty.
+    /// One forward pass over the file (ISO 10303-21): comments and the contents of quoted strings
+    /// ('' is an escaped quote) are skipped, so neither can carry a record or end one early, and only
+    /// the statements of the DATA section are kept, as id -> text after '='. The first definition of
+    /// an id wins. Only the records the unit chains need are stored.
+    void scan()
+    {
+        const std::string& t = text;
+        const size_t n = t.size();
+        bool inData = false;
+        std::string stmt;
+        size_t i = 0;
+        while (i < n) {
+            const char c = t[i];
+            if (c == '/' && i + 1 < n && t[i + 1] == '*') {
+                size_t e = t.find("*/", i + 2);
+                if (e == std::string::npos) {
+                    break;
+                }
+                i = e + 2;
+                stmt.push_back(' ');
+            }
+            else if (c == '\'') {
+                stmt += "''";
+                for (++i; i < n; ++i) {
+                    if (t[i] == '\'') {
+                        if (i + 1 < n && t[i + 1] == '\'') {
+                            ++i;
+                            continue;
+                        }
+                        ++i;
+                        break;
+                    }
+                }
+            }
+            else if (c == ';') {
+                statement(stmt, inData);
+                stmt.clear();
+                ++i;
+            }
+            else {
+                stmt.push_back(c);
+                ++i;
+            }
+        }
+    }
+
+    void statement(const std::string& stmt, bool& inData)
+    {
+        size_t b = 0;
+        while (b < stmt.size() && std::isspace(static_cast<unsigned char>(stmt[b]))) {
+            ++b;
+        }
+        size_t e = stmt.size();
+        while (e > b && std::isspace(static_cast<unsigned char>(stmt[e - 1]))) {
+            --e;
+        }
+        std::string s = stmt.substr(b, e - b);
+        if (s.empty()) {
+            return;
+        }
+        if (!inData) {
+            std::string up = s;
+            for (char& c : up) {
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            }
+            if (up == "DATA" || up.rfind("DATA(", 0) == 0 || up.rfind("DATA (", 0) == 0) {
+                inData = true;
+            }
+            return;
+        }
+        if (s[0] != '#') {
+            std::string up = s;
+            for (char& c : up) {
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            }
+            if (up == "ENDSEC") {
+                inData = false;
+            }
+            return;
+        }
+        char* end = nullptr;
+        long id = std::strtol(s.c_str() + 1, &end, 10);
+        if (end == s.c_str() + 1 || id <= 0) {
+            return;
+        }
+        while (*end != '\0' && std::isspace(static_cast<unsigned char>(*end))) {
+            ++end;
+        }
+        if (*end != '=') {
+            return;
+        }
+        std::string body = s.substr(static_cast<size_t>(end - s.c_str()) + 1);
+        std::string up = body;
+        for (char& c : up) {
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        }
+        if (up.find("AREA_UNIT") != std::string::npos || up.find("VOLUME_UNIT") != std::string::npos
+            || up.find("DERIVED_UNIT_ELEMENT") != std::string::npos) {
+            bodies.emplace(static_cast<int>(id), std::move(body));
+        }
+    }
+
+    /// The text after '=' of record #id (data section only), or empty.
     std::string record(int id) const
     {
-        const std::string key = "#" + std::to_string(id);
-        for (size_t pos = text.find(key); pos != std::string::npos; pos = text.find(key, pos + 1)) {
-            size_t q = pos + key.size();
-            while (q < text.size() && std::isspace(static_cast<unsigned char>(text[q]))) {
-                ++q;
-            }
-            if (q >= text.size() || text[q] != '=') {
-                continue;
-            }
-            if (pos > 0 && (std::isalnum(static_cast<unsigned char>(text[pos - 1])) || text[pos - 1] == '_')) {
-                continue;
-            }
-            size_t e = text.find(';', q);
-            return text.substr(q + 1, e == std::string::npos ? std::string::npos : e - q - 1);
-        }
-        return {};
+        auto it = bodies.find(id);
+        return it == bodies.end() ? std::string() : it->second;
     }
 
     /// The text inside the parentheses that follow `keyword` (matched, upper-case) in a record body.
@@ -579,7 +679,7 @@ private:
         if (!loaded) {
             load();
         }
-        if (text.empty() || id <= 0) {
+        if (bodies.empty() || id <= 0) {
             return std::nullopt;
         }
         std::vector<int> elems = refsIn(argsOf(record(id), keyword));
@@ -800,8 +900,13 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
             readRepresentation(pdr->UsedRepresentation(), stated[prod.get()], elementless);
         }
     }
-    // Geometry level fills in for a part that states nothing at part level, when exactly one of its
-    // shape aspects carries a volume or area (aspects holding only curve lengths are not its solids).
+    // Geometry level fills in for a part that states nothing at part level (aspects holding only
+    // curve lengths are not its solids). The figures of a shape aspect describe what the aspect
+    // refers to (sections 4.4.2, 4.4.3), not the whole part: a single aspect is applied to the part
+    // only when the part turns out to have exactly one solid and no independent surfaces (checked
+    // once the shape is measured, below); several aspects, or one that cannot be tied to the
+    // part's geometry, make the part unusable and never "no properties".
+    std::set<Standard_Transient*> fromAspect;  // parts that took the figures of their one shape aspect
     for (const auto& [prod, aspects] : aspectStated) {
         auto have = stated.find(prod);
         if (have != stated.end() && have->second.seen) {
@@ -817,6 +922,12 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
         }
         if (n == 1) {
             stated[prod] = *only;
+            fromAspect.insert(prod);
+        }
+        else if (n > 1) {
+            Stated unattributed;
+            unattributed.seen = unattributed.unusable = true;
+            stated[prod] = unattributed;
         }
     }
     // Pass 2: the parts, each once, with the shape that arrived in the part's own frame.
@@ -880,6 +991,15 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
             catch (Standard_Failure& e) {
                 failed = true;
                 part.reason = e.GetMessageString() ? e.GetMessageString() : "exception";
+            }
+        }
+        if (!failed && fromAspect.count(prod.get())) {
+            int solids = 0;
+            for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) {
+                ++solids;
+            }
+            if (solids != 1 || part.measured.independentArea) {
+                part.statedUnattributable = true;
             }
         }
         judgePart(part, failed);
@@ -1036,7 +1156,7 @@ int attachValidationProperties(Handle(TDocStd_Document) hDoc, std::vector<Indepe
             Handle(TDataStd_Name) nameAttr;
             if (label.FindAttribute(TDataStd_Name::GetID(), nameAttr)) {
                 IndependentFigures ind;
-                ind.name = TCollection_AsciiString(nameAttr->Get(), '?').ToCString();
+                ind.name = TCollection_AsciiString(nameAttr->Get()).ToCString();  // UTF-8, as the product name is stored
                 ind.surfaceOnly = !f.volume;
                 ind.area = f.independentArea;
                 ind.centroid = f.independentCentroid;

@@ -9,6 +9,7 @@
 import os
 import re
 import tempfile
+import time
 import unittest
 
 import FreeCAD as App
@@ -250,6 +251,15 @@ class TestWrite(StepValidationCase):
         for a, b in zip(st["independent_centroid"], (103.5, 3.5, 0.0)):
             self.assertAlmostEqual(a, b, places=9)
 
+    def test_non_ascii_product_name_keeps_the_independent_class(self):
+        # the writer matches a part's independent surfaces by its product name, which is UTF-8 in the file
+        face = Part.makePlane(9, 9, App.Vector(50, 0, 0))
+        obj = self.shape_object(Part.makeCompound([Part.makeBox(5, 5, 5), face]), "Bracket")
+        obj.Label = "Brkt \u00dcn\u00ef \u5b54"
+        r = Import.validateStep(self.export([obj]))
+        self.assertEqual(r["verdict"], "agree", r)
+        self.assertTrue(_close(r["parts"][0]["stated"]["independent_area"], 81.0))
+
     def make_assembly(self):
         box = self.shape_object(Part.makeBox(10, 20, 30), "Box")
         cyl = self.shape_object(Part.makeCylinder(5, 40), "Cyl")
@@ -441,6 +451,51 @@ class TestVerdicts(StepValidationCase):
         self.assertEqual(part["verdict"], "agree")
         self.assertTrue(_close(part["stated"]["volume"], 6000.0))
 
+    def two_solids_with_aspects(self, name, aspects, second=None):
+        """Two boxes (1000 and 125 mm^3) in one part (`second` replaces the small box), the part-level
+        figures hidden, and one shape aspect per entry of `aspects` (a volume each, section 4.4): the
+        file as an exporter that writes figures per solid at geometry level only would give it."""
+        b1 = Part.makeBox(10, 10, 10)
+        b2 = second if second is not None else Part.makeBox(5, 5, 5)
+        b2.translate(App.Vector(50, 0, 0))
+        p = self.export([self.shape_object(Part.makeCompound([b1, b2]), "Two")], name + "_raw.step")
+        t = self.flat(p).replace("PROPERTY_DEFINITION('geometric validation property'", "PROPERTY_DEFINITION('hidden'")
+        pds = re.search(r"#(\d+)\s*=\s*PRODUCT_DEFINITION_SHAPE\(", t).group(1)
+        ctx = re.search(r"#(\d+)\s*=\s*\(\s*GEOMETRIC_REPRESENTATION_CONTEXT", t).group(1)
+        unit = re.search(r"'volume measure',VOLUME_MEASURE\([^)]*\),#(\d+)\)", t).group(1)
+        extra = ""
+        for i, vol in enumerate(aspects):
+            n = 9000 + 10 * i
+            extra += ("#%d=SHAPE_ASPECT('solid %d','',#%s,.F.);"
+                      "#%d=PROPERTY_DEFINITION('geometric validation property','',#%d);"
+                      "#%d=MEASURE_REPRESENTATION_ITEM('volume measure',VOLUME_MEASURE(%r),#%s);"
+                      "#%d=REPRESENTATION('',(#%d),#%s);"
+                      "#%d=PROPERTY_DEFINITION_REPRESENTATION(#%d,#%d);"
+                      % (n, i, pds, n + 1, n, n + 2, vol, unit, n + 3, n + 2, ctx, n + 4, n + 1, n + 3))
+        return self.save(t.replace("ENDSEC;END-ISO", extra + "ENDSEC;END-ISO"), name + ".step")
+
+    def test_one_aspect_on_a_two_solid_part_is_not_compared_with_the_whole_part(self):
+        # the aspect describes the 1000 mm^3 solid; the part measures 1125. Comparing the two is a false disagree.
+        r = Import.validateStep(self.two_solids_with_aspects("asp1", [1000.0]))
+        part = r["parts"][0]
+        self.assertEqual(part["verdict"], "unusable_properties", part)
+        self.assertEqual(r["verdict"], "unusable_properties")
+
+    def test_two_aspects_on_a_two_solid_part_are_unusable_not_no_properties(self):
+        part = Import.validateStep(self.two_solids_with_aspects("asp2", [1000.0, 125.0]))["parts"][0]
+        self.assertEqual(part["verdict"], "unusable_properties", part)
+
+    def test_one_aspect_on_a_solid_with_an_independent_surface_is_unusable(self):
+        q = self.two_solids_with_aspects("asp5", [1000.0], second=Part.makePlane(7, 7))
+        part = Import.validateStep(q)["parts"][0]
+        self.assertEqual(part["verdict"], "unusable_properties", part)
+
+    def test_one_aspect_on_a_one_solid_part_is_still_compared(self):
+        q = self.hide_part_level(self.exported_box(), "asp3.step")
+        self.assertEqual(self.parts(q)[0]["verdict"], "agree")
+        q = self.mutate(q, self.path("asp4.step"), volume=1.01)
+        self.assertEqual(self.parts(q)[0]["verdict"], "disagree")
+
     def zero_figures(self, p, name):
         t = self.flat(p)
         t = re.sub(r"VOLUME_MEASURE\([^)]*\)", "VOLUME_MEASURE(0.0)", t)
@@ -594,6 +649,46 @@ class TestOlderDerivedUnits(StepValidationCase):
         t = self.text(q)
         self.write_text(q, re.sub(r"DERIVED_UNIT_ELEMENT\([^;]*;", "DERIVED_UNIT_ELEMENT(;", t))
         self.assertIn(self.parts(q)[0]["verdict"], ("unusable_properties", "disagree"))
+
+    def ids_for_decoy(self, q):
+        t = self.text(q)
+        elem = re.search(r"VOLUME_UNIT\(\(#(\d+)\)\)", t).group(1)
+        inch = re.search(r"#(\d+)\s*=\s*\(CONVERSION_BASED_UNIT\('INCH'", t).group(1)
+        return elem, inch
+
+    def test_a_record_in_a_comment_does_not_decide_the_unit(self):
+        q = self.older_form("tok_c", volume=25.4 ** 3, area=25.4 ** 2)
+        self.assertEqual(self.parts(q)[0]["verdict"], "agree")
+        elem, inch = self.ids_for_decoy(q)
+        t = self.text(q).replace("DATA;", "DATA;\n/* #%s=DERIVED_UNIT_ELEMENT(#%s,3.0); */" % (elem, inch), 1)
+        self.write_text(q, t)
+        self.assertEqual(self.parts(q)[0]["verdict"], "agree")
+
+    def test_a_record_in_the_header_or_in_a_string_does_not_decide_the_unit(self):
+        q = self.older_form("tok_s", volume=25.4 ** 3, area=25.4 ** 2)
+        elem, inch = self.ids_for_decoy(q)
+        decoy = "#%s=DERIVED_UNIT_ELEMENT(#%s,3.0);" % (elem, inch)
+        t = self.text(q)
+        t = re.sub(r"FILE_NAME\('[^']*'", "FILE_NAME('x %s y'" % decoy, t, count=1)
+        t = t.replace("DATA;", "DATA;\n#9100=DESCRIPTION('a;%s b');" % decoy.replace("'", "''"), 1)
+        self.write_text(q, t)
+        self.assertEqual(self.parts(q)[0]["verdict"], "agree")
+
+    def test_a_semicolon_in_a_string_or_comment_does_not_truncate_a_record(self):
+        q = self.older_form("tok_t", volume=25.4 ** 3, area=25.4 ** 2)
+        t = self.text(q)
+        t = re.sub(r"VOLUME_UNIT\(\((#\d+)\)\)", r"VOLUME_UNIT((';',\1))", t, count=1)
+        t = re.sub(r"(DERIVED_UNIT_ELEMENT\()(#\d+,)", r"\1/* ; */\2", t)
+        self.write_text(q, t)
+        self.assertEqual(self.parts(q)[0]["verdict"], "agree")
+
+    def test_a_file_of_many_records_is_read_once(self):
+        q = self.older_form("tok_n", volume=25.4 ** 3, area=25.4 ** 2)
+        filler = "".join("#%d=CARTESIAN_POINT('p',(0.,0.,%d.));\n" % (20000 + i, i) for i in range(40000))
+        self.write_text(q, self.text(q).replace("DATA;", "DATA;\n" + filler, 1))
+        start = time.perf_counter()
+        self.assertEqual(self.parts(q)[0]["verdict"], "agree")
+        self.assertLess(time.perf_counter() - start, 20.0)
 
 
 class TestImportBehaviour(StepValidationCase):
