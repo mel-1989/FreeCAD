@@ -54,6 +54,7 @@
 #include <Mod/Part/App/ShapeMapHasher.h>
 
 #include "ImportOCAF.h"
+#include "StepAttributes.h"
 #include "Tools.h"
 
 
@@ -256,6 +257,7 @@ void ImportOCAF::loadShapes(
                     pcPart = doc->addObject<App::Part>(asm_name.c_str());
                     pcPart->Label.setValue(asm_name);
                     pcPart->addObjects(localValue);
+                    applyStepAttributes(pcPart, label);
 
                     // STEP reader is now a hierarchical reader. Node and leaf must have
                     // there local placement updated and relative to the STEP file content
@@ -277,6 +279,19 @@ void ImportOCAF::createShape(
     bool mergeShape
 )
 {
+    // whatever this part adds to lValue carries the part's STEP attributes and layers
+    struct ApplyOnExit
+    {
+        const TDF_Label& label;
+        std::vector<App::DocumentObject*>& list;
+        size_t before;
+        ~ApplyOnExit()
+        {
+            for (size_t i = before; i < list.size(); ++i) {
+                applyStepAttributes(list[i], label);
+            }
+        }
+    } applyOnExit {label, lValue, lValue.size()};
     const TopoDS_Shape& aShape = aShapeTool->GetShape(label);
 #ifdef HAVE_TBB
     using namespace tbb;

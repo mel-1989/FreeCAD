@@ -28,6 +28,7 @@
 
 
 #include "WriterStep.h"
+#include "StepAttributes.h"
 #include "StepValidation.h"
 #include <Base/Exception.h>
 #include <App/Application.h>
@@ -72,6 +73,7 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
         attachValidationProperties(hDoc, &independent);
     }
     writer.Transfer(hDoc, STEPControl_AsIs);
+    writeStepAttributes(writer.ChangeWriter().Model(), writer.ChangeWriter().WS(), hDoc);
     int partsWithProps = 0;
     if (withProps) {
         partsWithProps = addPartLevelValidationProperties(writer.ChangeWriter().Model(), independent);

@@ -30,6 +30,7 @@
 
 
 #include "ReaderStep.h"
+#include "StepAttributes.h"
 #include "StepValidation.h"
 #include <Base/Exception.h>
 #include <Mod/Part/App/encodeFilename.h>
@@ -65,5 +66,6 @@ void ReaderStep::read(Handle(TDocStd_Document) hDoc, const Message_ProgressRange
     }
 
     aReader.Transfer(hDoc, theProgress);
+    stashStepAttributes(aReader.Reader().WS(), hDoc);
     reportStepValidation(aReader.Reader().WS());
 }
