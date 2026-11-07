@@ -401,6 +401,12 @@ SET(FemTestsApp_SRCS
     femtest/app/test_solver_mystran.py
     femtest/app/test_solver_z88.py
     femtest/app/test_gmsh.py
+    femtest/app/study_corpus.py
+    femtest/app/study_oracle.py
+    femtest/app/study_baseline.py
+    femtest/app/study_corpus_run.py
+    femtest/app/study_mutants.py
+    femtest/app/study_stale_scenarios.py
 )
 
 SET(FemTestsFiles_SRCS
