@@ -547,6 +547,14 @@ class TestExternalReferences(AttrCase):
         self.assertEqual(got["PartA"][1], (100.0, 0.0, 0.0))
         self.assertEqual(got["PartB"][1], (0.0, 100.0, 50.0))
         self.assertNotIn("STEP external reference", out)
+        # placements and volumes to 1e-9, not to the rounding of parts()
+        doc = self.load(p)
+        by = {o.Label: o for o in doc.Objects if o.TypeId == "Part::Feature"}
+        for label, want in (("PartA", (100.0, 0.0, 0.0)), ("PartB", (0.0, 100.0, 50.0))):
+            got = by[label].Placement.Base
+            for a, b in zip((got.x, got.y, got.z), want):
+                self.assertLess(abs(a - b), 1e-9)
+        self.assertLess(abs(by["PartA"].Shape.Volume - 6000.0), 1e-9 * 6000.0)
 
     def test_a_missing_file_gives_one_warning_and_the_rest_arrives(self):
         self.make_parts()
