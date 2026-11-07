@@ -14,6 +14,11 @@
 
 #include <BRep_Builder.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepClass3d.hxx>
+#include <TDataStd_Name.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Solid.hxx>
+#include <TopoDS_Shell.hxx>
 #include <TopoDS_Compound.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
@@ -156,11 +161,24 @@ StepFigures computeFigures(const TopoDS_Shape& shape)
     if (anyLoose) {
         BRepGProp::SurfaceProperties(loose, looseProps);
         f.independentArea = looseProps.Mass();
+        if (*f.independentArea > 0.0) {
+            f.independentCentroid = looseProps.CentreOfMass();
+        }
     }
     if (anySolid) {
         GProp_GProps sprops;
         BRepGProp::SurfaceProperties(solids, sprops);
         f.area = sprops.Mass();
+        // wetted area (practice 4.6.2): the outer shell of each solid, voids left out
+        TopoDS_Compound outer;
+        builder.MakeCompound(outer);
+        for (TopExp_Explorer ex(solids, TopAbs_SOLID); ex.More(); ex.Next()) {
+            TopoDS_Shell sh = BRepClass3d::OuterShell(TopoDS::Solid(ex.Current()));
+            builder.Add(outer, sh.IsNull() ? ex.Current() : TopoDS_Shape(sh));
+        }
+        GProp_GProps oprops;
+        BRepGProp::SurfaceProperties(outer, oprops);
+        f.wettedArea = oprops.Mass();
         GProp_GProps vprops;
         BRepGProp::VolumeProperties(solids, vprops);
         f.volume = vprops.Mass();
@@ -201,6 +219,8 @@ void judgePart(StepPartFinding& part, bool shapeFailed)
     using namespace StepValidationTolerance;
     part.volumeDisagrees = part.areaDisagrees = part.centroidDisagrees = false;
     part.independentAreaDisagrees = false;
+    part.independentCentroidDisagrees = false;
+    part.independentCentroidDist.reset();
     part.independentAreaDiff.reset();
     part.volumeDiff.reset();
     part.areaDiff.reset();
@@ -219,11 +239,13 @@ void judgePart(StepPartFinding& part, bool shapeFailed)
 
     bool unusable = part.statedUnusable;
     bool anyStated = false;
+    bool placeholder = false;
 
     if (part.stated.volume) {
         double s = *part.stated.volume;
         if (!std::isfinite(s) || s == 0.0) {
             unusable = true;
+            placeholder = true;
         }
         else {
             anyStated = true;
@@ -236,20 +258,26 @@ void judgePart(StepPartFinding& part, bool shapeFailed)
             }
         }
     }
+    // placeholder: a stated measure that is zero or not finite makes the set unusable; if no stated
+    // measure is usable, a centroid stated beside it is part of the same placeholder (not compared)
     if (part.stated.area) {
         double s = *part.stated.area;
         if (!std::isfinite(s) || s == 0.0) {
             unusable = true;
+            placeholder = true;
         }
         else {
             anyStated = true;
-            if (part.measured.area) {
-                part.areaDiff = *part.measured.area - s;
-                // Exporters differ on whether the surface area of a part with solids also counts
-                // its independent surfaces: some state the solids' faces only (wetted area, practice
-                // 4.6.2), some every face. Take whichever convention the stated figure follows.
-                if (part.measured.volume && part.measured.independentArea) {
-                    double all = *part.measured.area + *part.measured.independentArea - s;
+            // a wetted area (practice 4.6.2) is compared with the outer shells' area
+            std::optional<double> solidArea = part.statedAreaWetted ? part.measured.wettedArea : part.measured.area;
+            if (solidArea) {
+                part.areaDiff = *solidArea - s;
+                // Section 4.5: exporters differ on whether the area of a part with solids also counts
+                // its independent surfaces. A file that states the independent class itself
+                // (4.7) is held to the solids' faces; one that does not may follow either convention.
+                if (part.measured.volume && part.measured.independentArea && !part.stated.independentArea
+                    && !part.stated.independentCentroid) {
+                    double all = *solidArea + *part.measured.independentArea - s;
                     if (std::fabs(all) < std::fabs(*part.areaDiff)) {
                         part.areaDiff = all;
                     }
@@ -265,6 +293,7 @@ void judgePart(StepPartFinding& part, bool shapeFailed)
         double s = *part.stated.independentArea;
         if (!std::isfinite(s) || s == 0.0) {
             unusable = true;
+            placeholder = true;
         }
         else {
             anyStated = true;
@@ -273,11 +302,29 @@ void judgePart(StepPartFinding& part, bool shapeFailed)
             part.independentAreaDisagrees = std::fabs(*part.independentAreaDiff) > areaRelative * std::fabs(s);
         }
     }
+    const bool placeholderSet = placeholder && !anyStated;
+    if (part.stated.independentCentroid) {
+        if (!finite3(*part.stated.independentCentroid)) {
+            unusable = true;
+        }
+        else if (!placeholderSet) {
+            anyStated = true;
+            if (part.measured.independentCentroid) {
+                part.independentCentroidDist =
+                    part.measured.independentCentroid->Distance(*part.stated.independentCentroid);
+                part.independentCentroidDisagrees =
+                    *part.independentCentroidDist > centroidOfDiagonal * part.diagonal;
+            }
+            else {
+                part.independentCentroidDisagrees = true;
+            }
+        }
+    }
     if (part.stated.centroid) {
         if (!finite3(*part.stated.centroid)) {
             unusable = true;
         }
-        else {
+        else if (!placeholderSet) {
             anyStated = true;
             if (part.measured.centroid) {
                 part.centroidDist = part.measured.centroid->Distance(*part.stated.centroid);
@@ -290,7 +337,7 @@ void judgePart(StepPartFinding& part, bool shapeFailed)
     }
 
     if (part.volumeDisagrees || part.areaDisagrees || part.independentAreaDisagrees
-        || part.centroidDisagrees) {
+        || part.centroidDisagrees || part.independentCentroidDisagrees) {
         part.verdict = StepVerdict::disagree;
     }
     else if (unusable) {
@@ -458,7 +505,17 @@ struct Stated
     StepFigures figures;
     bool unusable {false};
     bool seen {false};
+    bool hasMeasure {false};   // a volume or area measure was among the items (a solid or surface class)
+    bool areaWetted {false};   // the area was named 'wetted area measure' (section 4.6.2)
 };
+
+/// The practice's marker may stand in the name or the description of the PROPERTY_DEFINITION
+/// (some exporters swap the two).
+bool isGeometricValidationProperty(const Handle(StepRepr_PropertyDefinition)& pd)
+{
+    static const std::string marker = "geometric validation property";
+    return !pd.IsNull() && (lowerTrim(pd->Name()) == marker || lowerTrim(pd->Description()) == marker);
+}
 
 void readRepresentation(const Handle(StepRepr_Representation)& rep, Stated& st)
 {
@@ -478,35 +535,40 @@ void readRepresentation(const Handle(StepRepr_Representation)& rep, Stated& st)
             std::string type = m->ValueComponentMember()->Name() ? m->ValueComponentMember()->Name() : "";
             double val = m->ValueComponent();
             if (type == "VOLUME_MEASURE" && name == "volume measure") {
-                st.seen = true;
+                st.seen = st.hasMeasure = true;
                 auto k = toMillimetres(measureUnit(m->UnitComponent(), ctxLen), 3.0);
                 if (!k) { st.unusable = true; }
                 else if (!st.figures.volume) { st.figures.volume = val * *k; }
             }
             else if (type == "AREA_MEASURE" && name == "independent surface area measure") {
-                st.seen = true;
+                st.seen = st.hasMeasure = true;
                 auto k = toMillimetres(measureUnit(m->UnitComponent(), ctxLen), 2.0);
                 if (!k) { st.unusable = true; }
                 else if (!st.figures.independentArea) { st.figures.independentArea = val * *k; }
             }
             else if (type == "AREA_MEASURE"
                      && (name == "surface area measure" || name == "wetted area measure")) {
-                st.seen = true;
+                st.seen = st.hasMeasure = true;
                 auto k = toMillimetres(measureUnit(m->UnitComponent(), ctxLen), 2.0);
                 if (!k) { st.unusable = true; }
-                else if (!st.figures.area) { st.figures.area = val * *k; }
+                else if (!st.figures.area) {
+                    st.figures.area = val * *k;
+                    st.areaWetted = (name == "wetted area measure");
+                }
             }
         }
         else if (Handle(StepGeom_CartesianPoint) cp = Handle(StepGeom_CartesianPoint)::DownCast(it)) {
-            if (name == "centre point" && cp->NbCoordinates() == 3) {
+            // section 4.6.3 'centre point' (solids), section 4.7.2 'surface centre point' (independent surfaces)
+            if ((name == "centre point" || name == "surface centre point") && cp->NbCoordinates() == 3) {
+                std::optional<gp_Pnt>& target =
+                    name == "centre point" ? st.figures.centroid : st.figures.independentCentroid;
                 st.seen = true;
                 if (!ctxLen) {
                     st.unusable = true;
                 }
-                else if (!st.figures.centroid) {
+                else if (!target) {
                     double k = *ctxLen * 1000.0;
-                    st.figures.centroid =
-                        gp_Pnt(cp->CoordinatesValue(1) * k, cp->CoordinatesValue(2) * k, cp->CoordinatesValue(3) * k);
+                    target = gp_Pnt(cp->CoordinatesValue(1) * k, cp->CoordinatesValue(2) * k, cp->CoordinatesValue(3) * k);
                 }
             }
         }
@@ -525,6 +587,8 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
 
     // Pass 1: the validation properties attached at part level, by product definition.
     std::map<Standard_Transient*, Stated> stated;
+    // geometry level (practice 4.4): per part, per shape aspect; used only where part level has nothing
+    std::map<Standard_Transient*, std::map<Standard_Transient*, Stated>> aspectStated;
     std::vector<Handle(StepShape_ShapeDefinitionRepresentation)> sdrs;
     std::set<Standard_Transient*> assemblies;  // products with children: assembly figures are not read
     for (int i = 1; i <= model->NbEntities(); ++i) {
@@ -544,18 +608,42 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
                 continue;
             }
             Handle(StepRepr_PropertyDefinition) pd = pdr->Definition().PropertyDefinition();
-            if (pd.IsNull() || lowerTrim(pd->Name()) != "geometric validation property") {
+            if (!isGeometricValidationProperty(pd)) {
                 continue;
             }
             Handle(StepRepr_ProductDefinitionShape) pds = pd->Definition().ProductDefinitionShape();
             if (pds.IsNull()) {
-                continue;  // geometry level (shape aspect) is not read; the practice puts the part level first
+                Handle(StepRepr_ShapeAspect) sa = pd->Definition().ShapeAspect();
+                if (!sa.IsNull() && !sa->OfShape().IsNull() && !sa->OfShape()->Definition().ProductDefinition().IsNull()) {
+                    readRepresentation(pdr->UsedRepresentation(),
+                                       aspectStated[sa->OfShape()->Definition().ProductDefinition().get()][sa.get()]);
+                }
+                continue;
             }
             Handle(StepBasic_ProductDefinition) prod = pds->Definition().ProductDefinition();
             if (prod.IsNull()) {
                 continue;  // assembly usage, not a part
             }
             readRepresentation(pdr->UsedRepresentation(), stated[prod.get()]);
+        }
+    }
+    // Geometry level fills in for a part that states nothing at part level, when exactly one of its
+    // shape aspects carries a volume or area (aspects holding only curve lengths are not its solids).
+    for (const auto& [prod, aspects] : aspectStated) {
+        auto have = stated.find(prod);
+        if (have != stated.end() && have->second.seen) {
+            continue;
+        }
+        const Stated* only = nullptr;
+        int n = 0;
+        for (const auto& [sa, st] : aspects) {
+            if (st.hasMeasure) {
+                only = &st;
+                ++n;
+            }
+        }
+        if (n == 1) {
+            stated[prod] = *only;
         }
     }
     // Pass 2: the parts, each once, with the shape that arrived in the part's own frame.
@@ -606,6 +694,7 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
         if (it != stated.end()) {
             part.stated = it->second.figures;
             part.statedUnusable = it->second.unusable;
+            part.statedAreaWetted = it->second.areaWetted;
         }
         bool failed = shape.IsNull();
         if (failed) {
@@ -699,11 +788,19 @@ std::string describeFinding(const StepPartFinding& part)
         }
     }
     if (part.areaDisagrees) {
-        rel("area", part.stated.area, part.measured.area);
+        rel(part.statedAreaWetted ? "wetted area" : "area", part.stated.area,
+            part.statedAreaWetted ? part.measured.wettedArea : part.measured.area);
     }
     if (part.independentAreaDisagrees) {
         rel("independent surface area", part.stated.independentArea,
             std::optional<double>(part.measured.independentArea.value_or(0.0)));
+    }
+    if (part.independentCentroidDisagrees && part.stated.independentCentroid) {
+        os << "; independent surface centroid stated (" << part.stated.independentCentroid->X() << ", "
+           << part.stated.independentCentroid->Y() << ", " << part.stated.independentCentroid->Z() << ")";
+        if (part.measured.independentCentroid) {
+            os << ", distance " << *part.independentCentroidDist << " mm of diagonal " << part.diagonal << " mm";
+        }
     }
     if (part.centroidDisagrees && part.stated.centroid) {
         os << "; centroid stated (" << part.stated.centroid->X() << ", " << part.stated.centroid->Y()
@@ -722,7 +819,7 @@ std::string describeFinding(const StepPartFinding& part)
 namespace Import
 {
 
-int attachValidationProperties(Handle(TDocStd_Document) hDoc)
+int attachValidationProperties(Handle(TDocStd_Document) hDoc, std::vector<IndependentFigures>* independent)
 {
     Handle(XCAFDoc_ShapeTool) shapeTool = XCAFDoc_DocumentTool::ShapeTool(hDoc->Main());
     TDF_LabelSequence labels;
@@ -760,6 +857,19 @@ int attachValidationProperties(Handle(TDocStd_Document) hDoc)
             any = true;
         }
         count += any ? 1 : 0;
+        // the independent surfaces are a class of their own (sections 4.5, 4.7): no XCAF slot holds
+        // them beside the solids', so hand them on by the part's name
+        if (independent && f.independentArea && std::isfinite(*f.independentArea) && *f.independentArea > 0.0) {
+            Handle(TDataStd_Name) nameAttr;
+            if (label.FindAttribute(TDataStd_Name::GetID(), nameAttr)) {
+                IndependentFigures ind;
+                ind.name = TCollection_AsciiString(nameAttr->Get(), '?').ToCString();
+                ind.surfaceOnly = !f.volume;
+                ind.area = f.independentArea;
+                ind.centroid = f.independentCentroid;
+                independent->push_back(ind);
+            }
+        }
     }
     return count;
 }
@@ -774,8 +884,23 @@ const char* validationPropertiesHeaderId()
     return "CAx-IF Rec.Pracs.---Geometric and Assembly Validation Properties---4.2---2014-10-09";
 }
 
-int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model)
+int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model,
+                                     const std::vector<IndependentFigures>& independent)
 {
+    // independent figures by product name; a name two parts share with different figures is left out
+    std::map<std::string, const IndependentFigures*> byName;
+    std::set<std::string> ambiguous;
+    for (const auto& ind : independent) {
+        auto it = byName.find(ind.name);
+        if (it == byName.end()) {
+            byName[ind.name] = &ind;
+        }
+        else if (!it->second->area || !ind.area || std::fabs(*it->second->area - *ind.area) > 1e-9 * *ind.area
+                 || it->second->surfaceOnly != ind.surfaceOnly) {
+            ambiguous.insert(ind.name);
+        }
+    }
+
     // OCCT's writer attaches the figures at the geometry level (a SHAPE_ASPECT of the part's
     // PRODUCT_DEFINITION_SHAPE). The practice puts them first at the part level (section 4.4), in
     // one combined representation with an empty name (section 4.10): add that, sharing the items.
@@ -784,6 +909,7 @@ int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model)
         Handle(StepRepr_ProductDefinitionShape) pds;
         Handle(StepRepr_RepresentationContext) context;
         std::map<std::string, Handle(StepRepr_RepresentationItem)> items;  // by item name
+        bool occt {false};  // OCCT already wrote part-level figures for this PRODUCT_DEFINITION_SHAPE
     };
     std::vector<Group> groups;
     std::map<Standard_Transient*, size_t> index;
@@ -796,23 +922,29 @@ int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model)
             continue;
         }
         Handle(StepRepr_PropertyDefinition) pd = pdr->Definition().PropertyDefinition();
-        if (pd.IsNull() || lowerTrim(pd->Name()) != "geometric validation property") {
+        if (!isGeometricValidationProperty(pd)) {
             continue;
         }
-        if (Handle(StepRepr_ProductDefinitionShape) direct = pd->Definition().ProductDefinitionShape()) {
-            alreadyPartLevel.insert(direct.get());
-            continue;
+        Handle(StepRepr_ProductDefinitionShape) pds;
+        bool direct = false;
+        if (Handle(StepRepr_ProductDefinitionShape) d = pd->Definition().ProductDefinitionShape()) {
+            alreadyPartLevel.insert(d.get());
+            pds = d;
+            direct = true;
         }
-        Handle(StepRepr_ShapeAspect) sa = pd->Definition().ShapeAspect();
-        if (sa.IsNull() || sa->OfShape().IsNull()) {
-            continue;
+        else {
+            Handle(StepRepr_ShapeAspect) sa = pd->Definition().ShapeAspect();
+            if (sa.IsNull() || sa->OfShape().IsNull()) {
+                continue;
+            }
+            pds = sa->OfShape();
         }
-        Handle(StepRepr_ProductDefinitionShape) pds = sa->OfShape();
         if (!index.count(pds.get())) {
             index[pds.get()] = groups.size();
             groups.push_back(Group {pds, pdr->UsedRepresentation()->ContextOfItems(), {}});
         }
         Group& g = groups[index[pds.get()]];
+        g.occt = g.occt || direct;
         Handle(StepRepr_Representation) rep = pdr->UsedRepresentation();
         for (int k = 1; k <= rep->NbItems(); ++k) {
             g.items.emplace(lowerTrim(rep->ItemsValue(k)->Name()), rep->ItemsValue(k));
@@ -821,14 +953,88 @@ int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model)
 
     int added = static_cast<int>(alreadyPartLevel.size());
     for (const Group& g : groups) {
-        if (alreadyPartLevel.count(g.pds.get())) {
+        // the independent class of this part, if any (practice 4.5 and 4.7)
+        const IndependentFigures* ind = nullptr;
+        {
+            Handle(StepBasic_ProductDefinition) prod = g.pds->Definition().ProductDefinition();
+            if (!prod.IsNull() && !prod->Formation().IsNull() && !prod->Formation()->OfProduct().IsNull()) {
+                std::string pname = prod->Formation()->OfProduct()->Name().IsNull()
+                                        ? std::string()
+                                        : std::string(prod->Formation()->OfProduct()->Name()->ToCString());
+                auto f = byName.find(pname);
+                if (f != byName.end() && !ambiguous.count(pname)) {
+                    ind = f->second;
+                }
+            }
+        }
+        std::map<std::string, Handle(StepRepr_RepresentationItem)> items = g.items;
+        std::vector<Handle(StepRepr_RepresentationItem)> newIndependent;
+        if (ind && ind->surfaceOnly) {
+            // a part of surfaces only: what OCCT wrote as the area and centre are the independent class
+            const std::vector<std::pair<std::string, std::string>> renames {
+                {"surface area measure", "independent surface area measure"}, {"centre point", "surface centre point"}};
+            for (const auto& [from, to] : renames) {
+                auto it = items.find(from);
+                if (it != items.end()) {
+                    it->second->SetName(new TCollection_HAsciiString(to.c_str()));
+                    items[to] = it->second;
+                    items.erase(from);
+                }
+            }
+        }
+        else if (ind && ind->area) {
+            auto areaIt = items.find("surface area measure");
+            Handle(StepRepr_MeasureRepresentationItem) areaItem =
+                areaIt == items.end() ? Handle(StepRepr_MeasureRepresentationItem)()
+                                      : Handle(StepRepr_MeasureRepresentationItem)::DownCast(areaIt->second);
+            if (!areaItem.IsNull() && !areaItem->Measure().IsNull()) {
+                Handle(StepBasic_MeasureValueMember) vm = new StepBasic_MeasureValueMember;
+                vm->SetName("AREA_MEASURE");
+                vm->SetReal(*ind->area);
+                Handle(StepRepr_MeasureRepresentationItem) ni = new StepRepr_MeasureRepresentationItem;
+                ni->Init(new TCollection_HAsciiString("independent surface area measure"), vm,
+                         areaItem->Measure()->UnitComponent());
+                items["independent surface area measure"] = ni;
+                newIndependent.push_back(ni);
+                if (ind->centroid) {
+                    Handle(StepGeom_CartesianPoint) cp = new StepGeom_CartesianPoint;
+                    cp->Init3D(new TCollection_HAsciiString("surface centre point"), ind->centroid->X(),
+                               ind->centroid->Y(), ind->centroid->Z());
+                    items["surface centre point"] = cp;
+                    newIndependent.push_back(cp);
+                }
+            }
+        }
+        if (g.occt) {
+            // OCCT wrote the solid class at part level itself, one definition per figure: the
+            // independent class goes in a definition of its own, combined as in section 4.10
+            if (!newIndependent.empty()) {
+                Handle(NCollection_HArray1<Handle(StepRepr_RepresentationItem)>) arr =
+                    new NCollection_HArray1<Handle(StepRepr_RepresentationItem)>(1, static_cast<int>(newIndependent.size()));
+                for (size_t k = 0; k < newIndependent.size(); ++k) {
+                    arr->SetValue(static_cast<int>(k) + 1, newIndependent[k]);
+                }
+                Handle(StepRepr_Representation) irep = new StepRepr_Representation;
+                irep->Init(new TCollection_HAsciiString(""), arr, g.context);
+                StepRepr_CharacterizedDefinition icd;
+                icd.SetValue(g.pds);
+                Handle(StepRepr_PropertyDefinition) ipd = new StepRepr_PropertyDefinition;
+                ipd->Init(new TCollection_HAsciiString("geometric validation property"), true,
+                          new TCollection_HAsciiString("independent surfaces of the part"), icd);
+                StepRepr_RepresentedDefinition ird;
+                ird.SetValue(ipd);
+                Handle(StepRepr_PropertyDefinitionRepresentation) ipdr = new StepRepr_PropertyDefinitionRepresentation;
+                ipdr->Init(ird, irep);
+                model->AddWithRefs(ipdr);
+            }
             continue;
         }
-        // fixed order: volume, area, centroid
+        // fixed order: volume, area, centroid, then the independent class
         std::vector<Handle(StepRepr_RepresentationItem)> ordered;
-        for (const char* key : {"volume measure", "surface area measure", "centre point"}) {
-            auto it = g.items.find(key);
-            if (it != g.items.end()) {
+        for (const char* key : {"volume measure", "surface area measure", "centre point",
+                                "independent surface area measure", "surface centre point"}) {
+            auto it = items.find(key);
+            if (it != items.end()) {
                 ordered.push_back(it->second);
             }
         }

@@ -406,8 +406,10 @@ private:
         Py::Dict d;
         d.setItem("volume", optFloat(f.volume));
         d.setItem("area", optFloat(f.area));
+        d.setItem("wetted_area", optFloat(f.wettedArea));
         d.setItem("independent_area", optFloat(f.independentArea));
         d.setItem("centroid", optPoint(f.centroid));
+        d.setItem("independent_centroid", optPoint(f.independentCentroid));
         return d;
     }
 
@@ -431,6 +433,7 @@ private:
             d.setItem("name", Py::String(p.name));
             d.setItem("verdict", Py::String(Import::verdictName(p.verdict)));
             d.setItem("reason", Py::String(p.reason));
+            d.setItem("stated_area_is_wetted", Py::Boolean(p.statedAreaWetted));
             d.setItem("stated", figuresToPy(p.stated));
             d.setItem("measured", figuresToPy(p.measured));
             Py::Dict diff;
@@ -438,6 +441,7 @@ private:
             diff.setItem("area", optFloat(p.areaDiff));
             diff.setItem("independent_area", optFloat(p.independentAreaDiff));
             diff.setItem("centroid", optFloat(p.centroidDist));
+            diff.setItem("independent_centroid", optFloat(p.independentCentroidDist));
             d.setItem("difference", diff);
             d.setItem("diagonal", Py::Float(p.diagonal));
             d.setItem("valid", Py::Boolean(p.geometryValid));
@@ -446,6 +450,7 @@ private:
             dis.setItem("area", Py::Boolean(p.areaDisagrees));
             dis.setItem("independent_area", Py::Boolean(p.independentAreaDisagrees));
             dis.setItem("centroid", Py::Boolean(p.centroidDisagrees));
+            dis.setItem("independent_centroid", Py::Boolean(p.independentCentroidDisagrees));
             d.setItem("disagrees", dis);
             parts.append(d);
         }

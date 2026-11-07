@@ -85,6 +85,31 @@ class StepValidationCase(unittest.TestCase):
         self.write_text(out, t)
         return out
 
+    def flat(self, p):
+        return re.sub(r"\s*\n\s*", "", self.text(p).replace("\r", ""))
+
+    def save(self, t, name):
+        q = self.path(name)
+        self.write_text(q, t.replace(";#", ";\n#"))
+        return q
+
+    def set_area(self, p, name, value):
+        """Set the absolute value of the 'surface area measure' item."""
+        t = re.sub(r"('surface area measure',AREA_MEASURE\()[^)]*\)", lambda m: m.group(1) + repr(value) + ")", self.flat(p))
+        return self.save(t, name)
+
+    def drop_loose_faces(self, p, name):
+        """What an importer that loses the independent surfaces would have received."""
+        t = self.flat(p)
+        faces = set(re.findall(r"#(\d+)\s*=\s*(?:SHELL_BASED_SURFACE_MODEL|ADVANCED_FACE)\(", t))
+        solid_items = set(re.findall(r"#(\d+)\s*=\s*MANIFOLD_SOLID_BREP\(", t))
+        def trim(m):
+            kept = [i for i in m.group(2).split(",") if i.strip().lstrip("#") not in faces or i.strip().lstrip("#") in solid_items]
+            return "%s('',(%s)" % (m.group(1), ",".join(kept))
+        t2 = re.sub(r"(\w*SHAPE_REPRESENTATION)\(\'\',\(([^)]*)\)", trim, t)
+        self.assertNotEqual(t, t2)
+        return self.save(t2, name)
+
     def capture_stderr(self, fn):
         """Run fn with fd 1 and 2 redirected to a file; return what the console wrote."""
         import sys
@@ -190,6 +215,7 @@ class TestWrite(StepValidationCase):
         self.assertTrue(_close(total, a.Volume + b.Volume))
 
     def test_surface_only_part(self):
+        # practice 4.7: independent surfaces are a class of their own, with their own magic strings
         shape = Part.makePlane(10, 20)
         obj = self.shape_object(shape, "Sheet")
         p = self.export([obj])
@@ -197,8 +223,31 @@ class TestWrite(StepValidationCase):
         self.assertEqual(r["verdict"], "agree")
         part = r["parts"][0]
         self.assertIsNone(part["stated"]["volume"])
-        self.assertTrue(_close(part["stated"]["area"], 200.0))
-        for a, b in zip(part["stated"]["centroid"], (5.0, 10.0, 0.0)):
+        self.assertIsNone(part["stated"]["area"])
+        self.assertIsNone(part["stated"]["centroid"])
+        self.assertTrue(_close(part["stated"]["independent_area"], 200.0))
+        for a, b in zip(part["stated"]["independent_centroid"], (5.0, 10.0, 0.0)):
+            self.assertAlmostEqual(a, b, places=9)
+        t = self.text(p).replace("\n", "")
+        self.assertIn("'independent surface area measure'", t)
+        self.assertIn("'surface centre point'", t)
+        self.assertNotIn("'surface area measure'", t)
+        self.assertNotIn("'centre point'", t)
+
+    def test_solid_with_a_loose_face_writes_each_class_separately(self):
+        # practice 4.5: solids and independent surfaces each have their own area and centroid
+        box = Part.makeBox(10, 20, 30)
+        face = Part.makePlane(7, 7, App.Vector(100, 0, 0))
+        obj = self.shape_object(Part.makeCompound([box, face]), "Mixed")
+        r = Import.validateStep(self.export([obj]))
+        self.assertEqual(r["verdict"], "agree")
+        st = r["parts"][0]["stated"]
+        self.assertTrue(_close(st["volume"], 6000.0))
+        self.assertTrue(_close(st["area"], 2200.0))
+        self.assertTrue(_close(st["independent_area"], 49.0))
+        for a, b in zip(st["centroid"], (5.0, 10.0, 15.0)):
+            self.assertAlmostEqual(a, b, places=9)
+        for a, b in zip(st["independent_centroid"], (103.5, 3.5, 0.0)):
             self.assertAlmostEqual(a, b, places=9)
 
     def make_assembly(self):
@@ -324,6 +373,116 @@ class TestVerdicts(StepValidationCase):
         part = Import.validateStep(q)["parts"][0]
         self.assertTrue(_close(part["stated"]["area"], 2200.0))
         self.assertEqual(part["verdict"], "agree")
+
+    def hollow(self):
+        # a 30 mm cube with a 10 mm cavity: area 6000 with the void, 5400 without (practice 4.6.2)
+        shape = Part.makeBox(30, 30, 30).cut(Part.makeBox(10, 10, 10, App.Vector(10, 10, 10)))
+        return self.export([self.shape_object(shape, "Hollow")], "hollow.step")
+
+    def test_wetted_area_is_compared_with_the_outer_shells(self):
+        p = self.hollow()
+        self.assertTrue(_close(self.parts(p)[0]["stated"]["area"], 6000.0))
+        wet = self.save(self.flat(self.set_area(p, "w0.step", 5400.0)).replace("'surface area measure'", "'wetted area measure'"), "w1.step")
+        part = self.parts(wet)[0]
+        self.assertEqual(part["verdict"], "agree")
+        self.assertTrue(part["stated_area_is_wetted"])
+        self.assertTrue(_close(part["measured"]["wetted_area"], 5400.0))
+        self.assertTrue(_close(part["measured"]["area"], 6000.0))
+
+    def test_wrong_wetted_area_disagrees(self):
+        p = self.hollow()
+        # 6000 is the total area: under the name 'wetted area measure' it is wrong
+        wet = self.save(self.flat(p).replace("'surface area measure'", "'wetted area measure'"), "w2.step")
+        self.assertEqual(self.parts(wet)[0]["verdict"], "disagree")
+        # and 5400 under the name 'surface area measure' (total area) is wrong too
+        self.assertEqual(self.parts(self.set_area(p, "w3.step", 5400.0))[0]["verdict"], "disagree")
+
+    def test_marker_in_the_description_field_is_read(self):
+        p = self.exported_box()
+        t = re.sub(r"PROPERTY_DEFINITION\('geometric validation property','([^']*)'", r"PROPERTY_DEFINITION('\1','geometric validation property'", self.flat(p))
+        self.assertNotIn("PROPERTY_DEFINITION('geometric validation property'", t)
+        q = self.save(t, "swapped.step")
+        part = self.parts(q)[0]
+        self.assertEqual(part["verdict"], "agree")
+        self.assertTrue(_close(part["stated"]["volume"], 6000.0))
+
+    def hide_part_level(self, p, name):
+        """Keep only the figures at geometry level (a SHAPE_ASPECT), as some exporters write them."""
+        t = self.flat(p)
+        t2 = t.replace("PROPERTY_DEFINITION('geometric validation property','volume, area and centroid of the part'",
+                       "PROPERTY_DEFINITION('hidden','volume, area and centroid of the part'")
+        self.assertNotEqual(t, t2)
+        return self.save(t2, name)
+
+    def test_geometry_level_figures_are_read_when_part_level_has_none(self):
+        q = self.hide_part_level(self.exported_box(), "geo.step")
+        part = self.parts(q)[0]
+        self.assertEqual(part["verdict"], "agree")
+        self.assertTrue(_close(part["stated"]["volume"], 6000.0))
+
+    def test_geometry_level_disagreement_is_found(self):
+        q = self.hide_part_level(self.exported_box(), "geo2.step")
+        q = self.mutate(q, self.path("geo3.step"), volume=1.01)
+        self.assertEqual(self.parts(q)[0]["verdict"], "disagree")
+
+    def zero_figures(self, p, name):
+        t = self.flat(p)
+        t = re.sub(r"VOLUME_MEASURE\([^)]*\)", "VOLUME_MEASURE(0.0)", t)
+        t = re.sub(r"AREA_MEASURE\([^)]*\)", "AREA_MEASURE(0.0)", t)
+        t = re.sub(r"CARTESIAN_POINT\('centre point',\([^)]*\)\)", "CARTESIAN_POINT('centre point',(0.0,0.0,0.0))", t)
+        return self.save(t, name)
+
+    def test_zero_figures_with_a_zero_centroid_are_unusable_not_disagree(self):
+        # nist_stc_06 shape: volume 0, area 0, centre (0,0,0). The centroid is part of the placeholder.
+        for hidden in (False, True):
+            p = self.exported_box()
+            if hidden:
+                p = self.hide_part_level(p, "zg.step")
+            part = self.parts(self.zero_figures(p, "zero%d.step" % hidden))[0]
+            self.assertEqual(part["verdict"], "unusable_properties", hidden)
+
+    def test_zero_measures_do_not_hide_a_usable_figure(self):
+        p = self.zero_figures(self.exported_box(), "z9.step")
+        t = self.flat(p).replace("AREA_MEASURE(0.0)", "AREA_MEASURE(2400.0)")
+        self.assertEqual(self.parts(self.save(t, "z10.step"))[0]["verdict"], "disagree")
+
+    def mixed(self):
+        face = Part.makePlane(7, 7, App.Vector(100, 0, 0))
+        shape = Part.makeCompound([Part.makeBox(10, 20, 30), face])
+        return self.export([self.shape_object(shape, "Mixed")], "mixed.step")
+
+    def test_lost_independent_surface_is_found_in_a_file_we_wrote(self):
+        q = self.drop_loose_faces(self.mixed(), "lost.step")
+        part = self.parts(q)[0]
+        self.assertEqual(part["verdict"], "disagree")
+        self.assertTrue(part["disagrees"]["independent_area"])
+        self.assertTrue(part["disagrees"]["independent_centroid"])
+        self.assertFalse(part["disagrees"]["area"])
+
+    def test_independent_centroid_moved_disagrees(self):
+        p = self.export([self.shape_object(Part.makePlane(10, 20), "Sheet")], "sheet.step")
+        t = re.sub(r"('surface centre point',\()([^,]*),", lambda m: m.group(1) + repr(float(m.group(2)) + 0.5) + ",", self.flat(p))
+        part = self.parts(self.save(t, "isc.step"))[0]
+        self.assertEqual(part["verdict"], "disagree")
+        self.assertTrue(part["disagrees"]["independent_centroid"])
+
+    def without_independent_figures(self, p, name):
+        t = self.flat(p).replace("'independent surface area measure'", "'xx'").replace("'surface centre point'", "'xy'")
+        return self.save(t, name)
+
+    def test_either_area_convention_is_accepted_only_without_independent_figures(self):
+        # practice 4.5: some systems count the independent surfaces in the solid's area, some do not
+        p = self.mixed()
+        bare = self.without_independent_figures(p, "bare.step")
+        all_faces = self.set_area(bare, "all.step", 2249.0)
+        self.assertEqual(self.parts(all_faces)[0]["verdict"], "agree")
+        self.assertEqual(self.parts(bare)[0]["verdict"], "agree")
+        # a wrong figure is still wrong under either convention
+        self.assertEqual(self.parts(self.set_area(bare, "bad.step", 2300.0))[0]["verdict"], "disagree")
+        # when the independent class is stated, the area must be the solids' own
+        strict = self.set_area(p, "strict.step", 2249.0)
+        self.assertEqual(self.parts(strict)[0]["verdict"], "disagree")
+        self.assertTrue(self.parts(strict)[0]["disagrees"]["area"])
 
     def test_area_just_outside_tolerance_disagrees(self):
         p = self.mutate(self.exported_box(), self.path("a2.step"), area=0.9985)

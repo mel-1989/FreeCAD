@@ -43,25 +43,30 @@ DxfImportStats = TypedDict(
 class _StepFigures(TypedDict):
     volume: float | None
     area: float | None
+    wetted_area: float | None  # measured: area of the solids' outer shells (voids left out)
     independent_area: float | None
     centroid: _Point | None
+    independent_centroid: _Point | None
 
 class _StepDifference(TypedDict):
     volume: float | None
     area: float | None
     independent_area: float | None
     centroid: float | None
+    independent_centroid: float | None
 
 class _StepDisagrees(TypedDict):
     volume: bool
     area: bool
     independent_area: bool
     centroid: bool
+    independent_centroid: bool
 
 class StepPartFinding(TypedDict):
     name: str
     verdict: _StepVerdict
     reason: str
+    stated_area_is_wetted: bool  # the stated area was named 'wetted area measure'
     stated: _StepFigures  # mm^3, mm^2, mm; None when the file does not state it
     measured: _StepFigures  # from the shape that arrived, in the part's own frame
     difference: _StepDifference  # measured - stated; the centroid entry is a distance

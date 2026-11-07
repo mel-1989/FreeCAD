@@ -66,13 +66,14 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
                                                 ->GetGroup("STEP");
     bool withProps = stepGrp->GetBool("WriteValidationProperties", true);
     writer.SetPropsMode(withProps);
+    std::vector<IndependentFigures> independent;
     if (withProps) {
-        attachValidationProperties(hDoc);
+        attachValidationProperties(hDoc, &independent);
     }
     writer.Transfer(hDoc, STEPControl_AsIs);
     int partsWithProps = 0;
     if (withProps) {
-        partsWithProps = addPartLevelValidationProperties(writer.ChangeWriter().Model());
+        partsWithProps = addPartLevelValidationProperties(writer.ChangeWriter().Model(), independent);
     }
 
     APIHeaderSection_MakeHeader makeHeader(writer.ChangeWriter().Model());

@@ -55,8 +55,10 @@ struct StepFigures
 {
     std::optional<double> volume;     // mm^3
     std::optional<double> area;       // mm^2, faces of solids (all faces when no solid arrived)
-    std::optional<double> independentArea;  // mm^2, faces outside any solid
-    std::optional<gp_Pnt> centroid;   // mm
+    std::optional<double> wettedArea; // mm^2, faces of the outer shells of the solids (voids left out, section 4.6.2)
+    std::optional<double> independentArea;  // mm^2, faces outside any solid (section 4.7)
+    std::optional<gp_Pnt> centroid;   // mm, of the solids (of the surfaces when no solid arrived)
+    std::optional<gp_Pnt> independentCentroid;  // mm, of the faces outside any solid (section 4.7)
 };
 
 struct StepPartFinding
@@ -66,6 +68,7 @@ struct StepPartFinding
     std::string reason;
     StepFigures stated;
     StepFigures measured;
+    bool statedAreaWetted {false};  // the stated area was named 'wetted area measure' (section 4.6.2)
     bool statedUnusable {false};    // some stated figure was zero, non-finite or in an unresolvable unit
     bool geometryValid {true};
     double diagonal {0.0};          // bounding-box diagonal of the arrived shape, mm
@@ -77,6 +80,8 @@ struct StepPartFinding
     bool independentAreaDisagrees {false};
     std::optional<double> independentAreaDiff;
     bool centroidDisagrees {false};
+    std::optional<double> independentCentroidDist;  // |measured - stated|, mm
+    bool independentCentroidDisagrees {false};
 };
 
 struct StepFileFinding
@@ -101,9 +106,20 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
 /// Never throws: a missing or garbage file gives verdict 'failed'.
 StepFileFinding validateStepFile(const Base::FileInfo& file);
 
+/// Figures of the independent surfaces of one part (section 4.5 and 4.7), kept apart from the solids'.
+struct IndependentFigures
+{
+    std::string name;                  // the part's product name as the writer will give it
+    bool surfaceOnly {false};          // no solid: the XCAF area and centroid are the surfaces' own
+    std::optional<double> area;        // mm^2
+    std::optional<gp_Pnt> centroid;    // mm
+};
+
 /// Set XCAFDoc_Volume, XCAFDoc_Area and XCAFDoc_Centroid on every part prototype label so that
-/// STEPCAFControl_Writer writes them. Returns the number of labels that received figures.
-int attachValidationProperties(Handle(TDocStd_Document) hDoc);
+/// STEPCAFControl_Writer writes them. Returns the number of labels that received figures. The
+/// independent surfaces of a part have no XCAF slot: when 'independent' is given they are returned
+/// there for addPartLevelValidationProperties.
+int attachValidationProperties(Handle(TDocStd_Document) hDoc, std::vector<IndependentFigures>* independent = nullptr);
 
 /// The identification string the practice asks for in FILE_DESCRIPTION (its section 3).
 const char* validationPropertiesHeaderId();
@@ -111,7 +127,8 @@ const char* validationPropertiesHeaderId();
 /// After STEPCAFControl_Writer::Transfer: add the part-level validation properties (one combined
 /// representation per part, practice section 4.10) next to what OCCT wrote at geometry level.
 /// Returns the number of parts that received them.
-int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model);
+int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model,
+                                     const std::vector<IndependentFigures>& independent = {});
 
 /// After a STEP transfer: log one warning per part whose verdict is disagree or invalid_geometry.
 /// Never throws, never touches the document. Preference CheckValidationProperties (default on).
