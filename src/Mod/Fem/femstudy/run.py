@@ -158,7 +158,6 @@ def solve_levels(doc, an, spec, objs, loads_v, h0, bbox, yield_mpa, load_scale=0
     opts = spec["options"]
     ratio, n = opts["ratio"], opts["levels"]
     cap = int(opts["max_elements"])
-    load_scale = 1.0
     applied = [0.0, 0.0, 0.0]
     requested = {}
     for k, ld in enumerate(spec["loads"]):
@@ -166,7 +165,7 @@ def solve_levels(doc, an, spec, objs, loads_v, h0, bbox, yield_mpa, load_scale=0
         for i in range(3):
             applied[i] += v[i]
         if ld["type"] in ("force", "pressure"):
-            requested[objs["loads"][k].Name] = [x * load_scale for x in v]
+            requested[objs["loads"][k].Name] = list(v)
     levels, warns, worst = [], [], {}
     stop, cap_hit = None, False
     for k in range(n):
