@@ -902,6 +902,14 @@ class TestSphereLuneRoundTrip(StepValidationCase):
         f.exportStep(p)
         self.assertNotIn("SPHERICAL_SURFACE", self.flat(p))
 
+    def test_a_face_just_over_a_half_circle_is_left_alone(self):
+        c = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), 5.0)
+        a = math.atan2(1.0 * c.YAxis.y, 1.0 * c.XAxis.y)  # axis along y
+        f = Part.SurfaceOfRevolution(c, App.Vector(0, 0, 0), App.Vector(0, 1, 0)).toShape(0.0, 1.0, a, a + math.pi + 0.05)
+        p = self.path("over.step")
+        f.exportStep(p)
+        self.assertNotIn("SPHERICAL_SURFACE", self.flat(p))
+
     def test_wedge_volume_is_the_closed_form(self):
         r, w = 5.0, math.radians(120.0)
         c = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), r)
