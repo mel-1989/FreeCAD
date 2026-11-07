@@ -348,8 +348,11 @@ class TestSchema(StepValidationCase):
         super().setUp()
         self.box = self.shape_object(Part.makeBox(20, 20, 20), "Box")
 
-    def write_all(self, tag):
-        """name -> (file schema identifier, file text) for the three write paths."""
+    def write_all(self, tag, poison=None):
+        """name -> (file schema identifier, file text) for the three write paths.
+
+        With `poison`, OCCT's own write.step.schema is set to that value before each path writes, so a path that does not apply
+        the preference itself writes the poisoned schema (an earlier path's work cannot cover for it)."""
         out = {}
         for name, fn in (
             ("Import.export", lambda p: Import.export([self.box], p)),
@@ -357,6 +360,8 @@ class TestSchema(StepValidationCase):
             ("Part.export", lambda p: Part.export([self.box], p)),
         ):
             p = self.path("%s_%s.stp" % (tag, name))
+            if poison:
+                Part.setStaticValue("write.step.schema", poison)
             fn(p)
             text = self.text(p)
             m = re.search(r"FILE_SCHEMA\s*\(\s*\(\s*'([^']*)'", text)
@@ -364,7 +369,8 @@ class TestSchema(StepValidationCase):
         return out
 
     def assert_schema(self, key, tag):
-        for name, (ident, _) in self.write_all(tag).items():
+        poison = "AP214CD" if key == "AP203" else "AP203"
+        for name, (ident, _) in self.write_all(tag, poison).items():
             self.assertIsNotNone(ident, name)
             self.assertTrue(ident.startswith(SCHEMA_IDS[key]), "%s wrote %s, wanted %s" % (name, ident, key))
 
