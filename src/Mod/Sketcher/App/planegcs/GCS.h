@@ -40,6 +40,26 @@
 
 namespace GCS
 {
+#ifdef EIGEN_SPARSEQR_COMPATIBLE
+// The column ordering of every sparse QR in the diagnosis: COLAMD, as always, unless a caller has
+// switched the process to the order the columns already have (see System::diagnoseNaturalOrder).
+// Declared before its use as a type in System's signatures.
+SketcherExport extern bool diagnoseNaturalOrderFlag;
+struct DiagnoseOrdering : public Eigen::COLAMDOrdering<int>
+{
+    template<typename MatrixType>
+    void operator()(const MatrixType& mat, PermutationType& perm)
+    {
+        if (diagnoseNaturalOrderFlag) {
+            perm.setIdentity(mat.cols());
+        }
+        else {
+            Eigen::COLAMDOrdering<int>::operator()(mat, perm);
+        }
+    }
+};
+#endif
+
 ///////////////////////////////////////
 // Other BFGS Solver parameters
 ///////////////////////////////////////
@@ -70,7 +90,8 @@ enum DogLegGaussStep
 {
     FullPivLU = 0,
     LeastNormFullPivLU = 1,
-    LeastNormLdlt = 2
+    LeastNormLdlt = 2,
+    SparseNormalLdlt = 3
 };
 
 enum QRAlgorithm
@@ -174,7 +195,7 @@ private:
     void makeSparseQRDecomposition(
         const Eigen::MatrixXd& J,
         const std::map<int, int>& jacobianconstraintmap,
-        Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>>& SqrJT,
+        Eigen::SparseQR<Eigen::SparseMatrix<double>, DiagnoseOrdering>& SqrJT,
         int& rank,
         Eigen::MatrixXd& R,
         bool transposeJ = true,
@@ -308,6 +329,9 @@ public:
     double convergence;
     double convergenceRedundant;
     QRAlgorithm qrAlgorithm;
+    // true runs the two sparse QRs of a component's diagnosis side by side instead of one after
+    // the other, at the cost of the second one when the rows turn out independent. Off for 2D.
+    bool diagnoseParallel = false;
     bool autoChooseAlgorithm;
     int autoQRThreshold;
     // Systems with at least this many unknowns are diagnosed one connected component at a time.

@@ -224,6 +224,8 @@ FullPivLU<MatrixdType>& FullPivLU<MatrixdType>::compute(const MatrixdType& matri
 
 namespace GCS
 {
+bool diagnoseNaturalOrderFlag = false;
+
 
 class SolverReportingManager
 {
@@ -2331,6 +2333,25 @@ Eigen::VectorXd System::gaussNewtonStepSparse(Eigen::SparseMatrix<double>& Jx, c
             }
             break;
         }
+        case SparseNormalLdlt: {
+            // Tall Jacobian (closed loops, redundant rows): J J^T is singular but J^T J, of the
+            // size of the unknowns, is not when J has independent columns. Solve J^T J h = -J^T f
+            // by a sparse Cholesky (LDL^T, approximate minimum degree ordering). The pivots tell
+            // rank deficiency: any pivot under 1e-12 of the largest sends the step to the dense
+            // minimum norm route below.
+            Eigen::SparseMatrix<double> JtJ = Jx.adjoint() * Jx;
+            JtJ.makeCompressed();
+            Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> ldlt;
+            ldlt.compute(JtJ);
+            if (ldlt.info() == Eigen::Success) {
+                const Eigen::VectorXd d = ldlt.vectorD();
+                if (d.minCoeff() > 1e-12 * d.maxCoeff()) {
+                    h_gn = ldlt.solve(-(Jx.adjoint() * fx));
+                    done = h_gn.allFinite();
+                }
+            }
+            break;
+        }
         case LeastNormLdlt: {
             Eigen::SparseMatrix<double> JJt = Jx * Jx.adjoint();
             JJt.makeCompressed();
@@ -2343,6 +2364,13 @@ Eigen::VectorXd System::gaussNewtonStepSparse(Eigen::SparseMatrix<double>& Jx, c
             break;
         }
     }
+    if (!done && stepKind == SparseNormalLdlt) {
+        // singular normal equations (J has dependent columns) or a tiny pivot: the minimum norm
+        // step, as LeastNormLdlt takes it
+        Eigen::MatrixXd Jd = Eigen::MatrixXd(Jx);
+        h_gn = Jd.adjoint() * (Jd * Jd.adjoint()).ldlt().solve(-fx);
+        done = true;
+    }
     if (!done) {
         // the sparse factorisation gave up: take the dense step the small systems use
         Eigen::MatrixXd Jd = Eigen::MatrixXd(Jx);
@@ -2353,6 +2381,7 @@ Eigen::VectorXd System::gaussNewtonStepSparse(Eigen::SparseMatrix<double>& Jx, c
             case LeastNormFullPivLU:
                 h_gn = Jd.adjoint() * (Jd * Jd.adjoint()).fullPivLu().solve(-fx);
                 break;
+            case SparseNormalLdlt:
             case LeastNormLdlt:
                 h_gn = Jd.adjoint() * (Jd * Jd.adjoint()).ldlt().solve(-fx);
                 break;
@@ -2470,6 +2499,7 @@ SolveStatus System::solve_DL(SubSystem* subsys, bool isRedundantsolving)
             case LeastNormFullPivLU:
                 h_gn = Jx.adjoint() * (Jx * Jx.adjoint()).fullPivLu().solve(-fx);
                 break;
+            case SparseNormalLdlt:
             case LeastNormLdlt:
                 h_gn = Jx.adjoint() * (Jx * Jx.adjoint()).ldlt().solve(-fx);
                 break;
@@ -5343,7 +5373,7 @@ int System::diagnose(Algorithm alg)
 # endif
         int rank = 0;
         Eigen::MatrixXd R;
-        Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> SqrJT;
+        Eigen::SparseQR<Eigen::SparseMatrix<double>, DiagnoseOrdering> SqrJT;
         // Here we give the system the possibility to run the two QR decompositions in parallel,
         // depending on the load of the system so we are using the default std::launch::async |
         // std::launch::deferred policy, as nobody better than the system nows if it can run the
@@ -5613,7 +5643,31 @@ bool System::diagnosePartitioned(Algorithm alg)
         }
 #ifdef EIGEN_SPARSEQR_COMPATIBLE
         else {
-            dep = dependentParametersSparse(Jc, rowmap, pdiagC);
+            // Both decompositions are independent of each other. In 2D the second one is skipped
+            // when the first finds the rows independent (the usual case), so it is only run side
+            // by side with the first when diagnoseParallel asks for it.
+            std::future<DependentResult> depFuture;
+            if (diagnoseParallel) {
+                depFuture = std::async(
+                    std::launch::async,
+                    &System::dependentParametersSparse,
+                    this,
+                    std::cref(Jc),
+                    std::cref(rowmap),
+                    std::cref(pdiagC)
+                );
+            }
+            Eigen::MatrixXd R;
+            Eigen::SparseQR<Eigen::SparseMatrix<double>, DiagnoseOrdering> SqrJT;
+            bool haveTransposed = false;
+            if (diagnoseParallel) {
+                makeSparseQRDecomposition(Jc, rowmap, SqrJT, rank, R, true, true);
+                haveTransposed = true;
+                dep = depFuture.get();
+            }
+            else {
+                dep = dependentParametersSparse(Jc, rowmap, pdiagC);
+            }
             if (dep.rank == nr) {
                 // The rows are independent, so there is nothing for the decomposition of the
                 // transposed Jacobian to find: no conflict, no redundancy.
@@ -5621,9 +5675,9 @@ bool System::diagnosePartitioned(Algorithm alg)
                 constrNum = nr;
             }
             else {
-                Eigen::MatrixXd R;
-                Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> SqrJT;
-                makeSparseQRDecomposition(Jc, rowmap, SqrJT, rank, R, true, true);
+                if (!haveTransposed) {
+                    makeSparseQRDecomposition(Jc, rowmap, SqrJT, rank, R, true, true);
+                }
                 constrNum = SqrJT.cols();
                 if (constrNum > rank) {
                     groups = extractConflictGroups(SqrJT, rowmap, R, constrNum, rank);
@@ -5778,7 +5832,7 @@ void System::makeDenseQRDecomposition(
 void System::makeSparseQRDecomposition(
     const Eigen::MatrixXd& J,
     const std::map<int, int>& jacobianconstraintmap,
-    Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>>& SqrJT,
+    Eigen::SparseQR<Eigen::SparseMatrix<double>, DiagnoseOrdering>& SqrJT,
     int& rank,
     Eigen::MatrixXd& R,
     bool transposeJ,
@@ -5896,7 +5950,7 @@ void System::identifyDependentParametersSparseQR(
     bool silent
 )
 {
-    Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> SqrJ;
+    Eigen::SparseQR<Eigen::SparseMatrix<double>, DiagnoseOrdering> SqrJ;
     Eigen::MatrixXd Rparams;
 
     int nontransprank;
@@ -6029,7 +6083,7 @@ System::DependentResult System::dependentParametersSparse(
     const GCS::VEC_pD& pdiagnoselist
 )
 {
-    Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> SqrJ;
+    Eigen::SparseQR<Eigen::SparseMatrix<double>, DiagnoseOrdering> SqrJ;
     Eigen::MatrixXd Rparams;
     int rank = 0;
     makeSparseQRDecomposition(J, jacobianconstraintmap, SqrJ, rank, Rparams, false, true);
@@ -6135,11 +6189,25 @@ void System::eliminateNonZerosOverPivotInUpperTriangularMatrix(Eigen::MatrixXd& 
     for (int i = 1; i < rank; i++) {
         // eliminate non zeros above pivot
         assert(R(i, i) != 0);
+        // The columns where the pivot row has a non zero are found once, and only those are
+        // updated: the others subtract coef * 0, so the result is the same, number for number.
+        // R comes from a sparse QR and its rows are mostly zero.
+        std::vector<int> nz;
+        bool nzFound = false;
         for (int row = 0; row < i; row++) {
             if (fabs(R(row, i)) > 1e-10) {
+                if (!nzFound) {
+                    for (int col = i + 1; col < R.cols(); col++) {
+                        if (R(i, col) != 0.0) {
+                            nz.push_back(col);
+                        }
+                    }
+                    nzFound = true;
+                }
                 double coef = R(row, i) / R(i, i);
-                R.block(row, i + 1, 1, R.cols() - i - 1) -= coef
-                    * R.block(i, i + 1, 1, R.cols() - i - 1);
+                for (int col : nz) {
+                    R(row, col) -= coef * R(i, col);
+                }
             }
             R(row, i) = 0;
         }
