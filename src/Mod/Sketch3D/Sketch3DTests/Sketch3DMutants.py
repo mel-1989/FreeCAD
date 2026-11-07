@@ -83,7 +83,17 @@ def main(argv):
         b = run(build, ctl, env)
         if b.returncode != 0:
             return "build failed", None
-        r = run([binary, "-t", "TestSketch3DApp"], tree, env)
+        try:
+            r = run([binary, "-t", "TestSketch3DApp"], tree, env, timeout=300)  # a clean quick run takes about 15 s
+        except subprocess.TimeoutExpired:
+            # A defect that makes thousands of solves fail can make the whole run slow (a failing
+            # solve tries perturbed starts before it names a conflict). Look for an assertion in
+            # the classes that do not solve thousands of systems.
+            names = ["TestSketch3DApp." + c for c in ("TestClosedForms", "TestConstraintSet", "TestGradients", "TestEntryPoint")]
+            try:
+                r = run([binary, "-t"] + names, tree, env, timeout=300)
+            except subprocess.TimeoutExpired:
+                return "ok", ["timeout (a clean run takes about 15 s)"]
         text = r.stdout + r.stderr
         failed = [l.split(" (")[0].split(": ")[-1] for l in text.splitlines() if l.startswith(("FAIL: ", "ERROR: "))]
         if "\nOK" not in text and not failed:
