@@ -438,6 +438,127 @@ class TestWrite(AttrCase):
         self.assertIn({"grade": "A"}, held)
         self.assertEqual(len(held), 2)
 
+    # ---- product id and name on export: asserted on the raw text of the written file ----------------
+    def products(self, p):
+        """[(id, name, description)] of every PRODUCT record in a file."""
+        return re.findall(r"= PRODUCT\('([^']*)','([^']*)','([^']*)'", self.read(p))
+
+    def test_an_id_equal_to_the_name_survives_import_and_export(self):
+        d = self.load(self.box_file("P"))
+        self.assertEqual(self.held(d), {})
+        self.assertEqual(self.products(self.roundtrip(d, "p.step")), [("P", "P", "")])
+
+    def test_layers_only_still_write_the_label_as_id_and_name(self):
+        d = self.newdoc()
+        o = self.feature(d, "Lay", Part.makeBox(1, 2, 3))
+        self.set_layers(o, ["L1"])
+        self.assertEqual(self.products(self.roundtrip(d, "l.step")), [("Lay", "Lay", "")])
+
+    def test_a_description_only_keeps_id_and_name_and_writes_the_description(self):
+        d = self.newdoc()
+        o = self.feature(d, "Bracket", Part.makeBox(1, 2, 3))
+        self.set_attrs(o, {"Description": "A desc"})
+        self.assertEqual(self.products(self.roundtrip(d, "d.step")), [("Bracket", "Bracket", "A desc")])
+
+    def test_a_deleted_part_number_falls_back_to_the_label(self):
+        d = self.newdoc()
+        o = self.feature(d, "Gear", Part.makeBox(1, 2, 3))
+        self.set_attrs(o, {"Part Number": "PN-1", "Description": "d"})
+        self.set_attrs(o, {"Description": "d"})
+        self.assertEqual(self.products(self.roundtrip(d, "g.step")), [("Gear", "Gear", "d")])
+
+    def test_an_empty_part_number_falls_back_to_the_label(self):
+        d = self.newdoc()
+        o = self.feature(d, "Gear", Part.makeBox(1, 2, 3))
+        self.set_attrs(o, {"Part Number": "", "Description": "d"})
+        self.assertEqual(self.products(self.roundtrip(d, "g.step")), [("Gear", "Gear", "d")])
+
+    def test_a_part_number_that_differs_from_the_name_is_written_beside_it(self):
+        d = self.newdoc()
+        o = self.feature(d, "Gear", Part.makeBox(1, 2, 3))
+        self.set_attrs(o, {"Part Number": "PN-1"})
+        self.assertEqual(self.products(self.roundtrip(d, "g.step")), [("PN-1", "Gear", "")])
+
+    def test_a_rename_keeps_the_part_number_and_the_name_follows_the_label(self):
+        d = self.newdoc()
+        o = self.feature(d, "Gear", Part.makeBox(1, 2, 3))
+        self.set_attrs(o, {"Part Number": "PN-1"})
+        o.Label = "Cog"
+        self.assertEqual(self.products(self.roundtrip(d, "g.step")), [("PN-1", "Cog", "")])
+
+    def test_a_raw_empty_name_with_an_id_exports_with_a_name(self):
+        p = self.box_file("Schenkel")
+        t = self.read(p)
+        self.assertIn("PRODUCT('Schenkel','Schenkel'", t)
+        self.write(p, t.replace("PRODUCT('Schenkel','Schenkel'", "PRODUCT('Schenkel',''"))
+        d = self.load(p)
+        self.assertEqual(self.held(d), {})
+        self.assertEqual(self.products(self.roundtrip(d, "s.step")), [("Schenkel", "Schenkel", "")])
+
+    def test_an_assembly_whose_children_lack_a_part_number_has_no_empty_id(self):
+        d = self.newdoc()
+        a = self.feature(d, "A", Part.makeBox(1, 2, 3))
+        b = self.feature(d, "B", Part.makeBox(2, 2, 2))
+        asm = d.addObject("App::Part", "Asm")
+        for o, x in ((a, 0), (b, 50)):
+            lk = d.addObject("App::Link", "L" + o.Name)
+            lk.LinkedObject = o
+            lk.Placement = App.Placement(App.Vector(x, 0, 0), App.Rotation())
+            asm.addObject(lk)
+        self.set_attrs(asm, {"Description": "the top"})
+        self.set_attrs(b, {"role": "b"})
+        d.recompute()
+        p = self.path("asm.step")
+        Import.export([asm], p)
+        found = self.products(p)
+        self.assertEqual(len(found), 3)
+        for pid, name, _ in found:
+            self.assertTrue(pid and name, found)
+            self.assertEqual(pid, name)
+
+    def test_two_copies_with_one_part_number_warn_once(self):
+        d = self.newdoc()
+        a = self.feature(d, "Plate", Part.makeBox(1, 2, 3))
+        b = self.feature(d, "Plate copy", Part.makeBox(1, 2, 3))
+        for o in (a, b):
+            self.set_attrs(o, {"Part Number": "PN-9"})
+        p = self.path("two.step")
+        out = self.stderr_of(lambda: Import.export([a, b], p))
+        self.assertEqual(out.count("Part Number 'PN-9'"), 1, out)
+        self.assertEqual(sorted(x for x in self.products(p) if x[0] == "PN-9"), [("PN-9", "Plate", ""), ("PN-9", "Plate_copy", "")])
+
+    def test_links_of_one_part_are_not_a_duplicate_part_number(self):
+        d = self.newdoc()
+        box = self.feature(d, "Box", Part.makeBox(10, 20, 30))
+        self.set_attrs(box, {"Part Number": "PN-5"})
+        asm = d.addObject("App::Part", "Asm")
+        for name, pos in (("L1", (100, 0, 0)), ("L2", (0, 100, 50))):
+            lk = d.addObject("App::Link", name)
+            lk.LinkedObject = box
+            lk.Placement = App.Placement(App.Vector(*pos), App.Rotation())
+            asm.addObject(lk)
+        d.recompute()
+        out = self.stderr_of(lambda: Import.export([asm], self.path("l.step")))
+        self.assertNotIn("Part Number 'PN-5'", out)
+
+    def test_attributes_of_an_assembly_stay_on_the_assembly_when_a_child_sits_at_the_origin(self):
+        # an identity placement lets the writer's solid lookup reach the child's product through the assembly's shape
+        d = self.newdoc()
+        box = self.feature(d, "Box", Part.makeBox(10, 20, 30))
+        self.set_attrs(box, {"grade": "A"})
+        asm = d.addObject("App::Part", "Asm")
+        lk = d.addObject("App::Link", "L1")
+        lk.LinkedObject = box
+        asm.addObject(lk)
+        self.set_attrs(asm, {"role": "top"})
+        d.recompute()
+        p = self.path("asmorigin.step")
+        Import.export([asm], p)
+        held = list(self.held(self.load(p)).values())
+        self.assertIn({"role": "top"}, held)
+        self.assertIn({"grade": "A"}, held)
+        self.assertEqual(len(held), 2)
+
     def test_off_switch_writes_the_stock_file(self):
         d = self.newdoc()
         o = self.feature(d, "Box", Part.makeBox(1, 2, 3))

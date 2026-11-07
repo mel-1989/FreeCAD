@@ -385,7 +385,10 @@ std::vector<StepPartData> collectStepPartData(const Handle(StepData_StepModel)& 
                 d.partNumber = text(pd->Formation()->OfProduct()->Id());
                 // FreeCAD writes the object's label as both id and name; an id that only repeats the name
                 // tells the user nothing the object's label does not
-                if (d.partNumber == text(pd->Formation()->OfProduct()->Name())) {
+                // An empty PRODUCT.name stands for the id (the object takes its label from it), so an id that is
+                // all there is of the name is not carried either
+                const std::string productName = text(pd->Formation()->OfProduct()->Name());
+                if (d.partNumber.empty() || productName.empty() || d.partNumber == productName) {
                     d.partNumber.clear();
                 }
                 d.description = text(pd->Formation()->OfProduct()->Description());
@@ -758,14 +761,19 @@ void stashStepAttributes(const Handle(XSControl_WorkSession)& ws, const Handle(T
             ++stashed;
         }
         int other = 0;
+        int otherLayers = 0;
         for (const auto& [k, n] : counts.otherLevelAttributes) {
             other += n;
-            Base::Console().log("STEP attributes: {} attribute(s) attached to {} are not imported\n", n, k);
         }
         for (const auto& [k, n] : counts.otherLayerTargets) {
-            Base::Console().log("STEP attributes: {} layer assignment(s) to {} are not imported\n", n, k);
+            otherLayers += n;
         }
-        (void)other;
+        if (other > 0 || otherLayers > 0) {
+            Base::Console().log(
+                "STEP attributes: {} attribute(s) at other levels and {} layer assignment(s) on other targets were counted and not attached\n",
+                other,
+                otherLayers);
+        }
         (void)stashed;
     }
     catch (...) {
@@ -900,6 +908,8 @@ int writeStepAttributes(const Handle(StepData_StepModel)& model,
         }
         std::map<std::string, std::vector<Handle(StepRepr_RepresentationItem)>> solidsOfLayer;
         std::vector<std::string> layerOrder;
+        // Part Number -> the distinct products it was written to, with their names
+        std::map<std::string, std::map<Standard_Transient*, std::string>> partNumbers;
 
         for (int i = 1; i <= shapes.Length(); ++i) {
             TDF_Label label = shapes.Value(i);
@@ -1010,10 +1020,13 @@ int writeStepAttributes(const Handle(StepData_StepModel)& model,
                     auto f = identity.find(key);
                     return f == identity.end() ? std::string() : f->second;
                 };
-                product->SetId(new TCollection_HAsciiString(pick("Part Number").c_str()));
-                if (!pick("Part Number").empty() && pick("Part Number") == text(product->Name())) {
-                    // the id carries the text, as in the file it may have come from; an id equal to the name is not read back
-                    product->SetName(new TCollection_HAsciiString(""));
+                // The id is written only when the user holds a non-empty Part Number; otherwise the writer's own
+                // id (the label) stays. The product name is never touched: it is what the writer made of the Label,
+                // and a Part Number equal to it is read back as no key at all
+                const std::string partNumber = pick("Part Number");
+                if (!partNumber.empty()) {
+                    product->SetId(new TCollection_HAsciiString(partNumber.c_str()));
+                    partNumbers[partNumber].emplace(product.get(), text(product->Name()));
                 }
                 product->SetDescription(new TCollection_HAsciiString(pick("Description").c_str()));
                 pd->Formation()->SetId(new TCollection_HAsciiString(pick("Revision").c_str()));
@@ -1063,6 +1076,22 @@ int writeStepAttributes(const Handle(StepData_StepModel)& model,
                 }
             }
             ++written;
+        }
+        for (const auto& [number, products] : partNumbers) {
+            std::set<std::string> names;
+            std::string list;
+            for (const auto& [prod, name] : products) {
+                if (names.insert(name).second) {
+                    list += (list.empty() ? "" : ", ") + name;
+                }
+            }
+            if (products.size() > 1 && names.size() > 1) {
+                Base::Console().warning(
+                    "STEP attributes: the Part Number '{}' is held by {} different parts ({}); a STEP product id should identify one part\n",
+                    number,
+                    products.size(),
+                    list);
+            }
         }
         for (const auto& name : layerOrder) {
             const auto& items = solidsOfLayer[name];
