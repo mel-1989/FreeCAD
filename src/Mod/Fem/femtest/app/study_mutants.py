@@ -39,7 +39,7 @@ MUTANTS = [
     ("M04", "Poisson ratio ignored", [("model.py", b'["nu"]', b'["nu"] * 0')], ["B03", "E01", "F01"], "nu = 0.3 cases only: A is nu = 0"),
     ("M05", "refinement ratio not applied (three identical meshes)", [("run.py", b"h = h0 / ratio ** k", b"h = h0")], ["B03", "C03"], "the study must report mesh_not_refined, never a zero estimate"),
     ("M06", "convergence estimate from the wrong pair of levels", [("convergence.py", b"levels[-3:]", b"levels[:2] + levels[:1]")], ["B01", "C01", "D01"], "needs a case whose drift is not the same between pairs"),
-    ("M07", "equilibrium check removed (and the delivered load 1% low)", [("checks.py", b"EQUILIBRIUM_TOL = 1e-3", b"EQUILIBRIUM_TOL = 1e9"), ("run.py", b"load_scale = 1.0", b"load_scale = 0.99")], ["B03", "C02"], "two patches: the check is off and the load delivered to the mesh is 1% off the request"),
+    ("M07", "equilibrium check removed (and the delivered load 1% low)", [("checks.py", b"EQUILIBRIUM_TOL = 1e-3", b"EQUILIBRIUM_TOL = 1e9"), ("run.py", b"= list(v)", b"= [x * 0.99 for x in v]")], ["B03", "C02"], "two patches: the check is off and the load delivered to the mesh is 1% off the request"),
     ("M08", "stale flag never set", [("stale.py", b"return h != stored", b"return False")], ["STALE"], "caught by study_stale_scenarios.py, not by a corpus case"),
     ("M09", "solver exit code ignored", [("run.py", b"if rc != 0", b"if False")], ["I12"], "I12 is a ccx shim that writes valid results and exits 3"),
     ("M10", "nan result passed on", [("checks.py", b"isnan(v) or isinf(v)", b"False")], ["I13"], "I13 is a ccx shim that writes nan into the results"),
