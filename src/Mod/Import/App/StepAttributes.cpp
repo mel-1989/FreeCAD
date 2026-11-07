@@ -383,6 +383,11 @@ std::vector<StepPartData> collectStepPartData(const Handle(StepData_StepModel)& 
             d.revision = text(pd->Formation()->Id());
             if (!pd->Formation()->OfProduct().IsNull()) {
                 d.partNumber = text(pd->Formation()->OfProduct()->Id());
+                // FreeCAD writes the object's label as both id and name; an id that only repeats the name
+                // tells the user nothing the object's label does not
+                if (d.partNumber == text(pd->Formation()->OfProduct()->Name())) {
+                    d.partNumber.clear();
+                }
                 d.description = text(pd->Formation()->OfProduct()->Description());
             }
             index[pd.get()] = out.size();
@@ -553,6 +558,15 @@ void stashStepAttributes(const Handle(XSControl_WorkSession)& ws, const Handle(T
         Handle(XCAFDoc_ShapeTool) tool = XCAFDoc_DocumentTool::ShapeTool(hDoc->Main());
         Handle(Transfer_TransientProcess) tp = reader->TransientProcess();
 
+        // assemblies: the label whose components refer to the labels of the product's children
+        std::map<Standard_Transient*, std::vector<Standard_Transient*>> children;
+        for (int i = 1; i <= model->NbEntities(); ++i) {
+            if (auto nauo = Handle(StepRepr_NextAssemblyUsageOccurrence)::DownCast(model->Value(i))) {
+                if (!nauo->RelatingProductDefinition().IsNull() && !nauo->RelatedProductDefinition().IsNull()) {
+                    children[nauo->RelatingProductDefinition().get()].push_back(nauo->RelatedProductDefinition().get());
+                }
+            }
+        }
         // parts: the label whose shape is the one transferred for the PRODUCT_DEFINITION
         std::map<Standard_Transient*, TDF_Label> labelOf;
         std::set<std::string> claimed;
@@ -564,7 +578,7 @@ void stashStepAttributes(const Handle(XSControl_WorkSession)& ws, const Handle(T
             TopoDS_Shape result = TransferBRep::ShapeResult(b);
             TDF_Label l = labelFromShape(tool, result);
             // OCCT keeps a compound that holds one thing as that thing
-            while (l.IsNull() && !result.IsNull() && result.ShapeType() == TopAbs_COMPOUND) {
+            while (l.IsNull() && !children.count(d.definition.get()) && !result.IsNull() && result.ShapeType() == TopAbs_COMPOUND) {
                 TopoDS_Iterator it(result, false, false);
                 if (!it.More()) {
                     break;
@@ -578,15 +592,6 @@ void stashStepAttributes(const Handle(XSControl_WorkSession)& ws, const Handle(T
             }
             if (!l.IsNull() && claimed.insert(labelEntry(l)).second) {
                 labelOf[d.definition.get()] = l;
-            }
-        }
-        // assemblies: the label whose components refer to the labels of the product's children
-        std::map<Standard_Transient*, std::vector<Standard_Transient*>> children;
-        for (int i = 1; i <= model->NbEntities(); ++i) {
-            if (auto nauo = Handle(StepRepr_NextAssemblyUsageOccurrence)::DownCast(model->Value(i))) {
-                if (!nauo->RelatingProductDefinition().IsNull() && !nauo->RelatedProductDefinition().IsNull()) {
-                    children[nauo->RelatingProductDefinition().get()].push_back(nauo->RelatedProductDefinition().get());
-                }
             }
         }
         NCollection_Sequence<TDF_Label> shapes;
@@ -768,7 +773,7 @@ void stashStepAttributes(const Handle(XSControl_WorkSession)& ws, const Handle(T
     }
 }
 
-void applyStepAttributes(App::DocumentObject* obj, const TDF_Label& label)
+void applyStepAttributes(App::DocumentObject* obj, const TDF_Label& label, bool includeSubShapes)
 {
     try {
         if (!obj || label.IsNull() || !readStepAttributesEnabled()) {
@@ -801,7 +806,7 @@ void applyStepAttributes(App::DocumentObject* obj, const TDF_Label& label)
         };
         collect(label, true, 0);
         int rank = 1;
-        for (TDF_ChildIterator ci(label, false); ci.More(); ci.Next()) {
+        for (TDF_ChildIterator ci(label, false); includeSubShapes && ci.More(); ci.Next()) {
             collect(ci.Value(), false, rank++);
         }
         for (auto& kv : udas) {
@@ -906,10 +911,12 @@ int writeStepAttributes(const Handle(StepData_StepModel)& model,
             if (shape.IsNull()) {
                 continue;
             }
-            // the PRODUCT_DEFINITION of this label: through the solid the writer made, else by product name
+            // the PRODUCT_DEFINITION of this label: for a part, through the solid the writer made of it; for an
+            // assembly (whose solids belong to its parts) and as a fallback, by product name
             Handle(StepBasic_ProductDefinition) pd;
             std::vector<Handle(StepRepr_RepresentationItem)> solidItems;
-            for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) {
+            const bool assembly = tool->IsAssembly(label);
+            for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More() && !assembly; ex.Next()) {
                 Handle(StepRepr_RepresentationItem) item = STEPConstruct::FindEntity(fp, ex.Current());
                 if (!item.IsNull()) {
                     solidItems.push_back(item);
@@ -922,6 +929,39 @@ int writeStepAttributes(const Handle(StepData_StepModel)& model,
                 auto named = productsByName.find(labelName(label));
                 if (named != productsByName.end() && named->second.size() == 1) {
                     pd = named->second.front();
+                }
+                else if (named != productsByName.end() && assembly) {
+                    // several products of that name: the assembly's component names must match
+                    NCollection_Sequence<TDF_Label> comps;
+                    tool->GetComponents(label, comps, false);
+                    std::vector<std::string> want;
+                    for (int c = 1; c <= comps.Length(); ++c) {
+                        TDF_Label ref;
+                        if (tool->GetReferredShape(comps.Value(c), ref)) {
+                            want.push_back(labelName(ref));
+                        }
+                    }
+                    std::sort(want.begin(), want.end());
+                    int matches = 0;
+                    for (const auto& cand : named->second) {
+                        std::vector<std::string> have;
+                        for (int k = 1; k <= model->NbEntities(); ++k) {
+                            if (auto nauo = Handle(StepRepr_NextAssemblyUsageOccurrence)::DownCast(model->Value(k))) {
+                                if (nauo->RelatingProductDefinition() == cand && !nauo->RelatedProductDefinition().IsNull()
+                                    && !nauo->RelatedProductDefinition()->Formation().IsNull()) {
+                                    have.push_back(text(nauo->RelatedProductDefinition()->Formation()->OfProduct()->Name()));
+                                }
+                            }
+                        }
+                        std::sort(have.begin(), have.end());
+                        if (have == want) {
+                            pd = cand;
+                            ++matches;
+                        }
+                    }
+                    if (matches != 1) {
+                        pd.Nullify();
+                    }
                 }
             }
             if (pd.IsNull()) {
@@ -971,6 +1011,10 @@ int writeStepAttributes(const Handle(StepData_StepModel)& model,
                     return f == identity.end() ? std::string() : f->second;
                 };
                 product->SetId(new TCollection_HAsciiString(pick("Part Number").c_str()));
+                if (!pick("Part Number").empty() && pick("Part Number") == text(product->Name())) {
+                    // the id carries the text, as in the file it may have come from; an id equal to the name is not read back
+                    product->SetName(new TCollection_HAsciiString(""));
+                }
                 product->SetDescription(new TCollection_HAsciiString(pick("Description").c_str()));
                 pd->Formation()->SetId(new TCollection_HAsciiString(pick("Revision").c_str()));
             }

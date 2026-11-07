@@ -211,7 +211,6 @@ ITEMS = [
     ("weight", "kg", "0.75"),
 ]
 WANT = {
-    "Part Number": "Box",
     "shipping information": "This Side Up",
     "assembly step": "2",
     "ratio": "0.125",
@@ -249,6 +248,10 @@ class TestRead(AttrCase):
         self.write(p, t)
         held = list(self.held(self.load(p)).values())[0]
         self.assertEqual(held, {"Part Number": "MP-03-2", "Description": "my part", "Revision": "03"})
+
+    def test_an_id_that_repeats_the_name_is_not_carried(self):
+        p = self.box_file()
+        self.assertEqual(self.held(self.load(p)), {})
 
     def test_nothing_to_carry_gives_no_property(self):
         p = self.box_file()
@@ -291,7 +294,7 @@ class TestRead(AttrCase):
                     self.assertNotIn("L1", v)
                 cylinder = [v for v in held.values() if v.get("grade") == "B"][0]
                 self.assertEqual(cylinder["n"], "3")
-                self.assertEqual(cylinder["Part Number"], "Cyl")
+                self.assertNotIn("Part Number", cylinder)  # FreeCAD's id repeats the name, so it is not carried
 
     def test_attributes_at_other_levels_are_not_attached(self):
         p = self.box_file()
@@ -305,8 +308,8 @@ class TestRead(AttrCase):
                "#900006=GENERAL_PROPERTY_ASSOCIATION('',$,#900001,#900004);\n" % (ctx, pds))
         i = t.rindex("ENDSEC;")
         self.write(p, t[:i] + add + t[i:])
-        held = list(self.held(self.load(p)).values())[0]
-        self.assertNotIn("deep", held)
+        # nothing is left to carry: the id only repeats the name, the attribute sits on the shape definition
+        self.assertEqual(self.held(self.load(p)), {})
 
     def test_duplicate_key_keeps_the_first_and_warns_once(self):
         p = self.box_file()

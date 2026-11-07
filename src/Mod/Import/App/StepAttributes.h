@@ -72,7 +72,9 @@ std::vector<StepPartData> collectStepPartData(const Handle(StepData_StepModel)& 
 void stashStepAttributes(const Handle(XSControl_WorkSession)& ws, const Handle(TDocStd_Document)& hDoc);
 
 /// Create StepAttributes / StepLayers on obj from the stash on label, when there is something to hold.
-void applyStepAttributes(App::DocumentObject* obj, const TDF_Label& label);
+/// 'includeSubShapes': layers of the solids filed under the label belong to obj too (false for a container whose
+/// solids get objects of their own).
+void applyStepAttributes(App::DocumentObject* obj, const TDF_Label& label, bool includeSubShapes = true);
 
 /// Export: copy StepAttributes / StepLayers of obj onto the part label so the writer finds them.
 void stashObjectStepData(const TDF_Label& label, App::DocumentObject* obj);
