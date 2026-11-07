@@ -54,6 +54,7 @@
 #include <Mod/Part/App/OCAF/ImportExportSettings.h>
 
 #include "ExportOCAF2.h"
+#include "StepAttributes.h"
 
 
 FC_LOG_LEVEL_INIT("Import", true, true)
@@ -210,6 +211,9 @@ void ExportOCAF2::setupObject(
 )
 {
     setName(label, obj, name);
+    if (!name && obj && !aShapeTool->IsComponent(label)) {
+        stashObjectStepData(label, obj);
+    }
     if (aShapeTool->IsComponent(label)) {
         auto& names = myNames[label];
         // The subname reference may contain several possible namings.

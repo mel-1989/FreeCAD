@@ -30,6 +30,8 @@
 
 
 #include "ReaderStep.h"
+#include "StepAttributes.h"
+#include "StepExternalRefs.h"
 #include "StepValidation.h"
 #include <Base/Exception.h>
 #include <Mod/Part/App/encodeFilename.h>
@@ -64,6 +66,11 @@ void ReaderStep::read(Handle(TDocStd_Document) hDoc, const Message_ProgressRange
         throw Base::FileException("Cannot read STEP file", file);
     }
 
+    // a file that refers to itself through other files would send OCCT into endless recursion
+    StepExternalReport external = prepareStepExternalReferences(aReader.Reader().StepModel(), file);
     aReader.Transfer(hDoc, theProgress);
+    finishStepExternalReferences(aReader, file, external);
+    reportStepExternalReferences(external);
+    stashStepAttributes(aReader.Reader().WS(), hDoc);
     reportStepValidation(aReader.Reader().WS());
 }

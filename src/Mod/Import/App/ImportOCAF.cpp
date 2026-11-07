@@ -54,6 +54,7 @@
 #include <Mod/Part/App/ShapeMapHasher.h>
 
 #include "ImportOCAF.h"
+#include "StepAttributes.h"
 #include "Tools.h"
 
 
@@ -256,6 +257,7 @@ void ImportOCAF::loadShapes(
                     pcPart = doc->addObject<App::Part>(asm_name.c_str());
                     pcPart->Label.setValue(asm_name);
                     pcPart->addObjects(localValue);
+                    applyStepAttributes(pcPart, label);
 
                     // STEP reader is now a hierarchical reader. Node and leaf must have
                     // there local placement updated and relative to the STEP file content
@@ -277,7 +279,23 @@ void ImportOCAF::createShape(
     bool mergeShape
 )
 {
+    // whatever this part adds to lValue carries the part's STEP attributes and layers
+    struct ApplyOnExit
+    {
+        const TDF_Label& label;
+        std::vector<App::DocumentObject*>& list;
+        size_t before;
+        bool includeSubShapes;
+        ~ApplyOnExit()
+        {
+            for (size_t i = before; i < list.size(); ++i) {
+                applyStepAttributes(list[i], label, includeSubShapes);
+            }
+        }
+    } applyOnExit {label, lValue, lValue.size(), true};
     const TopoDS_Shape& aShape = aShapeTool->GetShape(label);
+    // a compound that becomes a container of one object per solid: the solids' layers go to those objects
+    applyOnExit.includeSubShapes = mergeShape || aShape.IsNull() || aShape.ShapeType() != TopAbs_COMPOUND;
 #ifdef HAVE_TBB
     using namespace tbb;
     task_group g;
@@ -349,7 +367,12 @@ void ImportOCAF::createShape(
         }
         else {
             for (xp.Init(aShape, TopAbs_SOLID); xp.More(); xp.Next(), ctSolids++) {
+                size_t had = localValue.size();
                 createShape(xp.Current(), loc, name, localValue);
+                TDF_Label solidLabel;
+                if (localValue.size() > had && aShapeTool->FindSubShape(label, xp.Current(), solidLabel)) {
+                    applyStepAttributes(localValue.back(), solidLabel, false);
+                }
             }
             for (xp.Init(aShape, TopAbs_SHELL, TopAbs_SOLID); xp.More(); xp.Next(), ctShells++) {
                 createShape(xp.Current(), loc, name, localValue);

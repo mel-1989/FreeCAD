@@ -57,6 +57,7 @@
 #include <Mod/Part/App/OCAF/ImportExportSettings.h>
 
 #include "ImportOCAF2.h"
+#include "StepAttributes.h"
 
 // See https://dev.opencascade.org/content/occt-3d-viewer-becomes-srgb-aware
 #define OCC_COLOR_SPACE Quantity_TOC_sRGB
@@ -685,6 +686,7 @@ App::DocumentObject* ImportOCAF2::loadShape(
             return nullptr;
         }
         setObjectName(info, baseLabel);
+        applyStepAttributes(info.obj, baseLabel);
         it = myShapes.emplace(baseShape, info).first;
     }
     if (baseOnly) {
