@@ -5,6 +5,7 @@ import math
 
 SINGULAR_GROWTH = 1.30  # last-step growth of max von Mises above which the stress is a mesh artefact
 REVERSAL_FRACTION = 0.1  # a non-monotone step counts only when the last difference exceeds this fraction of `target`
+STRESS_SETTLED = 0.05  # target-independent: a last-step change of max von Mises above 5% is reported, whatever the displacement target is
 QUANTITIES = ("max_displacement", "energy")
 
 
@@ -101,13 +102,27 @@ def verdict(levels, target, cap_hit, a):
         return "unconverged", "element_cap", f"refinement stopped after {len(levels)} level(s) because the next mesh would exceed the element cap; estimated error {a['estimated_error']:.2e}"
     if not a["monotone"]:
         return "unconverged", "not_monotone", "the max displacement or the energy reverses direction between the last two refinements by more than a tenth of the target"
-    if a["estimated_error"] > target:
+    if not a["estimated_error"] <= target:  # a nan error is not within the target
         return "unconverged", "error_over_target", f"estimated error {a['estimated_error']:.2e} is above the target {target:g}"
     g = a["growth"]
-    if g is not None and g > SINGULAR_GROWTH:
+    if g is not None and not g <= SINGULAR_GROWTH:
         return ("stress_singular", "stress_singular",
                 f"displacement and energy are converged (estimated error {a['estimated_error']:.2e}) but max von Mises grew by a factor {g:.2f} on the last refinement: "
                 "the peak stress is a mesh artefact of a singularity (a point or line load, a sharp corner or a line support)")
+    tail = (f"; max von Mises changed by {g - 1:+.1%} on the last refinement step, below the singularity threshold of {SINGULAR_GROWTH - 1:.0%} (this does not say the peak stress is converged)"
+            if g is not None else "")
     if len(levels) < 3:
-        return "converged", "ok", f"estimated error {a['estimated_error']:.2e} from two levels with an assumed first-order rate"
-    return "converged", "ok", f"estimated error {a['estimated_error']:.2e} is within the target {target:g} and stress is stable under refinement"
+        return "converged", "ok", f"displacement and energy: estimated error {a['estimated_error']:.2e} from two levels with an assumed first-order rate{tail}"
+    return "converged", "ok", f"displacement and energy: estimated error {a['estimated_error']:.2e} is within the target {target:g}{tail}"
+
+
+def stress_warnings(levels, smallest_radius):
+    """New in run 067, after the verifier's cases; they move no verdict. `stress_not_settled`: the last-step change of max von Mises exceeds 5%.
+    `stress_under_resolved`: the finest level's element size h is above the smallest radius of a circular edge of the body."""
+    out = []
+    g = stress_growth(levels)
+    if g is not None and not abs(g - 1.0) <= STRESS_SETTLED:
+        out.append({"code": "stress_not_settled", "text": f"max von Mises changed by {g - 1:+.1%} on the last refinement step (limit {STRESS_SETTLED:.0%}): the peak stress is not settled and should not be quoted"})
+    if levels and smallest_radius is not None and levels[-1]["h"] > smallest_radius:
+        out.append({"code": "stress_under_resolved", "text": f"the finest element size {levels[-1]['h']:g} mm is above the smallest radius of a circular edge of the body ({smallest_radius:g} mm): the stress around that edge is under-resolved and can read low"})
+    return out

@@ -20,10 +20,15 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-HOME = os.path.expanduser("~")
-FC_SRC = os.environ.get("FC_SRC", os.path.join(HOME, "src/cad-fork/worktrees/G11"))
+def _env(name):
+    if name not in os.environ:
+        raise SystemExit(f"{name} is not set: export FC_SRC and CADFORK_HOME (harness/env.sh sets CADFORK_HOME)")
+    return os.environ[name]
+
+
+FC_SRC = _env("FC_SRC")
 FC_BUILD = os.environ.get("FC_BUILD_DIR", os.path.join(FC_SRC, "build/release"))
-SCRATCH = os.environ.get("SCRATCH", os.path.join(HOME, "src/cad-fork/scratch/r067"))
+SCRATCH = os.environ.get("SCRATCH") or os.path.join(_env("CADFORK_HOME"), "scratch", "r067")
 STUDY_DIR = os.path.join(FC_BUILD, "Mod/Fem/femstudy")
 
 # (id, name, [(file, old, new), ...], case subset, remark)

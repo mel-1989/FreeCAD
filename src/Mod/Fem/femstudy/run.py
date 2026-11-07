@@ -153,7 +153,7 @@ def _level_with_retry(doc, an, spec, objs, loads_v, applied, requested, h, k, bb
     raise last
 
 
-def solve_levels(doc, an, spec, objs, loads_v, h0, bbox, yield_mpa):
+def solve_levels(doc, an, spec, objs, loads_v, h0, bbox, yield_mpa, load_scale=0.0):
     """Run the levels. Returns (levels, warnings, stop, cap_hit): `stop` is None or (verdict, code, reason) for a failed post-solve check."""
     opts = spec["options"]
     ratio, n = opts["ratio"], opts["levels"]
@@ -189,7 +189,7 @@ def solve_levels(doc, an, spec, objs, loads_v, h0, bbox, yield_mpa):
                 worst[name] = s
         for name, rel in info["unscaled"].items():
             warns.append({"code": "load_mismatch", "text": f"{name}: the load delivered to the mesh differs from the request by {rel:.2%} and was not corrected"})
-        rel = checks.check_equilibrium(lv["reaction_sum"], lv["applied_sum"])
+        rel = checks.check_equilibrium(lv["reaction_sum"], lv["applied_sum"], load_scale)
         if rel is not None:
             stop = ("suspect", "equilibrium", f"at h = {h:g} mm the reaction forces differ from the applied load by {rel:.2e} (limit {checks.EQUILIBRIUM_TOL:g}) in study {spec['name']}")
             break

@@ -7,7 +7,7 @@ edited. Lost references are read from those live properties, never from the spec
 import FreeCAD
 import ObjectsFem
 
-from .spec import Refusal, parse_quantity
+from .spec import SUB_RE, Refusal, StudySpecError, parse_quantity
 
 
 def part_name(an, role, k=None):
@@ -37,7 +37,7 @@ def make_analysis(doc, name):
         clear(doc, an)
         return an
     if an is not None:
-        raise ValueError(f"object {name!r} exists and is not an Analysis")
+        raise StudySpecError(f"spec.name {name!r} is the name of an existing object that is not an Analysis")
     return ObjectsFem.makeAnalysis(doc, name)
 
 
@@ -85,10 +85,15 @@ def element(doc, objname, sub):
         raise LookupError(f"object {objname!r} does not exist")
     if sub.startswith("?"):
         raise LookupError(f"{objname}.{sub} no longer exists")
+    if not SUB_RE.match(sub):
+        raise LookupError(f"{objname}.{sub!r} is not a Face, Edge or Vertex name")
     try:
-        return ob.Shape.getElement(sub)
+        sh = ob.Shape.getElement(sub)
     except Exception as ex:  # noqa: BLE001
         raise LookupError(f"{objname}.{sub} does not resolve ({ex})") from None
+    if sh is None or sh.isNull() or sh.ShapeType not in ("Face", "Edge", "Vertex"):
+        raise LookupError(f"{objname}.{sub} does not resolve to a face, edge or vertex")
+    return sh
 
 
 def _direction_line(doc, an, k, direction):

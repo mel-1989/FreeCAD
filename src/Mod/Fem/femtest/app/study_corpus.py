@@ -290,7 +290,23 @@ def _cases_A(rng):
         build, truth, vol, par = _build_A(sec_, dims, L, matname, sigma, h0)
         c = Case(f"A{i:02d}", "A", f"axial bar {sec} {'x'.join(f'{x:g}' for x in dims)} L={L:g} {matname}", h0, build, truth, {}, par, vol)
         out.append(c)
+    out.append(_hanging_bar())
     return out
+
+
+def _hanging_bar():
+    """A09, added in the run-067 repair round: a 10 x 10 x 100 mm bar hangs from its top face under its own weight (gravity, nu = 0). Closed forms:
+    the support reaction is the weight rho g V, the tip displacement is rho g L^2 / (2 E) and the largest stress, at the support, is rho g L."""
+    E, rho, g, L, w = 210000.0, 7850e-12, 9810.0, 100.0, 10.0  # MPa, t/mm^3, mm/s^2, mm, mm
+    mat_ = {"E": "210 GPa", "nu": 0.0, "density": "7850 kg/m^3"}
+
+    def build(doc):
+        _, Part, V = _fc()
+        body = _feat(doc, Part.makeBox(w, w, L))
+        return {"spec": mkspec(body.Name, mat_, [sup(planes(body, 2, L))], [{"type": "gravity", "value": "9.81 m/s^2", "direction": [0, 0, -1]}], 12.0)}
+
+    truth = {"disp": rho * g * L**2 / (2 * E), "tol_disp": 1e-4, "max_vm": rho * g * L, "tol_vm": 1e-3}
+    return Case("A09", "A", "hanging bar under its own weight (gravity)", 12.0, build, truth, {}, {"L": L, "weight_N": rho * g * w * w * L}, w * w * L)
 
 
 # ---------------------------------------------------------------------------------------------------- group B and C: cantilevers
@@ -877,7 +893,7 @@ def all_cases():
     return cases
 
 
-EXPECTED_COUNTS = {"A": 8, "B": 12, "C": 6, "D": 8, "E": 6, "F": 6, "G": 6, "H": 6, "I": 14, "J": 4}
+EXPECTED_COUNTS = {"A": 9, "B": 12, "C": 6, "D": 8, "E": 6, "F": 6, "G": 6, "H": 6, "I": 14, "J": 4}
 
 
 def select(spec=None):

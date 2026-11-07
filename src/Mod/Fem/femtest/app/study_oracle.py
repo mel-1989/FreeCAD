@@ -146,13 +146,17 @@ def within_tolerance(case, run):
 def richardson_error(u1, u2, u3, n1, n2, n3):
     """Relative error of u3 against the Richardson limit for three values on meshes with n1 < n2 < n3 elements (mesh size h ~ n^(-1/3), because the
     Gmsh size setting is only an upper bound). The observed order is searched on a grid over [0.5, 4] from the ratio of the differences; a sequence
-    that reverses or does not shrink is extrapolated with order 1. Written separately from femstudy.convergence on purpose."""
+    that reverses or does not shrink (by the ln-ratio test above) is extrapolated with order 1. Written separately from femstudy.convergence on purpose."""
     h1, h2, h3 = n1 ** (-1 / 3), n2 ** (-1 / 3), n3 ** (-1 / 3)
     d12, d23 = u2 - u1, u3 - u2
     if d23 == 0:
         return 0.0
     p = 1.0
-    if d12 * d23 > 0 and abs(d23) < abs(d12):
+    reversed_ = d12 * d23 < 0
+    # the differences shrink when their ratio exceeds the p -> 0 limit of the ratio function, ln(h1/h2) / ln(h2/h3): the steps in h are uneven, so a
+    # plain |d23| < |d12| misreads an order-1 sequence on steps of 1.44 then 1.97 (F03 failed estimate_recomputed on exactly that). Same rule as femstudy.convergence.
+    shrinks = d12 != 0 and abs(d12) / abs(d23) > math.log(h1 / h2) / math.log(h2 / h3)
+    if shrinks and not reversed_:
         g = abs(d12) / abs(d23)
         best, p = None, 0.5
         for k in range(0, 3501):

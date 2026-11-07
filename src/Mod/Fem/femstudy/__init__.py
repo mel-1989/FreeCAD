@@ -87,12 +87,17 @@ def _execute(doc, an, spec, live, lost):
             raise Refusal("unit_dimension", "options.h0 must be a positive length")
         body = checks.check_body(doc, spec)
         checks.check_references(doc, spec, live, lost)
+        mass = mat["density"] * body.Shape.Volume * 1e-9 if mat["density"] is not None else None  # kg
+        load_scale = checks.check_loads(doc, spec, loads_v, mass)
         checks.check_rigid_body(doc, spec, live)
+        checks.check_mesh_size(body, h0, int(spec["options"]["max_elements"]))
         checks.check_tools()
         model.clear(doc, an)
         objs = model.build(doc, an, spec, live, mat, loads_v)
-        levels, warns, stop, cap_hit = run.solve_levels(doc, an, spec, objs, loads_v, h0, body.Shape.BoundBox, mat["yield"])
+        levels, warns, stop, cap_hit = run.solve_levels(doc, an, spec, objs, loads_v, h0, body.Shape.BoundBox, mat["yield"], load_scale)
         a = convergence.assess(levels, spec["options"]["target"]) if len(levels) >= 2 else None
+        if levels:
+            warns = warns + convergence.stress_warnings(levels, checks.smallest_circular_radius(body.Shape))
         if stop is not None:
             return _result(spec, an, stop[0], stop[1], stop[2], levels, warns, a)
         v, c, why = convergence.verdict(levels, spec["options"]["target"], cap_hit, a)
@@ -107,7 +112,19 @@ def _execute(doc, an, spec, live, lost):
 
 
 def run_static(doc, spec_or_name):
-    """Run a study. A dict is defined first (replacing a study of the same name); a name runs what is stored, resolving the references now."""
+    """Run a study. A dict is defined first (replacing a study of the same name); a name runs what is stored, resolving the references now.
+    Raises nothing but StudySpecError; anything else that goes wrong outside a study run comes back as a `failed` / `internal_error` result."""
+    try:
+        return _run_static(doc, spec_or_name)
+    except StudySpecError:
+        raise
+    except Exception as ex:  # noqa: BLE001
+        FreeCAD.Console.PrintError(traceback.format_exc())
+        return {"verdict": "failed", "code": "internal_error", "reason": f"{type(ex).__name__} outside the study run: {str(ex)[:200]}", "units": dict(UNITS), "levels": [],
+                "extrapolated": None, "order": None, "estimated_error": None, "warnings": [], "analysis": None, "stale": False}
+
+
+def _run_static(doc, spec_or_name):
     if isinstance(spec_or_name, str):
         an = _analysis(doc, spec_or_name)
         reuse = True

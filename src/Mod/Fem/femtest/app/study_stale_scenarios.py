@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Brief check 5, second half: 20 edit scenarios on a solved study; after each edit `femstudy.is_stale` must be True and the result read back must
+"""Brief check 5, second half: 22 edit scenarios on a solved study; after each edit `femstudy.is_stale` must be True and the result read back must
 carry `stale: true`; a new run must clear both. Run inside FreeCADCmd:  FreeCADCmd study_stale_scenarios.py  with CADFORK_STALE_RUN=1 (prints STALE_ALL_PASS or the failures).
 Written in run 067 before the study code exists. The base model is a PartDesign cantilever (10 x 20 x 100 mm pad along z), steel, 50 N across the end.
 Spec-level edits go through the `StudySpec` JSON property that `define_static` stores on the Analysis (SPEC.md, Stale results)."""
@@ -21,6 +21,34 @@ def base(doc):
     spec = sc.mkspec(body.Name, sc.mat("steel"), [sc.sup(sc.planes(body, 2, 0.0))],
                      [sc.frc(sc.planes(body, 2, 100.0), "50 N", (-1, 0, 0))], 26.0, levels=2)
     return dd, spec
+
+
+def base_hole(doc):
+    """Scenarios 21 and 22: a 100 x 20 x 20 mm box with a through hole (radius 4) at (50, 10), fixed at x = 0, pulled at x = 100. The verifier's moved-hole
+    edits leave the volume, the bounding box and every referenced face where they were, and the first version of the hash did not see them."""
+    import FreeCAD
+    import study_corpus as sc
+
+    V = FreeCAD.Vector
+    box = doc.addObject("Part::Box", "Box")
+    box.Length, box.Width, box.Height = 100, 20, 20
+    hole = doc.addObject("Part::Cylinder", "Hole")
+    hole.Radius, hole.Height = 4, 20
+    hole.Placement = FreeCAD.Placement(V(50, 10, 0), FreeCAD.Rotation())
+    cut = doc.addObject("Part::Cut", "Body")
+    cut.Base, cut.Tool = box, hole
+    doc.recompute()
+    spec = sc.mkspec("Body", sc.mat("steel"), [sc.sup(sc.planes(cut, 0, 0))], [sc.frc(sc.planes(cut, 0, 100), "2000 N", (0, 0, -1))], 8.0, levels=2)
+    return {"hole": hole}, spec
+
+
+def move_hole(x, y):
+    def f(doc, dd, name):
+        import FreeCAD
+
+        dd["hole"].Placement = FreeCAD.Placement(FreeCAD.Vector(x, y, 0), FreeCAD.Rotation())
+        doc.recompute()
+    return f
 
 
 def edit_spec(key_path, value):
@@ -63,7 +91,9 @@ def scenarios():
     S.append(("pad reversed", set_pad("Reversed", True)))
     S.append(("body placement moved 1 mm", lambda doc, dd, name: (setattr(dd["body"], "Placement", _moved(dd["body"].Placement)), doc.recompute())))
     S.append(("sketch attachment offset 1 mm", lambda doc, dd, name: (setattr(doc.getObject("Sketch"), "AttachmentOffset", _moved(doc.getObject("Sketch").AttachmentOffset)), doc.recompute())))
-    assert len(S) == 20
+    S.append(("hole moved along x, 50 to 8 (volume and bounding box unchanged)", move_hole(8, 10), base_hole))
+    S.append(("hole moved along y, 10 to 6 (volume and bounding box unchanged)", move_hole(50, 6), base_hole))
+    assert len(S) == 22
     return S
 
 
@@ -95,10 +125,11 @@ def main():
     import femstudy
 
     fails = []
-    for i, (title, edit) in enumerate(scenarios(), 1):
+    for i, sc_ in enumerate(scenarios(), 1):
+        title, edit = sc_[0], sc_[1]
         try:
             doc = FreeCAD.newDocument(f"stale{i}")
-            dd, spec = base(doc)
+            dd, spec = (sc_[2] if len(sc_) > 2 else base)(doc)
             res = femstudy.run_static(doc, spec)
             name = res["analysis"]
             assert not femstudy.is_stale(doc, name), "stale right after a run"

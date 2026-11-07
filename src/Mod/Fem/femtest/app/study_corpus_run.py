@@ -7,7 +7,7 @@
 
 Modes: `baseline` runs the stock pipeline (study_baseline.py) at the corpus's finest h (three levels for group H) and records raw numbers;
 `study` calls femstudy.define_static / run_static (SPEC.md). Scratch, mesh, .frd and .dat files live under SCRATCH (default
-~/src/cad-fork/scratch/r067/), never /tmp, and are deleted after each case. Environment: FC_SRC (worktree, default the G11 one),
+$CADFORK_HOME/scratch/r067/), never /tmp, and are deleted after each case. Environment: FC_SRC (worktree, required),
 FC_BUILD_DIR (default $FC_SRC/build/release). The pixi bin of the worktree is put first on PATH here, because harness/env.sh does not.
 The same file is the worker: with CADFORK_STUDY_WORKER=1 it runs one case inside FreeCADCmd and writes the record to CADFORK_STUDY_OUT.
 """
@@ -21,10 +21,15 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-HOME = os.path.expanduser("~")
-FC_SRC = os.environ.get("FC_SRC", os.path.join(HOME, "src/cad-fork/worktrees/G11"))
+def _env(name):
+    if name not in os.environ:
+        raise SystemExit(f"{name} is not set: export FC_SRC and CADFORK_HOME (harness/env.sh sets CADFORK_HOME)")
+    return os.environ[name]
+
+
+FC_SRC = _env("FC_SRC")
 FC_BUILD = os.environ.get("FC_BUILD_DIR", os.path.join(FC_SRC, "build/release"))
-SCRATCH = os.environ.get("SCRATCH", os.path.join(HOME, "src/cad-fork/scratch/r067"))
+SCRATCH = os.environ.get("SCRATCH") or os.path.join(_env("CADFORK_HOME"), "scratch", "r067")
 
 
 # ------------------------------------------------------------------------------------------------ worker (inside FreeCADCmd)

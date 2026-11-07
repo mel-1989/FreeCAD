@@ -9,11 +9,13 @@ The stock writers and file formats are not touched. What this module adds to a w
 * `*EL PRINT, ELSET=Eall, TOTALS=ONLY` / `ELSE` for the total strain energy, and one `*NODE PRINT ... RF` totals request on the union of every
   constrained node (the stock per-constraint requests count a node twice when two constraints share it);
 * the load that sits on constrained nodes, recomputed from the deck (nodal loads from `*CLOAD`, consistent face loads from `*DLOAD` on C3D10
-  faces). ccx prints RF = K u at a node, so the RF total of the constrained nodes is the support reaction plus the whole external load on those
+  faces, the consistent nodal forces of gravity). ccx prints RF = K u at a node, so the RF total of the constrained nodes is the support reaction plus the whole external load on those
   nodes (free directions included); the reaction is the RF total minus that load (SPEC.md, item 7 of Checks that may not hold).
 """
 
 import re
+
+import numpy as np
 
 # six-point degree-4 rule on the reference triangle (Dunavant), weights sum to 1 (multiply by the reference area 1/2)
 _B1, _B2 = 0.445948490915965, 0.091576213509771
@@ -28,7 +30,7 @@ FACES = {1: (1, 2, 3, 5, 6, 7), 2: (1, 4, 2, 8, 9, 5), 3: (2, 4, 3, 9, 10, 6), 4
 def parse(text):
     """Nodes, C3D10 elements, node sets, boundary dofs and the *CLOAD / *DLOAD blocks of a deck."""
     lines = text.split("\n")
-    nodes, elems, nsets, bounds, blocks = {}, {}, {}, [], []
+    nodes, elems, nsets, bounds, blocks, density = {}, {}, {}, [], [], None
     kw, cur, last_comment = None, None, ""
     for i, ln in enumerate(lines):
         if ln.startswith("**"):
@@ -56,6 +58,8 @@ def parse(text):
             nodes[int(f[0])] = (float(f[1]), float(f[2]), float(f[3]))
         elif kw == "*ELEMENT" and len(f) == 11:
             elems[int(f[0])] = [int(x) for x in f[1:]]
+        elif kw == "*DENSITY" and density is None and f:
+            density = float(f[0])
         elif kw == "*NSET" and cur is not None:
             cur.extend(int(x) for x in f if x.lstrip("-").isdigit())
         elif kw == "*BOUNDARY" and len(f) >= 2:
@@ -64,7 +68,7 @@ def parse(text):
             bounds.append((f[0], first, last))
         elif kw in ("*CLOAD", "*DLOAD") and cur is not None:
             cur["idx"].append(i)
-    return {"lines": lines, "nodes": nodes, "elems": elems, "nsets": nsets, "bounds": bounds, "blocks": blocks}
+    return {"lines": lines, "nodes": nodes, "elems": elems, "nsets": nsets, "bounds": bounds, "blocks": blocks, "density": density}
 
 
 def constrained_dofs(m):
@@ -122,6 +126,60 @@ def face_loads(nodes, enodes, face, p):
     return {n: tuple(v) for n, v in out.items()}
 
 
+# Gravity: the consistent nodal forces of a uniform body force on quadratic tetrahedra, f_i = rho g dir * integral of N_i dV. The integral is taken on the
+# curved element (midside nodes where the mesh put them) with a collapsed 4 x 4 x 4 Gauss rule, exact up to degree 7 in each of the three variables.
+_GL_X, _GL_W = np.polynomial.legendre.leggauss(4)
+_GL_X, _GL_W = (_GL_X + 1) / 2, _GL_W / 2
+
+
+def _tet10_rule():
+    pts, wts = [], []
+    for a, wa in zip(_GL_X, _GL_W):
+        for b, wb in zip(_GL_X, _GL_W):
+            for c, wc in zip(_GL_X, _GL_W):
+                x, y, z = a, b * (1 - a), c * (1 - a) * (1 - b)
+                pts.append((x, y, z))
+                wts.append(wa * wb * wc * (1 - a) ** 2 * (1 - b))
+    return np.array(pts), np.array(wts)
+
+
+def _tet10_shape(pts):
+    """Shape functions (nq, 10) and their derivatives with respect to (x, y, z) = (L2, L3, L4) (nq, 10, 3), ccx node order."""
+    L = np.column_stack([1 - pts.sum(axis=1), pts])  # L1..L4
+    dL = np.array([[-1.0, -1.0, -1.0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    pairs = [(0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)]
+    N = np.column_stack([L[:, i] * (2 * L[:, i] - 1) for i in range(4)] + [4 * L[:, i] * L[:, j] for i, j in pairs])
+    dN = np.zeros((len(pts), 10, 3))
+    for i in range(4):
+        dN[:, i, :] = (4 * L[:, i] - 1)[:, None] * dL[i][None, :]
+    for k, (i, j) in enumerate(pairs):
+        dN[:, 4 + k, :] = 4 * (L[:, i][:, None] * dL[j][None, :] + L[:, j][:, None] * dL[i][None, :])
+    return N, dN
+
+
+def gravity_loads(m, accel, direction, nodes_wanted=None):
+    """{node: [fx, fy, fz]} (N) of the body force rho * accel (mm/s^2) along the unit-length `direction` over every element of the deck."""
+    if m["density"] is None:
+        raise ValueError("the deck has a gravity load but no *DENSITY")
+    pts, wts = _tet10_rule()
+    N, dN = _tet10_shape(pts)
+    ids = list(m["elems"])
+    out = {}
+    for c0 in range(0, len(ids), 2000):
+        chunk = ids[c0:c0 + 2000]
+        conn = np.array([m["elems"][e] for e in chunk])
+        X = np.array([[m["nodes"][n] for n in row] for row in conn])  # (ne, 10, 3)
+        J = np.einsum("qjk,ejl->eqkl", dN, X)  # (ne, nq, 3, 3): d x_l / d xi_k
+        det = np.abs(np.linalg.det(J))
+        fi = np.einsum("q,qj,eq->ej", wts, N, det) * (m["density"] * accel)  # (ne, 10)
+        for row, vals in zip(conn, fi):
+            for n, v in zip(row, vals):
+                o = out.setdefault(int(n), [0.0, 0.0, 0.0])
+                for c in range(3):
+                    o[c] += v * direction[c]
+    return out
+
+
 def block_loads(m, blk):
     """{node: [fx, fy, fz]} delivered by one *CLOAD or *DLOAD block of the deck, from the lines as they stand now."""
     out = {}
@@ -131,8 +189,14 @@ def block_loads(m, blk):
             n, d, v = int(f[0]), int(f[1]), float(f[2])
             out.setdefault(n, [0.0, 0.0, 0.0])[d - 1] += v
         else:
+            if len(f) >= 6 and f[1].upper() == "GRAV":  # `Eall,GRAV,g,dx,dy,dz` on the whole mesh (the study applies gravity to the one body)
+                for n, v in gravity_loads(m, float(f[2]), (float(f[3]), float(f[4]), float(f[5]))).items():
+                    o = out.setdefault(n, [0.0, 0.0, 0.0])
+                    for c in range(3):
+                        o[c] += v[c]
+                continue
             if not (f[0].isdigit() and len(f) >= 3 and f[1].upper().startswith("P") and f[1][1:].isdigit()):
-                continue  # gravity (`Eall,GRAV,...`) or anything that is not an element face pressure
+                continue  # anything that is not an element face pressure or gravity
             e = int(f[0])
             for n, v in face_loads(m["nodes"], m["elems"][e], int(f[1][1:]), float(f[2])).items():
                 o = out.setdefault(n, [0.0, 0.0, 0.0])
@@ -164,6 +228,7 @@ def prepare(path, requested):
         d = [sum(v[c] for v in loads.values()) for c in range(3)]
         name = blk["name"]
         info["delivered"][name] = d
+        scaled = False
         if name in requested:
             a = requested[name]
             dd = _dot(d, d)
@@ -171,11 +236,12 @@ def prepare(path, requested):
             if 0.5 < s < 2.0:
                 if abs(s - 1.0) > 1e-12:
                     _scale_block(m, blk, s)
+                    scaled = True
                 info["scale"][name] = s
             else:
                 na = _dot(a, a) ** 0.5
                 info["unscaled"][name] = (_dot(_sub(d, a), _sub(d, a)) ** 0.5 / na) if na > 0 else 1.0
-        for n, v in block_loads(m, blk).items():
+        for n, v in (block_loads(m, blk) if scaled else loads).items():
             o = nodal.setdefault(n, [0.0, 0.0, 0.0])
             for c in range(3):
                 o[c] += v[c]
