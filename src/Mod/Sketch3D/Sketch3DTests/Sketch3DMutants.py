@@ -73,7 +73,7 @@ MUTANTS = [
     ("grid_normal_equations_drop_term", GCS, "h_gn = ldlt.solve(-(Jx.adjoint() * fx));", "h_gn = ldlt.solve(-fx.head(Jx.cols()));", "the right side of the normal equations is not J^T f"),
     ("grid_elimination_skips_negatives", GCS, "if (R(i, col) != 0.0) {", "if (R(i, col) > 0.0) {", "the pivot row's negative entries are left out of the elimination that names redundant sets"),
     # renumbering of large systems (check 9 whatever the user's numbering): the guard and the map-back
-    ("renumber_off", SOLVE, "    if (unknowns < RenumberUnknowns) {", "    if (true) {", "no renumbering: the diagnosis runs in the order the user gave (6 to 12 s at 3,069 unknowns)"),
+    ("renumber_off", SOLVE, "    if (unknowns < RenumberUnknowns) {", "    if (unknowns < RenumberUnknowns + 1000000) {", "no renumbering: the diagnosis runs in the order the user gave (6 to 12 s at 3,069 unknowns)"),
     ("renumber_points_kept_in_given_order", SOLVE, "    r.pointOld = ndOrder;", "    r.pointOld.clear();\n    for (int p = 0; p < np; ++p) {\n        if (!spec.points[p].fixed) {\n            r.pointOld.push_back(p);\n        }\n    }", "the dissection order replaced by the user's own order of the points"),
     ("renumber_tags_as_positions", SOLVE, "        ordered.constraints[k] = spec.constraints[rn.conOld[k]];", "        ordered.constraints[k] = spec.constraints[rn.conOld[k]];\n        ordered.constraints[k].tag = static_cast<int>(k);", "map-back of tags wrong: named tags are positions in the solver's order, not the user's tags"),
     ("renumber_coordinates_not_mapped_back", SOLVE, "out.coordinates[rn.pointOld[k]] = res.coordinates[k];", "out.coordinates[k] = res.coordinates[k];", "map-back of coordinates wrong: points come back in the solver's numbering"),
@@ -112,6 +112,13 @@ def main(argv):
                 r = run([binary, "-t"] + names, tree, env, timeout=300)
             except subprocess.TimeoutExpired:
                 return "ok", ["timeout (a clean run takes about 15 s)"]
+            if "\nOK" in r.stdout + r.stderr:
+                # the renumbering tests (a clean run takes about 10 s): a system that was
+                # numbered wrongly no longer solves, and its solve does not come back
+                try:
+                    r = run([binary, "-t", "TestSketch3DApp.TestNumbering"], tree, env, timeout=120)
+                except subprocess.TimeoutExpired:
+                    return "ok", ["TestNumbering timeout (a clean run takes about 10 s)"]
         text = r.stdout + r.stderr
         failed = [l.split(" (")[0].split(": ")[-1] for l in text.splitlines() if l.startswith(("FAIL: ", "ERROR: "))]
         if "\nOK" not in text and not failed:

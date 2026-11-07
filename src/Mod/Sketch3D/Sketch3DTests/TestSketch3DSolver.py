@@ -1729,6 +1729,16 @@ class TestNumbering(unittest.TestCase):
         from Sketch3DTests.Sketch3DBench import make_numbered
 
         spec, perm, n = make_numbered(kind, unknowns, numbering)
+        if kind == "grid":
+            # relations on points (the grid's own are all on lines): two distances across the
+            # grid and one fixed coordinate, all true at the solution (points at (i, j, 0))
+            m = int(round((unknowns / 3.0 + 1) ** 0.5))
+            at = lambda i, j: perm[j * m + i]
+            spec["constraints"] += [
+                {"type": "distance_pp", "operands": [at(2, 3), at(5, 1)], "value": 13 ** 0.5},
+                {"type": "distance_pp", "operands": [at(7, 0), at(1, 6)], "value": 72 ** 0.5},
+                {"type": "fixed_coordinate", "operands": [at(3, 3), 0], "value": 3.0},
+            ]
         for k, c in enumerate(spec["constraints"]):
             c["tag"] = 1000 + 7 * k
         return spec, perm
