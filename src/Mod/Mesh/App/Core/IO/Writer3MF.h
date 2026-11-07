@@ -58,6 +58,7 @@ struct ObjectColor3MF
 {
     std::vector<Base::Color> faceColors;  /**< one per facet, or empty */
     std::vector<std::string> materials;   /**< names of the distinct colours in first-use order, or empty */
+    bool materialsPaired = false;         /**< the names are known to pair with the distinct colours in order */
     std::optional<Base::Color> overall;   /**< one colour for the whole object, written as basematerials */
     std::string overallName;
     bool empty() const
@@ -122,7 +123,8 @@ private:
     void Finish(std::ostream& str);
     std::string GetType(const MeshKernel& mesh) const;
     void SaveBuildItem(int id, const Base::Matrix4D& mat);
-    static std::string DumpMatrix(const Base::Matrix4D& mat);
+    std::string DumpMatrix(const Base::Matrix4D& mat) const;
+    bool warnedNames = false;
     bool SaveObject(
         std::ostream& str,
         int id,

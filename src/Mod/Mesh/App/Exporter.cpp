@@ -48,6 +48,7 @@
 #include <zipios++/zipoutputstream.h>
 
 #include "Exporter.h"
+#include "Importer.h"
 
 
 using namespace Mesh;
@@ -188,6 +189,8 @@ void Exporter::collectColors(App::DocumentObject* linked, const char* label)
             auto* mat = dynamic_cast<App::PropertyStringList*>(linked->getPropertyByName("Material3mf"));
             if (mat) {
                 currentColors.materials = mat->getValues();
+                // names pair with colours only for a property the reader marked as paired
+                currentColors.materialsPaired = std::string(mat->getDocumentation()) == materialsPairedDoc;
             }
         }
     }

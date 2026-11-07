@@ -689,6 +689,9 @@ class MeshProperty(unittest.TestCase):
         self.assertEqual(len(material2["transparency"]), len1 + len2)
 
 
+PAIRED_DOC = "3MF basematerials names in order of first use (pair with the distinct FaceColors)"
+
+
 class Mesh3MFReadCases(unittest.TestCase):
     """3MF reading: root relationship, units, build items, colours and materials.
 
@@ -902,7 +905,7 @@ class Mesh3MFWriteCases(unittest.TestCase):
         f.addProperty("App::PropertyColorList", "FaceColors")
         f.FaceColors = [colors[i % len(colors)] for i in range(f.Mesh.CountFacets)]
         if materials:
-            f.addProperty("App::PropertyStringList", "Material3mf", "3MF")
+            f.addProperty("App::PropertyStringList", "Material3mf", "3MF", PAIRED_DOC)
             f.Material3mf = materials
         return f
 
@@ -985,3 +988,73 @@ class Mesh3MFWriteCases(unittest.TestCase):
         f = self.mesh_feature([(1.0, 0.0, 0.0, 1.0)])
         Mesh.export([f], os.path.join(self.tmp, "k.3mf"))
         self.assertNotIn("Write3mfColors", list(self.grp.GetBools()))
+
+
+class Mesh3MFRepairCases(Mesh3MFReadCases):
+    """Limits, name pairing, transform precision and start-part fallback."""
+
+    def test_component_fan_out_hits_the_budget_quickly(self):
+        import time
+        objs = [self.obj(1, "leaf")]
+        for i in range(2, 42):
+            objs.append('<object id="%d"><components><component objectid="%d"/><component objectid="%d"/></components></object>' % (i, i - 1, i - 1))
+        body = "<resources>%s</resources><build><item objectid=\"41\"/><item objectid=\"1\"/></build>" % "".join(objs)
+        t = time.time()
+        got = self.load(self.package(body))
+        self.assertLess(time.time() - t, 20)
+        self.assertEqual([o.Label for o in got], ["leaf"])
+
+    def test_non_finite_transform_item_is_skipped(self):
+        body = ("<resources>%s</resources><build><item objectid=\"1\"/>"
+                "<item objectid=\"1\" transform=\"1 0 0 0 1 0 0 0 1 nan 0 0\"/>"
+                "<item objectid=\"1\" transform=\"1e308 0 0 0 1 0 0 0 1 0 0 0\"/></build>") % self.obj(1, "x")
+        got = self.load(self.package(body))
+        self.assertEqual(len(got), 1)
+
+    def test_relationship_to_a_non_model_part_falls_back(self):
+        path = self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % self.obj(1), target="/[Content_Types].xml")
+        self.assertEqual(len(self.load(path)), 1)
+
+    def test_placement_round_trips_to_1e_9(self):
+        f = self.doc.addObject("Mesh::Feature", "P")
+        f.Mesh = Mesh.createBox(1, 1, 1)
+        f.Placement = FreeCAD.Placement(FreeCAD.Vector(1.123456789012, 2, 3), FreeCAD.Rotation(0.1234567, 0.7, 0.3, 0.9))
+        f2 = self.doc.addObject("Mesh::Feature", "Q")
+        f2.Mesh = Mesh.createBox(2, 1, 1)
+        path = os.path.join(self.tmp, "pl.3mf")
+        Mesh.export([f, f2], path)
+        got = self.load(path)
+        a = f.Placement.toMatrix().A
+        b = got[0].Placement.toMatrix().A
+        self.assertLess(max(abs(x - y) for x, y in zip(a, b)), 1e-9)
+
+    def test_mixed_names_are_never_mis_assigned(self):
+        res = ('<m:colorgroup id="5"><m:color color="#0000FF"/></m:colorgroup>'
+               '<basematerials id="6"><base name="A" displaycolor="#FF0000"/><base name="B" displaycolor="#0000FF"/></basematerials>'
+               + self.obj(1, "mix", "", ["pid=\"5\" p1=\"0\"", "pid=\"6\" p1=\"0\"", "pid=\"6\" p1=\"1\"", "pid=\"5\" p1=\"0\""]))
+        o = self.load(self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % res))[0]
+        self.assertEqual(list(o.Material3mf), ["A", "B"])
+        path = os.path.join(self.tmp, "mix.3mf")
+        Mesh.export([o], path)
+        import zipfile
+        text = zipfile.ZipFile(path).read("3D/3dmodel.model").decode()
+        self.assertNotIn('name="A" displaycolor="#0000FF"', text)
+        self.assertNotIn('name="B" displaycolor="#FF0000"', text)
+
+    def test_pure_names_survive_a_round_trip(self):
+        res = ('<basematerials id="6"><base name="A" displaycolor="#FF0000"/><base name="B" displaycolor="#0000FF"/></basematerials>'
+               + self.obj(1, "pure", "", ["pid=\"6\" p1=\"1\"", "pid=\"6\" p1=\"0\"", "pid=\"6\" p1=\"1\"", "pid=\"6\" p1=\"0\""]))
+        o = self.load(self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % res))[0]
+        self.assertEqual(list(o.Material3mf), ["B", "A"])
+        path = os.path.join(self.tmp, "pure.3mf")
+        Mesh.export([o], path)
+        self.assertEqual(self.reimport_names(path), ["B", "A"])
+
+    def reimport_names(self, path):
+        d = FreeCAD.newDocument("Back2")
+        try:
+            Mesh.insert(path, d.Name)
+            o = [x for x in d.Objects if x.isDerivedFrom("Mesh::Feature")][0]
+            return list(getattr(o, "Material3mf", []))
+        finally:
+            FreeCAD.closeDocument(d.Name)

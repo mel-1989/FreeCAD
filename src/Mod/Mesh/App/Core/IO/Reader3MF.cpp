@@ -50,7 +50,9 @@ using namespace XERCES_CPP_NAMESPACE;
 namespace
 {
 constexpr int maxComponentDepth = 32;
-constexpr std::size_t maxPieces = 100000;
+constexpr std::size_t maxNodes = 1000000;       // expanded component instances per build item
+constexpr std::size_t maxOutputTriangles = 10000000;  // triangles one build item may expand to
+constexpr double maxTransformEntry = 1e12;
 const char* const defaultModelPath = "3D/3dmodel.model";
 
 std::string localName(const DOMNode* node)
@@ -193,6 +195,18 @@ std::optional<Base::Matrix4D> readTransform(const std::string& text, double scal
     return mat;
 }
 
+bool isUsable(const Base::Matrix4D& m)
+{
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            if (!std::isfinite(m[i][j]) || std::abs(m[i][j]) > maxTransformEntry) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool isRigid(const Base::Matrix4D& m)
 {
     constexpr double eps = 1e-9;
@@ -237,6 +251,7 @@ struct Reader3MF::Impl
         int objectId = -1;
         Base::Matrix4D transform;
         std::string path;
+        bool skip = false;
     };
     struct Object
     {
@@ -252,12 +267,14 @@ struct Reader3MF::Impl
         std::vector<Base::Color> colors;
         std::vector<std::string> materials;
         std::vector<CompRef> comps;
+        bool usesColorGroup = false;
     };
     struct ItemRef
     {
         int objectId = -1;
         Base::Matrix4D transform;
         std::string path;
+        bool skip = false;
     };
     struct Part
     {
@@ -273,6 +290,8 @@ struct Reader3MF::Impl
         std::size_t badColor = 0;
         std::size_t multiP = 0;
         std::size_t badTransform = 0;
+        std::size_t skippedTransform = 0;
+        std::size_t overBudget = 0;
         std::map<std::string, std::size_t> outOfScope;
     };
 
@@ -427,7 +446,11 @@ struct Reader3MF::Impl
                         ref.path = pathAttr(c);
                         if (hasAttr(c, "transform")) {
                             auto m = readTransform(attr(c, "transform"), scale);
-                            if (m) {
+                            if (m && !isUsable(*m)) {
+                                ref.skip = true;
+                                count.skippedTransform++;
+                            }
+                            else if (m) {
                                 ref.transform = *m;
                             }
                             else {
@@ -508,7 +531,11 @@ struct Reader3MF::Impl
                 item.path = pathAttr(n);
                 if (hasAttr(n, "transform")) {
                     auto m = readTransform(attr(n, "transform"), scale);
-                    if (m) {
+                    if (m && !isUsable(*m)) {
+                        item.skip = true;
+                        count.skippedTransform++;
+                    }
+                    else if (m) {
                         item.transform = *m;
                     }
                     else {
@@ -588,6 +615,7 @@ struct Reader3MF::Impl
             if (g.colors[idx]) {
                 out[i] = Base::Color(*g.colors[idx]);
                 any = true;
+                obj.usesColorGroup = obj.usesColorGroup || g.kind == Kind::Color;
             }
         }
         return any;
@@ -615,6 +643,20 @@ struct Reader3MF::Impl
         }
         for (const auto& [tag, n] : count.outOfScope) {
             Base::Console().warning("3MF: {} triangles use a {} which is not read, they get no colour of their own\n", n, tag);
+        }
+        if (count.skippedTransform) {
+            Base::Console().warning(
+                "3MF: {} build items or components have a transform that is not finite or beyond 1e12 and are skipped\n",
+                count.skippedTransform
+            );
+        }
+        if (count.overBudget) {
+            Base::Console().warning(
+                "3MF: {} build items expand past the limit of {} component instances or {} triangles and are skipped\n",
+                count.overBudget,
+                maxNodes,
+                maxOutputTriangles
+            );
         }
         if (count.multiP) {
             Base::Console().warning("3MF: {} triangles have distinct p1, p2, p3, taking p1\n", count.multiP);
@@ -651,9 +693,17 @@ struct Reader3MF::Impl
         bool identity;
     };
 
+    std::size_t nodes = 0;
+    std::size_t outTriangles = 0;
+    bool budgetExceeded = false;
+
     void flatten(Part* part, int objectId, const Base::Matrix4D& tr, bool identity, int depth, std::vector<const Object*>& stack, std::vector<Piece>& out)
     {
-        if (!part || depth > maxComponentDepth) {
+        if (!part || depth > maxComponentDepth || budgetExceeded) {
+            return;
+        }
+        if (++nodes > maxNodes) {
+            budgetExceeded = true;
             return;
         }
         auto it = part->objects.find(objectId);
@@ -664,15 +714,20 @@ struct Reader3MF::Impl
         if (std::find(stack.begin(), stack.end(), obj) != stack.end()) {
             return;  // a component cycle
         }
-        if (out.size() >= maxPieces) {
-            return;
-        }
         if (obj->isMesh) {
+            outTriangles += obj->kernel.CountFacets();
+            if (outTriangles > maxOutputTriangles) {
+                budgetExceeded = true;
+                return;
+            }
             out.push_back({obj, tr, identity});
             return;
         }
         stack.push_back(obj);
         for (const CompRef& c : obj->comps) {
+            if (c.skip || budgetExceeded) {
+                continue;
+            }
             Part* sub = c.path.empty() ? part : partFor(c.path);
             Base::Matrix4D m = tr;
             m *= c.transform;  // the component applies first, then the transform of its parent
@@ -686,7 +741,14 @@ struct Reader3MF::Impl
         std::vector<Piece> pieces;
         std::vector<const Object*> stack;
         Base::Matrix4D unit;
+        nodes = 0;
+        outTriangles = 0;
+        budgetExceeded = false;
         flatten(part, objectId, unit, true, 0, stack, pieces);
+        if (budgetExceeded) {
+            count.overBudget++;
+            return;
+        }
         if (pieces.empty()) {
             return;
         }
@@ -696,24 +758,45 @@ struct Reader3MF::Impl
         item.rigid = isRigid(transform);
         auto top = part->objects.find(objectId);
         item.name = top->second.name;
-        bool first = true;
         bool anyColors = false;
         for (const Piece& p : pieces) {
             anyColors = anyColors || !p.obj->colors.empty();
+            item.materialsPaired = item.materialsPaired && !p.obj->usesColorGroup;
         }
         std::vector<Base::Color> colors;
+        if (pieces.size() == 1) {
+            item.kernel = pieces.front().obj->kernel;
+            if (!pieces.front().identity) {
+                item.kernel.Transform(pieces.front().transform);
+            }
+        }
+        else {
+            // one pass over all pieces; repeated MeshKernel::Merge is quadratic
+            MeshPointArray points;
+            MeshFacetArray facets;
+            for (const Piece& p : pieces) {
+                const MeshPointArray& pp = p.obj->kernel.GetPoints();
+                const MeshFacetArray& pf = p.obj->kernel.GetFacets();
+                const PointIndex offset = points.size();
+                for (const MeshPoint& pt : pp) {
+                    MeshPoint q = pt;
+                    if (!p.identity) {
+                        q *= p.transform;
+                    }
+                    points.push_back(q);
+                }
+                for (MeshFacet f : pf) {
+                    for (PointIndex& idx : f._aulPoints) {
+                        idx += offset;
+                    }
+                    facets.push_back(f);
+                }
+            }
+            MeshPointFacetAdjacency adjacency(points.size(), facets);
+            adjacency.SetFacetNeighbourhood();
+            item.kernel.Adopt(points, facets);
+        }
         for (const Piece& p : pieces) {
-            MeshKernel k = p.obj->kernel;
-            if (!p.identity) {
-                k.Transform(p.transform);
-            }
-            if (first) {
-                item.kernel = std::move(k);
-                first = false;
-            }
-            else {
-                item.kernel.Merge(k);
-            }
             if (anyColors) {
                 if (p.obj->colors.empty()) {
                     colors.insert(colors.end(), p.obj->kernel.CountFacets(), Base::Color(204U << 24 | 204U << 16 | 204U << 8 | 255U));
@@ -735,9 +818,12 @@ struct Reader3MF::Impl
     void assemble()
     {
         for (const ItemRef& it : root.items) {
+            if (it.skip) {
+                continue;
+            }
             addItem(partFor(it.path), it.objectId, it.transform);
         }
-        if (owner.items.empty()) {
+        if (owner.items.empty() && count.overBudget == 0 && count.skippedTransform == 0) {
             // no usable build section: keep what the file holds, every mesh object once
             for (int id : root.order) {
                 if (root.objects[id].isMesh) {
@@ -826,6 +912,7 @@ void Reader3MF::OpenStartPart()
     }
     if (!target.empty()) {
         zip = OpenPart(target);
+        startFromRelationship = static_cast<bool>(zip);
     }
     if (!zip) {
         zip.reset(file->getInputStream(defaultModelPath));
@@ -854,18 +941,29 @@ bool Reader3MF::TryLoad()
     if (!zip) {
         return false;
     }
-    Impl impl(*this);
-    bool ok = false;
-    try {
-        ok = impl.readPart(*zip, defaultModelPath, impl.root, true);
+    for (int attempt = 0; attempt < 2; attempt++) {
+        Impl impl(*this);
+        bool ok = false;
+        try {
+            ok = impl.readPart(*zip, defaultModelPath, impl.root, true);
+        }
+        catch (const std::exception&) {
+            ok = false;
+        }
+        if (ok) {
+            impl.assemble();
+            impl.report();
+            return !items.empty();
+        }
+        // a relationship can name a part that is no model; the fixed path is the fallback then
+        if (attempt > 0 || !startFromRelationship) {
+            return false;
+        }
+        zip.reset(file->getInputStream(defaultModelPath));
+        if (!zip) {
+            return false;
+        }
+        startFromRelationship = false;
     }
-    catch (const std::exception&) {
-        ok = false;
-    }
-    if (!ok) {
-        return false;
-    }
-    impl.assemble();
-    impl.report();
-    return !items.empty();
+    return false;
 }

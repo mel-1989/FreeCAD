@@ -29,6 +29,7 @@
 
 #include "Core/Evaluation.h"
 #include "Core/MeshKernel.h"
+#include <Base/Console.h>
 #include <Base/Tools.h>
 #include <Base/XMLTools.h>
 
@@ -147,7 +148,14 @@ bool Writer3MF::AddMesh(
             EnsureHeader();
             std::ostream& str = buffered ? static_cast<std::ostream&>(body) : zip;
             groupId = ++objectIndex;
-            const bool named = colors->overall || colors->materials.size() == distinct.size();
+            const bool pairable = colors->materialsPaired && colors->materials.size() == distinct.size();
+            if (!colors->overall && !colors->materials.empty() && !pairable && !warnedNames) {
+                warnedNames = true;
+                Base::Console().warning(
+                    "3MF export: material names are not written because they cannot be paired with the colours with certainty\n"
+                );
+            }
+            const bool named = colors->overall || pairable;
             if (named) {
                 str << Base::blanks(2) << "<basematerials id=\"" << groupId << "\">\n";
                 for (std::size_t i = 0; i < distinct.size(); i++) {
@@ -280,7 +288,7 @@ void Writer3MF::SaveBuildItem(int id, const Base::Matrix4D& mat)
     items.push_back(str.str());
 }
 
-std::string Writer3MF::DumpMatrix(const Base::Matrix4D& mat)
+std::string Writer3MF::DumpMatrix(const Base::Matrix4D& mat) const
 {
     // NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     // The matrix representation in the specs is the transposed version of Matrix4D
@@ -289,6 +297,10 @@ std::string Writer3MF::DumpMatrix(const Base::Matrix4D& mat)
     // 3D Manufacturing Format / Core Specification & Reference Guide v1.2.3
     // Chapter: 3.3 3D Matrices (page 9)
     std::stringstream str;
+    if (buffered) {
+        // with colours on the placement survives a round trip; the default precision keeps the old bytes
+        str.precision(17);
+    }
     str << mat[0][0] << " " << mat[1][0] << " " << mat[2][0] << " " << mat[0][1] << " " << mat[1][1]
         << " " << mat[2][1] << " " << mat[0][2] << " " << mat[1][2] << " " << mat[2][2] << " "
         << mat[0][3] << " " << mat[1][3] << " " << mat[2][3];

@@ -60,6 +60,7 @@ struct MeshExport Item3MF
     bool rigid = true;          /**< the transform is a rotation plus a translation */
     std::vector<Base::Color> faceColors;  /**< one per facet, empty when no facet has a colour */
     std::vector<std::string> materials;   /**< basematerials names in order of first use */
+    bool materialsPaired = true;          /**< no colorgroup colour in the item, so names pair with colours in order */
 };
 
 /** Loads the mesh objects from data in 3MF format.
@@ -116,6 +117,7 @@ private:
 
 private:
     bool readColors = true;
+    bool startFromRelationship = false;
     std::vector<Item3MF> items;
     std::unique_ptr<zipios::FileCollection> file;
     std::unique_ptr<std::istream> zip;

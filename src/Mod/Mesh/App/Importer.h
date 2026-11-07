@@ -39,6 +39,10 @@ struct Material;
 }
 namespace Mesh
 {
+/// Documentation text of the Material3mf property: whether its names pair with the distinct FaceColors in order
+constexpr const char* materialsPairedDoc = "3MF basematerials names in order of first use (pair with the distinct FaceColors)";
+constexpr const char* materialsMixedDoc = "3MF basematerials names in order of first use (item also uses colorgroup colours)";
+
 class MeshObject;
 class Feature;
 

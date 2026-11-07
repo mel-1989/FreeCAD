@@ -125,7 +125,12 @@ bool Importer::load3mf(const std::string& fileName)
         }
         if (!item.materials.empty()) {
             auto prop = static_cast<App::PropertyStringList*>(
-                feature->addDynamicProperty("App::PropertyStringList", "Material3mf", "3MF")
+                feature->addDynamicProperty(
+                    "App::PropertyStringList",
+                    "Material3mf",
+                    "3MF",
+                    item.materialsPaired ? Mesh::materialsPairedDoc : Mesh::materialsMixedDoc
+                )
             );
             if (prop) {
                 prop->setValues(item.materials);
