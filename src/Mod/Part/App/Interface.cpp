@@ -22,10 +22,17 @@
  *                                                                         *
  ***************************************************************************/
 
+#include <algorithm>
+#include <list>
+
 #include <Interface_Static.hxx>
+
+#include <App/Application.h>
+#include <Base/Parameter.h>
 
 
 #include "Interface.h"
+#include "ImportStep.h"
 
 
 using namespace Part;
@@ -103,6 +110,29 @@ Standard_CString Interface::writeStepScheme()
 bool Interface::writeStepScheme(Standard_CString scheme)
 {
     return Interface_Static::SetCVal("write.step.schema", scheme);
+}
+
+Standard_CString Interface::defaultStepScheme()
+{
+    return "AP242DIS";
+}
+
+std::string Interface::preferredStepScheme()
+{
+    Base::Reference<ParameterGrp> grp = App::GetApplication().GetParameterGroupByPath(
+        "User parameter:BaseApp/Preferences/Mod/Part/STEP"
+    );
+    std::string scheme = grp->GetASCII("Scheme", defaultStepScheme());
+    std::list<std::string> supported = supportedSTEPSchemes();
+    if (std::ranges::find(supported, scheme) == supported.end()) {
+        return defaultStepScheme();
+    }
+    return scheme;
+}
+
+void Interface::applyStepSchemePreference()
+{
+    Interface_Static::SetCVal("write.step.schema", preferredStepScheme().c_str());
 }
 
 bool Interface::writeStepUnit(Standard_CString unit)

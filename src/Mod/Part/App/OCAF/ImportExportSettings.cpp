@@ -29,6 +29,7 @@
 #include <Mod/Part/App/IGES/ImportExportSettings.h>
 #include <Mod/Part/App/STEP/ImportExportSettings.h>
 #include <App/Application.h>
+#include <Mod/Part/App/Interface.h>
 
 
 namespace Part
@@ -147,8 +148,7 @@ void ImportExportSettings::initSTEP(Base::Reference<ParameterGrp> hGrp)
             break;
     }
 
-    std::string ap = hStepGrp->GetASCII("Scheme", Interface_Static::CVal("write.step.schema"));
-    Interface_Static::SetCVal("write.step.schema", ap.c_str());
+    Part::Interface::applyStepSchemePreference();
     Interface_Static::SetCVal(
         "write.step.product.name",
         hStepGrp->GetASCII("Product", Interface_Static::CVal("write.step.product.name")).c_str()

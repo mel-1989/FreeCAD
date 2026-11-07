@@ -27,6 +27,7 @@
 
 #include "ImportExportSettings.h"
 #include <App/Application.h>
+#include <Mod/Part/App/Interface.h>
 
 
 namespace Part
@@ -82,7 +83,7 @@ bool ImportExportSettings::getWriteSurfaceCurveMode() const
 
 std::string ImportExportSettings::getScheme() const
 {
-    return pGroup->GetASCII("Scheme", Interface_Static::CVal("write.step.schema"));
+    return Part::Interface::preferredStepScheme();
 }
 
 void ImportExportSettings::setScheme(const char* scheme)

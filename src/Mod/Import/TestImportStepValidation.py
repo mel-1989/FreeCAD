@@ -28,6 +28,9 @@ class StepValidationCase(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="g13test")
         self.doc = App.newDocument("G13Test")
+        # the schema preference is removed for each test and put back exactly as found (unset stays unset)
+        self.savedScheme = PREF.GetString("Scheme") if "Scheme" in PREF.GetStrings() else None
+        PREF.RemString("Scheme")
         self.saved = PREF.GetBool("WriteValidationProperties", True)
         self.savedCheck = PREF.GetBool("CheckValidationProperties", True)
         PREF.SetBool("WriteValidationProperties", True)
@@ -36,6 +39,10 @@ class StepValidationCase(unittest.TestCase):
     def tearDown(self):
         PREF.SetBool("WriteValidationProperties", self.saved)
         PREF.SetBool("CheckValidationProperties", self.savedCheck)
+        if self.savedScheme is None:
+            PREF.RemString("Scheme")
+        else:
+            PREF.SetString("Scheme", self.savedScheme)
         App.closeDocument(self.doc.Name)
         for f in os.listdir(self.dir):
             os.remove(os.path.join(self.dir, f))
@@ -190,7 +197,8 @@ class TestApi(StepValidationCase):
         box = self.shape_object(Part.makeBox(10, 20, 30), "Box")
         r = Import.validateStep(self.export([box]))
         self.assertEqual(set(r), {"verdict", "schema", "message", "parts"})
-        self.assertTrue(r["schema"].startswith("AUTOMOTIVE_DESIGN"))
+        # AP242 is the default since slice 1b (OCCT's DESTEP_Parameters "AP242DIS")
+        self.assertTrue(r["schema"].startswith("AP242_MANAGED_MODEL_BASED_3D_ENGINEERING"))
         part = r["parts"][0]
         for k in ("name", "verdict", "stated", "measured", "difference", "disagrees", "valid", "diagonal"):
             self.assertIn(k, part)
@@ -323,6 +331,103 @@ class TestWrite(StepValidationCase):
         self.assertNotIn("validation property", t)
         self.assertNotIn("CAx-IF Rec.Pracs", t)
         self.assertEqual(Import.validateStep(p)["verdict"], "no_properties")
+
+
+SCHEMA_IDS = {
+    "AP203": "CONFIG_CONTROL_DESIGN",
+    "AP214CD": "AUTOMOTIVE_DESIGN_CC2",
+    "AP214IS": "AUTOMOTIVE_DESIGN {",
+    "AP242DIS": "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING",
+}
+
+
+class TestSchema(StepValidationCase):
+    """Slice 1b: AP242 is the default STEP schema and the preference is read at every export."""
+
+    def setUp(self):
+        super().setUp()
+        self.box = self.shape_object(Part.makeBox(20, 20, 20), "Box")
+
+    def write_all(self, tag, poison=None):
+        """name -> (file schema identifier, file text) for the three write paths.
+
+        With `poison`, OCCT's own write.step.schema is set to that value before each path writes, so a path that does not apply
+        the preference itself writes the poisoned schema (an earlier path's work cannot cover for it)."""
+        out = {}
+        for name, fn in (
+            ("Import.export", lambda p: Import.export([self.box], p)),
+            ("Shape.exportStep", lambda p: self.box.Shape.exportStep(p)),
+            ("Part.export", lambda p: Part.export([self.box], p)),
+        ):
+            p = self.path("%s_%s.stp" % (tag, name))
+            if poison:
+                Part.setStaticValue("write.step.schema", poison)
+            fn(p)
+            text = self.text(p)
+            m = re.search(r"FILE_SCHEMA\s*\(\s*\(\s*'([^']*)'", text)
+            out[name] = (m.group(1) if m else None, text)
+        return out
+
+    def assert_schema(self, key, tag):
+        poison = "AP214CD" if key == "AP203" else "AP203"
+        for name, (ident, _) in self.write_all(tag, poison).items():
+            self.assertIsNotNone(ident, name)
+            self.assertTrue(ident.startswith(SCHEMA_IDS[key]), "%s wrote %s, wanted %s" % (name, ident, key))
+
+    def test_default_is_ap242_on_every_path(self):
+        self.assertNotIn("Scheme", PREF.GetStrings())
+        self.assert_schema("AP242DIS", "d")
+
+    def test_default_does_not_write_the_preference(self):
+        self.write_all("d")
+        self.assertNotIn("Scheme", PREF.GetStrings())
+
+    def test_a_chosen_schema_is_kept_on_every_path(self):
+        for key in ("AP214IS", "AP203", "AP214CD", "AP242DIS"):
+            PREF.SetString("Scheme", key)
+            self.assert_schema(key, "k" + key)
+
+    def test_unknown_value_writes_ap242_and_does_not_fail(self):
+        for bad in ("BOGUS", "ap214is", "", "AP214IS "):
+            # leave OCCT's own setting at AP214IS first: an unknown value must not simply leave it alone
+            PREF.SetString("Scheme", "AP214IS")
+            self.assert_schema("AP214IS", "p%d" % len(bad))
+            PREF.SetString("Scheme", bad)
+            self.assert_schema("AP242DIS", "u%d" % len(bad))
+
+    def test_the_next_export_obeys_a_changed_preference_in_both_directions(self):
+        self.assert_schema("AP242DIS", "a")
+        PREF.SetString("Scheme", "AP214IS")
+        self.assert_schema("AP214IS", "b")
+        PREF.SetString("Scheme", "AP203")
+        self.assert_schema("AP203", "c")
+        PREF.RemString("Scheme")
+        self.assert_schema("AP242DIS", "d")
+        PREF.SetString("Scheme", "AP214IS")
+        self.assert_schema("AP214IS", "e")
+        PREF.SetString("Scheme", "AP242DIS")
+        self.assert_schema("AP242DIS", "f")
+
+    def test_triangulated_shape_writes_no_tessellated_entity_and_the_same_faces(self):
+        self.box.Shape.tessellate(0.05)  # attaches a triangulation, as the 3D view does
+        counts = {}
+        for key in ("AP214IS", "AP242DIS"):
+            PREF.SetString("Scheme", key)
+            for name, (_, text) in self.write_all("t" + key).items():
+                self.assertEqual(
+                    len(re.findall(r"TRIANGULATED|TESSELLATED|COORDINATES_LIST", text)), 0, (key, name)
+                )
+                counts[(key, name)] = text.count("ADVANCED_FACE")
+        for name in ("Import.export", "Shape.exportStep", "Part.export"):
+            self.assertEqual(counts[("AP242DIS", name)], 6)
+            self.assertEqual(counts[("AP242DIS", name)], counts[("AP214IS", name)])
+
+    def test_ap242_file_validates_and_reads_back(self):
+        p = self.export([self.box])
+        self.assertEqual(Import.validateStep(p)["verdict"], "agree")
+        r = Part.read(p)
+        self.assertAlmostEqual(r.Volume, 8000.0, places=6)
+        self.assertEqual(len(r.Solids), 1)
 
 
 class TestVerdicts(StepValidationCase):

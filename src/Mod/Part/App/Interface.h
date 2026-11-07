@@ -25,6 +25,7 @@
 #pragma once
 
 #include <Mod/Part/PartGlobal.h>
+#include <string>
 #include <Standard_CString.hxx>
 
 
@@ -55,6 +56,16 @@ public:
     static void writeStepAssembly(Assembly);
     static Standard_CString writeStepScheme();
     static bool writeStepScheme(Standard_CString);
+    /** The schema written when the user has not chosen one: AP242DIS, the only AP242 value
+     * OCCT's DESTEP_Parameters offers (ISO 10303-242 as named in the OCCT STEP user guide). */
+    static Standard_CString defaultStepScheme();
+    /** The schema the next STEP export will write: the preference "Scheme" in
+     * Mod/Part/STEP when it names a schema in supportedSTEPSchemes(), else the default.
+     * Reads the preference and never writes it. */
+    static std::string preferredStepScheme();
+    /** Makes OCCT's write.step.schema equal to preferredStepScheme(); called by every
+     * STEP write path just before it writes, so a changed preference applies at once. */
+    static void applyStepSchemePreference();
     static Standard_CString writeStepUnit();
     static bool writeStepUnit(Standard_CString);
     static bool writeStepUnit(Unit);
