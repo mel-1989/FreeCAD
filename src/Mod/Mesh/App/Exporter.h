@@ -62,6 +62,12 @@ public:
 
     virtual bool addMesh(const char* name, const MeshObject& mesh) = 0;
 
+    /// Collect colours and material names of added objects (3MF only reads them, default off)
+    virtual void setWriteColors(bool on)
+    {
+        writeColors = on;
+    }
+
     Exporter(const Exporter&) = delete;
     Exporter(Exporter&&) = delete;
     Exporter& operator=(const Exporter&) = delete;
@@ -69,9 +75,12 @@ public:
 
 protected:
     void throwIfNoPermission(const std::string&);
+    void collectColors(App::DocumentObject* linked, const char* label);
 
     std::map<const App::DocumentObject*, std::vector<std::string>> subObjectNameCache;
     std::map<const App::DocumentObject*, MeshObject> meshCache;
+    bool writeColors = false;
+    MeshCore::ObjectColor3MF currentColors;
 };
 
 /// Creates a single mesh, in a file, from one or more objects
@@ -219,6 +228,7 @@ public:
      * \param model
      */
     void setForceModel(bool model);
+    void setWriteColors(bool on) override;
 
 private:
     /// Write the meshes of the added objects to the output file

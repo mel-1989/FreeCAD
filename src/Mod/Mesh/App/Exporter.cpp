@@ -32,6 +32,9 @@
 #include <App/ComplexGeoData.h>
 #include <App/ComplexGeoDataPy.h>
 #include <App/DocumentObject.h>
+#include <App/GeoFeature.h>
+#include <App/Material.h>
+#include <App/PropertyStandard.h>
 #include <Base/Exception.h>
 #include <Base/FileInfo.h>
 #include <Base/Interpreter.h>
@@ -128,6 +131,11 @@ int Exporter::addObject(App::DocumentObject* obj, float tol)
             it->second.setTransform(matrix);
         }
 
+        currentColors = {};
+        if (writeColors && it != meshCache.end()) {
+            collectColors(linked, sobj->Label.getValue());
+        }
+
         // Add a new mesh
         if (it != meshCache.end()) {
             if (addMesh(sobj->Label.getValue(), it->second)) {
@@ -136,6 +144,26 @@ int Exporter::addObject(App::DocumentObject* obj, float tol)
         }
     }
     return count;
+}
+
+void Exporter::collectColors(App::DocumentObject* linked, const char* label)
+{
+    if (linked->isDerivedFrom<Mesh::Feature>()) {
+        auto* fc = dynamic_cast<App::PropertyColorList*>(linked->getPropertyByName("FaceColors"));
+        if (fc) {
+            currentColors.faceColors = fc->getValues();
+            auto* mat = dynamic_cast<App::PropertyStringList*>(linked->getPropertyByName("Material3mf"));
+            if (mat) {
+                currentColors.materials = mat->getValues();
+            }
+        }
+    }
+    else if (linked->getPropertyByName("ShapeMaterial")) {
+        if (auto* geo = dynamic_cast<App::GeoFeature*>(linked)) {
+            currentColors.overall = geo->getMaterialAppearance().diffuseColor;
+            currentColors.overallName = label;
+        }
+    }
 }
 
 void Exporter::throwIfNoPermission(const std::string& filename)
@@ -322,11 +350,17 @@ Exporter3MF::~Exporter3MF()
 
 bool Exporter3MF::addMesh(const char* name, const MeshObject& mesh)
 {
-    bool ok = d->writer3mf.AddMesh(mesh.getKernel(), mesh.getTransform(), name);
+    bool ok = d->writer3mf.AddMesh(mesh.getKernel(), mesh.getTransform(), name, &currentColors);
     if (ok) {
         d->addMesh(mesh);
     }
     return ok;
+}
+
+void Exporter3MF::setWriteColors(bool on)
+{
+    Exporter::setWriteColors(on);
+    d->writer3mf.SetBuffered(on);
 }
 
 void Exporter3MF::setForceModel(bool model)

@@ -872,3 +872,107 @@ class Mesh3MFReadCases(unittest.TestCase):
             self.load(bad)
         except Exception:
             pass
+
+
+class Mesh3MFWriteCases(unittest.TestCase):
+    """3MF writing of colours and materials (3MF Materials and Properties Extension, 3MF Consortium)."""
+
+    def setUp(self):
+        self.doc = FreeCAD.newDocument("Mesh3MFW")
+        self.tmp = tempfile.mkdtemp()
+        self.grp = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/Mesh")
+        self.grp.RemBool("Write3mfColors")
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.doc.Name)
+        self.grp.RemBool("Write3mfColors")
+
+    def mesh_feature(self, colors, materials=None):
+        f = self.doc.addObject("Mesh::Feature", "M")
+        f.Mesh = Mesh.createBox(1, 1, 1)
+        f.addProperty("App::PropertyColorList", "FaceColors")
+        f.FaceColors = [colors[i % len(colors)] for i in range(f.Mesh.CountFacets)]
+        if materials:
+            f.addProperty("App::PropertyStringList", "Material3mf", "3MF")
+            f.Material3mf = materials
+        return f
+
+    def model(self, path):
+        import zipfile
+        return zipfile.ZipFile(path).read("3D/3dmodel.model").decode()
+
+    def reimport(self, path):
+        d = FreeCAD.newDocument("Back")
+        try:
+            Mesh.insert(path, d.Name)
+            o = [x for x in d.Objects if x.isDerivedFrom("Mesh::Feature")][0]
+            return ([tuple(int(round(c * 255)) for c in col) for col in getattr(o, "FaceColors", [])],
+                    list(getattr(o, "Material3mf", [])))
+        finally:
+            FreeCAD.closeDocument(d.Name)
+
+    def test_face_colors_round_trip(self):
+        cols = [(1.0, 0.0, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0), (0.2, 0.9, 0.302, 0.5)]
+        f = self.mesh_feature(cols)
+        path = os.path.join(self.tmp, "c.3mf")
+        Mesh.export([f], path)
+        text = self.model(path)
+        self.assertIn("colorgroup", text)
+        self.assertIn('requiredextensions="m"', text)
+        got, mats = self.reimport(path)
+        want = [tuple(int(round(c * 255)) for c in cols[i % 3]) for i in range(f.Mesh.CountFacets)]
+        self.assertEqual(got, want)
+        self.assertEqual(mats, [])
+
+    def test_single_colour_is_object_level(self):
+        f = self.mesh_feature([(0.0, 1.0, 0.0, 1.0)])
+        path = os.path.join(self.tmp, "o.3mf")
+        Mesh.export([f], path)
+        self.assertNotIn(" p1=", self.model(path))
+        got, _ = self.reimport(path)
+        self.assertEqual(set(got), {(0, 255, 0, 255)})
+
+    def test_material_names_survive_as_basematerials(self):
+        f = self.mesh_feature([(1.0, 0.0, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0)], ["steel", "gold"])
+        path = os.path.join(self.tmp, "b.3mf")
+        Mesh.export([f], path)
+        self.assertIn("<basematerials", self.model(path))
+        _, mats = self.reimport(path)
+        self.assertEqual(mats, ["steel", "gold"])
+
+    def test_part_shape_material_written(self):
+        b = self.doc.addObject("Part::Box", "Box")
+        m = b.ShapeMaterial
+        m.setAppearanceValue("DiffuseColor", "(1.0, 0.0, 0.0, 1.0)")
+        b.ShapeMaterial = m
+        self.doc.recompute()
+        path = os.path.join(self.tmp, "p.3mf")
+        Mesh.export([b], path)
+        self.assertIn('displaycolor="#FF0000"', self.model(path))
+        got, mats = self.reimport(path)
+        self.assertEqual(set(got), {(255, 0, 0, 255)})
+        self.assertEqual(mats, ["Box"])
+
+    def test_no_colour_means_stock_bytes(self):
+        f = self.doc.addObject("Mesh::Feature", "Plain")
+        f.Mesh = Mesh.createBox(1, 1, 1)
+        path = os.path.join(self.tmp, "n.3mf")
+        Mesh.export([f], path)
+        text = self.model(path)
+        self.assertNotIn("colorgroup", text)
+        self.assertNotIn("basematerials", text)
+        self.assertNotIn("xmlns:m", text)
+
+    def test_switch_off_writes_no_resource(self):
+        f = self.mesh_feature([(1.0, 0.0, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0)])
+        self.grp.SetBool("Write3mfColors", False)
+        path = os.path.join(self.tmp, "s.3mf")
+        Mesh.export([f], path)
+        text = self.model(path)
+        self.assertNotIn("colorgroup", text)
+        self.assertNotIn("pid=", text)
+
+    def test_export_does_not_write_the_switch(self):
+        f = self.mesh_feature([(1.0, 0.0, 0.0, 1.0)])
+        Mesh.export([f], os.path.join(self.tmp, "k.3mf"))
+        self.assertNotIn("Write3mfColors", list(self.grp.GetBools()))

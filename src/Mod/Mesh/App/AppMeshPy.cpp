@@ -281,6 +281,7 @@ private:
                 Extension3MFFactory::createExtensions()
             );
             dynamic_cast<Exporter3MF*>(exporter.get())->setForceModel(export3mfModel);
+            exporter->setWriteColors(hGrp->GetBool("Write3mfColors", true));
         }
         else if (exportFormat != MeshIO::Undefined) {
             exporter = std::make_unique<MergeExporter>(outputFileName, exportFormat);

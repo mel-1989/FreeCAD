@@ -25,8 +25,13 @@
 
 #pragma once
 
+#include <Base/Color.h>
 #include <Mod/Mesh/MeshGlobal.h>
+#include <optional>
+#include <string>
+#include <vector>
 #include <iosfwd>
+#include <sstream>
 #include <zipios++/zipoutputstream.h>
 
 namespace Base
@@ -46,6 +51,19 @@ struct Resource3MF
     std::string relationshipType;
     std::string fileNameInZip;
     std::string fileContent;
+};
+
+/** Colours and material names of one object to write (3MF Materials and Properties Extension). */
+struct ObjectColor3MF
+{
+    std::vector<Base::Color> faceColors;  /**< one per facet, or empty */
+    std::vector<std::string> materials;   /**< names of the distinct colours in first-use order, or empty */
+    std::optional<Base::Color> overall;   /**< one colour for the whole object, written as basematerials */
+    std::string overallName;
+    bool empty() const
+    {
+        return faceColors.empty() && !overall;
+    }
 };
 
 /** Saves the mesh object into 3MF format. */
@@ -71,6 +89,8 @@ public:
      * \param model
      */
     void SetForceModel(bool model);
+    /*! Keep the model body in memory so the header can declare the materials namespace when needed. */
+    void SetBuffered(bool on);
     /*!
      * \brief Add a mesh object resource to the 3MF file.
      * \param mesh The mesh object to be written
@@ -78,7 +98,12 @@ public:
      * \param name The name of the mesh object which can later be displayed by downstream applications
      * \return true if the added mesh could be written successfully, false otherwise.
      */
-    bool AddMesh(const MeshKernel& mesh, const Base::Matrix4D& mat, const std::string& name = "");
+    bool AddMesh(
+        const MeshKernel& mesh,
+        const Base::Matrix4D& mat,
+        const std::string& name = "",
+        const ObjectColor3MF* colors = nullptr
+    );
     /*!
      * \brief AddResource
      * Add an additional resource to the 3MF file.
@@ -92,12 +117,20 @@ public:
     bool Save();
 
 private:
-    static void Initialize(std::ostream& str);
+    static void Initialize(std::ostream& str, bool colors);
+    void EnsureHeader();
     void Finish(std::ostream& str);
     std::string GetType(const MeshKernel& mesh) const;
     void SaveBuildItem(int id, const Base::Matrix4D& mat);
     static std::string DumpMatrix(const Base::Matrix4D& mat);
-    bool SaveObject(std::ostream& str, int id, const MeshKernel& mesh, const std::string& name) const;
+    bool SaveObject(
+        std::ostream& str,
+        int id,
+        const MeshKernel& mesh,
+        const std::string& name,
+        const std::vector<std::size_t>* triColor,
+        int groupId
+    ) const;
     bool SaveRels(std::ostream& str) const;
     bool SaveContent(std::ostream& str) const;
 
@@ -107,6 +140,10 @@ private:
     std::vector<std::string> items;
     std::vector<Resource3MF> resources;
     bool forceModel = true;
+    bool buffered = false;
+    bool headerDone = false;
+    bool usesColorGroup = false;
+    std::ostringstream body;
 };
 
 }  // namespace MeshCore

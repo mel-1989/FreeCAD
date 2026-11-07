@@ -22,6 +22,7 @@
  *                                                                         *
  ***************************************************************************/
 
+#include <map>
 #include <ostream>
 #include <sstream>
 
@@ -36,18 +37,21 @@
 
 using namespace MeshCore;
 
+namespace
+{
+const char* const materialNamespace = "http://schemas.microsoft.com/3dmanufacturing/material/2015/02";
+}
+
 Writer3MF::Writer3MF(std::ostream& str)
     : zip(str)
 {
     zip.putNextEntry("3D/3dmodel.model");
-    Initialize(zip);
 }
 
 Writer3MF::Writer3MF(const std::string& filename)
     : zip(filename)
 {
     zip.putNextEntry("3D/3dmodel.model");
-    Initialize(zip);
 }
 
 void Writer3MF::SetForceModel(bool model)
@@ -55,11 +59,28 @@ void Writer3MF::SetForceModel(bool model)
     forceModel = model;
 }
 
-void Writer3MF::Initialize(std::ostream& str)
+void Writer3MF::SetBuffered(bool on)
+{
+    buffered = on;
+}
+
+void Writer3MF::EnsureHeader()
+{
+    if (!buffered && !headerDone) {
+        Initialize(zip, false);
+        headerDone = true;
+    }
+}
+
+void Writer3MF::Initialize(std::ostream& str, bool colors)
 {
     str << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
            "<model unit=\"millimeter\" xml:lang=\"en-US\" "
-           "xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n"
+           "xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\"";
+    if (colors) {
+        str << " xmlns:m=\"" << materialNamespace << "\" requiredextensions=\"m\"";
+    }
+    str << ">\n"
            " <metadata name=\"Application\">FreeCAD</metadata>\n";
     str << Base::blanks(1) << "<resources>\n";
 }
@@ -75,11 +96,81 @@ void Writer3MF::Finish(std::ostream& str)
     str << "</model>\n";
 }
 
-bool Writer3MF::AddMesh(const MeshKernel& mesh, const Base::Matrix4D& mat, const std::string& name)
+namespace
 {
+std::string colorText(const Base::Color& c)
+{
+    // #RRGGBB, or #RRGGBBAA when not opaque
+    static const char* digits = "0123456789ABCDEF";
+    uint32_t v = c.getPackedValue();
+    std::string s = "#";
+    const int count = (v & 0xFFU) == 0xFFU ? 3 : 4;
+    for (int i = 0; i < count; i++) {
+        uint32_t byte = (v >> (24 - 8 * i)) & 0xFFU;
+        s += digits[byte >> 4];
+        s += digits[byte & 0xFU];
+    }
+    return s;
+}
+}  // namespace
+
+bool Writer3MF::AddMesh(
+    const MeshKernel& mesh,
+    const Base::Matrix4D& mat,
+    const std::string& name,
+    const ObjectColor3MF* colors
+)
+{
+    int groupId = 0;
+    std::vector<std::size_t> triColor;
+    if (colors && !colors->empty()) {
+        std::vector<Base::Color> distinct;
+        if (colors->overall) {
+            distinct.push_back(*colors->overall);
+        }
+        else if (colors->faceColors.size() == mesh.CountFacets()) {
+            triColor.reserve(colors->faceColors.size());
+            std::map<uint32_t, std::size_t> seen;
+            for (const auto& c : colors->faceColors) {
+                auto it = seen.find(c.getPackedValue());
+                if (it == seen.end()) {
+                    it = seen.emplace(c.getPackedValue(), distinct.size()).first;
+                    distinct.push_back(c);
+                }
+                triColor.push_back(it->second);
+            }
+        }
+        if (distinct.size() == 1) {
+            triColor.clear();  // one colour for the whole object: pid and pindex on the object suffice
+        }
+        if (!distinct.empty()) {
+            EnsureHeader();
+            std::ostream& str = buffered ? static_cast<std::ostream&>(body) : zip;
+            groupId = ++objectIndex;
+            const bool named = colors->overall || colors->materials.size() == distinct.size();
+            if (named) {
+                str << Base::blanks(2) << "<basematerials id=\"" << groupId << "\">\n";
+                for (std::size_t i = 0; i < distinct.size(); i++) {
+                    std::string n = colors->overall ? colors->overallName : colors->materials[i];
+                    str << Base::blanks(3) << "<base name=\"" << XMLTools::escapeXml(n)
+                        << "\" displaycolor=\"" << colorText(distinct[i]) << "\" />\n";
+                }
+                str << Base::blanks(2) << "</basematerials>\n";
+            }
+            else {
+                usesColorGroup = true;
+                str << Base::blanks(2) << "<m:colorgroup id=\"" << groupId << "\">\n";
+                for (const auto& c : distinct) {
+                    str << Base::blanks(3) << "<m:color color=\"" << colorText(c) << "\" />\n";
+                }
+                str << Base::blanks(2) << "</m:colorgroup>\n";
+            }
+        }
+    }
+    EnsureHeader();
     int id = ++objectIndex;
     SaveBuildItem(id, mat);
-    return SaveObject(zip, id, mesh, name);
+    return SaveObject(buffered ? static_cast<std::ostream&>(body) : zip, id, mesh, name, triColor.empty() ? nullptr : &triColor, groupId);
 }
 
 void Writer3MF::AddResource(const Resource3MF& res)
@@ -89,6 +180,12 @@ void Writer3MF::AddResource(const Resource3MF& res)
 
 bool Writer3MF::Save()
 {
+    if (buffered) {
+        Initialize(zip, usesColorGroup);
+        zip << body.str();
+        headerDone = true;
+    }
+    EnsureHeader();
     Finish(zip);
     zip.closeEntry();
 
@@ -112,7 +209,14 @@ bool Writer3MF::Save()
     return true;
 }
 
-bool Writer3MF::SaveObject(std::ostream& str, int id, const MeshKernel& mesh, const std::string& name) const
+bool Writer3MF::SaveObject(
+    std::ostream& str,
+    int id,
+    const MeshKernel& mesh,
+    const std::string& name,
+    const std::vector<std::size_t>* triColor,
+    int groupId
+) const
 {
     // NOLINTBEGIN(readability-magic-numbers, cppcoreguidelines-avoid-magic-numbers)
     const MeshPointArray& rPoints = mesh.GetPoints();
@@ -125,6 +229,9 @@ bool Writer3MF::SaveObject(std::ostream& str, int id, const MeshKernel& mesh, co
     str << Base::blanks(2) << "<object id=\"" << id << "\" type=\"" << GetType(mesh) << "\"";
     if (!name.empty()) {
         str << " name=\"" << XMLTools::escapeXml(name) << "\"";
+    }
+    if (groupId > 0) {
+        str << " pid=\"" << groupId << "\" pindex=\"" << (triColor ? (*triColor)[0] : 0) << "\"";
     }
     str << ">\n";
     str << Base::blanks(3) << "<mesh>\n";
@@ -139,9 +246,17 @@ bool Writer3MF::SaveObject(std::ostream& str, int id, const MeshKernel& mesh, co
 
     // facet indices
     str << Base::blanks(4) << "<triangles>\n";
+    std::size_t index = 0;
     for (const auto& it : rFacets) {
         str << Base::blanks(5) << "<triangle v1=\"" << it._aulPoints[0] << "\" v2=\""
-            << it._aulPoints[1] << "\" v3=\"" << it._aulPoints[2] << "\" />\n";
+            << it._aulPoints[1] << "\" v3=\"" << it._aulPoints[2] << "\"";
+        if (triColor && groupId > 0) {
+            const auto c = (*triColor)[index];
+            // pid, p2 and p3 are written too because lib3mf ignores a triangle that has p1 alone
+            str << " pid=\"" << groupId << "\" p1=\"" << c << "\" p2=\"" << c << "\" p3=\"" << c << "\"";
+        }
+        str << " />\n";
+        index++;
     }
     str << Base::blanks(4) << "</triangles>\n";
 
