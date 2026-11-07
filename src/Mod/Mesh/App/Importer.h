@@ -49,6 +49,7 @@ public:
     void load(const std::string& fileName);
 
 private:
+    bool load3mf(const std::string& fileName);
     void addVertexColors(Feature*, const std::vector<Base::Color>&);
     void addFaceColors(Feature*, const std::vector<Base::Color>&);
     void addColors(Feature*, const std::string& property, const std::vector<Base::Color>&);

@@ -23,7 +23,14 @@
  ***************************************************************************/
 
 
+#include <App/Application.h>
 #include <App/Document.h>
+#include <App/PropertyStandard.h>
+#include <Base/FileInfo.h>
+#include <Base/Parameter.h>
+#include <Base/Placement.h>
+
+#include "Core/IO/Reader3MF.h"
 
 #include "Importer.h"
 #include "MeshFeature.h"
@@ -38,6 +45,10 @@ Importer::Importer(App::Document* doc)
 
 void Importer::load(const std::string& fileName)
 {
+    if (Base::FileInfo(fileName.c_str()).hasExtension("3mf") && load3mf(fileName)) {
+        return;
+    }
+
     MeshObject mesh;
     MeshCore::Material mat;
     std::string name;
@@ -77,6 +88,53 @@ void Importer::load(const std::string& fileName)
     else {
         Base::Console().error("Failed to load {}\n", fileName);
     }
+}
+
+bool Importer::load3mf(const std::string& fileName)
+{
+    // Read3mfColors is only read here, never written
+    bool readColors = App::GetApplication()
+                          .GetParameterGroupByPath("User parameter:BaseApp/Preferences/Mod/Mesh")
+                          ->GetBool("Read3mfColors", true);
+    std::vector<MeshCore::Item3MF> items;
+    if (!MeshCore::Load3MFItems(fileName.c_str(), readColors, items) || items.empty()) {
+        return false;
+    }
+
+    Base::FileInfo file(fileName.c_str());
+    const bool single = items.size() == 1;
+    for (auto& item : items) {
+        // one build item is baked into the vertices as always; several keep a rigid transform as Placement
+        const bool asPlacement = !single && item.rigid;
+        if (!asPlacement) {
+            item.kernel.Transform(item.transform);
+        }
+        std::string label = item.name;
+        if (label.empty()) {
+            label = single ? file.fileNamePure() : std::to_string(item.objectId);
+        }
+
+        MeshObject mesh;
+        mesh.swap(item.kernel);
+        Feature* feature = createMesh(single ? file.fileNamePure() : label, mesh);
+        if (asPlacement) {
+            feature->Placement.setValue(Base::Placement(item.transform));
+        }
+        if (!item.faceColors.empty()) {
+            addFaceColors(feature, item.faceColors);
+        }
+        if (!item.materials.empty()) {
+            auto prop = static_cast<App::PropertyStringList*>(
+                feature->addDynamicProperty("App::PropertyStringList", "Material3mf", "3MF")
+            );
+            if (prop) {
+                prop->setValues(item.materials);
+            }
+        }
+        feature->Label.setValue(label);
+        feature->purgeTouched();
+    }
+    return true;
 }
 
 void Importer::addVertexColors(Feature* feature, const std::vector<Base::Color>& colors)
