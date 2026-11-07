@@ -1582,3 +1582,132 @@ class TestNumerics(unittest.TestCase):
             b.con("distance_pp", p, q, value=3.0 if k else 4.0)
         r = self.check("1000 duplicates one wrong", b.spec())
         self.assertNotEqual(r["code"], 0)
+
+
+# --------------------------------------------------------------------------------------------
+# check 9 (speed): the routes that make a grid of lines fast agree with the reference ones
+# --------------------------------------------------------------------------------------------
+
+
+class TestLargeGrids(unittest.TestCase):
+    """A grid of lines has more rows than unknowns (closed loops make rows redundant). Its
+    Gauss-Newton step is the sparse normal equations, and from 250 unknowns its diagnosis is a
+    sparse QR in the order the points were given, the two QRs side by side. The reference route
+    (`reference_diagnosis`) is the System's own: dense QR below 1,000 unknowns, COLAMD above. Both
+    must say the same thing."""
+
+    @staticmethod
+    def grid(unknowns):
+        from Sketch3DTests.Sketch3DBench import make_spec
+
+        return make_spec("grid", unknowns)[0]
+
+    def routes(self, spec):
+        ref = dict(spec, reference_diagnosis=True)
+        return Sketch3D.solve(spec), Sketch3D.solve(ref)
+
+    def assert_same(self, name, fast, ref, spec):
+        """Same verdict, DOF, conflicts and coordinates. Which constraints of a redundant set are
+        the ones named is the QR's column order, so the two routes may name different members and
+        a different number of them (969 unknowns: 18 redundant and 1 partially redundant against
+        34 and 0), as the dense and sparse paths of the 2D sketcher do: the members must be true
+        ones (removing a named tag alone leaves the DOF and the verdict)."""
+        for key in ("code", "dof", "conflicting"):
+            self.assertEqual(fast[key], ref[key], "%s: %s differs between the routes" % (name, key))
+        worst = max(abs(a - b) for a, b in zip(flat(fast), flat(ref)))
+        self.assertLessEqual(worst, 1e-8, "%s: coordinates differ by %g" % (name, worst))
+        self.assertEqual(bool(fast["redundant"] or fast["partially_redundant"]), bool(ref["redundant"] or ref["partially_redundant"]), name)
+        rng = random.Random(len(fast["redundant"]))
+        named = sorted(fast["redundant"])
+        for tag in rng.sample(named, min(4, len(named))):
+            smaller = dict(spec, constraints=[c for c in spec["constraints"] if c.get("tag") != tag])
+            r = Sketch3D.solve(smaller)
+            self.assertEqual((r["code"], r["dof"]), (fast["code"], fast["dof"]), "%s: removing redundant tag %s" % (name, tag))
+
+    def test_consistent_grids_agree_with_the_reference_route(self):
+        for unknowns in (297, 969):
+            spec = self.grid(unknowns)
+            fast, ref = self.routes(spec)
+            self.assertEqual((fast["code"], fast["dof"]), (0, 0), "grid %d" % unknowns)
+            self.assertGreater(len(fast["redundant"]) + len(fast["partially_redundant"]), 0, "closed loops are redundant")
+            self.assert_same("grid %d" % unknowns, fast, ref, spec)
+            print("\n[check 9] grid %d: %d redundant, %d partially redundant, same verdict, DOF and coordinates as the reference route" % (
+                unknowns, len(fast["redundant"]), len(fast["partially_redundant"])))
+
+    def test_planted_conflicts_are_named_alike(self):
+        for unknowns, victims in ((297, (0, 5, 17, 30)),):  # a failing solve of 969 unknowns takes 30 s (open, see the note)
+            for victim in victims:
+                spec = self.grid(unknowns)
+                lengths = [i for i, c in enumerate(spec["constraints"]) if c["type"] == "length"]
+                spec["constraints"][lengths[victim]]["value"] = 1.7
+                fast, ref = self.routes(spec)
+                self.assertNotEqual(fast["code"], 0, "grid %d length %d wrong" % (unknowns, victim))
+                self.assertGreater(len(fast["conflicting"]), 0)
+                self.assert_same("grid %d, length %d wrong" % (unknowns, victim), fast, ref, spec)
+
+    def test_ungrounded_grid_agrees(self):
+        spec = self.grid(297)
+        spec["points"][0]["fixed"] = False
+        fast, ref = self.routes(spec)
+        self.assertEqual(fast["dof"], 3, "a free grid of axis lines can only translate")
+        self.assert_same("free grid", fast, ref, spec)
+
+    def test_a_grid_with_a_missing_row_stays_correct(self):
+        """J has dependent columns here: the normal equations are singular and the step falls
+        back to the minimum norm one."""
+        spec = self.grid(297)
+        last = len(spec["points"]) - 1
+        touching = {i for i, (a, b) in enumerate(spec["lines"]) if last in (a, b)}
+        spec["constraints"] = [c for c in spec["constraints"] if c["operands"][0] not in touching]
+        fast, ref = self.routes(spec)
+        self.assertEqual(fast["code"], 0)
+        self.assertEqual(fast["dof"], 3, "the corner point lost every relation")
+        self.assert_same("grid with a free corner", fast, ref, spec)
+
+    def test_a_corner_held_by_one_distance_is_nearly_singular(self):
+        """Its three unknowns carry one row: J^T J has a block of rank 1, whose pivots come out
+        tiny but not zero. The pivot test sends the step to the minimum norm route; without it
+        the sparse Cholesky divides by rounding noise."""
+        spec = self.grid(297)
+        last = len(spec["points"]) - 1
+        touching = {i for i, (a, b) in enumerate(spec["lines"]) if last in (a, b)}
+        spec["constraints"] = [c for c in spec["constraints"] if c["operands"][0] not in touching]
+        near = max(a if b == last else b for a, b in spec["lines"] if last in (a, b))
+        spec["points"][last]["xyz"] = [c + 0.02 for c in spec["points"][last]["xyz"]]
+        spec["lines"].append([near, last])
+        spec["constraints"].append({"type": "length", "operands": [len(spec["lines"]) - 1], "value": 1.0})
+        fast, ref = self.routes(spec)
+        self.assertEqual((fast["code"], fast["dof"]), (0, 2), "the corner can swing on a sphere")
+        self.assert_same("corner on one distance", fast, ref, spec)
+        self.assertLessEqual(true_residual(spec, flat(fast)), TOL)
+
+    def test_reference_flag_must_be_a_bool(self):
+        spec = self.grid(297)
+        spec["reference_diagnosis"] = "yes"
+        with self.assertRaises(Sketch3D.SpecError):
+            Sketch3D.solve(spec)
+
+    def test_speed_guards(self):
+        """Loose guards, at twice the bars of check 9 that the mini measures well under: they
+        catch the old behaviour (a dense step of 225 ms each, a COLAMD diagnosis of 10 s)."""
+        import time
+
+        spec = self.grid(1000)
+        spec["diagnose"] = False
+        t = time.perf_counter()
+        r = Sketch3D.solve(spec)
+        step_only = time.perf_counter() - t
+        self.assertEqual(r["code"], 0)
+        self.assertLess(step_only, 0.5, "the solve of a 969-unknown grid took %.2f s" % step_only)
+        spec = self.grid(1000)
+        t = time.perf_counter()
+        r = Sketch3D.solve(spec)
+        with_diagnosis = time.perf_counter() - t
+        self.assertLess(with_diagnosis, 0.4, "the solve and diagnosis of a 969-unknown grid took %.2f s" % with_diagnosis)
+        spec = self.grid(3000)
+        t = time.perf_counter()
+        r = Sketch3D.solve(spec)
+        whole = time.perf_counter() - t
+        self.assertEqual((r["code"], r["dof"]), (0, 0))
+        self.assertLess(whole, 2.0, "the solve and diagnosis of a 3,069-unknown grid took %.2f s" % whole)
+        print("\n[check 9] guards: grid 969 solve %.0f ms, with diagnosis %.0f ms; grid 3069 with diagnosis %.0f ms" % (1000 * step_only, 1000 * with_diagnosis, 1000 * whole))

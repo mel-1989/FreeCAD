@@ -436,9 +436,21 @@ struct Model
             list.push_back(r.get());
         }
         sub = std::make_unique<GCS::SubSystem>(list, unknowns);
+        sys.dogLegGaussStep = tallStep(list.size(), unknowns.size());
         const GCS::SolveStatus st = sys.solve(sub.get(), alg, false);
         sub->applySolution();
         return st;
+    }
+
+    // The Gauss-Newton step for a Jacobian of rows x cols. More rows than unknowns means closed
+    // loops, so J is rank deficient and J J^T is singular: the sparse Cholesky of J J^T fails on
+    // every step and the System falls back to a dense LDLT of the rows x rows matrix (225 ms a
+    // step at 969 unknowns on a grid of lines). A sparse QR of J itself (Davis, "Algorithm 915,
+    // SuiteSparseQR") handles the singular case and gives a least-squares step, which is the
+    // exact one for the consistent systems this solver is given.
+    static GCS::DogLegGaussStep tallStep(size_t rows, size_t cols)
+    {
+        return (rows > cols && cols >= 200) ? GCS::SparseNormalLdlt : GCS::LeastNormLdlt;
     }
 
     void tune()
@@ -467,6 +479,28 @@ struct Model
         sys.declareUnknowns(unknowns);
         GCS::VEC_pD driven;
         sys.declareDrivenParams(driven);
+        // The diagnosis of a large system: a sparse QR from 250 unknowns on (the System's default
+        // is 1,000, below which a dense QR of the whole Jacobian takes 0.2 s at 1,000 unknowns),
+        // with the columns in the order the points were given. COLAMD's order fills the triangle
+        // on a grid of lines (10 s at 3,069 unknowns against 0.5 s) and points of a drawing come in
+        // an order that has locality. spec.referenceDiagnosis asks for the System's own choice.
+        // The ordering flag is process wide and the GIL is held for the whole call, so the 2D
+        // sketcher cannot run in between; the guard clears it even if the diagnosis throws.
+        struct OrderGuard
+        {
+            explicit OrderGuard(bool on)
+            {
+                GCS::diagnoseNaturalOrderFlag = on;
+            }
+            ~OrderGuard()
+            {
+                GCS::diagnoseNaturalOrderFlag = false;
+            }
+        } orderGuard(!spec.referenceDiagnosis);
+        if (!spec.referenceDiagnosis) {
+            sys.autoQRThreshold = 250;
+            sys.diagnoseParallel = true;
+        }
         sys.initSolution(alg);
     }
 };

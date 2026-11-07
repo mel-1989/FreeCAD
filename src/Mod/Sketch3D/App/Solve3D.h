@@ -56,6 +56,9 @@ struct Spec
     // false skips the diagnosis (a sparse QR of the Jacobian, most of the time of a large solve):
     // dof is then -1 and the redundant lists stay empty. For interactive solves.
     bool diagnose = true;
+    // true diagnoses with the System's own choices (dense QR below 1,000 unknowns, COLAMD column
+    // order above), as the 2D sketcher does; for tests that compare the two routes
+    bool referenceDiagnosis = false;
 };
 
 struct Result

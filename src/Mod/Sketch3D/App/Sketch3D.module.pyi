@@ -34,6 +34,8 @@ class Spec(TypedDict, total=False):
     algorithm: str
     diagnose: bool
     """False skips the diagnosis: ``dof`` is -1 and the redundancy lists are empty."""
+    reference_diagnosis: bool
+    """True diagnoses as the 2D sketcher does (dense QR below 1,000 unknowns, COLAMD column order above) instead of the faster route used by default from 250 unknowns; for comparing the two."""
 
 class Result(TypedDict):
     code: int

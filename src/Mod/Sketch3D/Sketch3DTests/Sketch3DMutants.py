@@ -20,6 +20,7 @@ REL = "src/Mod/Sketch3D/App/Relations.cpp"
 SOLVE = "src/Mod/Sketch3D/App/Solve3D.cpp"
 APP = "src/Mod/Sketch3D/App/AppSketch3D.cpp"
 HDR = "src/Mod/Sketch3D/App/Solve3D.h"
+GCS = "src/Mod/Sketcher/App/planegcs/GCS.cpp"
 
 # (name, file, old text, new text, what it plants)
 MUTANTS = [
@@ -63,6 +64,15 @@ MUTANTS = [
     ("strict_flag_off", APP, "if (!o || !PyBool_Check(o)) {\n        raiseSpec(position, what + \" must be True or False\");", "if (!o) {\n        raiseSpec(position, what + \" must be True or False\");", "'yes' accepted for a flag"),
     ("strict_keys_off", APP, "        if (!known) {\n            raiseSpec(position, what + \": unknown key", "        if (false) {\n            raiseSpec(position, what + \": unknown key", "an unknown key accepted"),
     ("strict_negative_tag_off", APP, "if (cs.tag < 0) {", "if (cs.tag < -1000000000) {", "a negative tag accepted"),
+    # grid speed (check 9): the tall Gauss-Newton step, the diagnosis route and its guards
+    ("grid_tall_step_off", SOLVE, "return (rows > cols && cols >= 200) ? GCS::SparseNormalLdlt : GCS::LeastNormLdlt;", "return GCS::LeastNormLdlt;", "a tall Jacobian takes the J J^T step again (a dense fallback on every step of a grid)"),
+    ("grid_diagnosis_order_off", SOLVE, "} orderGuard(!spec.referenceDiagnosis);", "} orderGuard(false);", "the diagnosis keeps COLAMD's column order on a grid (10 s at 3,069 unknowns)"),
+    ("grid_diagnosis_threshold_default", SOLVE, "sys.autoQRThreshold = 250;", "sys.autoQRThreshold = 1000;", "a system under 1,000 unknowns is diagnosed with the dense QR (0.6 s at 969)"),
+    ("grid_diagnosis_serial", SOLVE, "sys.diagnoseParallel = true;", "sys.diagnoseParallel = false;", "the two sparse QRs of the diagnosis run one after the other (0.9 s to 1.2 s at 3,069)"),
+    ("grid_normal_pivot_test_off", GCS, "if (d.minCoeff() > 1e-12 * d.maxCoeff()) {", "if (true) {", "the sparse normal equations are trusted whatever their pivots"),
+    ("grid_normal_equations_drop_term", GCS, "h_gn = ldlt.solve(-(Jx.adjoint() * fx));", "h_gn = ldlt.solve(-fx.head(Jx.cols()));", "the right side of the normal equations is not J^T f"),
+    ("grid_elimination_skips_negatives", GCS, "if (R(i, col) != 0.0) {", "if (R(i, col) > 0.0) {", "the pivot row's negative entries are left out of the elimination that names redundant sets"),
+    ("grid_reference_flag_ignored", APP, "spec.referenceDiagnosis = flag(rd, -1, \"'reference_diagnosis'\");", "spec.referenceDiagnosis = false;", "reference_diagnosis is never read"),
 ]
 
 

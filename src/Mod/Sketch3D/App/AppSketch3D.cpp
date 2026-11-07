@@ -155,7 +155,7 @@ Spec parseSpec(PyObject* obj)
         raiseSpec(-1, "spec must be a dict");
     }
     Spec spec;
-    onlyKeys(obj, {"points", "lines", "planes", "constraints", "algorithm", "diagnose"}, -1, "spec");
+    onlyKeys(obj, {"points", "lines", "planes", "constraints", "algorithm", "diagnose", "reference_diagnosis"}, -1, "spec");
     {
         Ref pts = listOf(obj, "points");
         const Py_ssize_t n = PySequence_Fast_GET_SIZE(pts.p);
@@ -274,6 +274,10 @@ Spec parseSpec(PyObject* obj)
     PyObject* dg = item(obj, "diagnose");
     if (dg) {
         spec.diagnose = flag(dg, -1, "'diagnose'");
+    }
+    PyObject* rd = item(obj, "reference_diagnosis");
+    if (rd) {
+        spec.referenceDiagnosis = flag(rd, -1, "'reference_diagnosis'");
     }
     PyObject* alg = item(obj, "algorithm");
     if (alg && alg != Py_None) {
