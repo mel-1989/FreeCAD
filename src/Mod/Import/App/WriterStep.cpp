@@ -56,6 +56,7 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
     writer.SetShapeProcessFlags(aFlags);
 #endif
     Part::Interface::writeStepAssembly(Part::Interface::Assembly::On);
+    Part::Interface::applyStepSchemePreference();
 
     // Validation properties (CAx-IF Recommended Practices, v4.2): on by default.
     Base::Reference<ParameterGrp> stepGrp = App::GetApplication()

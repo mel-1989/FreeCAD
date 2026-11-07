@@ -94,6 +94,7 @@ void DlgExportStep::saveSettings()
     ui->checkBoxExportHiddenObj->onSave();
     ui->checkBoxExportLegacy->onSave();
     ui->checkBoxKeepPlacement->onSave();
+    ui->checkBoxValidationProps->onSave();
 }
 
 void DlgExportStep::loadSettings()
@@ -116,6 +117,7 @@ void DlgExportStep::loadSettings()
     ui->checkBoxExportHiddenObj->onRestore();
     ui->checkBoxExportLegacy->onRestore();
     ui->checkBoxKeepPlacement->onRestore();
+    ui->checkBoxValidationProps->onRestore();
 }
 
 StepSettings DlgExportStep::getSettings() const

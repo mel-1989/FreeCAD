@@ -85,6 +85,25 @@
         </item>
        </widget>
       </item>
+      <item row="7" column="0" colspan="2">
+       <widget class="Gui::PrefCheckBox" name="checkBoxValidationProps">
+        <property name="toolTip">
+         <string>Writes the volume, surface area and centroid of each part as validation properties, so a receiving system can check what it read (CAx-IF recommended practices for geometric and assembly validation properties). Switch off for receivers that reject them.</string>
+        </property>
+        <property name="text">
+         <string>Write validation properties (volume, area, centroid)</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+        <property name="prefEntry" stdset="0">
+         <cstring>WriteValidationProperties</cstring>
+        </property>
+        <property name="prefPath" stdset="0">
+         <cstring>Mod/Part/STEP</cstring>
+        </property>
+       </widget>
+      </item>
       <item row="4" column="0" colspan="2">
        <widget class="Gui::PrefCheckBox" name="checkBoxExportLegacy">
         <property name="text">

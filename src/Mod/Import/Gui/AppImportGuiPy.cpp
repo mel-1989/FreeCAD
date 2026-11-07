@@ -589,15 +589,6 @@ private:
 
             Base::FileInfo file(Utf8Name.c_str());
             if (file.hasExtension({"stp", "step"})) {
-                ParameterGrp::handle hGrp = App::GetApplication().GetParameterGroupByPath(
-                    "User parameter:BaseApp/Preferences/Mod/Part/STEP"
-                );
-                std::string scheme = hGrp->GetASCII("Scheme", Part::Interface::writeStepScheme());
-                std::list<std::string> supported = Part::supportedSTEPSchemes();
-                if (std::ranges::find(supported, scheme) != supported.end()) {
-                    Part::Interface::writeStepScheme(scheme.c_str());
-                }
-
                 Import::WriterStep writer(file);
                 writer.write(hDoc);
             }
