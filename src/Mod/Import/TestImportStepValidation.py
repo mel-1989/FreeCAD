@@ -161,6 +161,26 @@ class TestApi(StepValidationCase):
         self.write_text(p, "this is not STEP\x00\x01\x02" * 50)
         self.assertEqual(Import.validateStep(p)["verdict"], "failed")
 
+    def test_malformed_product_record_does_not_kill_the_caller(self):
+        box = self.shape_object(Part.makeBox(10, 20, 30), "Box")
+        good = self.export([box])
+        text = open(good, errors="replace").read()
+        record = re.search(r"#(\d+)\s*=\s*PRODUCT\s*\(.*?\)\s*;", text, re.S)
+        self.assertIsNotNone(record)
+        for tag, args in (("short", "'Box'"), ("numbers", "1,2,3,4"), ("none", "")):
+            p = self.path("product_%s.step" % tag)
+            with open(p, "w") as f:
+                f.write(
+                    text[: record.start()]
+                    + "#%s=PRODUCT(%s);" % (record.group(1), args)
+                    + text[record.end() :]
+                )
+            result = Import.validateStep(p)
+            self.assertIn(
+                result["verdict"],
+                ("agree", "disagree", "invalid_geometry", "no_properties", "unusable_properties", "failed"),
+            )
+
     def test_empty_file_is_failed(self):
         p = self.path("empty.step")
         self.write_text(p, "")

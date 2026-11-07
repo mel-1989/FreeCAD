@@ -133,7 +133,8 @@ std::string schemaOf(const Handle(StepData_StepModel)& sm)
         Handle(Standard_Transient) h = sm->HeaderEntity(STANDARD_TYPE(HeaderSection_FileSchema));
         Handle(HeaderSection_FileSchema) fs = Handle(HeaderSection_FileSchema)::DownCast(h);
         if (!fs.IsNull() && fs->NbSchemaIdentifiers() > 0) {
-            return fs->SchemaIdentifiersValue(1)->ToCString();
+            Handle(TCollection_HAsciiString) id = fs->SchemaIdentifiersValue(1);
+            return id.IsNull() ? std::string() : std::string(id->ToCString());
         }
     }
     return {};
@@ -795,6 +796,9 @@ void readRepresentation(const Handle(StepRepr_Representation)& rep, Stated& st, 
     std::optional<double> ctxLen = contextLengthFactor(rep->ContextOfItems());
     for (int i = 1; i <= rep->NbItems(); ++i) {
         Handle(StepRepr_RepresentationItem) it = rep->ItemsValue(i);
+        if (it.IsNull()) {
+            continue;
+        }
         std::string name = lowerTrim(it->Name());
         if (Handle(StepRepr_MeasureRepresentationItem) mri =
                 Handle(StepRepr_MeasureRepresentationItem)::DownCast(it)) {
@@ -971,8 +975,15 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
         StepPartFinding part;
         if (!prod->Formation().IsNull() && !prod->Formation()->OfProduct().IsNull()) {
             Handle(StepBasic_Product) product = prod->Formation()->OfProduct();
-            part.name = lowerTrim(product->Name()).empty() ? std::string(product->Id()->ToCString())
-                                                           : std::string(product->Name()->ToCString());
+            // A malformed PRODUCT record leaves either handle null; a garbage file must not kill the caller.
+            HAscii pname = product->Name();
+            HAscii pid = product->Id();
+            if (!lowerTrim(pname).empty()) {
+                part.name = pname->ToCString();
+            }
+            else if (!pid.IsNull()) {
+                part.name = pid->ToCString();
+            }
         }
         auto it = stated.find(prod.get());
         if (it != stated.end()) {
@@ -1239,8 +1250,13 @@ int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model,
         Group& g = groups[index[pds.get()]];
         g.occt = g.occt || direct;
         Handle(StepRepr_Representation) rep = pdr->UsedRepresentation();
+        if (rep.IsNull()) {
+            continue;
+        }
         for (int k = 1; k <= rep->NbItems(); ++k) {
-            g.items.emplace(lowerTrim(rep->ItemsValue(k)->Name()), rep->ItemsValue(k));
+            if (!rep->ItemsValue(k).IsNull()) {
+                g.items.emplace(lowerTrim(rep->ItemsValue(k)->Name()), rep->ItemsValue(k));
+            }
         }
     }
 
