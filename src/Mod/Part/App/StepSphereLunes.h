@@ -54,6 +54,10 @@ public:
     /// true when any face of the shape is a sphere lune
     static bool hasSphereLune(const TopoDS_Shape& shape);
 
+    /// The preference Mod/Part/STEP "WriteSphereLunes" (default true); off writes every face as the
+    /// document has it
+    static bool enabled();
+
     /// Performs the conversion into the modifier (Init and Perform are done here). Returns false
     /// and leaves the modifier untouched when the shape has no such face.
     static bool convert(const TopoDS_Shape& shape, BRepTools_Modifier& modifier);

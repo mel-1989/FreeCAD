@@ -60,6 +60,7 @@ void convertSphereLunes(const Handle(TDocStd_Document)& hDoc)
     Handle(XCAFDoc_ShapeTool) shapeTool = XCAFDoc_DocumentTool::ShapeTool(hDoc->Main());
     TDF_LabelSequence labels;
     shapeTool->GetShapes(labels);
+    bool any = false;
     for (int i = 1; i <= labels.Length(); ++i) {
         const TDF_Label label = labels.Value(i);
         if (!XCAFDoc_ShapeTool::IsSimpleShape(label)) {
@@ -72,6 +73,7 @@ void convertSphereLunes(const Handle(TDocStd_Document)& hDoc)
         }
         TDF_LabelSequence subs;
         XCAFDoc_ShapeTool::GetSubShapes(label, subs);
+        any = true;
         label.ForgetAttribute(TNaming_NamedShape::GetID());
         shapeTool->SetShape(label, modifier.ModifiedShape(shape));
         for (int j = 1; j <= subs.Length(); ++j) {
@@ -87,6 +89,10 @@ void convertSphereLunes(const Handle(TDocStd_Document)& hDoc)
             sub.ForgetAttribute(TNaming_NamedShape::GetID());
             shapeTool->SetShape(sub, newSub);
         }
+    }
+    if (any) {
+        // assemblies keep a compound of their components' shapes; rebuild it from the labels
+        shapeTool->UpdateAssemblies();
     }
 }
 

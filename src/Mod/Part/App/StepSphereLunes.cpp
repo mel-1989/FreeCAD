@@ -49,6 +49,9 @@
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Vertex.hxx>
 
+#include <App/Application.h>
+#include <Base/Parameter.h>
+
 #include "StepSphereLunes.h"
 
 using namespace Part;
@@ -256,9 +259,20 @@ bool StepSphereLunes::hasSphereLune(const TopoDS_Shape& shape)
     return false;
 }
 
+bool StepSphereLunes::enabled()
+{
+    return App::GetApplication()
+        .GetUserParameter()
+        .GetGroup("BaseApp")
+        ->GetGroup("Preferences")
+        ->GetGroup("Mod/Part")
+        ->GetGroup("STEP")
+        ->GetBool("WriteSphereLunes", true);
+}
+
 bool StepSphereLunes::convert(const TopoDS_Shape& shape, BRepTools_Modifier& modifier)
 {
-    if (shape.IsNull() || !hasSphereLune(shape)) {
+    if (shape.IsNull() || !enabled() || !hasSphereLune(shape)) {
         return false;
     }
     modifier.Init(shape);

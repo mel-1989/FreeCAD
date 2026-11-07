@@ -6,6 +6,7 @@
 #   Assembly Validation Properties, v4.2 (2014-10-09).                    *
 # **************************************************************************
 
+import math
 import os
 import re
 import tempfile
@@ -764,6 +765,184 @@ class TestImportBehaviour(StepValidationCase):
         out = self.capture_stderr(self.import_into_new_doc)
         warnings = [l for l in out.splitlines() if "STEP validation" in l]
         self.assertEqual(len(warnings), 2, out)  # Box (placed twice) and Cyl: once each
+
+
+class TestSphereLuneRoundTrip(StepValidationCase):
+    """G13 slice 2a: our own export of a part of a sphere comes back the right side of the sphere.
+
+    A sweep corner is a surface of revolution of a circle about a line through its centre in its plane. STEP
+    carries it as SURFACE_OF_REVOLUTION (ISO 10303-42), the file keeps the two meridians but not the pole edges,
+    and OCCT's reader builds the complementary lune. The write converts such faces, and only those, to a sphere.
+    """
+
+    R = 5.0
+
+    def lune(self, r=5.0, axis=App.Vector(0, 1, 0), width=90.0, half="even", reverse=False):
+        c = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), r)
+        ax = App.Vector(axis)
+        ax.normalize()
+        a = math.atan2(ax.dot(c.YAxis), ax.dot(c.XAxis))
+        t0 = a + (0.0 if half == "even" else math.pi)
+        f = Part.SurfaceOfRevolution(c, App.Vector(0, 0, 0), ax).toShape(0.0, math.radians(width), t0, t0 + math.pi)
+        if reverse:
+            f = f.copy()
+            f.reverse()
+        return f
+
+    def sweep(self, angle=90.0, reverse=False, r=5.0, centre_offset=0.0):
+        b = App.Vector(0, 0, 40)
+        c2 = b + App.Vector(40 * math.sin(math.radians(angle)), 0, 40 * math.cos(math.radians(angle)))
+        pts = [App.Vector(0, 0, 0), b, c2]
+        if reverse:
+            pts.reverse()
+        t = (pts[1] - pts[0]).normalize()
+        prof = Part.Wire([Part.makeCircle(r, pts[0] + App.Vector(centre_offset, 0, 0), t)])
+        return Part.Wire(Part.makePolygon(pts)).makePipeShell([prof], True, False, 2)
+
+    def back_via_export(self, shape, name="s"):
+        obj = self.shape_object(shape, name)
+        p = self.export([obj], name + ".step")
+        return p, Part.read(p)
+
+    def back_via_export_step(self, shape, name="s"):
+        p = self.path(name + "_es.step")
+        shape.exportStep(p)
+        return p, Part.read(p)
+
+    def assertSame(self, shape, back, rel=1e-6):
+        self.assertTrue(back.isValid())
+        self.assertTrue(_close(shape.Area, back.Area, rel), (shape.Area, back.Area))
+        if shape.Solids:
+            self.assertTrue(_close(shape.Volume, back.Volume, rel), (shape.Volume, back.Volume))
+
+    def test_round_corner_sweep_keeps_its_volume_through_import_export(self):
+        sh = self.sweep(90.0)
+        self.assertEqual(sum(type(f.Surface).__name__ == "SurfaceOfRevolution" for f in sh.Faces), 1)
+        p, back = self.back_via_export(sh)
+        self.assertSame(sh, back)
+        self.assertEqual(Import.validateStep(p)["verdict"], "agree")
+
+    def test_round_corner_sweep_keeps_its_volume_through_export_step(self):
+        sh = self.sweep(90.0)
+        _, back = self.back_via_export_step(sh)
+        self.assertSame(sh, back)
+
+    def test_sweep_in_both_path_directions_and_many_angles(self):
+        for angle in (10.0, 45.0, 90.0, 135.0, 150.0):
+            for reverse in (False, True):
+                with self.subTest(angle=angle, reverse=reverse):
+                    sh = self.sweep(angle, reverse)
+                    self.assertSame(sh, self.back_via_export_step(sh, "w")[1])
+
+    def test_lunes_of_every_width_half_orientation_and_axis(self):
+        for axis in (App.Vector(0, 1, 0), App.Vector(1, 0, 0), App.Vector(1, 1, 0)):
+            for width in (5.0, 89.0, 90.0, 91.0, 179.0, 180.0, 181.0, 270.0, 355.0):
+                for half in ("even", "odd"):
+                    for reverse in (False, True):
+                        with self.subTest(axis=tuple(axis), width=width, half=half, reverse=reverse):
+                            f = self.lune(axis=axis, width=width, half=half, reverse=reverse)
+                            back = self.back_via_export_step(f, "l")[1]
+                            self.assertSame(f, back)
+                            # the closed form, not the source shape: area of a lune is 2 r^2 w
+                            self.assertTrue(_close(back.Area, 2 * 25.0 * math.radians(width), 1e-6))
+
+    def test_written_file_names_a_sphere_for_the_converted_face(self):
+        p, _ = self.back_via_export(self.sweep(90.0))
+        t = self.flat(p)
+        self.assertIn("SPHERICAL_SURFACE", t)
+        self.assertNotIn("SURFACE_OF_REVOLUTION", t)
+
+    def test_export_leaves_the_document_shape_alone(self):
+        obj = self.shape_object(self.sweep(90.0), "Sweep")
+        before = obj.Shape.exportBrepToString()
+        self.export([obj])
+        obj.Shape.exportStep(self.path("direct.step"))
+        flags = re.compile(r"^\s*[01]{7}\s*$", re.M)  # TShape bookkeeping that stock export clears as well
+        self.assertEqual(flags.sub("F", before), flags.sub("F", obj.Shape.exportBrepToString()))
+        self.assertEqual(sum(type(f.Surface).__name__ == "SurfaceOfRevolution" for f in obj.Shape.Faces), 1)
+
+    def test_a_shape_without_such_a_face_is_written_as_before(self):
+        obj = self.shape_object(Part.makeCylinder(5, 20), "Cyl")
+        on = self.export([obj], "on.step")
+        PREF.SetBool("WriteSphereLunes", False)
+        try:
+            off = self.export([obj], "off.step")
+        finally:
+            PREF.SetBool("WriteSphereLunes", True)
+        strip = lambda p: re.sub(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", "T", self.text(p))
+        self.assertEqual(strip(on), strip(off))
+
+    def test_switching_the_conversion_off_writes_the_revolution(self):
+        PREF.SetBool("WriteSphereLunes", False)
+        try:
+            p, _ = self.back_via_export(self.sweep(90.0))
+        finally:
+            PREF.SetBool("WriteSphereLunes", True)
+        self.assertIn("SURFACE_OF_REVOLUTION", self.flat(p))
+
+    def test_only_a_circle_about_a_line_through_its_centre_in_its_plane_is_converted(self):
+        z = App.Vector(0, 0, 1)
+        cases = {
+            "centre off the axis": (Part.Circle(App.Vector(2, 0, 0), z, 5.0), App.Vector(0, 0, 0), App.Vector(0, 1, 0)),
+            "axis out of the circle's plane": (Part.Circle(App.Vector(0, 0, 0), z, 5.0), App.Vector(0, 0, 0), App.Vector(0, 1, 1)),
+            "ellipse": (Part.Ellipse(App.Vector(0, 0, 0), 6.0, 5.0), App.Vector(0, 0, 0), App.Vector(0, 1, 0)),
+        }
+        for name, (curve, loc, axis) in cases.items():
+            with self.subTest(name):
+                f = Part.SurfaceOfRevolution(curve, loc, axis).toShape(0.0, 1.0, 1.6, 3.0)
+                p = self.path("n.step")
+                f.exportStep(p)
+                self.assertNotIn("SPHERICAL_SURFACE", self.flat(p))
+                self.assertIn("SURFACE_OF_REVOLUTION", self.flat(p))
+
+    def test_a_face_across_both_halves_of_the_circle_is_left_alone(self):
+        c = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), 5.0)
+        f = Part.SurfaceOfRevolution(c, App.Vector(0, 0, 0), App.Vector(0, 1, 0)).toShape(0.0, 1.0, 0.3, 5.0)
+        p = self.path("both.step")
+        f.exportStep(p)
+        self.assertNotIn("SPHERICAL_SURFACE", self.flat(p))
+
+    def test_wedge_volume_is_the_closed_form(self):
+        r, w = 5.0, math.radians(120.0)
+        c = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), r)
+        lune = Part.SurfaceOfRevolution(c, App.Vector(0, 0, 0), App.Vector(0, 1, 0)).toShape(0.0, w, math.pi / 2, 3 * math.pi / 2)
+        faces = [lune]
+        for u in (0.0, w):
+            arc = Part.ArcOfCircle(c, math.pi / 2, 3 * math.pi / 2).toShape()
+            d = Part.Face(Part.Wire([arc, Part.makeLine(arc.Vertexes[-1].Point, arc.Vertexes[0].Point)]))
+            d.rotate(App.Vector(0, 0, 0), App.Vector(0, 1, 0), math.degrees(u))
+            faces.append(d)
+        wedge = Part.Solid(Part.Shell(faces))
+        back = self.back_via_export_step(wedge, "wedge")[1]
+        self.assertTrue(_close(back.Volume, 2.0 / 3.0 * r ** 3 * w, 1e-6))
+
+    def test_names_and_placed_instances_of_a_converted_part_survive(self):
+        a = self.doc.addObject("Part::Feature", "Elbow")
+        a.Shape = self.sweep(90.0)
+        b = self.doc.addObject("Part::Feature", "Elbow2")
+        b.Shape = self.sweep(60.0)
+        b.Placement = App.Placement(App.Vector(100, 20, 0), App.Rotation(App.Vector(0, 0, 1), 30))
+        self.doc.recompute()
+        p = self.export([a, b], "asm.step")
+        t = self.flat(p)
+        self.assertIn("'Elbow'", t)
+        self.assertIn("'Elbow2'", t)
+        d = App.newDocument("G13Back")
+        try:
+            Import.insert(p, d.Name)
+            byLabel = {o.Label: o for o in d.Objects if hasattr(o, "Shape") and o.Shape.Solids}
+            self.assertIn("Elbow", byLabel)
+            self.assertIn("Elbow2", byLabel)
+            for name, src in (("Elbow", a), ("Elbow2", b)):
+                back = byLabel[name].Shape
+                self.assertTrue(back.isValid())
+                self.assertTrue(_close(back.Volume, src.Shape.Volume, 1e-6), (name, back.Volume, src.Shape.Volume))
+                self.assertTrue(_close(back.Area, src.Shape.Area, 1e-6), (name, back.Area, src.Shape.Area))
+            # the placed instance stayed where it was
+            self.assertLess(byLabel["Elbow2"].Shape.BoundBox.XMin, 100 + 1e-3)
+            self.assertGreater(byLabel["Elbow2"].Shape.BoundBox.YMax, 20)
+        finally:
+            App.closeDocument(d.Name)
 
 
 if __name__ == "__main__":
