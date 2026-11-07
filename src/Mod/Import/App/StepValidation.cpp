@@ -11,13 +11,24 @@
 #include <cstdlib>
 #include <sstream>
 
+#include <BRep_Builder.hxx>
 #include <BRepBndLib.hxx>
+#include <TopoDS_Compound.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
 #include <HeaderSection_FileSchema.hxx>
+#include <NCollection_HArray1.hxx>
 #include <STEPControl_Reader.hxx>
+#include <StepRepr_ShapeAspect.hxx>
+#include <StepRepr_Representation.hxx>
+#include <TDocStd_Document.hxx>
+#include <XCAFDoc_Area.hxx>
+#include <XCAFDoc_Centroid.hxx>
+#include <XCAFDoc_DocumentTool.hxx>
+#include <XCAFDoc_ShapeTool.hxx>
+#include <XCAFDoc_Volume.hxx>
 #include <StepData_StepModel.hxx>
 #include <TCollection_HAsciiString.hxx>
 #include <TDF_LabelSequence.hxx>
@@ -66,6 +77,7 @@
 #include <XSControl_WorkSession.hxx>
 #include <map>
 #include <set>
+#include <App/Application.h>
 #include <Base/Console.h>
 #include <Base/Exception.h>
 #include <Mod/Part/App/encodeFilename.h>
@@ -120,6 +132,48 @@ std::string schemaOf(const Handle(StepData_StepModel)& sm)
     return {};
 }
 
+StepFigures computeFigures(const TopoDS_Shape& shape)
+{
+    StepFigures f;
+    BRep_Builder builder;
+    TopoDS_Compound solids;
+    builder.MakeCompound(solids);
+    bool anySolid = false;
+    for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) {
+        builder.Add(solids, ex.Current());
+        anySolid = true;
+    }
+    // faces that are not part of any solid are independent surfaces (practice section 4.7)
+    TopoDS_Compound loose;
+    builder.MakeCompound(loose);
+    bool anyLoose = false;
+    for (TopExp_Explorer ex(shape, TopAbs_FACE, TopAbs_SOLID); ex.More(); ex.Next()) {
+        builder.Add(loose, ex.Current());
+        anyLoose = true;
+    }
+    GProp_GProps looseProps;
+    if (anyLoose) {
+        BRepGProp::SurfaceProperties(loose, looseProps);
+        f.independentArea = looseProps.Mass();
+    }
+    if (anySolid) {
+        GProp_GProps sprops;
+        BRepGProp::SurfaceProperties(solids, sprops);
+        f.area = sprops.Mass();
+        GProp_GProps vprops;
+        BRepGProp::VolumeProperties(solids, vprops);
+        f.volume = vprops.Mass();
+        f.centroid = vprops.CentreOfMass();
+    }
+    else if (anyLoose) {
+        f.area = looseProps.Mass();
+        if (*f.area > 0.0) {
+            f.centroid = looseProps.CentreOfMass();
+        }
+    }
+    return f;
+}
+
 void measureShape(StepPartFinding& part, const TopoDS_Shape& shape)
 {
     part.measured = StepFigures {};
@@ -134,26 +188,15 @@ void measureShape(StepPartFinding& part, const TopoDS_Shape& shape)
 
     part.geometryValid = BRepCheck_Analyzer(shape).IsValid();
 
-    GProp_GProps sprops;
-    BRepGProp::SurfaceProperties(shape, sprops);
-    part.measured.area = sprops.Mass();
-
-    TopExp_Explorer solids(shape, TopAbs_SOLID);
-    if (solids.More()) {
-        GProp_GProps vprops;
-        BRepGProp::VolumeProperties(shape, vprops);
-        part.measured.volume = vprops.Mass();
-        part.measured.centroid = vprops.CentreOfMass();
-    }
-    else if (part.measured.area && *part.measured.area > 0.0) {
-        part.measured.centroid = sprops.CentreOfMass();
-    }
+    part.measured = computeFigures(shape);
 }
 
 void judgePart(StepPartFinding& part, bool shapeFailed)
 {
     using namespace StepValidationTolerance;
     part.volumeDisagrees = part.areaDisagrees = part.centroidDisagrees = false;
+    part.independentAreaDisagrees = false;
+    part.independentAreaDiff.reset();
     part.volumeDiff.reset();
     part.areaDiff.reset();
     part.centroidDist.reset();
@@ -197,11 +240,32 @@ void judgePart(StepPartFinding& part, bool shapeFailed)
             anyStated = true;
             if (part.measured.area) {
                 part.areaDiff = *part.measured.area - s;
+                // Exporters differ on whether the surface area of a part with solids also counts
+                // its independent surfaces: some state the solids' faces only (wetted area, practice
+                // 4.6.2), some every face. Take whichever convention the stated figure follows.
+                if (part.measured.volume && part.measured.independentArea) {
+                    double all = *part.measured.area + *part.measured.independentArea - s;
+                    if (std::fabs(all) < std::fabs(*part.areaDiff)) {
+                        part.areaDiff = all;
+                    }
+                }
                 part.areaDisagrees = std::fabs(*part.areaDiff) > areaRelative * std::fabs(s);
             }
             else {
                 part.areaDisagrees = true;
             }
+        }
+    }
+    if (part.stated.independentArea) {
+        double s = *part.stated.independentArea;
+        if (!std::isfinite(s) || s == 0.0) {
+            unusable = true;
+        }
+        else {
+            anyStated = true;
+            double m = part.measured.independentArea.value_or(0.0);
+            part.independentAreaDiff = m - s;
+            part.independentAreaDisagrees = std::fabs(*part.independentAreaDiff) > areaRelative * std::fabs(s);
         }
     }
     if (part.stated.centroid) {
@@ -220,7 +284,8 @@ void judgePart(StepPartFinding& part, bool shapeFailed)
         }
     }
 
-    if (part.volumeDisagrees || part.areaDisagrees || part.centroidDisagrees) {
+    if (part.volumeDisagrees || part.areaDisagrees || part.independentAreaDisagrees
+        || part.centroidDisagrees) {
         part.verdict = StepVerdict::disagree;
     }
     else if (unusable) {
@@ -412,6 +477,12 @@ void readRepresentation(const Handle(StepRepr_Representation)& rep, Stated& st)
                 auto k = toMillimetres(measureUnit(m->UnitComponent(), ctxLen), 3.0);
                 if (!k) { st.unusable = true; }
                 else if (!st.figures.volume) { st.figures.volume = val * *k; }
+            }
+            else if (type == "AREA_MEASURE" && name == "independent surface area measure") {
+                st.seen = true;
+                auto k = toMillimetres(measureUnit(m->UnitComponent(), ctxLen), 2.0);
+                if (!k) { st.unusable = true; }
+                else if (!st.figures.independentArea) { st.figures.independentArea = val * *k; }
             }
             else if (type == "AREA_MEASURE"
                      && (name == "surface area measure" || name == "wetted area measure")) {
@@ -614,6 +685,10 @@ std::string describeFinding(const StepPartFinding& part)
     if (part.areaDisagrees) {
         rel("area", part.stated.area, part.measured.area);
     }
+    if (part.independentAreaDisagrees) {
+        rel("independent surface area", part.stated.independentArea,
+            std::optional<double>(part.measured.independentArea.value_or(0.0)));
+    }
     if (part.centroidDisagrees && part.stated.centroid) {
         os << "; centroid stated (" << part.stated.centroid->X() << ", " << part.stated.centroid->Y()
            << ", " << part.stated.centroid->Z() << ")";
@@ -624,6 +699,174 @@ std::string describeFinding(const StepPartFinding& part)
         }
     }
     return os.str();
+}
+
+}  // namespace Import
+
+namespace Import
+{
+
+int attachValidationProperties(Handle(TDocStd_Document) hDoc)
+{
+    Handle(XCAFDoc_ShapeTool) shapeTool = XCAFDoc_DocumentTool::ShapeTool(hDoc->Main());
+    TDF_LabelSequence labels;
+    shapeTool->GetShapes(labels);
+    int count = 0;
+    for (Standard_Integer i = 1; i <= labels.Length(); ++i) {
+        TDF_Label label = labels.Value(i);
+        // one set of figures per part prototype, in the part's own frame
+        if (shapeTool->IsReference(label) || shapeTool->IsSubShape(label)
+            || shapeTool->IsAssembly(label)) {
+            continue;
+        }
+        TopoDS_Shape shape = shapeTool->GetShape(label);
+        if (shape.IsNull()) {
+            continue;
+        }
+        StepFigures f;
+        try {
+            f = computeFigures(shape.Located(TopLoc_Location()));
+        }
+        catch (Standard_Failure&) {
+            continue;
+        }
+        bool any = false;
+        if (f.volume && std::isfinite(*f.volume) && *f.volume > 0.0) {
+            XCAFDoc_Volume::Set(label, *f.volume);
+            any = true;
+        }
+        if (f.area && std::isfinite(*f.area) && *f.area > 0.0) {
+            XCAFDoc_Area::Set(label, *f.area);
+            any = true;
+        }
+        if (f.centroid && finite3(*f.centroid)) {
+            XCAFDoc_Centroid::Set(label, *f.centroid);
+            any = true;
+        }
+        count += any ? 1 : 0;
+    }
+    return count;
+}
+
+}  // namespace Import
+
+namespace Import
+{
+
+const char* validationPropertiesHeaderId()
+{
+    return "CAx-IF Rec.Pracs.---Geometric and Assembly Validation Properties---4.2---2014-10-09";
+}
+
+int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model)
+{
+    // OCCT's writer attaches the figures at the geometry level (a SHAPE_ASPECT of the part's
+    // PRODUCT_DEFINITION_SHAPE). The practice puts them first at the part level (section 4.4), in
+    // one combined representation with an empty name (section 4.10): add that, sharing the items.
+    struct Group
+    {
+        Handle(StepRepr_ProductDefinitionShape) pds;
+        Handle(StepRepr_RepresentationContext) context;
+        std::map<std::string, Handle(StepRepr_RepresentationItem)> items;  // by item name
+    };
+    std::vector<Group> groups;
+    std::map<Standard_Transient*, size_t> index;
+
+    for (int i = 1; i <= model->NbEntities(); ++i) {
+        Handle(StepRepr_PropertyDefinitionRepresentation) pdr =
+            Handle(StepRepr_PropertyDefinitionRepresentation)::DownCast(model->Value(i));
+        if (pdr.IsNull() || pdr->UsedRepresentation().IsNull()) {
+            continue;
+        }
+        Handle(StepRepr_PropertyDefinition) pd = pdr->Definition().PropertyDefinition();
+        if (pd.IsNull() || lowerTrim(pd->Name()) != "geometric validation property") {
+            continue;
+        }
+        Handle(StepRepr_ShapeAspect) sa = pd->Definition().ShapeAspect();
+        if (sa.IsNull() || sa->OfShape().IsNull()) {
+            continue;
+        }
+        Handle(StepRepr_ProductDefinitionShape) pds = sa->OfShape();
+        if (!index.count(pds.get())) {
+            index[pds.get()] = groups.size();
+            groups.push_back(Group {pds, pdr->UsedRepresentation()->ContextOfItems(), {}});
+        }
+        Group& g = groups[index[pds.get()]];
+        Handle(StepRepr_Representation) rep = pdr->UsedRepresentation();
+        for (int k = 1; k <= rep->NbItems(); ++k) {
+            g.items.emplace(lowerTrim(rep->ItemsValue(k)->Name()), rep->ItemsValue(k));
+        }
+    }
+
+    int added = 0;
+    for (const Group& g : groups) {
+        // fixed order: volume, area, centroid
+        std::vector<Handle(StepRepr_RepresentationItem)> ordered;
+        for (const char* key : {"volume measure", "surface area measure", "centre point"}) {
+            auto it = g.items.find(key);
+            if (it != g.items.end()) {
+                ordered.push_back(it->second);
+            }
+        }
+        if (ordered.empty()) {
+            continue;
+        }
+        Handle(NCollection_HArray1<Handle(StepRepr_RepresentationItem)>) arr =
+            new NCollection_HArray1<Handle(StepRepr_RepresentationItem)>(1, static_cast<int>(ordered.size()));
+        for (size_t k = 0; k < ordered.size(); ++k) {
+            arr->SetValue(static_cast<int>(k) + 1, ordered[k]);
+        }
+        Handle(StepRepr_Representation) rep = new StepRepr_Representation;
+        rep->Init(new TCollection_HAsciiString(""), arr, g.context);
+
+        StepRepr_CharacterizedDefinition cd;
+        cd.SetValue(g.pds);
+        Handle(StepRepr_PropertyDefinition) pd = new StepRepr_PropertyDefinition;
+        pd->Init(new TCollection_HAsciiString("geometric validation property"), true,
+                 new TCollection_HAsciiString("volume, area and centroid of the part"), cd);
+
+        StepRepr_RepresentedDefinition rd;
+        rd.SetValue(pd);
+        Handle(StepRepr_PropertyDefinitionRepresentation) pdr = new StepRepr_PropertyDefinitionRepresentation;
+        pdr->Init(rd, rep);
+        model->AddWithRefs(pdr);
+        ++added;
+    }
+    return added;
+}
+
+}  // namespace Import
+
+namespace Import
+{
+
+int reportStepValidation(const Handle(XSControl_WorkSession)& ws)
+{
+    int warned = 0;
+    try {
+        bool enabled = App::GetApplication()
+                           .GetUserParameter()
+                           .GetGroup("BaseApp")
+                           ->GetGroup("Preferences")
+                           ->GetGroup("Mod/Part")
+                           ->GetGroup("STEP")
+                           ->GetBool("CheckValidationProperties", true);
+        if (!enabled || ws.IsNull()) {
+            return 0;
+        }
+        StepFileFinding finding;
+        validateWorkSession(ws, finding);
+        for (const auto& part : finding.parts) {
+            if (part.verdict == StepVerdict::disagree || part.verdict == StepVerdict::invalid_geometry) {
+                Base::Console().warning("{}\n", describeFinding(part));
+                ++warned;
+            }
+        }
+    }
+    catch (...) {
+        // checking never stops an import
+    }
+    return warned;
 }
 
 }  // namespace Import

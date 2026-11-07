@@ -406,6 +406,7 @@ private:
         Py::Dict d;
         d.setItem("volume", optFloat(f.volume));
         d.setItem("area", optFloat(f.area));
+        d.setItem("independent_area", optFloat(f.independentArea));
         d.setItem("centroid", optPoint(f.centroid));
         return d;
     }
@@ -435,6 +436,7 @@ private:
             Py::Dict diff;
             diff.setItem("volume", optFloat(p.volumeDiff));
             diff.setItem("area", optFloat(p.areaDiff));
+            diff.setItem("independent_area", optFloat(p.independentAreaDiff));
             diff.setItem("centroid", optFloat(p.centroidDist));
             d.setItem("difference", diff);
             d.setItem("diagonal", Py::Float(p.diagonal));
@@ -442,6 +444,7 @@ private:
             Py::Dict dis;
             dis.setItem("volume", Py::Boolean(p.volumeDisagrees));
             dis.setItem("area", Py::Boolean(p.areaDisagrees));
+            dis.setItem("independent_area", Py::Boolean(p.independentAreaDisagrees));
             dis.setItem("centroid", Py::Boolean(p.centroidDisagrees));
             d.setItem("disagrees", dis);
             parts.append(d);

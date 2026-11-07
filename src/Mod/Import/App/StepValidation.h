@@ -16,6 +16,8 @@
 
 #include <gp_Pnt.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TDocStd_Document.hxx>
+#include <StepData_StepModel.hxx>
 #include <XSControl_WorkSession.hxx>
 #include <Mod/Import/ImportGlobal.h>
 #include <Base/FileInfo.h>
@@ -52,7 +54,8 @@ StepVerdict worseVerdict(StepVerdict a, StepVerdict b);
 struct StepFigures
 {
     std::optional<double> volume;     // mm^3
-    std::optional<double> area;       // mm^2
+    std::optional<double> area;       // mm^2, faces of solids (all faces when no solid arrived)
+    std::optional<double> independentArea;  // mm^2, faces outside any solid
     std::optional<gp_Pnt> centroid;   // mm
 };
 
@@ -71,6 +74,8 @@ struct StepPartFinding
     std::optional<double> centroidDist;  // |measured - stated|, mm
     bool volumeDisagrees {false};
     bool areaDisagrees {false};
+    bool independentAreaDisagrees {false};
+    std::optional<double> independentAreaDiff;
     bool centroidDisagrees {false};
 };
 
@@ -95,6 +100,23 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
 /// Read a STEP file (properties on) into a scratch document and validate it.
 /// Never throws: a missing or garbage file gives verdict 'failed'.
 StepFileFinding validateStepFile(const Base::FileInfo& file);
+
+/// Set XCAFDoc_Volume, XCAFDoc_Area and XCAFDoc_Centroid on every part prototype label so that
+/// STEPCAFControl_Writer writes them. Returns the number of labels that received figures.
+int attachValidationProperties(Handle(TDocStd_Document) hDoc);
+
+/// The identification string the practice asks for in FILE_DESCRIPTION (its section 3).
+const char* validationPropertiesHeaderId();
+
+/// After STEPCAFControl_Writer::Transfer: add the part-level validation properties (one combined
+/// representation per part, practice section 4.10) next to what OCCT wrote at geometry level.
+/// Returns the number of parts that received them.
+int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model);
+
+/// After a STEP transfer: log one warning per part whose verdict is disagree or invalid_geometry.
+/// Never throws, never touches the document. Preference CheckValidationProperties (default on).
+/// Returns the number of warnings.
+int reportStepValidation(const Handle(XSControl_WorkSession)& ws);
 
 /// One-line report-view text for a part that disagrees or is invalid.
 std::string describeFinding(const StepPartFinding& part);
