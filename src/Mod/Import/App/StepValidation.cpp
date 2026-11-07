@@ -569,6 +569,17 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
         // OCCT binds the transferred shape of a part to its PRODUCT_DEFINITION, in the part's own frame
         TopoDS_Shape shape = tr->ShapeResult(prod);
         if (shape.IsNull()) {
+            // only the root of an assembly keeps its binder: transfer this part by itself, which
+            // gives its prototype shape in its own frame, without the placement of any instance
+            try {
+                tr->TransferOne(prod);
+                shape = tr->ShapeResult(prod);
+            }
+            catch (Standard_Failure&) {
+                shape.Nullify();
+            }
+        }
+        if (shape.IsNull()) {
             shape = tr->ShapeResult(sdr);
         }
         if (shape.IsNull()) {
