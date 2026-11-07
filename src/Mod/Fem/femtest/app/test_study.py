@@ -165,3 +165,22 @@ class TestStudyRun(unittest.TestCase):
         r2 = femstudy.run_static(d, name)
         self.assertFalse(r2["stale"])
         self.assertFalse(femstudy.is_stale(d, name))
+
+    def test_stale_survives_save_and_reopen(self):
+        import tempfile
+
+        d = self.doc
+        r = femstudy.run_static(d, bar_spec(d))
+        name = r["analysis"]
+        path = os.path.join(tempfile.mkdtemp(prefix="study_save_"), "s.FCStd")
+        d.saveAs(path)
+        FreeCAD.closeDocument(d.Name)
+        d2 = FreeCAD.openDocument(path)
+        self.doc = d2
+        self.assertFalse(femstudy.is_stale(d2, name))
+        stored = femstudy.stored_result(d2, name)
+        self.assertEqual(stored["verdict"], "converged")
+        d2.getObject("Body").Placement = FreeCAD.Placement(FreeCAD.Vector(1, 0, 0), FreeCAD.Rotation())
+        d2.recompute()
+        self.assertTrue(femstudy.is_stale(d2, name))
+        self.assertTrue(femstudy.stored_result(d2, name)["stale"])
