@@ -262,11 +262,15 @@ def _build_A(section, dims, L, matname, sigma, h0):
             )
         }
 
+    # The element family is exact on flat-sided sections only. A meshed circle is not a circle, and the loaded end carries a local
+    # disturbance of about 0.5% whatever the load distribution (SPEC.md, "Checks that may not hold", item 1), so round bars get a
+    # looser bar. This was set in run 067 after the study code existed, and the run note says so.
+    round_section = section == "circle"
     truth = {
         "disp": P * L / (A * E),
-        "tol_disp": 1e-5,
+        "tol_disp": 1e-3 if round_section else 1e-5,
         "max_vm": P / A,
-        "tol_vm": 1e-5,
+        "tol_vm": 1e-2 if round_section else 1e-5,
         "energy": 0.5 * P * (P * L / (A * E)),
     }
     return build, truth, A * L, {"section": section, "dims": dims, "L": L, "material": matname, "P_N": P}
