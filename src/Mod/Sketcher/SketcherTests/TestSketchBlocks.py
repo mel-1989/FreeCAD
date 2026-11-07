@@ -1464,6 +1464,16 @@ class TestBlockSessionReading(BlocksCase):
         self.assertEqual(res["changes"], {})
         self.assertTrue(res["moved_together"])
 
+    def test_a_tiny_edit_to_a_lone_line_is_a_change_of_the_block_not_a_rigid_move(self):
+        sk = self.blocksketch(members=1)
+        pose, members, known = self.begin(sk)
+        geo = sk.Geometry
+        geo[0].EndPoint = geo[0].EndPoint + V(1.5e-7, 0, 0)
+        sk.Geometry = geo
+        res = B.session_changes(sk, "W", pose, members, known)
+        self.assertEqual(res["moved"], ["m0000"])
+        self.assertFalse(res["moved_together"])
+
     def test_two_members_with_a_shared_centre_have_no_rigid_pose_to_fit(self):
         defn = {"members": {"m0": {"t": "c", "g": [0.0, 0.0, 1.0], "c": False}, "m1": {"t": "c", "g": [0.0, 0.0, 2.0], "c": False}}}
         self.assertIsNone(B.rigid_fit(defn, {"m0": [5.0, 5.0, 1.0], "m1": [5.0, 5.0, 2.0]}))
