@@ -420,6 +420,24 @@ class TestWrite(AttrCase):
         held = self.held(self.load(p))
         self.assertEqual([v for v in held.values() if v.get("grade") == "A"][0]["grade"], "A")
 
+    def test_attributes_of_an_assembly_stay_on_the_assembly(self):
+        d = self.newdoc()
+        box = self.feature(d, "Box", Part.makeBox(10, 20, 30))
+        self.set_attrs(box, {"grade": "A"})
+        asm = d.addObject("App::Part", "Asm")
+        lk = d.addObject("App::Link", "L1")
+        lk.LinkedObject = box
+        lk.Placement = App.Placement(App.Vector(100, 0, 0), App.Rotation())
+        asm.addObject(lk)
+        self.set_attrs(asm, {"role": "top"})
+        d.recompute()
+        p = self.path("asmattr.step")
+        Import.export([asm], p)
+        held = list(self.held(self.load(p)).values())
+        self.assertIn({"role": "top"}, held)
+        self.assertIn({"grade": "A"}, held)
+        self.assertEqual(len(held), 2)
+
     def test_off_switch_writes_the_stock_file(self):
         d = self.newdoc()
         o = self.feature(d, "Box", Part.makeBox(1, 2, 3))
