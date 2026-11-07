@@ -1134,6 +1134,10 @@ class TestConflictAndRedundancy(unittest.TestCase):
                 r = Sketch3D.solve(spec)
                 named = set(r["conflicting"]) | set(r["redundant"]) | set(r["partially_redundant"])
                 self.assertTrue(named <= tags, "%s names unknown tags %s" % (name, named - tags))
+                if r["code"] != 0:
+                    # a failure either names a conflict or says why it does not
+                    self.assertTrue(r["conflicting"] or r["reason"], "%s: failed with no conflict and no reason" % name)
+                    self.assertNotIn("one exists", r["reason"], "%s: a consistent-system reason on a contradiction" % name)
                 if kind == "conflict":
                     self.assertNotEqual(r["code"], 0, name)
                     self.assertTrue(r["conflicting"], "%s: no conflict named" % name)
