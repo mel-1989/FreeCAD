@@ -138,7 +138,7 @@ std::string schemaOf(const Handle(StepData_StepModel)& sm)
     return {};
 }
 
-StepFigures computeFigures(const TopoDS_Shape& shape)
+StepFigures computeFigures(const TopoDS_Shape& shape, bool wetted = false)
 {
     StepFigures f;
     BRep_Builder builder;
@@ -169,16 +169,19 @@ StepFigures computeFigures(const TopoDS_Shape& shape)
         GProp_GProps sprops;
         BRepGProp::SurfaceProperties(solids, sprops);
         f.area = sprops.Mass();
-        // wetted area (practice 4.6.2): the outer shell of each solid, voids left out
-        TopoDS_Compound outer;
-        builder.MakeCompound(outer);
-        for (TopExp_Explorer ex(solids, TopAbs_SOLID); ex.More(); ex.Next()) {
-            TopoDS_Shell sh = BRepClass3d::OuterShell(TopoDS::Solid(ex.Current()));
-            builder.Add(outer, sh.IsNull() ? ex.Current() : TopoDS_Shape(sh));
+        if (wetted) {
+            // wetted area (practice 4.6.2): the outer shell of each solid, voids left out; only
+            // measured when the file states a wetted area, as the outer shell costs a classification
+            TopoDS_Compound outer;
+            builder.MakeCompound(outer);
+            for (TopExp_Explorer ex(solids, TopAbs_SOLID); ex.More(); ex.Next()) {
+                TopoDS_Shell sh = BRepClass3d::OuterShell(TopoDS::Solid(ex.Current()));
+                builder.Add(outer, sh.IsNull() ? ex.Current() : TopoDS_Shape(sh));
+            }
+            GProp_GProps oprops;
+            BRepGProp::SurfaceProperties(outer, oprops);
+            f.wettedArea = oprops.Mass();
         }
-        GProp_GProps oprops;
-        BRepGProp::SurfaceProperties(outer, oprops);
-        f.wettedArea = oprops.Mass();
         GProp_GProps vprops;
         BRepGProp::VolumeProperties(solids, vprops);
         f.volume = vprops.Mass();
@@ -211,7 +214,7 @@ void measureShape(StepPartFinding& part, const TopoDS_Shape& shape)
 
     part.geometryValid = BRepCheck_Analyzer(shape).IsValid();
 
-    part.measured = computeFigures(shape);
+    part.measured = computeFigures(shape, part.statedAreaWetted);
 }
 
 void judgePart(StepPartFinding& part, bool shapeFailed)

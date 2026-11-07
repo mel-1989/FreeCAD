@@ -425,6 +425,22 @@ class TestVerdicts(StepValidationCase):
         q = self.mutate(q, self.path("geo3.step"), volume=1.01)
         self.assertEqual(self.parts(q)[0]["verdict"], "disagree")
 
+    def test_aspect_holding_only_curve_figures_is_not_a_solid_class_source(self):
+        # nist_stc_09 shape: a second shape aspect states only a centre point (section 4.8 curves)
+        q = self.hide_part_level(self.exported_box(), "geo4.step")
+        t = self.flat(q)
+        pds = re.search(r"#(\d+)\s*=\s*PRODUCT_DEFINITION_SHAPE\(", t).group(1)
+        ctx = re.search(r"#(\d+)\s*=\s*\(\s*GEOMETRIC_REPRESENTATION_CONTEXT", t).group(1)
+        extra = ("#9001 = SHAPE_ASPECT('curve','',#%s,.F.);"
+                 "#9002 = PROPERTY_DEFINITION('length of a curve','geometric validation property',#9001);"
+                 "#9003 = CARTESIAN_POINT('centre point',(1.,2.,3.));"
+                 "#9004 = REPRESENTATION('',(#9003),#%s);"
+                 "#9005 = PROPERTY_DEFINITION_REPRESENTATION(#9002,#9004);" % (pds, ctx))
+        t = t.replace("ENDSEC;END-ISO", extra + "ENDSEC;END-ISO")
+        part = self.parts(self.save(t, "geo5.step"))[0]
+        self.assertEqual(part["verdict"], "agree")
+        self.assertTrue(_close(part["stated"]["volume"], 6000.0))
+
     def zero_figures(self, p, name):
         t = self.flat(p)
         t = re.sub(r"VOLUME_MEASURE\([^)]*\)", "VOLUME_MEASURE(0.0)", t)
