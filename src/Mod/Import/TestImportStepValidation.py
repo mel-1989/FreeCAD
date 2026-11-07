@@ -295,17 +295,48 @@ class TestVerdicts(StepValidationCase):
         self.assertEqual(r["verdict"], "no_properties")
         self.assertEqual(r["parts"][0]["verdict"], "no_properties")
 
-    def test_negative_volume_is_invalid_geometry_and_outranks_agree(self):
-        shape = Part.makeBox(10, 20, 30)
-        solid = shape.Solids[0].reversed()
-        obj = self.shape_object(solid, "Inside_out")
-        p = self.export([obj])
-        part = Import.validateStep(p)["parts"][0]
-        # whatever the kernel does with an inside-out solid, "agree" must not come back for it
-        if part["measured"]["volume"] is not None and part["measured"]["volume"] < 0:
-            self.assertEqual(part["verdict"], "invalid_geometry")
-        else:
-            self.assertIn(part["verdict"], ("agree", "invalid_geometry"))
+    def test_file_verdict_is_the_worst_part(self):
+        asm = TestWrite.make_assembly(self)[0]
+        good = self.export([asm])
+        t = re.sub(r"\s*\n\s*", "", self.text(good))
+        t = t.replace(";#", ";\n#")
+        # change only the first stated volume in the file (one of the two parts)
+        t = re.sub(r"VOLUME_MEASURE\(([-+0-9.eE]+)\)", lambda m: "VOLUME_MEASURE(%.17g)" % (float(m.group(1)) * 1.5), t, count=1)
+        q = self.path("one_bad.step")
+        self.write_text(q, t)
+        r = Import.validateStep(q)
+        verdicts = sorted(p["verdict"] for p in r["parts"])
+        self.assertEqual(verdicts, ["agree", "disagree"])
+        self.assertEqual(r["verdict"], "disagree")
+
+    def test_other_validation_property_types_are_ignored(self):
+        p = self.exported_box()
+        t = self.text(p).replace("'geometric validation property'", "'pmi validation property'")
+        q = self.path("pmi.step")
+        self.write_text(q, t)
+        self.assertEqual(Import.validateStep(q)["verdict"], "no_properties")
+
+    def test_wetted_area_measure_is_read(self):
+        p = self.exported_box()
+        t = self.text(p).replace("'surface area measure'", "'wetted area measure'")
+        q = self.path("wetted.step")
+        self.write_text(q, t)
+        part = Import.validateStep(q)["parts"][0]
+        self.assertTrue(_close(part["stated"]["area"], 2200.0))
+        self.assertEqual(part["verdict"], "agree")
+
+    def test_area_just_outside_tolerance_disagrees(self):
+        p = self.mutate(self.exported_box(), self.path("a2.step"), area=0.9985)
+        self.assertEqual(Import.validateStep(p)["parts"][0]["verdict"], "disagree")
+
+    def test_centroid_tolerance_is_a_fraction_of_the_diagonal(self):
+        big = self.shape_object(Part.makeBox(1000, 1000, 1000), "Big")
+        p = self.export([big], "big.step")
+        diag = 1000.0 * 3 ** 0.5
+        inside = self.move_centroid(p, self.path("c_in.step"), 0.0005 * diag)
+        outside = self.move_centroid(p, self.path("c_out.step"), 0.0015 * diag)
+        self.assertEqual(Import.validateStep(inside)["parts"][0]["verdict"], "agree")
+        self.assertEqual(Import.validateStep(outside)["parts"][0]["verdict"], "disagree")
 
     def test_unit_prefix_is_applied(self):
         """The same part written in centimetres: figures must be converted to mm."""
