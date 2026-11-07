@@ -895,6 +895,27 @@ class TestSphereLuneRoundTrip(StepValidationCase):
                 self.assertNotIn("SPHERICAL_SURFACE", self.flat(p))
                 self.assertIn("SURFACE_OF_REVOLUTION", self.flat(p))
 
+    def test_a_centre_a_hair_off_the_axis_never_reads_back_worse_than_unconverted(self):
+        # swept offsets (r = 5 and 100): up to 3e-8 the sphere reads back exactly; from 1e-7 up the face is left alone
+        for r in (5.0, 100.0):
+            for d in (1e-9, 3e-8, 1e-7, 2e-7, 1e-6):
+                for off in (App.Vector(1, 0, 0), App.Vector(0, 0, 1)):
+                    with self.subTest(r=r, d=d, off=tuple(off)):
+                        c = Part.Circle(off * d, App.Vector(0, 0, 1), r)
+                        a = math.atan2(c.YAxis.y, c.XAxis.y)
+                        f = Part.SurfaceOfRevolution(c, App.Vector(0, 0, 0), App.Vector(0, 1, 0)).toShape(0.0, math.pi / 2, a, a + math.pi)
+                        sizes = []
+                        for on in (True, False):
+                            PREF.SetBool("WriteSphereLunes", on)
+                            try:
+                                sizes.append(abs(self.back_via_export_step(f, "hair")[1].Area / f.Area - 1.0))
+                            finally:
+                                PREF.SetBool("WriteSphereLunes", True)
+                        if d <= 3e-8:
+                            self.assertLess(sizes[0], 1e-6)
+                        else:
+                            self.assertLessEqual(sizes[0], sizes[1] + 1e-9)
+
     def test_a_face_across_both_halves_of_the_circle_is_left_alone(self):
         c = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), 5.0)
         f = Part.SurfaceOfRevolution(c, App.Vector(0, 0, 0), App.Vector(0, 1, 0)).toShape(0.0, 1.0, 0.3, 5.0)

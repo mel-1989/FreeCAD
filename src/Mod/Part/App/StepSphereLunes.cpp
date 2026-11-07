@@ -111,8 +111,10 @@ bool analyse(const TopoDS_Face& face, Lune* out)
     if (radius <= 0.0) {
         return false;
     }
-    // the axis passes through the centre, and lies in the circle's plane
-    if (gp_Lin(axis).Distance(c.Location()) > 1e-7 * radius) {
+    // the axis passes through the centre, and lies in the circle's plane. The offset is absolute:
+    // measured by sweeping it (r = 5 and 100), conversion reads back exactly up to 3e-8 and is worse
+    // than leaving the face alone from 1e-7 up, whatever the radius
+    if (gp_Lin(axis).Distance(c.Location()) > 3e-8) {
         return false;
     }
     if (std::abs(axis.Direction().Dot(c.Axis().Direction())) > 1e-9) {
@@ -140,7 +142,7 @@ bool analyse(const TopoDS_Face& face, Lune* out)
 
     const gp_Dir dirB = c.Axis().Direction().Crossed(dirA);
     // sphere: pole A, prime meridian B, so its Y is A x B = the circle's normal
-    out->sphere = new Geom_SphericalSurface(gp_Ax3(c.Location(), dirA, dirB), radius);
+    out->sphere = new Geom_SphericalSurface(gp_Ax3(c.Location(), dirA, even ? dirB : dirB.Reversed()), radius);
 
     // old (u, t): s' = t - a - m pi in [0, pi]
     //   even m: longitude u, latitude pi/2 - s'    = -t + (a + m pi + pi/2)
@@ -154,7 +156,7 @@ bool analyse(const TopoDS_Face& face, Lune* out)
     }
     else {
         gp_Trsf2d move;
-        move.SetTranslation(gp_Vec2d(pi, -shift));
+        move.SetTranslation(gp_Vec2d(0.0, -shift));  // the half turn is in the sphere's prime meridian
         out->map = move;
     }
     out->reversesNormal = even;
