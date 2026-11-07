@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """F6 static grounding: pyright against freecad-stubs rejects invented API calls before exec."""
 
+import os
+import shutil
+import tempfile
 import unittest
 
 import FreeCAD
@@ -142,3 +145,41 @@ class TestStubPatch(unittest.TestCase):
         text = open(path + "/Part/__init__.pyi", encoding="utf-8").read()
         self.assertNotIn("PartModule.Geom2d", text)
         self.assertIn("import Part.Geom2d", text)
+
+    def _in_private_temp(self):
+        saved = tempfile.tempdir
+        private = tempfile.mkdtemp(prefix="agentcore-stub-test-")
+        tempfile.tempdir = private
+
+        def restore():
+            tempfile.tempdir = saved
+            shutil.rmtree(private, ignore_errors=True)
+
+        self.addCleanup(restore)
+
+    def test_stub_copy_emptied_by_the_system_is_rebuilt(self):
+        """macOS's temp cleaner removes old files and leaves the folders; pyright then passes everything."""
+        self._in_private_temp()
+        exe, _ = grounding.find_pyright()
+        path = grounding.patched_stub_path(exe)
+        for root, _, files in os.walk(path):
+            for name in files:
+                os.remove(os.path.join(root, name))
+        self.assertEqual(grounding.patched_stub_path(exe), path)
+        self.assertTrue(os.path.isfile(path + "/Part/__init__.pyi"))
+
+    def test_stub_copy_missing_one_file_is_rebuilt(self):
+        self._in_private_temp()
+        exe, _ = grounding.find_pyright()
+        path = grounding.patched_stub_path(exe)
+        os.remove(path + "/Part/__init__.pyi")
+        self.assertEqual(grounding.patched_stub_path(exe), path)
+        self.assertTrue(os.path.isfile(path + "/Part/__init__.pyi"))
+
+    def test_whole_stub_copy_is_reused(self):
+        self._in_private_temp()
+        exe, _ = grounding.find_pyright()
+        path = grounding.patched_stub_path(exe)
+        stamp = os.stat(path + "/Part/__init__.pyi").st_mtime_ns
+        self.assertEqual(grounding.patched_stub_path(exe), path)
+        self.assertEqual(os.stat(path + "/Part/__init__.pyi").st_mtime_ns, stamp)
