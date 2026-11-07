@@ -184,3 +184,53 @@ class StepExportPanelTest(unittest.TestCase):
         self.assertTrue(ident.startswith("AP242_MANAGED_MODEL_BASED_3D_ENGINEERING"), ident)
         self.assertTrue(props)
 
+
+
+class StepAttributesGuiTest(unittest.TestCase):
+    """G13 slice 1c: the GUI import path (ImportGui.insert, ImportGui.open) carries attributes and layers like Import."""
+
+    def setUp(self):
+        import Part
+        self.dir = tempfile.mkdtemp(prefix="g13attrgui")
+        doc = App.newDocument("G13AttrGuiSrc")
+        box = doc.addObject("Part::Feature", "Box")
+        box.Shape = Part.makeBox(10, 20, 30)
+        box.addProperty("App::PropertyMap", "StepAttributes", "STEP")
+        box.StepAttributes = {"Part Number": "PN-9", "grade": "A", "w": "1.5 mm"}
+        box.addProperty("App::PropertyStringList", "StepLayers", "STEP")
+        box.StepLayers = ["red"]
+        doc.recompute()
+        self.path = os.path.join(self.dir, "attrs.step")
+        import Import
+        Import.export([box], self.path)
+        App.closeDocument(doc.Name)
+        self.docs = []
+
+    def tearDown(self):
+        for d in self.docs:
+            App.closeDocument(d.Name)
+        for f in os.listdir(self.dir):
+            os.remove(os.path.join(self.dir, f))
+        os.rmdir(self.dir)
+
+    def held(self, doc):
+        return [(dict(o.StepAttributes) if hasattr(o, "StepAttributes") else None,
+                 list(o.StepLayers) if hasattr(o, "StepLayers") else None) for o in doc.Objects
+                if hasattr(o, "StepAttributes") or hasattr(o, "StepLayers")]
+
+    def test_insert_carries_attributes_and_layers(self):
+        doc = App.newDocument("G13AttrGui")
+        self.docs.append(doc)
+        ImportGui.insert(self.path, doc.Name)
+        got = self.held(doc)
+        self.assertTrue(any(m == {"Part Number": "PN-9", "grade": "A", "w": "1.5 mm"} for (m, _) in got), got)
+        self.assertTrue(any(l == ["red"] for (_, l) in got), got)
+
+    def test_open_carries_attributes_and_layers(self):
+        before = set(App.listDocuments())
+        ImportGui.open(self.path)
+        doc = [App.getDocument(n) for n in App.listDocuments() if n not in before][0]
+        self.docs.append(doc)
+        got = self.held(doc)
+        self.assertTrue(any(m == {"Part Number": "PN-9", "grade": "A", "w": "1.5 mm"} for (m, _) in got))
+        self.assertTrue(any(l == ["red"] for (_, l) in got))
