@@ -68,21 +68,37 @@ def _site_packages(exe):
     return sorted(glob.glob(os.path.join(root, "lib", "python3*", "site-packages")))
 
 
+_STUB_MANIFEST = "agentcore-manifest.json"
+
+
+def _stub_copy_is_whole(path):
+    """True when every file a finished stub copy was built with is still there."""
+    try:
+        with open(os.path.join(path, _STUB_MANIFEST), encoding="utf-8") as fh:
+            written = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    return bool(written) and all(os.path.isfile(os.path.join(path, rel)) for rel in written)
+
+
 def patched_stub_path(exe):
     """A directory of corrected copies of the stub packages whose ``import XModule.sub`` is broken.
 
     Returns ``None`` when there is nothing to patch. Built once per stubs state, atomically, in the
-    system temp directory.
+    system temp directory, and rebuilt if any of its files has since gone.
     """
     packages = []
     for sp in _site_packages(exe):
         packages += sorted(glob.glob(os.path.join(sp, "*-stubs")))
     if not packages:
         return None
-    key = hashlib.sha1("|".join(f"{d}:{os.stat(d).st_mtime_ns}" for d in packages).encode() + b"v1").hexdigest()[:12]
+    key = hashlib.sha1("|".join(f"{d}:{os.stat(d).st_mtime_ns}" for d in packages).encode() + b"v2").hexdigest()[:12]
     final = os.path.join(tempfile.gettempdir(), f"agentcore-stubs-{key}")
-    if os.path.isdir(final):
+    if _stub_copy_is_whole(final):
         return final
+    # macOS empties old files out of the temp directory and leaves the folders: pyright then finds
+    # no stubs and passes every invented attribute. Such a copy is rebuilt, never trusted.
+    shutil.rmtree(final, ignore_errors=True)
     building = tempfile.mkdtemp(prefix="agentcore-stubs-build-")
     patched_any = False
     for pkg in packages:
@@ -104,6 +120,13 @@ def patched_stub_path(exe):
     if not patched_any:
         shutil.rmtree(building, ignore_errors=True)
         return None
+    written = sorted(
+        os.path.relpath(os.path.join(root, fname), building)
+        for root, _, files in os.walk(building)
+        for fname in files
+    )
+    with open(os.path.join(building, _STUB_MANIFEST), "w", encoding="utf-8") as fh:
+        json.dump(written, fh)
     try:
         os.rename(building, final)
     except OSError:                       # another process won the race
