@@ -23,6 +23,7 @@
  ***************************************************************************/
 
 
+#include <cctype>
 #include <App/Application.h>
 #include <App/Document.h>
 #include <App/PropertyStandard.h>
@@ -137,12 +138,22 @@ std::vector<std::pair<std::string, uint32_t>> Mesh::decodeMaterialsDoc(const std
         }
         std::string name;
         for (std::size_t i = pos; i < eq; i++) {
-            if (doc[i] == '%' && i + 2 < eq) {
+            if (doc[i] == '%') {
+                // A corrupt or hand-edited record names nothing rather than throwing
+                if (i + 2 >= eq || !std::isxdigit(static_cast<unsigned char>(doc[i + 1]))
+                    || !std::isxdigit(static_cast<unsigned char>(doc[i + 2]))) {
+                    return {};
+                }
                 name += static_cast<char>(std::stoi(doc.substr(i + 1, 2), nullptr, 16));
                 i += 2;
             }
             else {
                 name += doc[i];
+            }
+        }
+        for (std::size_t i = eq + 1; i < end; i++) {
+            if (!std::isxdigit(static_cast<unsigned char>(doc[i]))) {
+                return {};
             }
         }
         try {
