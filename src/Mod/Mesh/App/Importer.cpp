@@ -30,6 +30,8 @@
 #include <Base/Parameter.h>
 #include <Base/Placement.h>
 
+#include <cstdio>
+
 #include "Core/IO/Reader3MF.h"
 
 #include "Importer.h"
@@ -90,6 +92,70 @@ void Importer::load(const std::string& fileName)
     }
 }
 
+std::string Mesh::encodeMaterialsDoc(
+    const std::vector<std::string>& names,
+    const std::vector<std::optional<uint32_t>>& colors
+)
+{
+    std::string doc = materialsDocPrefix;
+    static const char* hex = "0123456789ABCDEF";
+    for (std::size_t i = 0; i < names.size() && i < colors.size(); i++) {
+        if (!colors[i]) {
+            continue;
+        }
+        std::string enc;
+        for (unsigned char c : names[i]) {
+            if (c == '%' || c == ';' || c == '=' || c < 0x20) {
+                enc += '%';
+                enc += hex[c >> 4];
+                enc += hex[c & 0xF];
+            }
+            else {
+                enc += static_cast<char>(c);
+            }
+        }
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%08X", static_cast<unsigned>(*colors[i]));
+        doc += enc + "=" + buf + ";";
+    }
+    return doc;
+}
+
+std::vector<std::pair<std::string, uint32_t>> Mesh::decodeMaterialsDoc(const std::string& doc)
+{
+    std::vector<std::pair<std::string, uint32_t>> out;
+    const std::string prefix = materialsDocPrefix;
+    if (doc.compare(0, prefix.size(), prefix) != 0) {
+        return out;
+    }
+    std::size_t pos = prefix.size();
+    while (pos < doc.size()) {
+        std::size_t end = doc.find(';', pos);
+        std::size_t eq = doc.find('=', pos);
+        if (end == std::string::npos || eq == std::string::npos || eq > end || end - eq != 9) {
+            return {};
+        }
+        std::string name;
+        for (std::size_t i = pos; i < eq; i++) {
+            if (doc[i] == '%' && i + 2 < eq) {
+                name += static_cast<char>(std::stoi(doc.substr(i + 1, 2), nullptr, 16));
+                i += 2;
+            }
+            else {
+                name += doc[i];
+            }
+        }
+        try {
+            out.emplace_back(name, static_cast<uint32_t>(std::stoul(doc.substr(eq + 1, 8), nullptr, 16)));
+        }
+        catch (const std::exception&) {
+            return {};
+        }
+        pos = end + 1;
+    }
+    return out;
+}
+
 bool Importer::load3mf(const std::string& fileName)
 {
     // Read3mfColors is only read here, never written
@@ -129,7 +195,7 @@ bool Importer::load3mf(const std::string& fileName)
                     "App::PropertyStringList",
                     "Material3mf",
                     "3MF",
-                    item.materialsPaired ? Mesh::materialsPairedDoc : Mesh::materialsMixedDoc
+                    Mesh::encodeMaterialsDoc(item.materials, item.materialColors).c_str()
                 )
             );
             if (prop) {

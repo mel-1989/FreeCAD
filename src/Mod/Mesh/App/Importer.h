@@ -25,6 +25,10 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace App
@@ -39,9 +43,12 @@ struct Material;
 }
 namespace Mesh
 {
-/// Documentation text of the Material3mf property: whether its names pair with the distinct FaceColors in order
-constexpr const char* materialsPairedDoc = "3MF basematerials names in order of first use (pair with the distinct FaceColors)";
-constexpr const char* materialsMixedDoc = "3MF basematerials names in order of first use (item also uses colorgroup colours)";
+/// Documentation text of the Material3mf property: the reader records each name with its RGBA colour here,
+/// "<prefix>name=RRGGBBAA;..." with name percent-encoded for % ; = and control characters. The 3MF writer
+/// attaches a name only to a colour equal to the one recorded for it.
+constexpr const char* materialsDocPrefix = "3MF basematerials names with their colours: ";
+std::string encodeMaterialsDoc(const std::vector<std::string>& names, const std::vector<std::optional<uint32_t>>& colors);
+std::vector<std::pair<std::string, uint32_t>> decodeMaterialsDoc(const std::string& doc);
 
 class MeshObject;
 class Feature;

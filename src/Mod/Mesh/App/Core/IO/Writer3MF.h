@@ -28,7 +28,9 @@
 #include <Base/Color.h>
 #include <Mod/Mesh/MeshGlobal.h>
 #include <optional>
+#include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 #include <iosfwd>
 #include <sstream>
@@ -57,8 +59,8 @@ struct Resource3MF
 struct ObjectColor3MF
 {
     std::vector<Base::Color> faceColors;  /**< one per facet, or empty */
-    std::vector<std::string> materials;   /**< names of the distinct colours in first-use order, or empty */
-    bool materialsPaired = false;         /**< the names are known to pair with the distinct colours in order */
+    std::vector<std::pair<std::string, uint32_t>> namedColors;  /**< names with the RGBA recorded for them */
+    bool namesDeclared = false;           /**< the object had material names, valid or not */
     std::optional<Base::Color> overall;   /**< one colour for the whole object, written as basematerials */
     std::string overallName;
     bool empty() const
@@ -130,8 +132,9 @@ private:
         int id,
         const MeshKernel& mesh,
         const std::string& name,
-        const std::vector<std::size_t>* triColor,
-        int groupId
+        const std::vector<std::pair<int, std::size_t>>* triColor,
+        int groupId,
+        std::size_t objectPindex
     ) const;
     bool SaveRels(std::ostream& str) const;
     bool SaveContent(std::ostream& str) const;

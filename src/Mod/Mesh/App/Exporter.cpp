@@ -188,9 +188,15 @@ void Exporter::collectColors(App::DocumentObject* linked, const char* label)
             currentColors.faceColors = fc->getValues();
             auto* mat = dynamic_cast<App::PropertyStringList*>(linked->getPropertyByName("Material3mf"));
             if (mat) {
-                currentColors.materials = mat->getValues();
-                // names pair with colours only for a property the reader marked as paired
-                currentColors.materialsPaired = std::string(mat->getDocumentation()) == materialsPairedDoc;
+                currentColors.namesDeclared = !mat->getValues().empty();
+                // names pair with colours only through the colours the reader recorded for them
+                auto recorded = decodeMaterialsDoc(mat->getDocumentation());
+                const auto& values = mat->getValues();
+                for (auto& nc : recorded) {
+                    if (std::find(values.begin(), values.end(), nc.first) != values.end()) {
+                        currentColors.namedColors.push_back(nc);
+                    }
+                }
             }
         }
     }

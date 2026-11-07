@@ -689,7 +689,7 @@ class MeshProperty(unittest.TestCase):
         self.assertEqual(len(material2["transparency"]), len1 + len2)
 
 
-PAIRED_DOC = "3MF basematerials names in order of first use (pair with the distinct FaceColors)"
+PAIRED_DOC = "3MF basematerials names with their colours: steel=FF0000FF;gold=0000FFFF;"
 
 
 class Mesh3MFReadCases(unittest.TestCase):
@@ -1058,3 +1058,63 @@ class Mesh3MFRepairCases(Mesh3MFReadCases):
             return list(getattr(o, "Material3mf", []))
         finally:
             FreeCAD.closeDocument(d.Name)
+
+
+class Mesh3MFNamePinning(Mesh3MFReadCases):
+    """Names stay with the colour recorded for them when FaceColors is edited, copied or reloaded."""
+
+    PURE = ('<basematerials id="6"><base name="Red" displaycolor="#FF0000"/><base name="Green" displaycolor="#00FF00"/>'
+            '<base name="Blue" displaycolor="#0000FF"/></basematerials>')
+
+    def pure(self):
+        res = self.PURE + self.obj(1, "p", "", ["pid=\"6\" p1=\"0\"", "pid=\"6\" p1=\"0\"", "pid=\"6\" p1=\"1\"", "pid=\"6\" p1=\"2\""])
+        return self.load(self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % res))[0]
+
+    def named(self, o, tag):
+        import zipfile, re
+        path = os.path.join(self.tmp, tag + ".3mf")
+        Mesh.export([o], path)
+        text = zipfile.ZipFile(path).read("3D/3dmodel.model").decode()
+        return set(re.findall(r'<base name="([^"]*)" displaycolor="([^"]*)"', text))
+
+    def test_untouched_keeps_pairs(self):
+        self.assertEqual(self.named(self.pure(), "u"), {("Red", "#FF0000"), ("Green", "#00FF00"), ("Blue", "#0000FF")})
+
+    def test_reorder_keeps_names_on_their_colours(self):
+        o = self.pure()
+        fc = list(o.FaceColors)
+        o.FaceColors = [fc[3], fc[2], fc[1], fc[0]]
+        self.assertEqual(self.named(o, "r"), {("Red", "#FF0000"), ("Green", "#00FF00"), ("Blue", "#0000FF")})
+
+    def test_recolour_drops_names(self):
+        o = self.pure()
+        o.FaceColors = [(1, 1, 0, 1), (1, 1, 0, 1), (0, 1, 1, 1), (1, 0, 1, 1)]
+        self.assertEqual(self.named(o, "c"), set())
+
+    def test_partial_recolour_keeps_only_matching(self):
+        o = self.pure()
+        fc = list(o.FaceColors)
+        o.FaceColors = [fc[0], fc[0], (1, 1, 0, 1), fc[3]]
+        self.assertEqual(self.named(o, "p"), {("Red", "#FF0000"), ("Blue", "#0000FF")})
+
+    def test_copy_and_save_reload(self):
+        o = self.pure()
+        cp = self.doc.copyObject(o)
+        self.assertEqual(self.named(cp, "cp"), {("Red", "#FF0000"), ("Green", "#00FF00"), ("Blue", "#0000FF")})
+        path = os.path.join(self.tmp, "s.FCStd")
+        self.doc.saveCopy(path)
+        d2 = FreeCAD.openDocument(path)
+        try:
+            o2 = [x for x in d2.Objects if x.isDerivedFrom("Mesh::Feature")][0]
+            self.assertEqual(self.named(o2, "rl"), {("Red", "#FF0000"), ("Green", "#00FF00"), ("Blue", "#0000FF")})
+        finally:
+            FreeCAD.closeDocument(d2.Name)
+
+    def test_hand_made_names_get_no_pairs(self):
+        f = self.doc.addObject("Mesh::Feature", "H")
+        f.Mesh = Mesh.createBox(1, 1, 1)
+        f.addProperty("App::PropertyColorList", "FaceColors")
+        f.FaceColors = [(1, 0, 0, 1)] * 6 + [(0, 0, 1, 1)] * 6
+        f.addProperty("App::PropertyStringList", "Material3mf", "3MF", "whatever")
+        f.Material3mf = ["Steel", "Gold"]
+        self.assertEqual(self.named(f, "h"), set())

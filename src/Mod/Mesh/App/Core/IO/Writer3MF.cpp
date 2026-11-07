@@ -123,14 +123,16 @@ bool Writer3MF::AddMesh(
 )
 {
     int groupId = 0;
-    std::vector<std::size_t> triColor;
+    std::size_t objectPindex = 0;
+    std::vector<std::pair<int, std::size_t>> triColor;  // property group and index per triangle
     if (colors && !colors->empty()) {
         std::vector<Base::Color> distinct;
+        std::vector<std::size_t> triDistinct;
         if (colors->overall) {
             distinct.push_back(*colors->overall);
         }
         else if (colors->faceColors.size() == mesh.CountFacets()) {
-            triColor.reserve(colors->faceColors.size());
+            triDistinct.reserve(colors->faceColors.size());
             std::map<uint32_t, std::size_t> seen;
             for (const auto& c : colors->faceColors) {
                 auto it = seen.find(c.getPackedValue());
@@ -138,47 +140,92 @@ bool Writer3MF::AddMesh(
                     it = seen.emplace(c.getPackedValue(), distinct.size()).first;
                     distinct.push_back(c);
                 }
-                triColor.push_back(it->second);
+                triDistinct.push_back(it->second);
             }
-        }
-        if (distinct.size() == 1) {
-            triColor.clear();  // one colour for the whole object: pid and pindex on the object suffice
         }
         if (!distinct.empty()) {
             EnsureHeader();
             std::ostream& str = buffered ? static_cast<std::ostream&>(body) : zip;
-            groupId = ++objectIndex;
-            const bool pairable = colors->materialsPaired && colors->materials.size() == distinct.size();
-            if (!colors->overall && !colors->materials.empty() && !pairable && !warnedNames) {
+            // a colour gets a name only when it equals the colour recorded for that name
+            std::vector<std::string> nameOf(distinct.size());
+            std::size_t used = 0;
+            for (std::size_t i = 0; i < distinct.size(); i++) {
+                if (colors->overall) {
+                    nameOf[i] = colors->overallName;
+                    used++;
+                    continue;
+                }
+                for (const auto& nc : colors->namedColors) {
+                    if (nc.second == distinct[i].getPackedValue()) {
+                        nameOf[i] = nc.first;
+                        used++;
+                        break;
+                    }
+                }
+            }
+            if (!colors->overall && colors->namesDeclared && !warnedNames
+                && (used < colors->namedColors.size() || colors->namedColors.empty())) {
                 warnedNames = true;
                 Base::Console().warning(
-                    "3MF export: material names are not written because they cannot be paired with the colours with certainty\n"
+                    "3MF export: some material names are not written because no colour equals the colour recorded for them\n"
                 );
             }
-            const bool named = colors->overall || pairable;
-            if (named) {
-                str << Base::blanks(2) << "<basematerials id=\"" << groupId << "\">\n";
-                for (std::size_t i = 0; i < distinct.size(); i++) {
-                    std::string n = colors->overall ? colors->overallName : colors->materials[i];
-                    str << Base::blanks(3) << "<base name=\"" << XMLTools::escapeXml(n)
-                        << "\" displaycolor=\"" << colorText(distinct[i]) << "\" />\n";
+            std::vector<std::pair<int, std::size_t>> where(distinct.size());
+            int baseGroup = 0;
+            int colorGroup = 0;
+            std::vector<std::size_t> baseList;
+            std::vector<std::size_t> colorList;
+            for (std::size_t i = 0; i < distinct.size(); i++) {
+                (nameOf[i].empty() ? colorList : baseList).push_back(i);
+            }
+            if (!baseList.empty()) {
+                baseGroup = ++objectIndex;
+                str << Base::blanks(2) << "<basematerials id=\"" << baseGroup << "\">\n";
+                for (std::size_t k = 0; k < baseList.size(); k++) {
+                    str << Base::blanks(3) << "<base name=\"" << XMLTools::escapeXml(nameOf[baseList[k]])
+                        << "\" displaycolor=\"" << colorText(distinct[baseList[k]]) << "\" />\n";
+                    where[baseList[k]] = {baseGroup, k};
                 }
                 str << Base::blanks(2) << "</basematerials>\n";
             }
-            else {
+            if (!colorList.empty()) {
                 usesColorGroup = true;
-                str << Base::blanks(2) << "<m:colorgroup id=\"" << groupId << "\">\n";
-                for (const auto& c : distinct) {
-                    str << Base::blanks(3) << "<m:color color=\"" << colorText(c) << "\" />\n";
+                colorGroup = ++objectIndex;
+                str << Base::blanks(2) << "<m:colorgroup id=\"" << colorGroup << "\">\n";
+                for (std::size_t k = 0; k < colorList.size(); k++) {
+                    str << Base::blanks(3) << "<m:color color=\"" << colorText(distinct[colorList[k]]) << "\" />\n";
+                    where[colorList[k]] = {colorGroup, k};
                 }
                 str << Base::blanks(2) << "</m:colorgroup>\n";
+            }
+            if (triDistinct.empty()) {
+                groupId = where[0].first;  // one colour for the whole object
+            }
+            else {
+                triColor.reserve(triDistinct.size());
+                for (std::size_t d : triDistinct) {
+                    triColor.push_back(where[d]);
+                }
+                if (distinct.size() == 1) {
+                    groupId = triColor[0].first;
+                    triColor.clear();  // one colour: pid and pindex on the object suffice
+                }
+                else {
+                    groupId = triColor[0].first;
+                }
+            }
+            if (triDistinct.empty() || distinct.size() == 1) {
+                objectPindex = where[0].second;
+            }
+            else {
+                objectPindex = triColor[0].second;
             }
         }
     }
     EnsureHeader();
     int id = ++objectIndex;
     SaveBuildItem(id, mat);
-    return SaveObject(buffered ? static_cast<std::ostream&>(body) : zip, id, mesh, name, triColor.empty() ? nullptr : &triColor, groupId);
+    return SaveObject(buffered ? static_cast<std::ostream&>(body) : zip, id, mesh, name, triColor.empty() ? nullptr : &triColor, groupId, objectPindex);
 }
 
 void Writer3MF::AddResource(const Resource3MF& res)
@@ -222,8 +269,9 @@ bool Writer3MF::SaveObject(
     int id,
     const MeshKernel& mesh,
     const std::string& name,
-    const std::vector<std::size_t>* triColor,
-    int groupId
+    const std::vector<std::pair<int, std::size_t>>* triColor,
+    int groupId,
+    std::size_t objectPindex
 ) const
 {
     // NOLINTBEGIN(readability-magic-numbers, cppcoreguidelines-avoid-magic-numbers)
@@ -239,7 +287,7 @@ bool Writer3MF::SaveObject(
         str << " name=\"" << XMLTools::escapeXml(name) << "\"";
     }
     if (groupId > 0) {
-        str << " pid=\"" << groupId << "\" pindex=\"" << (triColor ? (*triColor)[0] : 0) << "\"";
+        str << " pid=\"" << groupId << "\" pindex=\"" << objectPindex << "\"";
     }
     str << ">\n";
     str << Base::blanks(3) << "<mesh>\n";
@@ -261,7 +309,7 @@ bool Writer3MF::SaveObject(
         if (triColor && groupId > 0) {
             const auto c = (*triColor)[index];
             // pid, p2 and p3 are written too because lib3mf ignores a triangle that has p1 alone
-            str << " pid=\"" << groupId << "\" p1=\"" << c << "\" p2=\"" << c << "\" p3=\"" << c << "\"";
+            str << " pid=\"" << c.first << "\" p1=\"" << c.second << "\" p2=\"" << c.second << "\" p3=\"" << c.second << "\"";
         }
         str << " />\n";
         index++;

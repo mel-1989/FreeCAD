@@ -32,6 +32,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <cstdint>
 #include <vector>
 #include <xercesc/util/XercesDefs.hpp>
 
@@ -60,7 +61,7 @@ struct MeshExport Item3MF
     bool rigid = true;          /**< the transform is a rotation plus a translation */
     std::vector<Base::Color> faceColors;  /**< one per facet, empty when no facet has a colour */
     std::vector<std::string> materials;   /**< basematerials names in order of first use */
-    bool materialsPaired = true;          /**< no colorgroup colour in the item, so names pair with colours in order */
+    std::vector<std::optional<uint32_t>> materialColors;  /**< RGBA of each name, same order as materials */
 };
 
 /** Loads the mesh objects from data in 3MF format.

@@ -266,8 +266,8 @@ struct Reader3MF::Impl
         MeshKernel kernel;
         std::vector<Base::Color> colors;
         std::vector<std::string> materials;
+        std::vector<std::optional<uint32_t>> materialColors;
         std::vector<CompRef> comps;
-        bool usesColorGroup = false;
     };
     struct ItemRef
     {
@@ -611,11 +611,11 @@ struct Reader3MF::Impl
                 && std::find(obj.materials.begin(), obj.materials.end(), g.names[idx])
                     == obj.materials.end()) {
                 obj.materials.push_back(g.names[idx]);
+                obj.materialColors.push_back(g.colors[idx]);
             }
             if (g.colors[idx]) {
                 out[i] = Base::Color(*g.colors[idx]);
                 any = true;
-                obj.usesColorGroup = obj.usesColorGroup || g.kind == Kind::Color;
             }
         }
         return any;
@@ -761,7 +761,6 @@ struct Reader3MF::Impl
         bool anyColors = false;
         for (const Piece& p : pieces) {
             anyColors = anyColors || !p.obj->colors.empty();
-            item.materialsPaired = item.materialsPaired && !p.obj->usesColorGroup;
         }
         std::vector<Base::Color> colors;
         if (pieces.size() == 1) {
@@ -805,9 +804,11 @@ struct Reader3MF::Impl
                     colors.insert(colors.end(), p.obj->colors.begin(), p.obj->colors.end());
                 }
             }
-            for (const std::string& m : p.obj->materials) {
+            for (std::size_t k = 0; k < p.obj->materials.size(); k++) {
+                const std::string& m = p.obj->materials[k];
                 if (std::find(item.materials.begin(), item.materials.end(), m) == item.materials.end()) {
                     item.materials.push_back(m);
+                    item.materialColors.push_back(p.obj->materialColors[k]);
                 }
             }
         }
