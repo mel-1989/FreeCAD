@@ -26,6 +26,7 @@
 
 #include <map>
 #include <ostream>
+#include <functional>
 #include <vector>
 
 #include "MeshFeature.h"
@@ -68,6 +69,11 @@ public:
         writeColors = on;
     }
 
+    /// Colours a GUI shows on a shape: one per face, or a single one for the whole object; empty when
+    /// they equal the shape's material. Registered by MeshGui, absent without a GUI.
+    using FaceColorProvider = std::function<std::vector<Base::Color>(App::DocumentObject*)>;
+    static void setFaceColorProvider(FaceColorProvider provider);
+
     Exporter(const Exporter&) = delete;
     Exporter(Exporter&&) = delete;
     Exporter& operator=(const Exporter&) = delete;
@@ -79,6 +85,7 @@ protected:
 
     std::map<const App::DocumentObject*, std::vector<std::string>> subObjectNameCache;
     std::map<const App::DocumentObject*, MeshObject> meshCache;
+    std::map<const App::DocumentObject*, std::vector<std::size_t>> faceFacetCounts;
     bool writeColors = false;
     MeshCore::ObjectColor3MF currentColors;
 };

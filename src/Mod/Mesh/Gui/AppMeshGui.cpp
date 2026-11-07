@@ -45,6 +45,7 @@
 #include "SoFCMeshObject.h"
 #include "SoPolygon.h"
 #include "ThumbnailExtension.h"
+#include <Mod/Mesh/App/Exporter.h>
 #include "ViewProvider.h"
 #include "ViewProviderCurvature.h"
 #include "ViewProviderDefects.h"
@@ -160,6 +161,27 @@ PyMOD_INIT_FUNC(MeshGui)
     );
 
     Mesh::Extension3MFFactory::addProducer(new MeshGui::ThumbnailExtensionProducer);
+    Mesh::Exporter::setFaceColorProvider([](App::DocumentObject* obj) {
+        // colours the view provider shows on a shape, when they differ from its ShapeMaterial
+        std::vector<Base::Color> shown;
+        Gui::ViewProvider* vp = Gui::Application::Instance->getViewProvider(obj);
+        auto* geo = dynamic_cast<App::GeoFeature*>(obj);
+        auto* prop = vp ? dynamic_cast<App::PropertyMaterialList*>(vp->getPropertyByName("ShapeAppearance"))
+                        : nullptr;
+        if (!prop || !geo) {
+            return shown;
+        }
+        const Base::Color base = geo->getMaterialAppearance().diffuseColor;
+        bool differs = false;
+        for (const App::Material& m : prop->getValues()) {
+            shown.push_back(m.diffuseColor);
+            differs = differs || m.diffuseColor != base;
+        }
+        if (!differs) {
+            shown.clear();
+        }
+        return shown;
+    });
     // NOLINTEND
 
     // clang-format off

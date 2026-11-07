@@ -54,3 +54,27 @@ class PivyTestCases(unittest.TestCase):
 
     def tearDown(self):
         FreeCAD.closeDocument("MeshTest")
+
+
+class Export3MFFaceColors(unittest.TestCase):
+    """Per-face colours a user sees on a Part body reach the 3MF colorgroup (3MF Materials Extension)."""
+
+    def testPartFaceColorsExported(self):
+        import os, tempfile, zipfile, re
+        doc = FreeCAD.newDocument("Mesh3MFGui")
+        box = doc.addObject("Part::Box", "FaceBox")
+        doc.recompute()
+        red, blue, grey = (1.0, 0.0, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0), (0.8, 0.8, 0.9019, 1.0)
+        box.ViewObject.DiffuseColor = [red, grey, blue, grey, grey, grey]
+        path = os.path.join(tempfile.mkdtemp(), "faces.3mf")
+        Mesh.export([box], path)
+        text = zipfile.ZipFile(path).read("3D/3dmodel.model").decode()
+        self.assertIn("colorgroup", text)
+        colors = re.findall(r'<m:color color="(#[0-9A-F]+)"', text)
+        self.assertEqual(colors[0], "#FF0000")
+        self.assertIn("#0000FF", colors)
+        tri = re.findall(r'<triangle [^>]*p1="(\d+)"', text)
+        self.assertEqual(len(tri), 12)
+        self.assertEqual(tri[0], tri[1])
+        self.assertEqual(tri[0], "0")
+        FreeCAD.closeDocument(doc.Name)

@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/core/ignore_unused.hpp>
+#include <memory>
 #include <vector>
 
 
@@ -92,6 +93,20 @@ static std::vector<std::string> expandSubObjectNames(
     return res;
 }
 
+namespace
+{
+Exporter::FaceColorProvider& faceColorProvider()
+{
+    static Exporter::FaceColorProvider provider;
+    return provider;
+}
+}  // namespace
+
+void Exporter::setFaceColorProvider(FaceColorProvider provider)
+{
+    faceColorProvider() = std::move(provider);
+}
+
 Exporter::Exporter() = default;
 
 // static
@@ -123,6 +138,24 @@ int Exporter::addObject(App::DocumentObject* obj, float tol)
                     it = meshCache.emplace(linked, MeshObject()).first;
                     it->second.setFacets(aTopo, aPoints);
                     it->second.setTransform(matrix);
+                    if (writeColors && faceColorProvider()) {
+                        // facets come face by face; count them per face to map face colours to facets
+                        std::vector<std::size_t> counts;
+                        std::size_t total = 0;
+                        for (unsigned long f = 1; f <= geoData->countSubElements("Face"); f++) {
+                            std::unique_ptr<Data::Segment> seg(geoData->getSubElement("Face", f));
+                            std::vector<Base::Vector3d> pts, normals;
+                            std::vector<Data::ComplexGeoData::Facet> facets;
+                            if (seg) {
+                                geoData->getFacesFromSubElement(seg.get(), pts, normals, facets);
+                            }
+                            counts.push_back(facets.size());
+                            total += facets.size();
+                        }
+                        if (total == aTopo.size()) {
+                            faceFacetCounts[linked] = counts;
+                        }
+                    }
                 }
                 Py_DECREF(pyobj);
             }
@@ -162,6 +195,22 @@ void Exporter::collectColors(App::DocumentObject* linked, const char* label)
         if (auto* geo = dynamic_cast<App::GeoFeature*>(linked)) {
             currentColors.overall = geo->getMaterialAppearance().diffuseColor;
             currentColors.overallName = label;
+            // what the GUI shows on the shape wins when it differs from the material
+            std::vector<Base::Color> shown;
+            if (faceColorProvider()) {
+                shown = faceColorProvider()(linked);
+            }
+            auto counts = faceFacetCounts.find(linked);
+            if (shown.size() == 1) {
+                currentColors.overall = shown.front();
+            }
+            else if (shown.size() > 1 && counts != faceFacetCounts.end()
+                     && counts->second.size() == shown.size()) {
+                for (std::size_t f = 0; f < shown.size(); f++) {
+                    currentColors.faceColors.insert(currentColors.faceColors.end(), counts->second[f], shown[f]);
+                }
+                currentColors.overall.reset();
+            }
         }
     }
 }
