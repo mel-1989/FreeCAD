@@ -19,6 +19,7 @@ The mutant script (`femtest/app/study_mutants.py`) patches these names, so they 
 | `femstudy/run.py` | Gmsh at the levels, writes the CalculiX deck, runs ccx, parses outputs, element cap |
 | `femstudy/convergence.py` | Richardson estimate, observed order, singularity test, verdict |
 | `femstudy/stale.py` | input hash, the `stale` flag |
+| `femstudy/deck.py` | edits the written CalculiX deck in the study's own working directory (load correction, output requests, load on constrained nodes) and reads the `.dat` |
 
 ## Entry points
 
@@ -78,7 +79,7 @@ Observed on this fork (run 067, PartDesign body, stock constraints, see `BASELIN
 }
 ```
 
-Additions to the brief's list, needed by the oracle: `units` (brief check 4), `levels[i].result` (the name of the `Fem::FemResultObject` of that level, so the oracle can sample stresses independently of the study), `reaction_sum` and `applied_sum` as 3-vectors in N. `energy` is the total strain energy in N mm (= mJ). A level that was not reached (refused, failed, cap) is absent; `levels` may be empty.
+Additions to the brief's list, needed by the oracle: `units` (brief check 4), `levels[i].result` (the name of the `Fem::FemResultObject` of that level, so the oracle can sample stresses independently of the study), `reaction_sum` and `applied_sum` as 3-vectors in N. `energy` is the total strain energy in N mm (= mJ). Three further keys per level are diagnostics for the equilibrium: `rf_total` (the `RF` totals of the union of all constrained nodes), `load_on_constrained` (the whole external load on those nodes, free directions included) and `delivered_sum` (the sum of the nodal loads in the deck after correction); `reaction_sum` is `rf_total - load_on_constrained` (ccx prints RF = K u, which holds the node's own external load). A level that was not reached (refused, failed, cap) is absent; `levels` may be empty.
 
 ## Verdicts and codes (closed list, one code per cause)
 
@@ -87,6 +88,7 @@ Additions to the brief's list, needed by the oracle: `units` (brief check 4), `l
 | `converged` | `ok` | all checks passed, estimated error at most `target`, no stress growth |
 | `unconverged` | `not_monotone` | the three displacement or energy values do not move monotonically toward a limit |
 | `unconverged` | `error_over_target` | estimated error above `target` |
+| `unconverged` | `mesh_not_refined` | a finer level has no more elements than the one before: Gmsh did not refine, so no convergence statement is possible |
 | `unconverged` | `element_cap` | refinement stopped because the next level would exceed `max_elements` |
 | `stress_singular` | `stress_singular` | displacement and energy within target, max von Mises grew by more than 30% on the last refinement |
 | `suspect` | `equilibrium` | `\|reaction_sum + applied_sum\| / \|applied_sum\|` above 1e-3 on any level |
@@ -97,6 +99,7 @@ Additions to the brief's list, needed by the oracle: `units` (brief check 4), `l
 | `refused` | `rigid_body_motion` | the supports leave a rigid-body mode (for instance every support is a single line or point fixed in all directions, or translations are not all held) |
 | `refused` | `material_incomplete` | `E` or `nu` missing |
 | `refused` | `unit_missing` | a quantity string without a unit, or a bare number where a quantity is required |
+| `refused` | `unit_unknown` | a unit FreeCAD cannot parse (`kip`, `furlong`); never guessed |
 | `refused` | `unit_dimension` | a quantity of the wrong dimension (`210 N` for `E`) |
 | `refused` | `poisson_range` | `nu` outside [0, 0.5) |
 | `refused` | `body_invalid` | zero volume, not a solid, or the object missing |
@@ -106,8 +109,9 @@ Additions to the brief's list, needed by the oracle: `units` (brief check 4), `l
 | `failed` | `mesher_failed` | Gmsh failed or produced no volume elements |
 | `failed` | `solver_failed` | ccx exit code not zero, or the result object holds no displacements |
 | `failed` | `result_nan` | a `nan` or `inf` in a result |
+| `failed` | `internal_error` | an unexpected exception inside the study; the reason names its type and message (a bug in the study, never a verdict about the model) |
 
-Order of tests: structure (raises), refusals in the order of the table, then `failed` tool checks, then per level post-solve checks, then convergence. `stress_singular` is decided only when displacement and energy are within target; it beats `unconverged`. The singularity test uses the last refinement step (measured growth on the corpus: see Checks that may not hold).
+Order of tests as implemented: structure (raises); `no_support`, `no_load`; `material_incomplete`, `unit_*`, `poisson_range`; `body_invalid`; `reference_lost`; `rigid_body_motion` (after the reference check, because it needs the references to resolve); then the `failed` tool checks (`mesher_missing`, `solver_missing`), then per level the post-solve checks (`equilibrium`, then `large_displacement`; each stops the run at the first level that fails), then `yield_exceeded` on the finest level only, then convergence. `stress_singular` is decided only when displacement and energy are within target; it beats `unconverged`. The singularity test uses the last refinement step (measured growth on the corpus: see Checks that may not hold).
 
 ## Exceptions
 

@@ -282,7 +282,7 @@ def _cases_A(rng):
         sigma = rng.choice([40.0, 50.0, 60.0])
         sec_ = "circle" if sec == "circle" else "rect"
         m = min(dims)
-        h0 = (1.0 if sec == "circle" else 1.5) * m  # a round section: the coarsest mesh must not be coarser than the diameter, or Gmsh finds no volume
+        h0 = (0.5 if sec == "circle" else 1.5) * m  # round: h0 = d/2. At d (or 4/3 d) Gmsh finds no volume or a coarse level 25 times off (measured 147 to 244 elements for d = 12)
         build, truth, vol, par = _build_A(sec_, dims, L, matname, sigma, h0)
         c = Case(f"A{i:02d}", "A", f"axial bar {sec} {'x'.join(f'{x:g}' for x in dims)} L={L:g} {matname}", h0, build, truth, {}, par, vol)
         out.append(c)
@@ -338,7 +338,7 @@ def _cases_B(rng):
                 delta = cant_tip(P, L, E, nu, s["I"], s["A"], kap)
                 sig = P * (L - L / 2) * s["c"] / s["I"]  # bending stress at mid-length (Euler-Bernoulli moment, extreme fibre)
                 m = min(SEC_RECT) if kind == "rect" else SEC_CIRC
-                h0 = 4 * m / 3.0 if kind == "rect" else m  # round: h0 no coarser than the diameter (Gmsh finds no volume at 4/3 d)
+                h0 = 4 * m / 3.0 if kind == "rect" else m / 2.0  # round: h0 = d/2, see group A
                 direction = (0, -1, 0) if axis == "y" else (0, 0, -1)
 
                 def build(doc, kind=kind, L=L, P=P, matname=matname, direction=direction, h0=h0):
@@ -525,7 +525,7 @@ def _cases_G(rng):
         L = 100.0
         dims = {"square": (10.0, 10.0), "rect": (20.0, 10.0), "circle": (12.0,)}[sec]
         m = min(dims)
-        h0 = (1.0 if sec == "circle" else 2.0) * m  # round: h0 no coarser than the diameter
+        h0 = (0.5 if sec == "circle" else 2.0) * m  # round: h0 = d/2, see group A
         if kind == "cant":
             P /= 50.0  # 20 to 60 N: a cantilever of this section at 1 to 3 kN deflects by 30% to 100% of its depth, which the study rightly calls suspect
 

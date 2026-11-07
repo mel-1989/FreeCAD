@@ -56,7 +56,7 @@ def _clean(path):
         shutil.rmtree(path, ignore_errors=True)
 
 
-def _one_level(doc, an, spec, objs, loads_v, applied, requested, h, k, bbox):
+def _one_level(doc, an, spec, objs, loads_v, applied, requested, h, k, bbox, optimizer):
     import Fem
     from femmesh import gmshtools
     from femtools import ccxtools
@@ -65,6 +65,7 @@ def _one_level(doc, an, spec, objs, loads_v, applied, requested, h, k, bbox):
     wd = tempfile.mkdtemp(prefix=f"study_L{k}_")
     try:
         mesh.WorkingDirectory = wd
+        mesh.HighOrderOptimize = optimizer
         mesh.CharacteristicLengthMax = f"{h:.12g} mm"
         mesh.FemMesh = Fem.FemMesh()  # an empty mesh, so a failed Gmsh run cannot leave the previous level's mesh behind
         err = gmshtools.GmshTools(mesh).create_mesh()
@@ -129,6 +130,29 @@ def _one_level(doc, an, spec, objs, loads_v, applied, requested, h, k, bbox):
         _clean(wd)
 
 
+# Gmsh's high-order optimiser repairs second-order tetrahedra with a non-positive Jacobian on curved boundaries (ccx would stop with exit code 201), but
+# it can also fail outright and leave no mesh. Each level tries these settings in turn; a retry is reported as a warning.
+OPTIMIZERS = ("Optimization", "Elastic+Optimization", "None")
+
+
+def _level_with_retry(doc, an, spec, objs, loads_v, applied, requested, h, k, bbox, warns):
+    last = None
+    for opt in OPTIMIZERS:
+        try:
+            lv, info = _one_level(doc, an, spec, objs, loads_v, applied, requested, h, k, bbox, opt)
+        except ToolFailure as t:
+            retry = t.code == "mesher_failed" or (t.code == "solver_failed" and "jacobian" in t.reason.lower())
+            if not retry:
+                raise
+            last = t
+            continue
+        if last is not None:
+            warns.append({"code": "mesh_retry", "text": f"level {k} (h = {h:g} mm) needed the Gmsh high-order setting {opt!r} after: {last.reason[:120]}"})
+        lv["mesh_optimizer"] = opt
+        return lv, info
+    raise last
+
+
 def solve_levels(doc, an, spec, objs, loads_v, h0, bbox, yield_mpa):
     """Run the levels. Returns (levels, warnings, stop, cap_hit): `stop` is None or (verdict, code, reason) for a failed post-solve check."""
     opts = spec["options"]
@@ -150,7 +174,7 @@ def solve_levels(doc, an, spec, objs, loads_v, h0, bbox, yield_mpa):
         if levels and levels[-1]["elements"] * ratio**3 > cap:
             cap_hit = True
             break
-        lv, info = _one_level(doc, an, spec, objs, loads_v, applied, requested, h, k, bbox)
+        lv, info = _level_with_retry(doc, an, spec, objs, loads_v, applied, requested, h, k, bbox, warns)
         if lv["elements"] > cap:  # the first mesh is already over the cap: nothing is solved beyond it
             cap_hit = True
             levels.append(lv)
