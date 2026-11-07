@@ -51,6 +51,7 @@ set(Import_Scripts
     Init.py
     stepZ.py
     TestImportStepValidation.py
+    TestImportStepAttributes.py
 )
 
 if(BUILD_GUI)

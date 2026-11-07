@@ -332,6 +332,26 @@ TDF_Label labelFromShape(const Handle(XCAFDoc_ShapeTool)& tool, const TopoDS_Sha
 
 }  // namespace
 
+/// OCCT's own reader refuses a STEP record of about 16 000 characters; a text longer than this is cut
+/// where the cost of writing it (a non-ASCII character takes ten characters as \\X2\\hhhh\\X0\\) passes the cap.
+std::string capForStep(const std::string& s, size_t cap, bool& cut)
+{
+    size_t cost = 0;
+    size_t i = 0;
+    while (i < s.size()) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        size_t len = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : 4;
+        size_t add = c < 0x80 ? 1 : 10;
+        if (cost + add > cap) {
+            cut = true;
+            return s.substr(0, i);
+        }
+        cost += add;
+        i += len;
+    }
+    return s;
+}
+
 bool readStepAttributesEnabled()
 {
     return stepPreference("ReadStepAttributes");
@@ -685,7 +705,7 @@ void stashStepAttributes(const Handle(XSControl_WorkSession)& ws, const Handle(T
             for (const auto& [solid, name] : d.solidLayers) {
                 auto sl = solidLabel.find(solid.get());
                 if (sl == solidLabel.end()) {
-                    Base::Console().log("STEP attributes: layer '%s' names a solid that has no object; not attached\n", name.c_str());
+                    Base::Console().log("STEP attributes: layer '{}' names a solid that has no object; not attached\n", name);
                     continue;
                 }
                 Handle(TDataStd_NamedData) nd = namedData(sl->second, true);
@@ -701,8 +721,8 @@ void stashStepAttributes(const Handle(XSControl_WorkSession)& ws, const Handle(T
             if (lo == labelOf.end()) {
                 if (!d.attributes.empty() || !d.layers.empty()) {
                     Base::Console().log(
-                        "STEP attributes: product '%s' has %zu attribute(s) and %zu layer(s) but no object of its own; not attached\n",
-                        d.partNumber.c_str(),
+                        "STEP attributes: product '{}' has {} attribute(s) and {} layer(s) but no object of its own; not attached\n",
+                        d.partNumber,
                         d.attributes.size(),
                         d.layers.size()
                     );
@@ -726,19 +746,19 @@ void stashStepAttributes(const Handle(XSControl_WorkSession)& ws, const Handle(T
                 setString(nd, std::string(kAttrPrefix) + k, v);
             }
             for (const auto& k : d.duplicateKeys) {
-                Base::Console().warning("STEP attributes: part '%s' repeats the attribute '%s'; the first value is kept\n",
-                                        d.partNumber.c_str(),
-                                        k.c_str());
+                Base::Console().warning("STEP attributes: part '{}' repeats the attribute '{}'; the first value is kept\n",
+                                        d.partNumber,
+                                        k);
             }
             ++stashed;
         }
         int other = 0;
         for (const auto& [k, n] : counts.otherLevelAttributes) {
             other += n;
-            Base::Console().log("STEP attributes: %d attribute(s) attached to %s are not imported\n", n, k.c_str());
+            Base::Console().log("STEP attributes: {} attribute(s) attached to {} are not imported\n", n, k);
         }
         for (const auto& [k, n] : counts.otherLayerTargets) {
-            Base::Console().log("STEP attributes: %d layer assignment(s) to %s are not imported\n", n, k.c_str());
+            Base::Console().log("STEP attributes: {} layer assignment(s) to {} are not imported\n", n, k);
         }
         (void)other;
         (void)stashed;
@@ -905,8 +925,7 @@ int writeStepAttributes(const Handle(StepData_StepModel)& model,
                 }
             }
             if (pd.IsNull()) {
-                Base::Console().warning("STEP attributes: could not find the product of '%s' in the written file; its attributes are not written\n",
-                                        labelName(label).c_str());
+                Base::Console().warning("STEP attributes: could not find the product of '{}' in the written file; its attributes are not written\n", labelName(label));
                 continue;
             }
 
@@ -958,7 +977,13 @@ int writeStepAttributes(const Handle(StepData_StepModel)& model,
             Handle(StepRepr_RepresentationContext) context = lookup.contextOfPd.count(pd.get())
                 ? lookup.contextOfPd[pd.get()]
                 : Handle(StepRepr_RepresentationContext)();
-            for (const auto& [key, value] : udas) {
+            for (const auto& [rawKey, rawValue] : udas) {
+                bool cut = false;
+                const std::string key = capForStep(rawKey, 2000, cut);
+                const std::string value = capForStep(rawValue, 8000, cut);
+                if (cut) {
+                    Base::Console().warning("STEP attributes: the attribute '{}' is too long for a STEP record and is cut\n", key);
+                }
                 Handle(StepBasic_GeneralProperty) gp = new StepBasic_GeneralProperty;
                 gp->Init(new TCollection_HAsciiString(""), new TCollection_HAsciiString(key.c_str()), false, HAscii());
                 StepRepr_CharacterizedDefinition cd;
@@ -1013,7 +1038,7 @@ int writeStepAttributes(const Handle(StepData_StepModel)& model,
         }
     }
     catch (Standard_Failure& e) {
-        Base::Console().warning("STEP attributes: writing stopped (%s)\n", e.GetMessageString() ? e.GetMessageString() : "OCCT failure");
+        Base::Console().warning("STEP attributes: writing stopped ({})\n", e.GetMessageString() ? e.GetMessageString() : "OCCT failure");
     }
     catch (...) {
     }

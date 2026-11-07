@@ -26,6 +26,8 @@ SET(Import_SRCS
     ReaderStep.cpp
     ReaderStep.h
     StepShape.pyi
+    StepExternalRefs.cpp
+    StepExternalRefs.h
     StepAttributes.cpp
     StepAttributes.h
     StepValidation.cpp
