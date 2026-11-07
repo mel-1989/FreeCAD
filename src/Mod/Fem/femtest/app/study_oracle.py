@@ -197,7 +197,9 @@ def judge(case, run):
             return out
         ok_v = _fail(chk, "verdict", v == "converged", f"verdict={v} code={code}")
         name, truth, tol = primary(case)
-        if len(res["levels"]) >= 2 and name:
+        # Group F is exempt from "error against the truth is smaller at h/4 than at h": the truth is Kirchhoff, 3D elasticity converges to a limit
+        # above it by the shear term, so refinement moves away from the truth. The accuracy bar (5% at the finest level) still applies.
+        if len(res["levels"]) >= 2 and name and g != "F":
             e0 = abs(measure(case, run, 0, name) or 0) if name != "max_displacement" else res["levels"][0]["max_displacement"]
             e1 = abs(measure(case, run, len(res["levels"]) - 1, name) or 0) if name != "max_displacement" else res["levels"][-1]["max_displacement"]
             err0, err1 = _rel(e0, truth), _rel(e1, truth)

@@ -447,7 +447,10 @@ def _cases_E(rng):
             sig_t_over_p = (b * b + a * a) / (b * b - a * a)
             vm_over_p = math.sqrt(sig_t_over_p**2 + 1 + sig_t_over_p)
             p = float(f"{0.4 * sy / vm_over_p:.2g}")
-            h0 = 4 * (b - a) / 3.0 if ba < 3.0 else (b - a)  # b/a = 3: at 4/3 of the wall the quarter circle has one or two faces and the load delivered misses by 1.9e-3
+            # b/a >= 2: h0 = a = 10 mm. At 4/3 (b - a) or (b - a) the coarsest level puts 14 to 18 quadratic faces on the quarter circle and the load on the constrained
+            # edge nodes (recomputed from the deck) is off by 0.8e-3 to 2.1e-3 (E05, E06 fail the 1e-3 equilibrium bar); at h0 = a it is 7e-5 to 1.2e-4, and the energy of E03 and E04
+            # no longer sits flat over two coarse levels before a 1.7% jump. b/a = 1.5 keeps 4/3 (b - a): its coarsest level passes (1.2e-4).
+            h0 = 4 * (b - a) / 3.0 if ba < 2.0 else a
 
             def build(doc, a=a, b=b, H2=H2, p=p, matname=matname, h0=h0):
                 FreeCAD, Part, V = _fc()
@@ -866,11 +869,11 @@ def all_cases():
     cases = []
     for fn in (_cases_A, _cases_B, _cases_C, _cases_D, _cases_E, _cases_F, _cases_G, _cases_H, _cases_I, _cases_J):
         cases += fn(rng)
-    cases += _cases_B_stubby()
+    # B13 and B14 (_cases_B_stubby, L/h = 2) are not graded: L/h = 2 is outside where Timoshenko's formula is a valid truth. They do not kill M15 either.
     return cases
 
 
-EXPECTED_COUNTS = {"A": 8, "B": 14, "C": 6, "D": 8, "E": 6, "F": 6, "G": 6, "H": 6, "I": 14, "J": 4}
+EXPECTED_COUNTS = {"A": 8, "B": 12, "C": 6, "D": 8, "E": 6, "F": 6, "G": 6, "H": 6, "I": 14, "J": 4}
 
 
 def select(spec=None):

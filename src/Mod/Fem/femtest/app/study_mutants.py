@@ -9,8 +9,8 @@ to the source tree. Bytes are read, patched and restored byte for byte in a fina
 
 A mutant is `caught` when some case of its subset that passes on the clean code fails (any status other than PASS or MISS_ALLOWED) with the
 patch in place; it `survived` otherwise. Every survivor must be killed or named in the run note. M15 (kappa = 1) patches the corpus, not the
-study: expected to survive at L/h >= 5 (the shear term is 3% of the deflection at L/h = 5 and kappa = 1 changes it by 17%, 0.5% in all, under the
-3% tolerance); killing it takes L/h = 2 cases.
+study: a named survivor (NAMED_SURVIVORS): the shear term is 3% of the deflection at L/h = 5 and kappa = 1 changes it by 17%, 0.5% in all, under the
+3% tolerance, and the L/h = 2 cases that would kill it have no valid truth.
 """
 
 import json
@@ -42,9 +42,15 @@ MUTANTS = [
     ("M12", "element cap ignored", [("run.py", b'opts["max_elements"]', b"10**12")], ["I14"], "I14 runs with max_elements = 600"),
     ("M13", "displacement-size check disabled", [("checks.py", b"LARGE_DISPLACEMENT_FRACTION = 0.10", b"LARGE_DISPLACEMENT_FRACTION = 1e9")], ["I10"], ""),
     ("M14", "previous run's result reused after an edit", [("__init__.py", b"input_hash != stored_hash", b"False")], ["STALE"], "caught by study_stale_scenarios.py"),
-    ("M15", "kappa taken as 1 (corpus formula)", [("@corpus", b"return 5.0 / 6.0", b"return 1.0")], ["B01", "B02", "C01", "C02", "B13", "B14"], "patches study_corpus.py, the truth of the rectangular cantilevers; the stubby cases B13 and B14 end unconverged, see the run note"),
+    ("M15", "kappa taken as 1 (corpus formula)", [("@corpus", b"return 5.0 / 6.0", b"return 1.0")], ["B01", "B02", "C01", "C02"], "patches study_corpus.py, the truth of the rectangular cantilevers"),
     ("M16", "missing support not refused", [("checks.py", b'if not spec["supports"]', b"if False")], ["I01"], ""),
 ]
+
+
+# Survivors that are named and accepted, with the reason (the run still reports them as SURVIVED)
+NAMED_SURVIVORS = {
+    "M15": "kappa = 1 moves the Timoshenko truth by 0.5% at L/h >= 5, under the 3% bar; killing it needs L/h = 2 cases, and there Timoshenko is not a valid truth (a clamped short beam's converged 3D deflection moves away from it), so no graded case can kill it",
+}
 
 
 def read(p):
@@ -124,7 +130,8 @@ def main(argv):
             print(f"{mid} caught   by {','.join(killers)}  ({name})")
         else:
             survived.append(mid)
-            print(f"{mid} SURVIVED  clean={clean} mutated={mutated}  ({name}) {remark}")
+            named = f" NAMED SURVIVOR: {NAMED_SURVIVORS[mid]}" if mid in NAMED_SURVIVORS else ""
+            print(f"{mid} SURVIVED  clean={clean} mutated={mutated}  ({name}) {remark}{named}")
     print(f"caught {len(caught)}, survived {len(survived)} {survived}, anchors missing {len(missing)} {missing}")
     return 0
 

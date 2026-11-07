@@ -28,7 +28,9 @@ def richardson(u1, u2, u3, h1, h2, h3):
     if d23 == 0:
         return u3, None, 0.0, False
     reversed_ = d12 * d23 < 0
-    shrinks = d12 != 0 and abs(d23) < abs(d12)
+    # the differences shrink when their ratio exceeds the p -> 0 limit of _ratio_of_differences, ln(h1/h2) / ln(h2/h3): steps in h are uneven, so a
+    # plain |d23| < |d12| misreads an order-1 sequence on steps of 1.44 then 1.97 as not shrinking
+    shrinks = d12 != 0 and abs(d12) / abs(d23) > math.log(h1 / h2) / math.log(h2 / h3)
     order = None
     if shrinks:
         g = abs(d12) / abs(d23)
