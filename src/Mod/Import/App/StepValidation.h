@@ -97,11 +97,16 @@ struct StepFileFinding
 void judgePart(StepPartFinding& part, bool shapeFailed);
 
 /// Fill 'measured' (and the geometry flags) from the part's own prototype shape.
-void measureShape(StepPartFinding& part, const TopoDS_Shape& shape);
+///
+/// With 'skipUnneededFigures' the volume, area and centroid are left unset for a part that states no
+/// figure and has only forward solids, since no verdict reads them; the validity check still runs.
+void measureShape(StepPartFinding& part, const TopoDS_Shape& shape, bool skipUnneededFigures = false);
 
 /// Judge every part of a work session that has transferred a STEP file: the stated figures are
 /// read from the file's own entities (not through OCCT's ReadValProps, see the run note).
-void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFinding& out);
+///
+/// 'skipUnneededFigures' is for the import path, which only reports the warnings; validateStep keeps the figures.
+void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFinding& out, bool skipUnneededFigures = false);
 
 /// Read a STEP file (properties on) into a scratch document and validate it.
 /// Never throws: a missing or garbage file gives verdict 'failed'.

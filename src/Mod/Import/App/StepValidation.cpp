@@ -22,6 +22,8 @@
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Compound.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <TopoDS_Iterator.hxx>
+#include <future>
 #include <BRepGProp.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
@@ -168,8 +170,18 @@ StepFigures computeFigures(const TopoDS_Shape& shape, bool wetted = false)
         }
     }
     if (anySolid) {
+        // volume and surface integrals are independent reads of the same solids: run them side by side
+        GProp_GProps vprops;
+        std::future<void> volumeDone =
+            std::async(std::launch::async, [&solids, &vprops]() { BRepGProp::VolumeProperties(solids, vprops); });
         GProp_GProps sprops;
-        BRepGProp::SurfaceProperties(solids, sprops);
+        try {
+            BRepGProp::SurfaceProperties(solids, sprops);
+        }
+        catch (...) {
+            volumeDone.wait();
+            throw;
+        }
         f.area = sprops.Mass();
         if (wetted) {
             // wetted area (practice 4.6.2): the outer shell of each solid, voids left out; only
@@ -184,8 +196,7 @@ StepFigures computeFigures(const TopoDS_Shape& shape, bool wetted = false)
             BRepGProp::SurfaceProperties(outer, oprops);
             f.wettedArea = oprops.Mass();
         }
-        GProp_GProps vprops;
-        BRepGProp::VolumeProperties(solids, vprops);
+        volumeDone.get();
         f.volume = vprops.Mass();
         f.centroid = vprops.CentreOfMass();
         // A solid with no volume (all faces coplanar) has no centre of volume: use its surface.
@@ -202,7 +213,34 @@ StepFigures computeFigures(const TopoDS_Shape& shape, bool wetted = false)
     return f;
 }
 
-void measureShape(StepPartFinding& part, const TopoDS_Shape& shape)
+namespace
+{
+/// True when the part's verdict can depend on a measured figure: any figure is stated, or a solid is
+/// not plainly forward (a reversed solid is valid to BRepCheck and has a negative volume).
+bool figuresCanChangeVerdict(const StepPartFinding& part, const TopoDS_Shape& shape)
+{
+    const StepFigures& st = part.stated;
+    if (st.volume || st.area || st.wettedArea || st.independentArea || st.centroid || st.independentCentroid) {
+        return true;
+    }
+    if (part.statedUnusable || part.statedUnattributable) {
+        return true;
+    }
+    for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) {
+        if (ex.Current().Orientation() != TopAbs_FORWARD) {
+            return true;
+        }
+        for (TopoDS_Iterator it(ex.Current(), false, false); it.More(); it.Next()) {
+            if (it.Value().Orientation() != TopAbs_FORWARD) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+}  // namespace
+
+void measureShape(StepPartFinding& part, const TopoDS_Shape& shape, bool skipUnneededFigures)
 {
     part.measured = StepFigures {};
     part.diagonal = 0.0;
@@ -214,9 +252,27 @@ void measureShape(StepPartFinding& part, const TopoDS_Shape& shape)
         part.diagonal = std::sqrt(box.SquareExtent());
     }
 
-    part.geometryValid = BRepCheck_Analyzer(shape).IsValid();
-
-    part.measured = computeFigures(shape, part.statedAreaWetted);
+    // The validity check and the figures read the shape and write nothing to it, so they run side by
+    // side: the check is parallel inside OCCT, the figures on a second thread. Values are unchanged.
+    if (skipUnneededFigures && !figuresCanChangeVerdict(part, shape)) {
+        part.geometryValid = BRepCheck_Analyzer(shape, true, true).IsValid();
+        if (!part.geometryValid) {
+            // the warning for an invalid part quotes its volume
+            part.measured = computeFigures(shape, part.statedAreaWetted);
+        }
+        return;
+    }
+    const bool wetted = part.statedAreaWetted;
+    std::future<StepFigures> figures =
+        std::async(std::launch::async, [&shape, wetted]() { return computeFigures(shape, wetted); });
+    try {
+        part.geometryValid = BRepCheck_Analyzer(shape, true, true).IsValid();
+    }
+    catch (...) {
+        figures.wait();
+        throw;
+    }
+    part.measured = figures.get();
 }
 
 void judgePart(StepPartFinding& part, bool shapeFailed)
@@ -851,7 +907,7 @@ void readRepresentation(const Handle(StepRepr_Representation)& rep, Stated& st, 
 
 }  // namespace
 
-void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFinding& out)
+void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFinding& out, bool skipUnneededFigures)
 {
     Handle(StepData_StepModel) model = Handle(StepData_StepModel)::DownCast(ws->Model());
     Handle(XSControl_TransferReader) tr = ws->TransferReader();
@@ -997,7 +1053,7 @@ void validateWorkSession(const Handle(XSControl_WorkSession)& ws, StepFileFindin
         }
         else {
             try {
-                measureShape(part, shape);  // the transferred prototype carries no instance location
+                measureShape(part, shape, skipUnneededFigures);  // the transferred prototype carries no instance location
             }
             catch (Standard_Failure& e) {
                 failed = true;
@@ -1394,7 +1450,7 @@ int reportStepValidation(const Handle(XSControl_WorkSession)& ws)
             return 0;
         }
         StepFileFinding finding;
-        validateWorkSession(ws, finding);
+        validateWorkSession(ws, finding, true);  // import path: skip figures no verdict can use
         for (const auto& part : finding.parts) {
             if (part.verdict == StepVerdict::disagree || part.verdict == StepVerdict::invalid_geometry) {
                 Base::Console().warning("{}\n", describeFinding(part));
