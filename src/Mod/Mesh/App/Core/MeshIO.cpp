@@ -924,6 +924,7 @@ void MeshInput::LoadXML(Base::XMLReader& reader)
 bool MeshInput::Load3MF(std::istream& input)
 {
     Reader3MF reader(input);
+    reader.SetReadColors(false);
     reader.Load();
     std::vector<int> ids = reader.GetMeshIds();
     if (!ids.empty()) {
@@ -946,6 +947,36 @@ bool MeshInput::Load3MF(std::istream& input)
     }
 
     return false;
+}
+
+bool MeshCore::Load3MFItems(const char* fileName, bool readColors, std::vector<Item3MF>& items)
+{
+    auto run = [&](std::istream& str) {
+        Reader3MF reader(str);
+        reader.SetReadColors(readColors);
+        bool ok = reader.Load();
+        for (int id : reader.GetMeshIds()) {
+            items.push_back(reader.GetItem(id));
+        }
+        return ok;
+    };
+
+    Base::FileInfo fi(fileName);
+    if (!fi.exists() || !fi.isFile()) {
+        throw Base::FileNotFoundException(fileName);
+    }
+    if (!fi.isReadable()) {
+        throw Base::FileReadPermissionException(fileName);
+    }
+    Base::ifstream str(fi, std::ios::in | std::ios::binary);
+    try {
+        return run(str);
+    }
+    catch (const zipios::FCollException&) {
+        items.clear();
+        ZipFixer zip(fileName);
+        return run(zip.getStream());
+    }
 }
 
 /** Loads an OpenInventor file. */

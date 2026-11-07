@@ -25,11 +25,14 @@
 
 #pragma once
 
+#include <Base/Color.h>
 #include <Mod/Mesh/App/Core/MeshKernel.h>
 #include <Mod/Mesh/MeshGlobal.h>
 #include <iosfwd>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 #include <xercesc/util/XercesDefs.hpp>
 
 namespace XERCES_CPP_NAMESPACE
@@ -37,9 +40,6 @@ namespace XERCES_CPP_NAMESPACE
 class DOMDocument;
 class DOMElement;
 class DOMNode;
-class DOMNodeList;
-class DOMNamedNodeMap;
-class XercesDOMParser;
 }  // namespace XERCES_CPP_NAMESPACE
 
 namespace zipios
@@ -50,25 +50,41 @@ class FileCollection;
 namespace MeshCore
 {
 
-/** Loads the mesh object from data in 3MF format. */
+/** One build item of a 3MF package after its components are flattened and its units are millimetre. */
+struct MeshExport Item3MF
+{
+    MeshKernel kernel;          /**< vertices in millimetre, component transforms applied, item transform not */
+    Base::Matrix4D transform;   /**< build item transform, translation in millimetre */
+    std::string name;           /**< name of the object, may be empty */
+    int objectId = -1;
+    bool rigid = true;          /**< the transform is a rotation plus a translation */
+    std::vector<Base::Color> faceColors;  /**< one per facet, empty when no facet has a colour */
+    std::vector<std::string> materials;   /**< basematerials names in order of first use */
+};
+
+/** Loads the mesh objects from data in 3MF format.
+ *
+ * The model part is found through the package's root relationship, the model unit is scaled to
+ * millimetre and every build item becomes one entry. Sources: 3MF Core Specification and the
+ * Materials and Properties Extension (3MF Consortium).
+ */
 class MeshExport Reader3MF
 {
 public:
-    /*!
-     * \brief Reader3MF
-     * \param str
-     *
-     * Passes an input stream to the constructor.
-     */
+    /*! Passes an input stream to the constructor. */
     explicit Reader3MF(std::istream& str);
 
-    /*!
-     * \brief Reader3MF
-     * \param filename
-     *
-     * Passes a file name to the constructor
-     */
+    /*! Passes a file name to the constructor */
     explicit Reader3MF(const std::string& filename);
+    ~Reader3MF();
+    Reader3MF(const Reader3MF&) = delete;
+    Reader3MF& operator=(const Reader3MF&) = delete;
+
+    /*! Read colours and materials (default true). Switch off before Load(). */
+    void SetReadColors(bool on)
+    {
+        readColors = on;
+    }
     /*!
      * \brief Load the mesh from the input stream or file
      * \return true on success and false otherwise
@@ -77,64 +93,35 @@ public:
     std::vector<int> GetMeshIds() const;
     const MeshKernel& GetMesh(int id) const
     {
-        return meshes.at(id).kernel;
+        return items.at(id).kernel;
     }
     const Base::Matrix4D& GetTransform(int id) const
     {
-        return meshes.at(id).transform;
+        return items.at(id).transform;
     }
     const std::string& GetName(int id) const
     {
-        return meshes.at(id).name;
+        return items.at(id).name;
+    }
+    const Item3MF& GetItem(int id) const
+    {
+        return items.at(id);
     }
 
 private:
-    struct Component
-    {
-        int id = -1;
-        int objectId = -1;
-        std::string path;
-        std::string name;
-        Base::Matrix4D transform;
-    };
-    static std::unique_ptr<XERCES_CPP_NAMESPACE::XercesDOMParser> makeDomParser();
+    struct Impl;
     bool TryLoad();
-    bool LoadModel(std::istream&);
-    bool LoadModel(std::istream&, const Component&);
-    bool TryLoadModel(std::istream&, const Component&);
-    bool LoadModel(XERCES_CPP_NAMESPACE::DOMDocument&, const Component&);
-    bool LoadResourcesAndBuild(XERCES_CPP_NAMESPACE::DOMElement*, const Component&);
-    bool LoadResources(XERCES_CPP_NAMESPACE::DOMNodeList*, const Component&);
-    bool LoadBuild(XERCES_CPP_NAMESPACE::DOMNodeList*);
-    bool LoadBuildObject(XERCES_CPP_NAMESPACE::DOMNodeList*);
-    bool LoadItems(XERCES_CPP_NAMESPACE::DOMNodeList*);
-    void LoadItem(XERCES_CPP_NAMESPACE::DOMNamedNodeMap*);
-    bool LoadBuildItems(XERCES_CPP_NAMESPACE::DOMNodeList*);
-    void LoadBuildItem(XERCES_CPP_NAMESPACE::DOMNamedNodeMap*);
-    bool LoadObject(XERCES_CPP_NAMESPACE::DOMNodeList*, const Component&);
-    void LoadComponents(XERCES_CPP_NAMESPACE::DOMNodeList*, int id);
-    void LoadComponent(XERCES_CPP_NAMESPACE::DOMNodeList*, int id);
-    void LoadComponent(XERCES_CPP_NAMESPACE::DOMNamedNodeMap*, int id);
-    void LoadMesh(XERCES_CPP_NAMESPACE::DOMNodeList*, int id, const Component&, const std::string& name);
-    void LoadVertices(XERCES_CPP_NAMESPACE::DOMNodeList*, MeshPointArray&);
-    void ReadVertices(XERCES_CPP_NAMESPACE::DOMNodeList*, MeshPointArray&);
-    void LoadTriangles(XERCES_CPP_NAMESPACE::DOMNodeList*, MeshFacetArray&);
-    void ReadTriangles(XERCES_CPP_NAMESPACE::DOMNodeList*, MeshFacetArray&);
-    bool LoadMeshFromComponents();
-    std::optional<Base::Matrix4D> ReadTransform(XERCES_CPP_NAMESPACE::DOMNode*);
+    void OpenStartPart();
+    std::unique_ptr<std::istream> OpenPart(const std::string& path) const;
 
 private:
-    std::vector<Component> components;
-    struct MeshKernelAndTransform
-    {
-        MeshKernel kernel;
-        Base::Matrix4D transform;
-        std::string name;
-        int objectId = -1;
-    };
-    std::vector<MeshKernelAndTransform> meshes;
+    bool readColors = true;
+    std::vector<Item3MF> items;
     std::unique_ptr<zipios::FileCollection> file;
     std::unique_ptr<std::istream> zip;
 };
+
+/** Reads a 3MF file into one entry per build item, falling back to a repaired archive. */
+MeshExport bool Load3MFItems(const char* fileName, bool readColors, std::vector<Item3MF>& items);
 
 }  // namespace MeshCore
