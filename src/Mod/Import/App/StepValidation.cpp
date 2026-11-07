@@ -5,6 +5,7 @@
  *   See StepValidation.h for the public source of the behaviour.          *
  ***************************************************************************/
 
+#include <algorithm>
 #include <cmath>
 #include <cctype>
 #include <cstdio>
@@ -164,6 +165,10 @@ StepFigures computeFigures(const TopoDS_Shape& shape)
         BRepGProp::VolumeProperties(solids, vprops);
         f.volume = vprops.Mass();
         f.centroid = vprops.CentreOfMass();
+        // A solid with no volume (all faces coplanar) has no centre of volume: use its surface.
+        if (!(std::fabs(*f.volume) > 1e-12 * std::pow(std::max(*f.area, 1e-300), 1.5))) {
+            f.centroid = sprops.CentreOfMass();
+        }
     }
     else if (anyLoose) {
         f.area = looseProps.Mass();
@@ -782,6 +787,7 @@ int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model)
     };
     std::vector<Group> groups;
     std::map<Standard_Transient*, size_t> index;
+    std::set<Standard_Transient*> alreadyPartLevel;  // OCCT sometimes writes at part level itself
 
     for (int i = 1; i <= model->NbEntities(); ++i) {
         Handle(StepRepr_PropertyDefinitionRepresentation) pdr =
@@ -791,6 +797,10 @@ int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model)
         }
         Handle(StepRepr_PropertyDefinition) pd = pdr->Definition().PropertyDefinition();
         if (pd.IsNull() || lowerTrim(pd->Name()) != "geometric validation property") {
+            continue;
+        }
+        if (Handle(StepRepr_ProductDefinitionShape) direct = pd->Definition().ProductDefinitionShape()) {
+            alreadyPartLevel.insert(direct.get());
             continue;
         }
         Handle(StepRepr_ShapeAspect) sa = pd->Definition().ShapeAspect();
@@ -809,8 +819,11 @@ int addPartLevelValidationProperties(const Handle(StepData_StepModel)& model)
         }
     }
 
-    int added = 0;
+    int added = static_cast<int>(alreadyPartLevel.size());
     for (const Group& g : groups) {
+        if (alreadyPartLevel.count(g.pds.get())) {
+            continue;
+        }
         // fixed order: volume, area, centroid
         std::vector<Handle(StepRepr_RepresentationItem)> ordered;
         for (const char* key : {"volume measure", "surface area measure", "centre point"}) {
