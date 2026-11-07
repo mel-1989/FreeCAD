@@ -65,7 +65,7 @@ MUTANTS = [
     ("strict_keys_off", APP, "        if (!known) {\n            raiseSpec(position, what + \": unknown key", "        if (false) {\n            raiseSpec(position, what + \": unknown key", "an unknown key accepted"),
     ("strict_negative_tag_off", APP, "if (cs.tag < 0) {", "if (cs.tag < -1000000000) {", "a negative tag accepted"),
     # grid speed (check 9): the tall Gauss-Newton step, the diagnosis route and its guards
-    ("grid_tall_step_off", SOLVE, "return (rows > cols && cols >= 200) ? GCS::SparseNormalLdlt : GCS::LeastNormLdlt;", "return GCS::LeastNormLdlt;", "a tall Jacobian takes the J J^T step again (a dense fallback on every step of a grid)"),
+    ("grid_tall_step_off", SOLVE, "return (rows > cols && cols >= 200) ? GCS::SparseNormalLdlt : GCS::LeastNormLdlt;", "return (rows > cols + 100000 && cols >= 200) ? GCS::SparseNormalLdlt : GCS::LeastNormLdlt;", "a tall Jacobian takes the J J^T step again (a dense fallback on every step of a grid)"),
     ("grid_diagnosis_order_off", SOLVE, "} orderGuard(!spec.referenceDiagnosis);", "} orderGuard(false);", "the diagnosis keeps COLAMD's column order on a grid (10 s at 3,069 unknowns)"),
     ("grid_diagnosis_threshold_default", SOLVE, "sys.autoQRThreshold = 250;", "sys.autoQRThreshold = 1000;", "a system under 1,000 unknowns is diagnosed with the dense QR (0.6 s at 969)"),
     ("grid_diagnosis_serial", SOLVE, "sys.diagnoseParallel = true;", "sys.diagnoseParallel = false;", "the two sparse QRs of the diagnosis run one after the other (0.9 s to 1.2 s at 3,069)"),
