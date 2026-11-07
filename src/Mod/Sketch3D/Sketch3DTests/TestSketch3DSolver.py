@@ -1711,3 +1711,97 @@ class TestLargeGrids(unittest.TestCase):
         self.assertEqual((r["code"], r["dof"]), (0, 0))
         self.assertLess(whole, 2.0, "the solve and diagnosis of a 3,069-unknown grid took %.2f s" % whole)
         print("\n[check 9] guards: grid 969 solve %.0f ms, with diagnosis %.0f ms; grid 3069 with diagnosis %.0f ms" % (1000 * step_only, 1000 * with_diagnosis, 1000 * whole))
+
+
+class TestNumbering(unittest.TestCase):
+    """Check 9 must hold whatever order the user's points and constraints come in. From 250
+    unknowns the solver numbers the points and orders the constraints itself (Solve3D.cpp,
+    renumber) and maps the answer back. These tests give the same system in several numberings
+    and look at what the user sees: verdict, DOF, coordinates by the user's point, residuals by the
+    user's constraint, and the tags named."""
+
+    NUMBERINGS = ("given", "reverse", "swap", "random1", "random2", "random3")
+
+    @staticmethod
+    def system(kind, unknowns, numbering):
+        """The system in a numbering, every constraint carrying a tag that is not its position
+        (so a tag mistaken for a position shows), and a map from the given numbering."""
+        from Sketch3DTests.Sketch3DBench import make_numbered
+
+        spec, perm, n = make_numbered(kind, unknowns, numbering)
+        for k, c in enumerate(spec["constraints"]):
+            c["tag"] = 1000 + 7 * k
+        return spec, perm
+
+    def test_every_numbering_gives_the_same_answer(self):
+        for kind, unknowns in (("grid", 297), ("grid", 540), ("chain", 300)):
+            base_spec, _ = self.system(kind, unknowns, "given")
+            base = Sketch3D.solve(base_spec)
+            self.assertEqual((base["code"], base["dof"]), (0, 0), "%s %d" % (kind, unknowns))
+            for numbering in self.NUMBERINGS[1:]:
+                spec, perm = self.system(kind, unknowns, numbering)
+                r = Sketch3D.solve(spec)
+                name = "%s %d %s" % (kind, unknowns, numbering)
+                self.assertEqual((r["code"], r["dof"]), (0, 0), name)
+                # the coordinates of the user's point o are at index perm[o]
+                worst = max(abs(a - b) for o, p in enumerate(base["coordinates"]) for a, b in zip(p, r["coordinates"][perm[o]]))
+                self.assertLessEqual(worst, 1e-8, "%s: coordinates differ from the given numbering by %g" % (name, worst))
+                self.assertLessEqual(true_residual(spec, flat(r)), TOL, name)
+                self.assertEqual(len(r["residuals"]), len(spec["constraints"]))
+                tags = {c["tag"] for c in spec["constraints"]}
+                self.assertTrue(set(r["redundant"]) | set(r["partially_redundant"]) <= tags, "%s: redundant tags that are not the input's" % name)
+                self.assertEqual(bool(r["redundant"] or r["partially_redundant"]), bool(base["redundant"] or base["partially_redundant"]), name)
+                for tag in sorted(r["redundant"])[:3]:
+                    smaller = dict(spec, constraints=[c for c in spec["constraints"] if c["tag"] != tag])
+                    s = Sketch3D.solve(smaller)
+                    self.assertEqual((s["code"], s["dof"]), (0, 0), "%s: removing redundant tag %s" % (name, tag))
+
+    def test_a_non_driving_relation_reports_its_own_residual(self):
+        """Residuals come back by the user's constraint, not by the solver's position."""
+        for numbering in self.NUMBERINGS:
+            spec, perm = self.system("grid", 297, numbering)
+            line = 7
+            spec["lines"].append(list(spec["lines"][line]))
+            spec["constraints"].append({"type": "length", "operands": [len(spec["lines"]) - 1], "value": 1.7, "driving": False, "tag": 99999})
+            r = Sketch3D.solve(spec)
+            self.assertEqual(r["code"], 0, numbering)
+            res = r["residuals"]
+            self.assertAlmostEqual(res[-1], 0.7, delta=1e-6, msg="%s: the non-driving relation's residual" % numbering)
+            self.assertLess(max(res[:-1]), 1e-9, "%s: a driving relation reads as unsatisfied" % numbering)
+
+    def test_a_planted_conflict_is_named_by_the_users_tag(self):
+        for numbering in self.NUMBERINGS:
+            spec, perm = self.system("grid", 297, numbering)
+            lengths = [i for i, c in enumerate(spec["constraints"]) if c["type"] == "length"]
+            victim = lengths[len(lengths) // 3]
+            spec["constraints"][victim]["value"] = 1.7
+            r = Sketch3D.solve(spec)
+            self.assertNotEqual(r["code"], 0, numbering)
+            tags = {c["tag"] for c in spec["constraints"]}
+            self.assertTrue(r["conflicting"], numbering)
+            self.assertTrue(set(r["conflicting"]) <= tags, "%s: conflicting tags that are not the input's: %s" % (numbering, r["conflicting"][:5]))
+            smaller = dict(spec, constraints=[c for c in spec["constraints"] if c["tag"] not in set(r["conflicting"])])
+            self.assertEqual(Sketch3D.solve(smaller)["code"], 0, "%s: removing the named conflicting set" % numbering)
+
+    def test_speed_does_not_depend_on_the_numbering(self):
+        """Loose guards at twice the bars of check 9: 3,069 unknowns in 2 s however the points are
+        numbered. Without the renumbering the sparse QR of the diagnosis runs in the order the
+        user gave, and takes 6 to 12 s on these (0.8 s in the grid's own order)."""
+        import time
+
+        timings = []
+        for numbering in ("reverse", "swap", "random1"):
+            spec = self.system("grid", 3000, numbering)[0]
+            t = time.perf_counter()
+            r = Sketch3D.solve(spec)
+            dt = time.perf_counter() - t
+            self.assertEqual((r["code"], r["dof"]), (0, 0), numbering)
+            self.assertLess(dt, 2.0, "grid 3,069 numbered %s took %.2f s" % (numbering, dt))
+            timings.append("%s %.0f ms" % (numbering, 1000 * dt))
+        spec = self.system("chain", 3000, "random1")[0]
+        t = time.perf_counter()
+        r = Sketch3D.solve(spec)
+        dt = time.perf_counter() - t
+        self.assertEqual((r["code"], r["dof"]), (0, 0))
+        self.assertLess(dt, 0.4, "chain 2,991 shuffled took %.2f s" % dt)
+        print("\n[check 9] guards by numbering: grid 3069 %s; shuffled chain 2991 %.0f ms" % (", ".join(timings), 1000 * dt))

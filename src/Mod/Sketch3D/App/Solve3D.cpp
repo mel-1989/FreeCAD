@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <cstring>
 #include <map>
 #include <numbers>
@@ -298,10 +299,501 @@ Result solveImpl(const Spec& spec, int depth, bool retry);
 
 }  // namespace
 
+namespace
+{
+
+// Unknowns from which the points and constraints are renumbered before the solve (the same size
+// at which the diagnosis turns to a sparse QR).
+constexpr int RenumberUnknowns = 250;
+
+// A renumbering of the free points and of the constraints. pointNew[old] is the new index of a
+// point, conNew[old] the new index of a constraint; the lists are the inverses.
+struct Renumbering
+{
+    std::vector<int> pointNew, pointOld, conNew, conOld;
+};
+
+// The points that a constraint touches, through its point and line operands.
+void touchedPoints(const Spec& spec, const ConstraintSpec& cs, std::vector<int>& out)
+{
+    out.clear();
+    const KindInfo& info = kindInfo(cs.kind);
+    for (size_t k = 0; k < cs.operands.size(); ++k) {
+        const int o = cs.operands[k];
+        if (info.operands[k] == 'p') {
+            out.push_back(o);
+        }
+        else if (info.operands[k] == 'l') {
+            out.push_back(spec.lines[o][0]);
+            out.push_back(spec.lines[o][1]);
+        }
+    }
+}
+
+// A fill-reducing order of the free points and an order of the constraints that suits the sparse
+// QR of the diagnosis, computed from the sketch's own structure so that the speed of a solve does
+// not depend on how the user numbered the points and listed the relations.
+//
+// Points: nested dissection (George 1973) of the graph whose vertices are the free points and
+// whose hyperedges are the constraints (a constraint joins all the free points it touches). A
+// component is cut at the breadth-first level (Cuthill and McKee 1969, George 1971) that holds
+// the median vertex, counted from a pseudo-peripheral start (George and Liu 1979); the pieces
+// are ordered first and the cut last, recursively. Ties go to lower degree, then lower index.
+// Plain reverse Cuthill-McKee for the columns was tried first and is 3.6 to 10 times slower on
+// a grid of lines than the dissection (3 s, or 8.5 s in the worse of two modes, against 0.4 to
+// 0.9 s at 3,069 unknowns). Fixed points have no unknowns and take the last positions.
+//
+// Constraints: sorted by the reverse Cuthill-McKee position of their points, then matched to
+// columns (below). The cost is near linear in the number of incidences and the result depends on
+// nothing but the input, so it is the same in every process.
+Renumbering renumber(const Spec& spec)
+{
+    const int np = static_cast<int>(spec.points.size());
+    const int nc = static_cast<int>(spec.constraints.size());
+    std::vector<std::vector<int>> adj(np);
+    std::vector<int> pts;
+    for (int ci = 0; ci < nc; ++ci) {
+        touchedPoints(spec, spec.constraints[ci], pts);
+        std::vector<int> free;
+        for (int p : pts) {
+            if (!spec.points[p].fixed) {
+                free.push_back(p);
+            }
+        }
+        std::sort(free.begin(), free.end());
+        free.erase(std::unique(free.begin(), free.end()), free.end());
+        for (int a : free) {
+            for (int b : free) {
+                if (a != b) {
+                    adj[a].push_back(b);
+                }
+            }
+        }
+    }
+    for (auto& v : adj) {
+        std::sort(v.begin(), v.end());
+        v.erase(std::unique(v.begin(), v.end()), v.end());
+    }
+    auto byDegree = [&](int a, int b) {
+        return adj[a].size() != adj[b].size() ? adj[a].size() < adj[b].size() : a < b;
+    };
+    for (auto& v : adj) {
+        std::sort(v.begin(), v.end(), byDegree);
+    }
+
+    std::vector<int> level(np, 0), done(np, 0), ndOrder;
+    {
+        // nested dissection by level-set separators
+        std::vector<int> inSet(np, -1);  // the call that owns a vertex
+        int stamp = 1;
+        std::vector<int> out;
+        std::function<void(std::vector<int>)> dissect = [&](std::vector<int> verts) {
+            // verts is connected. Order it: pieces first, separator last.
+            if (verts.size() <= 24) {
+                // small: plain breadth-first from the lowest degree vertex, reversed
+                ++stamp;
+                for (int v : verts) {
+                    inSet[v] = stamp;
+                }
+                int root = verts[0];
+                for (int v : verts) {
+                    if (byDegree(v, root)) {
+                        root = v;
+                    }
+                }
+                std::vector<int> q(1, root);
+                inSet[root] = -stamp;
+                for (size_t h = 0; h < q.size(); ++h) {
+                    for (int w : adj[q[h]]) {
+                        if (inSet[w] == stamp) {
+                            inSet[w] = -stamp;
+                            q.push_back(w);
+                        }
+                    }
+                }
+                out.insert(out.end(), q.rbegin(), q.rend());
+                return;
+            }
+            ++stamp;
+            const int mine = stamp;
+            for (int v : verts) {
+                inSet[v] = mine;
+            }
+            auto sweep2 = [&](int root, std::vector<int>& ord) {
+                ++stamp;
+                ord.assign(1, root);
+                level[root] = 0;
+                inSet[root] = -mine;
+                for (size_t h = 0; h < ord.size(); ++h) {
+                    for (int w : adj[ord[h]]) {
+                        if (inSet[w] == mine) {
+                            inSet[w] = -mine;
+                            level[w] = level[ord[h]] + 1;
+                            ord.push_back(w);
+                        }
+                    }
+                }
+                for (int v : ord) {
+                    inSet[v] = mine;
+                }
+            };
+            std::vector<int> ord;
+            int root = verts[0];
+            for (int v : verts) {
+                if (byDegree(v, root)) {
+                    root = v;
+                }
+            }
+            sweep2(root, ord);
+            int depthL = level[ord.back()];
+            for (int guard = 0; guard < 8; ++guard) {
+                int cand = -1;
+                for (int v : ord) {
+                    if (level[v] == depthL && (cand < 0 || byDegree(v, cand))) {
+                        cand = v;
+                    }
+                }
+                std::vector<int> ord2;
+                sweep2(cand, ord2);
+                const int d2 = level[ord2.back()];
+                if (d2 > depthL) {
+                    depthL = d2;
+                    ord = ord2;
+                }
+                else {
+                    sweep2(ord.front(), ord);
+                    break;
+                }
+            }
+            if (depthL < 2) {
+                out.insert(out.end(), ord.rbegin(), ord.rend());
+                return;
+            }
+            // separator level: the one where the cumulative count first reaches half
+            std::vector<int> count(depthL + 1, 0);
+            for (int v : ord) {
+                ++count[level[v]];
+            }
+            int acc = 0, sepL = 1;
+            for (int l = 0; l <= depthL; ++l) {
+                acc += count[l];
+                if (2 * acc >= static_cast<int>(ord.size())) {
+                    sepL = std::min(std::max(l, 1), depthL - 1);
+                    break;
+                }
+            }
+            std::vector<int> sep;
+            for (int v : ord) {
+                if (level[v] == sepL) {
+                    sep.push_back(v);
+                    inSet[v] = 0;
+                }
+            }
+            // components of the rest
+            for (int v : ord) {
+                if (inSet[v] != mine) {
+                    continue;
+                }
+                std::vector<int> comp(1, v);
+                inSet[v] = -mine;
+                for (size_t h = 0; h < comp.size(); ++h) {
+                    for (int w : adj[comp[h]]) {
+                        if (inSet[w] == mine) {
+                            inSet[w] = -mine;
+                            comp.push_back(w);
+                        }
+                    }
+                }
+                for (int c : comp) {
+                    inSet[c] = -1;
+                }
+                dissect(comp);
+            }
+            out.insert(out.end(), sep.begin(), sep.end());
+        };
+        for (int sv = 0; sv < np; ++sv) {
+            if (spec.points[sv].fixed || done[sv]) {
+                continue;
+            }
+            std::vector<int> comp(1, sv);
+            done[sv] = 1;
+            for (size_t h = 0; h < comp.size(); ++h) {
+                for (int w : adj[comp[h]]) {
+                    if (!done[w]) {
+                        done[w] = 1;
+                        comp.push_back(w);
+                    }
+                }
+            }
+            dissect(comp);
+        }
+        ndOrder = out;
+    }
+    // Reverse Cuthill-McKee order, per component from a pseudo-peripheral vertex. It orders the
+    // constraints (below): the dependent constraints of a closed loop are then found among
+    // neighbours, so a redundant set stays small (a grid of lines names 36 constraints with this
+    // key and 506 with the dissection order).
+    std::vector<int> keyOrder;
+    {
+        std::vector<int> seenC(np, 0), lev(np, 0);
+        auto bfsFrom = [&](int root, std::vector<int>& ord, std::vector<int>& visitedStamp, int st) {
+            ord.assign(1, root);
+            visitedStamp[root] = st;
+            lev[root] = 0;
+            for (size_t h = 0; h < ord.size(); ++h) {
+                for (int w : adj[ord[h]]) {
+                    if (visitedStamp[w] != st) {
+                        visitedStamp[w] = st;
+                        lev[w] = lev[ord[h]] + 1;
+                        ord.push_back(w);
+                    }
+                }
+            }
+        };
+        std::vector<int> stampv(np, 0), o1, o2;
+        int st = 0;
+        for (int sv = 0; sv < np; ++sv) {
+            if (spec.points[sv].fixed || seenC[sv]) {
+                continue;
+            }
+            bfsFrom(sv, o1, stampv, ++st);
+            int root = sv;
+            int dep = lev[o1.back()];
+            for (int g = 0; g < 8; ++g) {
+                int cand = -1;
+                for (int v : o1) {
+                    if (lev[v] == dep && (cand < 0 || byDegree(v, cand))) {
+                        cand = v;
+                    }
+                }
+                bfsFrom(cand, o2, stampv, ++st);
+                const int d2 = lev[o2.back()];
+                if (d2 > dep) {
+                    dep = d2;
+                    root = cand;
+                    o1 = o2;
+                }
+                else {
+                    break;
+                }
+            }
+            bfsFrom(root, o1, stampv, ++st);
+            for (int v : o1) {
+                seenC[v] = 1;
+            }
+            keyOrder.insert(keyOrder.end(), o1.rbegin(), o1.rend());
+        }
+    }
+    Renumbering r;
+    r.pointOld = ndOrder;  // the nested dissection order of the free points
+    for (int p = 0; p < np; ++p) {
+        if (spec.points[p].fixed) {
+            r.pointOld.push_back(p);
+        }
+    }
+    r.pointNew.assign(np, 0);
+    for (int k = 0; k < np; ++k) {
+        r.pointNew[r.pointOld[k]] = k;
+    }
+
+    // Constraint order. Eigen's sparse QR takes row k to belong to column k (the Householder
+    // vector of column k starts at row k), so a Jacobian whose first rows each touch "their"
+    // column fills least. Rows are therefore matched to columns (a maximum bipartite matching on
+    // the nonzero pattern of the Jacobian at the start: a greedy pass in wavefront order, then
+    // augmenting paths, Duff 1981), and the constraints are sorted by the column their first
+    // matched row took. Rows no column takes (the surplus of a tall system) and constraints with
+    // no unknown go last in wavefront order. All of it is a heuristic about speed; any order is
+    // a correct input.
+    std::vector<int> kpos = r.pointNew;
+    if (!keyOrder.empty()) {
+        for (size_t k = 0; k < keyOrder.size(); ++k) {
+            kpos[keyOrder[k]] = static_cast<int>(k);
+        }
+    }
+    std::vector<double> c0(3 * np);
+    for (int i = 0; i < np; ++i) {
+        for (int a = 0; a < 3; ++a) {
+            c0[3 * i + a] = spec.points[i].xyz[a];
+        }
+    }
+    const std::vector<PlaneData> planes = allPlanes(spec);
+    std::vector<int> colOfParam(3 * np, -1);
+    int ncols = 0;
+    for (int k = 0; k < np; ++k) {
+        const int pt = r.pointOld[k];
+        if (!spec.points[pt].fixed) {
+            for (int a = 0; a < 3; ++a) {
+                colOfParam[3 * pt + a] = 3 * k + a;
+            }
+            ++ncols;
+        }
+    }
+    ncols *= 3;
+    std::vector<std::array<int, 4>> keys(nc);  // wavefront key of a constraint
+    std::vector<std::vector<int>> rowCols;     // column pattern of each row
+    std::vector<int> rowCon;                   // constraint of each row
+    for (int ci = 0; ci < nc; ++ci) {
+        touchedPoints(spec, spec.constraints[ci], pts);
+        int lo = np, hi = -1;
+        for (int p : pts) {
+            if (!spec.points[p].fixed) {
+                lo = std::min(lo, kpos[p]);
+                hi = std::max(hi, kpos[p]);
+            }
+        }
+        // ties between constraints on the same points: the one with more rows first, then by
+        // kind, so that the order does not depend on the order the user listed them in (a
+        // direction relation's two rows ahead of a length's one measured 2.4 times faster on a
+        // grid than the reverse)
+        const int tie = -1000 * kindInfo(spec.constraints[ci].kind).rows
+                        - static_cast<int>(spec.constraints[ci].kind);
+        keys[ci] = {lo, hi, tie, ci};
+        if (!spec.constraints[ci].driving || hi < 0) {
+            continue;
+        }
+        auto rows = buildRows(spec, ci, c0.data(), planes);
+        for (auto& row : rows) {
+            std::vector<int> cols;
+            for (double* q : row->allParams()) {
+                const int col = colOfParam[q - c0.data()];
+                if (col >= 0 && row->grad(q) != 0.0) {
+                    cols.push_back(col);
+                }
+            }
+            std::sort(cols.begin(), cols.end());
+            cols.erase(std::unique(cols.begin(), cols.end()), cols.end());
+            rowCols.push_back(std::move(cols));
+            rowCon.push_back(ci);
+        }
+    }
+    const int nrows = static_cast<int>(rowCols.size());
+    std::vector<int> byKey(nrows);
+    for (int i = 0; i < nrows; ++i) {
+        byKey[i] = i;
+    }
+    std::stable_sort(byKey.begin(), byKey.end(), [&](int a, int b) {
+        return keys[rowCon[a]] < keys[rowCon[b]];
+    });
+    std::vector<int> rowOfCol(ncols, -1), colOfRow(nrows, -1);
+    for (int i : byKey) {
+        for (int col : rowCols[i]) {
+            if (rowOfCol[col] < 0) {
+                rowOfCol[col] = i;
+                colOfRow[i] = col;
+                break;
+            }
+        }
+    }
+    {
+        // augmenting paths for the rows left over, by depth-first search with a visit stamp; the
+        // total work is capped so a hard structure costs at most a few passes
+        std::vector<int> seen(ncols, -1);
+        long budget = 40L * (static_cast<long>(nrows) + ncols) + 1000;
+        std::vector<std::pair<int, size_t>> stack;
+        for (int i : byKey) {
+            if (colOfRow[i] >= 0 || budget <= 0) {
+                continue;
+            }
+            stack.assign(1, {i, 0});
+            std::vector<int> viaCol(1, -1);
+            bool found = false;
+            while (!stack.empty() && !found && budget > 0) {
+                auto& [row, pos] = stack.back();
+                if (pos >= rowCols[row].size()) {
+                    stack.pop_back();
+                    viaCol.pop_back();
+                    continue;
+                }
+                const int col = rowCols[row][pos++];
+                --budget;
+                if (seen[col] == i) {
+                    continue;
+                }
+                seen[col] = i;
+                if (rowOfCol[col] < 0) {
+                    // flip the path: every row on the stack takes the column it was exploring
+                    int take = col;
+                    for (size_t d = stack.size(); d-- > 0;) {
+                        const int rr = stack[d].first;
+                        const int prev = colOfRow[rr];
+                        colOfRow[rr] = take;
+                        rowOfCol[take] = rr;
+                        take = prev;
+                    }
+                    found = true;
+                }
+                else {
+                    stack.push_back({rowOfCol[col], 0});
+                    viaCol.push_back(col);
+                }
+            }
+        }
+    }
+    // a constraint sorts by the smallest matched column of its rows; unmatched ones follow
+    std::vector<std::array<int, 5>> ckeys(nc);
+    for (int ci = 0; ci < nc; ++ci) {
+        ckeys[ci] = {1, keys[ci][0], keys[ci][1], keys[ci][2], ci};
+    }
+    for (int i = 0; i < nrows; ++i) {
+        auto& k = ckeys[rowCon[i]];
+        if (colOfRow[i] >= 0 && (k[0] == 1 || colOfRow[i] < k[1])) {
+            k = {0, colOfRow[i], 0, keys[rowCon[i]][2], rowCon[i]};
+        }
+    }
+    r.conOld.resize(nc);
+    for (int ci = 0; ci < nc; ++ci) {
+        r.conOld[ci] = ci;
+    }
+    std::sort(r.conOld.begin(), r.conOld.end(), [&](int a, int b) { return ckeys[a] < ckeys[b]; });
+    r.conNew.assign(nc, 0);
+    for (int k = 0; k < nc; ++k) {
+        r.conNew[r.conOld[k]] = k;
+    }
+    return r;
+}
+
+}  // namespace
+
 Result solve(const Spec& spec)
 {
     validate(spec);
-    return solveImpl(spec, 0, true);
+    int unknowns = 0;
+    for (const auto& p : spec.points) {
+        unknowns += p.fixed ? 0 : 3;
+    }
+    if (unknowns < RenumberUnknowns) {
+        return solveImpl(spec, 0, true);
+    }
+    // Large systems are solved in a numbering of our own (see renumber) and the answer is mapped
+    // back: coordinates by point, residuals by constraint. Conflict and redundancy lists carry
+    // the user's tags, which do not move.
+    const Renumbering rn = renumber(spec);
+    Spec ordered = spec;
+    for (size_t k = 0; k < rn.pointOld.size(); ++k) {
+        ordered.points[k] = spec.points[rn.pointOld[k]];
+    }
+    for (auto& l : ordered.lines) {
+        l = {rn.pointNew[l[0]], rn.pointNew[l[1]]};
+    }
+    for (size_t k = 0; k < rn.conOld.size(); ++k) {
+        ordered.constraints[k] = spec.constraints[rn.conOld[k]];
+        const KindInfo& info = kindInfo(ordered.constraints[k].kind);
+        for (size_t j = 0; j < ordered.constraints[k].operands.size(); ++j) {
+            if (info.operands[j] == 'p') {
+                int& o = ordered.constraints[k].operands[j];
+                o = rn.pointNew[o];
+            }
+        }
+    }
+    Result res = solveImpl(ordered, 0, true);
+    Result out = res;
+    for (size_t k = 0; k < rn.pointOld.size(); ++k) {
+        out.coordinates[rn.pointOld[k]] = res.coordinates[k];
+    }
+    for (size_t k = 0; k < rn.conOld.size(); ++k) {
+        out.residuals[rn.conOld[k]] = res.residuals[k];
+    }
+    return out;
 }
 
 namespace

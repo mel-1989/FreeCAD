@@ -72,6 +72,14 @@ MUTANTS = [
     ("grid_normal_pivot_test_off", GCS, "if (d.minCoeff() > 1e-12 * d.maxCoeff()) {", "if (true) {", "the sparse normal equations are trusted whatever their pivots"),
     ("grid_normal_equations_drop_term", GCS, "h_gn = ldlt.solve(-(Jx.adjoint() * fx));", "h_gn = ldlt.solve(-fx.head(Jx.cols()));", "the right side of the normal equations is not J^T f"),
     ("grid_elimination_skips_negatives", GCS, "if (R(i, col) != 0.0) {", "if (R(i, col) > 0.0) {", "the pivot row's negative entries are left out of the elimination that names redundant sets"),
+    # renumbering of large systems (check 9 whatever the user's numbering): the guard and the map-back
+    ("renumber_off", SOLVE, "    if (unknowns < RenumberUnknowns) {", "    if (true) {", "no renumbering: the diagnosis runs in the order the user gave (6 to 12 s at 3,069 unknowns)"),
+    ("renumber_points_kept_in_given_order", SOLVE, "    r.pointOld = ndOrder;", "    r.pointOld.clear();\n    for (int p = 0; p < np; ++p) {\n        if (!spec.points[p].fixed) {\n            r.pointOld.push_back(p);\n        }\n    }", "the dissection order replaced by the user's own order of the points"),
+    ("renumber_tags_as_positions", SOLVE, "        ordered.constraints[k] = spec.constraints[rn.conOld[k]];", "        ordered.constraints[k] = spec.constraints[rn.conOld[k]];\n        ordered.constraints[k].tag = static_cast<int>(k);", "map-back of tags wrong: named tags are positions in the solver's order, not the user's tags"),
+    ("renumber_coordinates_not_mapped_back", SOLVE, "out.coordinates[rn.pointOld[k]] = res.coordinates[k];", "out.coordinates[k] = res.coordinates[k];", "map-back of coordinates wrong: points come back in the solver's numbering"),
+    ("renumber_residuals_not_mapped_back", SOLVE, "out.residuals[rn.conOld[k]] = res.residuals[k];", "out.residuals[k] = res.residuals[k];", "map-back of residuals wrong: reported against the solver's order of constraints"),
+    ("renumber_line_ends_not_remapped", SOLVE, "l = {rn.pointNew[l[0]], rn.pointNew[l[1]]};", "l = {l[0], l[1]};", "lines keep the old point indices after the points are renumbered"),
+    ("renumber_point_operands_not_remapped", SOLVE, "                o = rn.pointNew[o];", "                o = o + 0;", "point operands of constraints keep the old indices"),
     ("grid_reference_flag_ignored", APP, "spec.referenceDiagnosis = flag(rd, -1, \"'reference_diagnosis'\");", "spec.referenceDiagnosis = false;", "reference_diagnosis is never read"),
 ]
 
