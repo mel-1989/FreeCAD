@@ -208,7 +208,8 @@ public:
         fs::path next = target(node, r);
         const std::string nkey = next.string();
         std::error_code ec;
-        const bool exists = fs::exists(next, ec) && !fs::is_directory(next, ec);
+        const bool isFolder = fs::is_directory(next, ec);
+        const bool exists = fs::exists(next, ec) && !isFolder;
         if (outside(r)) {
             warn("out|" + key + "|" + r.name + "|" + r.source,
                  "STEP external reference: '" + r.name + (r.source.empty() ? "" : "' in '" + r.source) + "' referenced by '"
@@ -218,12 +219,12 @@ public:
                                                  ? "loaded from the path as written"
                                                  : "looked for beside the importing file, the folder named is not used")
                                + ")"
-                               : " (not found)"));
+                               : (isFolder ? " (it is a folder, not a file)" : " (not found)")));
         }
         if (!exists) {
             warn("miss|" + nkey,
                  "STEP external reference: file '" + r.name + "' referenced by '" + node.filename().string()
-                     + "' was not found");
+                     + (isFolder ? "' is a folder, not a file" : "' was not found"));
             return false;
         }
         report.referencedFiles += seen.insert(nkey).second ? 1 : 0;
