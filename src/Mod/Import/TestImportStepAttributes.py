@@ -479,6 +479,12 @@ class TestWrite(AttrCase):
         self.set_attrs(o, {"Part Number": "PN-1"})
         self.assertEqual(self.products(self.roundtrip(d, "g.step")), [("PN-1", "Gear", "")])
 
+    def test_a_part_number_equal_to_the_name_keeps_the_name(self):
+        d = self.newdoc()
+        o = self.feature(d, "Gear", Part.makeBox(1, 2, 3))
+        self.set_attrs(o, {"Part Number": "Gear", "Description": "d"})
+        self.assertEqual(self.products(self.roundtrip(d, "g.step")), [("Gear", "Gear", "d")])
+
     def test_a_rename_keeps_the_part_number_and_the_name_follows_the_label(self):
         d = self.newdoc()
         o = self.feature(d, "Gear", Part.makeBox(1, 2, 3))
@@ -542,7 +548,9 @@ class TestWrite(AttrCase):
         self.assertNotIn("Part Number 'PN-5'", out)
 
     def test_attributes_of_an_assembly_stay_on_the_assembly_when_a_child_sits_at_the_origin(self):
-        # an identity placement lets the writer's solid lookup reach the child's product through the assembly's shape
+        # the writer's solid lookup never reaches a child's product through an assembly's shape (probed: no solid of an
+        # assembly's compound is found in the written file), so the first-solid route is dead code and the name
+        # fallback decides; this test pins the outcome, not that route
         d = self.newdoc()
         box = self.feature(d, "Box", Part.makeBox(10, 20, 30))
         self.set_attrs(box, {"grade": "A"})
