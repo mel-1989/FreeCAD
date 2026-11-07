@@ -687,3 +687,188 @@ class MeshProperty(unittest.TestCase):
         self.assertEqual(len(material2["emissiveColor"]), len1 + len2)
         self.assertEqual(len(material2["shininess"]), len1 + len2)
         self.assertEqual(len(material2["transparency"]), len1 + len2)
+
+
+class Mesh3MFReadCases(unittest.TestCase):
+    """3MF reading: root relationship, units, build items, colours and materials.
+
+    The fixtures are written here from the 3MF Core Specification and Materials Extension (3MF Consortium).
+    """
+
+    CORE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+    MATL = "http://schemas.microsoft.com/3dmanufacturing/material/2015/02"
+    REL = "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"
+    # a right-angled tetrahedron: legs of length 1 along x, y and z
+    VERTS = '<vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/><vertex x="0" y="0" z="1"/>'
+
+    def setUp(self):
+        self.doc = FreeCAD.newDocument("Mesh3MF")
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.doc.Name)
+
+    def tris(self, extra=None):
+        faces = [(0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3)]
+        extra = extra or [""] * 4
+        return "".join('<triangle v1="%d" v2="%d" v3="%d" %s/>' % (a, b, c, e) for (a, b, c), e in zip(faces, extra))
+
+    def obj(self, oid, name=None, attrs="", extra=None):
+        n = ' name="%s"' % name if name else ""
+        return '<object id="%d"%s %s><mesh><vertices>%s</vertices><triangles>%s</triangles></mesh></object>' % (
+            oid, n, attrs, self.VERTS, self.tris(extra))
+
+    def package(self, body, unit=None, part="3D/3dmodel.model", target=None, resources_prefix=""):
+        import zipfile
+        u = ' unit="%s"' % unit if unit else ""
+        model = '<?xml version="1.0" encoding="UTF-8"?><model xmlns="%s" xmlns:m="%s"%s>%s</model>' % (self.CORE, self.MATL, u, body)
+        path = os.path.join(self.tmp, "t%d.3mf" % len(os.listdir(self.tmp)))
+        with zipfile.ZipFile(path, "w") as z:
+            if target is not False:
+                rel = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r0" Target="%s" Type="%s"/></Relationships>' % (target or "/" + part, self.REL)
+                z.writestr("_rels/.rels", rel)
+            z.writestr(part, model)
+        return path
+
+    def load(self, path):
+        before = set(o.Name for o in self.doc.Objects)
+        Mesh.insert(path, self.doc.Name)
+        return [o for o in self.doc.Objects if o.Name not in before and o.isDerivedFrom("Mesh::Feature")]
+
+    def grp(self):
+        return FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/Mesh")
+
+    def test_start_part_through_relationship(self):
+        path = self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % self.obj(1), part="3D/other_name.part")
+        objs = self.load(path)
+        self.assertEqual(len(objs), 1)
+        self.assertEqual(objs[0].Mesh.CountFacets, 4)
+
+    def test_start_part_percent_encoded(self):
+        path = self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % self.obj(1), part="3D/a b.model", target="/3D/a%20b.model")
+        self.assertEqual(len(self.load(path)), 1)
+
+    def test_start_part_fixed_path_fallback(self):
+        path = self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % self.obj(1), target=False)
+        self.assertEqual(len(self.load(path)), 1)
+
+    def test_units_scaled_to_millimetre(self):
+        want = {"millimeter": 1.0, "micron": 0.001, "centimeter": 10.0, "inch": 25.4, "foot": 304.8, "meter": 1000.0}
+        for unit, f in want.items():
+            path = self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % self.obj(1), unit=unit)
+            o = self.load(path)[0]
+            self.assertAlmostEqual(o.Mesh.BoundBox.XLength, f, places=4, msg=unit)
+        path = self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % self.obj(1))
+        self.assertAlmostEqual(self.load(path)[0].Mesh.BoundBox.XLength, 1.0, places=6)
+
+    def test_unit_scales_item_translation(self):
+        tr = "1 0 0 0 1 0 0 0 1 2 0 0"
+        path = self.package("<resources>%s</resources><build><item objectid=\"1\" transform=\"%s\"/></build>" % (self.obj(1), tr), unit="centimeter")
+        self.assertAlmostEqual(self.load(path)[0].Mesh.BoundBox.XMin, 20.0, places=4)
+
+    def test_one_object_per_build_item(self):
+        body = ("<resources>%s%s</resources><build><item objectid=\"1\"/>"
+                "<item objectid=\"2\" transform=\"0 1 0 -1 0 0 0 0 1 10 0 0\"/>"
+                "<item objectid=\"2\" transform=\"2 0 0 0 1 0 0 0 1 0 5 0\"/></build>") % (self.obj(1, "first"), self.obj(2, "second"))
+        objs = self.load(self.package(body))
+        self.assertEqual([o.Label for o in objs], ["first", "second", "second001"])
+        self.assertTrue(objs[0].Placement.isIdentity())
+        # a rigid transform becomes the Placement, a scaling one is baked into the vertices
+        self.assertAlmostEqual(objs[1].Placement.Base.x, 10.0, places=6)
+        self.assertAlmostEqual(objs[1].Placement.Rotation.Angle, math.pi / 2, places=6)
+        self.assertTrue(objs[2].Placement.isIdentity())
+        self.assertAlmostEqual(objs[2].Mesh.BoundBox.XLength, 2.0, places=5)
+        self.assertAlmostEqual(objs[2].Mesh.BoundBox.YMin, 5.0, places=5)
+
+    def test_single_item_transform_baked(self):
+        tr = "1 0 0 0 1 0 0 0 1 3 0 0"
+        o = self.load(self.package("<resources>%s</resources><build><item objectid=\"1\" transform=\"%s\"/></build>" % (self.obj(1), tr)))[0]
+        self.assertTrue(o.Placement.isIdentity())
+        self.assertAlmostEqual(o.Mesh.BoundBox.XMin, 3.0, places=5)
+
+    def test_object_not_in_build_is_left_out(self):
+        objs = self.load(self.package("<resources>%s%s</resources><build><item objectid=\"1\"/></build>" % (self.obj(1), self.obj(2))))
+        self.assertEqual(len(objs), 1)
+
+    def test_components_flattened_with_transforms(self):
+        comp = ('<object id="3"><components><component objectid="1"/>'
+                '<component objectid="1" transform="1 0 0 0 1 0 0 0 1 10 0 0"/></components></object>')
+        objs = self.load(self.package("<resources>%s%s</resources><build><item objectid=\"3\"/></build>" % (self.obj(1), comp)))
+        self.assertEqual(len(objs), 1)
+        self.assertEqual(objs[0].Mesh.CountFacets, 8)
+        self.assertAlmostEqual(objs[0].Mesh.BoundBox.XMax, 11.0, places=5)
+
+    def test_component_cycle_does_not_hang(self):
+        cyc = ('<object id="3"><components><component objectid="4"/></components></object>'
+               '<object id="4"><components><component objectid="3"/></components></object>')
+        objs = self.load(self.package("<resources>%s%s</resources><build><item objectid=\"1\"/><item objectid=\"3\"/></build>" % (self.obj(1), cyc)))
+        self.assertEqual(len(objs), 1)
+
+    def colors(self, o):
+        return [tuple(int(round(c * 255)) for c in col) for col in o.FaceColors]
+
+    def test_colorgroup_to_face_colors(self):
+        res = ('<m:colorgroup id="5"><m:color color="#FF0000"/><m:color color="#00FF0080"/></m:colorgroup>'
+               + self.obj(1, "c", 'pid="5" pindex="0"', ["p1=\"1\"", "", "p1=\"1\" p2=\"0\" p3=\"0\"", ""]))
+        o = self.load(self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % res))[0]
+        self.assertEqual(self.colors(o), [(0, 255, 0, 128), (255, 0, 0, 255), (0, 255, 0, 128), (255, 0, 0, 255)])
+        self.assertFalse(hasattr(o, "Material3mf"))
+
+    def test_object_level_colour_gives_full_list(self):
+        res = '<m:colorgroup id="5"><m:color color="#102030"/></m:colorgroup>' + self.obj(1, "c", 'pid="5" pindex="0"')
+        o = self.load(self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % res))[0]
+        self.assertEqual(self.colors(o), [(16, 32, 48, 255)] * 4)
+
+    def test_basematerials_names_in_first_use_order(self):
+        res = ('<basematerials id="2"><base name="steel" displaycolor="#808080FF"/><base name="gold" displaycolor="#FFD700FF"/>'
+               '<base name="unused" displaycolor="#000000FF"/></basematerials>'
+               + self.obj(1, "m", 'pid="2" pindex="1"', ["p1=\"0\"", "", "p1=\"0\"", ""]))
+        o = self.load(self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % res))[0]
+        self.assertEqual(list(o.Material3mf), ["steel", "gold"])
+        self.assertEqual(self.colors(o)[0], (128, 128, 128, 255))
+        self.assertEqual(self.colors(o)[1], (255, 215, 0, 255))
+
+    def test_nothing_to_carry(self):
+        o = self.load(self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % self.obj(1)))[0]
+        self.assertFalse(hasattr(o, "FaceColors"))
+        self.assertFalse(hasattr(o, "Material3mf"))
+
+    def test_out_of_scope_property_gives_no_colour(self):
+        res = ('<m:texture2dgroup id="9" texid="1"><m:tex2coord u="0" v="0"/></m:texture2dgroup>'
+               + self.obj(1, "t", 'pid="9" pindex="0"'))
+        o = self.load(self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % res))[0]
+        self.assertFalse(hasattr(o, "FaceColors"))
+
+    def test_dangling_references_do_not_crash(self):
+        res = ('<m:colorgroup id="5"><m:color color="nonsense"/></m:colorgroup>'
+               + self.obj(1, "d", 'pid="77" pindex="0"', ["pid=\"5\" p1=\"0\"", "pid=\"5\" p1=\"9\"", "", ""]))
+        o = self.load(self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % res))[0]
+        self.assertEqual(o.Mesh.CountFacets, 4)
+        self.assertFalse(hasattr(o, "FaceColors"))
+
+    def test_read_switch_off_gives_no_colours_but_keeps_fixes(self):
+        res = '<m:colorgroup id="5"><m:color color="#FF0000"/></m:colorgroup>' + self.obj(1, "c", 'pid="5" pindex="0"')
+        path = self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % res, unit="centimeter", part="3D/x.part")
+        g = self.grp()
+        g.SetBool("Read3mfColors", False)
+        try:
+            o = self.load(path)[0]
+        finally:
+            g.RemBool("Read3mfColors")
+        self.assertFalse(hasattr(o, "FaceColors"))
+        self.assertAlmostEqual(o.Mesh.BoundBox.XLength, 10.0, places=4)
+
+    def test_switch_is_not_written_by_import(self):
+        path = self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % self.obj(1))
+        self.load(path)
+        self.assertNotIn("Read3mfColors", [b for b in self.grp().GetBools()])
+
+    def test_truncated_package_does_not_crash(self):
+        path = self.package("<resources>%s</resources><build><item objectid=\"1\"/></build>" % self.obj(1))
+        data = open(path, "rb").read()
+        bad = os.path.join(self.tmp, "trunc.3mf")
+        open(bad, "wb").write(data[: len(data) // 2])
+        try:
+            self.load(bad)
+        except Exception:
+            pass
