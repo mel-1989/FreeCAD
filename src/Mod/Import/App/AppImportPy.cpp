@@ -68,6 +68,7 @@
 #include "ReaderGltf.h"
 #include "ReaderIges.h"
 #include "ReaderStep.h"
+#include "StepValidation.h"
 #include "WriterGltf.h"
 #include "WriterIges.h"
 #include "WriterStep.h"
@@ -95,6 +96,13 @@ public:
             "export",
             &Module::exporter,
             "export(list,string) -- Export a list of objects into a single file."
+        );
+        add_varargs_method(
+            "validateStep",
+            &Module::validateStep,
+            "validateStep(path) -- Compare the geometric validation properties stated in a STEP "
+            "file with what arrives. Returns a dict with the file verdict, the schema and one entry "
+            "per part. A missing or garbage file gives the verdict 'failed'."
         );
         add_varargs_method(
             "readDXF",
@@ -371,6 +379,83 @@ private:
         }
 
         return Py::None();
+    }
+
+    static Py::Object optFloat(const std::optional<double>& v)
+    {
+        if (v) {
+            return Py::Float(*v);
+        }
+        return Py::None();
+    }
+
+    static Py::Object optPoint(const std::optional<gp_Pnt>& p)
+    {
+        if (!p) {
+            return Py::None();
+        }
+        Py::Tuple t(3);
+        t.setItem(0, Py::Float(p->X()));
+        t.setItem(1, Py::Float(p->Y()));
+        t.setItem(2, Py::Float(p->Z()));
+        return t;
+    }
+
+    static Py::Object figuresToPy(const Import::StepFigures& f)
+    {
+        Py::Dict d;
+        d.setItem("volume", optFloat(f.volume));
+        d.setItem("area", optFloat(f.area));
+        d.setItem("wetted_area", optFloat(f.wettedArea));
+        d.setItem("independent_area", optFloat(f.independentArea));
+        d.setItem("centroid", optPoint(f.centroid));
+        d.setItem("independent_centroid", optPoint(f.independentCentroid));
+        return d;
+    }
+
+    Py::Object validateStep(const Py::Tuple& args)
+    {
+        char* Name = nullptr;
+        if (!PyArg_ParseTuple(args.ptr(), "et", "utf-8", &Name)) {
+            throw Py::Exception();
+        }
+        std::string utf8Name = Name;
+        PyMem_Free(Name);
+
+        Import::StepFileFinding res = Import::validateStepFile(Base::FileInfo(utf8Name));
+        Py::Dict out;
+        out.setItem("verdict", Py::String(Import::verdictName(res.verdict)));
+        out.setItem("schema", Py::String(res.schema));
+        out.setItem("message", Py::String(res.message));
+        Py::List parts;
+        for (const auto& p : res.parts) {
+            Py::Dict d;
+            d.setItem("name", Py::String(p.name));
+            d.setItem("verdict", Py::String(Import::verdictName(p.verdict)));
+            d.setItem("reason", Py::String(p.reason));
+            d.setItem("stated_area_is_wetted", Py::Boolean(p.statedAreaWetted));
+            d.setItem("stated", figuresToPy(p.stated));
+            d.setItem("measured", figuresToPy(p.measured));
+            Py::Dict diff;
+            diff.setItem("volume", optFloat(p.volumeDiff));
+            diff.setItem("area", optFloat(p.areaDiff));
+            diff.setItem("independent_area", optFloat(p.independentAreaDiff));
+            diff.setItem("centroid", optFloat(p.centroidDist));
+            diff.setItem("independent_centroid", optFloat(p.independentCentroidDist));
+            d.setItem("difference", diff);
+            d.setItem("diagonal", Py::Float(p.diagonal));
+            d.setItem("valid", Py::Boolean(p.geometryValid));
+            Py::Dict dis;
+            dis.setItem("volume", Py::Boolean(p.volumeDisagrees));
+            dis.setItem("area", Py::Boolean(p.areaDisagrees));
+            dis.setItem("independent_area", Py::Boolean(p.independentAreaDisagrees));
+            dis.setItem("centroid", Py::Boolean(p.centroidDisagrees));
+            dis.setItem("independent_centroid", Py::Boolean(p.independentCentroidDisagrees));
+            d.setItem("disagrees", dis);
+            parts.append(d);
+        }
+        out.setItem("parts", parts);
+        return out;
     }
 
     // This readDXF method is an almost exact duplicate of the one in ImportGui::Module.

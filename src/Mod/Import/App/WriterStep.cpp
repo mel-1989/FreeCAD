@@ -28,6 +28,7 @@
 
 
 #include "WriterStep.h"
+#include "StepValidation.h"
 #include <Base/Exception.h>
 #include <App/Application.h>
 #include <Mod/Part/App/encodeFilename.h>
@@ -55,7 +56,25 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
     writer.SetShapeProcessFlags(aFlags);
 #endif
     Part::Interface::writeStepAssembly(Part::Interface::Assembly::On);
+
+    // Validation properties (CAx-IF Recommended Practices, v4.2): on by default.
+    Base::Reference<ParameterGrp> stepGrp = App::GetApplication()
+                                                .GetUserParameter()
+                                                .GetGroup("BaseApp")
+                                                ->GetGroup("Preferences")
+                                                ->GetGroup("Mod/Part")
+                                                ->GetGroup("STEP");
+    bool withProps = stepGrp->GetBool("WriteValidationProperties", true);
+    writer.SetPropsMode(withProps);
+    std::vector<IndependentFigures> independent;
+    if (withProps) {
+        attachValidationProperties(hDoc, &independent);
+    }
     writer.Transfer(hDoc, STEPControl_AsIs);
+    int partsWithProps = 0;
+    if (withProps) {
+        partsWithProps = addPartLevelValidationProperties(writer.ChangeWriter().Model(), independent);
+    }
 
     APIHeaderSection_MakeHeader makeHeader(writer.ChangeWriter().Model());
     Base::Reference<ParameterGrp> hGrp = App::GetApplication()
@@ -76,6 +95,13 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
         new TCollection_HAsciiString(App::Application::getExecutableName().c_str())
     );
     makeHeader.SetDescriptionValue(1, new TCollection_HAsciiString("FreeCAD Model"));
+    if (partsWithProps > 0) {
+        // the practice's document identification string (its section 3)
+        auto desc = new NCollection_HArray1<Handle(TCollection_HAsciiString)>(1, 2);
+        desc->SetValue(1, new TCollection_HAsciiString("FreeCAD Model"));
+        desc->SetValue(2, new TCollection_HAsciiString(validationPropertiesHeaderId()));
+        makeHeader.SetDescription(desc);
+    }
     IFSelect_ReturnStatus ret = writer.Write(name8bit.c_str());
     if (ret == IFSelect_RetError || ret == IFSelect_RetFail || ret == IFSelect_RetStop) {
         throw Base::FileException("Cannot open file: ", file);
