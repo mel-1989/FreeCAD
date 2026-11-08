@@ -189,6 +189,8 @@ private:
         d.setItem("skipped", Py::Long(r.skipped));
         d.setItem("presentations_stripped", Py::Long(r.presentationsStripped));
         d.setItem("fell_back", Py::Boolean(r.fellBack));
+        d.setItem("shapeless_callouts", Py::Long(r.shapelessCallouts));
+        d.setItem("write_error_accepted", Py::Boolean(r.writeErrorAccepted));
         Py::List warnings;
         for (const auto& s : r.warnings) {
             warnings.append(Py::String(s));

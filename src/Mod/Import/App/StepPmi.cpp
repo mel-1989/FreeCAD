@@ -3499,6 +3499,52 @@ int repairWrittenStepPmi(const std::string& path)
     return 0;
 }
 
+bool acceptStepPmiWriteError(const std::vector<std::pair<std::string, std::string>>& fails, const std::string& path)
+{
+    // the error is a known one only when every failed check is a null reference of a draughting model item association
+    // (one per presentation-only label, so no more than the annotations written) or of the draughting model itself (the
+    // one that lists those associations; at most one)
+    int associations = 0;
+    int models = 0;
+    for (const auto& f : fails) {
+        if (f.second.find("Null Reference") == std::string::npos) {
+            return false;
+        }
+        if (f.first == "StepAP242_DraughtingModelItemAssociation") {
+            ++associations;
+        }
+        else if (f.first == "StepVisual_DraughtingModel") {
+            ++models;
+        }
+        else {
+            return false;
+        }
+    }
+    if (associations == 0 || associations > gExport.annotations || models > 1) {
+        return false;
+    }
+    // the written file must be complete: it ends with the exchange-structure trailer and holds every annotation occurrence
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const size_t endPos = text.rfind("END-ISO-10303-21;");
+    if (endPos == std::string::npos || text.find_first_not_of(" \r\n\t", endPos + 17) != std::string::npos) {
+        return false;
+    }
+    int occurrences = 0;
+    for (size_t pos = text.find("TESSELLATED_ANNOTATION_OCCURRENCE("); pos != std::string::npos;
+         pos = text.find("TESSELLATED_ANNOTATION_OCCURRENCE(", pos + 1)) {
+        ++occurrences;
+    }
+    if (occurrences < gExport.annotations) {
+        return false;
+    }
+    gExport.writeErrorAccepted = true;
+    return true;
+}
+
 void reportStepPmiExportFallback(const std::string& why)
 {
     gExport.fellBack = true;
@@ -3699,9 +3745,9 @@ int exportStepPmi(
                     continue;
                 }
                 if (af.Length() == 0) {
-                    // OCCT's writer reports an error for a presentation label that has no shape to refer to
+                    // OCCT's writer reports an error for a presentation label that has no shape to refer to, although
+                    // the file is complete; the label is written and the error is judged by acceptStepPmiWriteError
                     ++noFaceCallouts;
-                    continue;
                 }
                 Handle(XCAFDimTolObjects_DimensionObject) obj = new XCAFDimTolObjects_DimensionObject();
                 obj->SetType(type);
@@ -3726,15 +3772,19 @@ int exportStepPmi(
                 });
                 TDF_Label l = cx.dt->AddDimension();
                 XCAFDoc_Dimension::Set(l)->SetObject(obj);
-                cx.dt->SetDimension(af, NCollection_Sequence<TDF_Label>(), l);
+                if (af.Length() > 0) {
+                    cx.dt->SetDimension(af, NCollection_Sequence<TDF_Label>(), l);
+                }
                 ++gExport.annotations;
             }
         }
+        gExport.shapelessCallouts = noFaceCallouts;
         if (noFaceCallouts > 0) {
-            gExport.skipped += noFaceCallouts;
-            exportWarn("STEP PMI: " + std::to_string(noFaceCallouts)
-                       + " graphic callout(s) point at no face and were left out (the STEP writer reports an error for a presentation "
-                         "label without a shape)");
+            exportWarn(
+                "STEP PMI: " + std::to_string(noFaceCallouts)
+                + " graphic callout(s) point at no face and were written without one (the STEP writer may report an error for "
+                  "them although the file is complete; that error is accepted only for that known kind)"
+            );
         }
         if (cx.facePresentationStripped > 0) {
             gExport.presentationsStripped = cx.facePresentationStripped;

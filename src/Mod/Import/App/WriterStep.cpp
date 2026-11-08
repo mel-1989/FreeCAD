@@ -30,6 +30,13 @@
 #include <XCAFDoc_DimTolTool.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <cstdlib>
+#include <utility>
+#include <vector>
+#include <Interface_CheckIterator.hxx>
+#include <Interface_Check.hxx>
+#include <Interface_CheckStatus.hxx>
+#include <IFSelect_WorkSession.hxx>
+#include <STEPControl_Writer.hxx>
 #include <string>
 
 
@@ -94,6 +101,9 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
         dtool->GetDatumLabels(datums);
         hasPmi = dims.Length() + tols.Length() + datums.Length() > 0;
     }
+    auto failed = [](IFSelect_ReturnStatus r) {
+        return r == IFSelect_RetError || r == IFSelect_RetFail || r == IFSelect_RetStop;
+    };
     auto attempt = [&](bool withPmi, STEPCAFControl_Writer& writer) -> IFSelect_ReturnStatus {
         if (!withPmi && hasPmi) {
             writer.SetDimTolMode(false);
@@ -137,10 +147,27 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
                 return IFSelect_RetError;  // test hook: a PMI write that fails
             }
         }
-        return writer.Write(name8bit.c_str());
-    };
-    auto failed = [](IFSelect_ReturnStatus r) {
-        return r == IFSelect_RetError || r == IFSelect_RetFail || r == IFSelect_RetStop;
+        IFSelect_ReturnStatus st = writer.Write(name8bit.c_str());
+        if (withPmi && hasPmi && failed(st)) {
+            // judge OCCT's error: accepted only when it is the known one for presentation-only labels (see StepPmi.h)
+            std::vector<std::pair<std::string, std::string>> fails;
+            Interface_CheckIterator cl = writer.ChangeWriter().WS()->LastRunCheckList();
+            for (cl.Start(); cl.More(); cl.Next()) {
+                Handle(Interface_Check) ch = cl.Value();
+                if (ch->NbFails() == 0) {
+                    continue;
+                }
+                Handle(Standard_Transient) ent = ch->Entity();
+                fails.emplace_back(
+                    ent.IsNull() ? "" : ent->DynamicType()->Name(),
+                    ch->CFail(1) ? ch->CFail(1) : ""
+                );
+            }
+            if (acceptStepPmiWriteError(fails, name8bit)) {
+                return IFSelect_RetDone;
+            }
+        }
+        return st;
     };
     IFSelect_ReturnStatus ret = IFSelect_RetError;
     bool pmiFailed = false;

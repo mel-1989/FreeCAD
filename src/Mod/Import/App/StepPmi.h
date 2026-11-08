@@ -94,6 +94,8 @@ struct ImportExport StepPmiExportReport
     int skipped {0};           // items left out, each with a warning
     int presentationsStripped {0};  // presentations the writer cannot take (faces only), left out
     bool fellBack {false};     // the file was written again without PMI after a write error
+    int shapelessCallouts {0};  // annotations written with no face to refer to (OCCT's writer reports an error for them)
+    bool writeErrorAccepted {false};  // that error was accepted after the checks of acceptStepPmiWriteError
     std::vector<double> writtenToleranceValues;  // in write order
     std::vector<std::string> writtenToleranceKinds;
     std::vector<bool> writtenToleranceDatum;
@@ -119,6 +121,15 @@ ImportExport int exportStepPmi(
 );
 
 /// Called by WriterStep when the file had to be written again without PMI.
+/// OCCT's STEP writer returns an error status when a presentation-only label has no shape to refer to (every such label
+/// yields a StepAP242_DraughtingModelItemAssociation with a null reference, plus one for the StepVisual_DraughtingModel), although the file is complete (run 076,
+/// probe xcaf_roundtrip). Decides whether such an error may be accepted: every failed check of the last write is that
+/// kind, the associations number no more than the annotations written, and the file at \a path ends properly and holds at
+/// least as many TESSELLATED_ANNOTATION_OCCURRENCE as annotations were written. \a fails lists the (entity type,
+/// message) of each failed check. Records the verdict in the export report. Source: CAx-IF Recommended Practices for
+/// the Representation and Presentation of PMI (AP242), section on draughting model item association.
+ImportExport bool acceptStepPmiWriteError(const std::vector<std::pair<std::string, std::string>>& fails, const std::string& path);
+
 ImportExport void reportStepPmiExportFallback(const std::string& why);
 
 /// After STEPCAFControl_Writer::Write succeeded with PMI: make the file state what OCCT's writer cannot. A tolerance that

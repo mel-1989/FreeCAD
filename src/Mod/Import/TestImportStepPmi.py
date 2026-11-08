@@ -927,14 +927,18 @@ class TestExportStepPmi(unittest.TestCase):
         self.assertGreaterEqual(len(anns[0].References), 1)  # import keeps the faces of a callout
         self.assertFalse(anns[0].Presentation.isNull())
 
-    def test_graphic_callout_pointing_at_no_face_is_left_out_with_one_warning(self):
+    def test_graphic_callout_pointing_at_no_face_is_written_with_one_warning(self):
+        # run 077, check 15: OCCT's writer reports an error for a presentation label without a shape although the file
+        # is complete; the error is accepted only for that known kind, and the file keeps its semantic PMI and the callout
         self._annotation(False)
         out = self._export(self.doc)
         rep = Import.lastStepPmiExportReport()
-        self.assertEqual(rep["annotations"], 0)
-        self.assertEqual(len([w for w in rep["warnings"] if "point at no face" in w]), 1)
-        self.assertNotIn("TESSELLATED_ANNOTATION_OCCURRENCE", self._text(out))
+        self.assertEqual(rep["shapeless_callouts"], 1)
         self.assertFalse(rep["fell_back"])
+        self.assertEqual(len([w for w in rep["warnings"] if "point at no face" in w]), 1)
+        self.assertGreater(rep["dimensions"] + rep["tolerances"] + rep["datums"], 0)
+        back = self._insert(out)
+        self.assertEqual(len(self._of(back, "Part::PmiDimension")), len(self._of(self.doc, "Part::PmiDimension")))
 
     def test_all_around_is_left_alone_when_the_flagged_one_is_not_the_composite_one(self):
         # identical datum-less Flatness 0.1: the flagged one governs one face (a plain shape aspect), the other two faces (composite)
