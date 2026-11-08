@@ -57,8 +57,48 @@ class BatchTranslateCase(unittest.TestCase):
     def test_help_exits_zero_and_names_the_options(self):
         done, _ = self.run_batch("--help")
         self.assertEqual(done.returncode, 0)
-        for word in ("to=", "out=", "timeout=", "report="):
+        for word in ("--to", "--out", "--timeout", "--report", "to=step"):
             self.assertIn(word, done.stdout)
+
+    def test_dash_spelling_of_every_option_and_the_name_value_spelling_agree(self):
+        report = os.path.join(self.dir, "report.json")
+        done, _ = self.run_batch("--to", "step", "--out", self.out, "--timeout", "60", "--report", report,
+                                 self.box, self.cyl)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("2 files: 2 ok, 0 changed, 0 failed, 0 timeout", done.stdout)
+        self.assertEqual(self.report()["summary"]["files"], 2)
+        out2 = os.path.join(self.dir, "out2")
+        done, _ = self.run_batch("to=step", "out=" + out2, "timeout=60", self.box)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(os.path.isfile(os.path.join(out2, "box.step")))
+
+    def test_pass_hands_every_later_token_to_the_script_untouched(self):
+        probe = os.path.join(self.dir, "argv.py")
+        marker = os.path.join(self.dir, "opened.txt")
+        with open(probe, "w", encoding="utf-8") as handle:
+            handle.write("import json, sys\nprint('ARGV=' + json.dumps(sys.argv))\n")
+        spaced = os.path.join(self.dir, "a dir")
+        os.makedirs(spaced)
+        later = os.path.join(spaced, "in x.py")  # a file FreeCAD would run if it took the token for an input
+        with open(later, "w", encoding="utf-8") as handle:
+            handle.write("open(%r, 'w').close()\n" % marker)
+        tokens = ["--to", "step", "-x", "a b", "--anything", "--to=step", "--", "y", "-style", later]
+        env = dict(os.environ)
+        done = subprocess.run([_binary(), probe, "--pass", *tokens], env=env, capture_output=True, text=True,
+                              timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        line = [ln for ln in done.stdout.splitlines() if ln.startswith("ARGV=")][0]
+        argv = json.loads(line[len("ARGV="):])
+        self.assertEqual(argv[argv.index("--pass") + 1:], tokens)
+        self.assertFalse(os.path.exists(marker), "a token after --pass was opened as an input file")
+
+    def test_bare_pass_runs_the_script_and_exits_zero(self):
+        probe = os.path.join(self.dir, "argv.py")
+        with open(probe, "w", encoding="utf-8") as handle:
+            handle.write("import sys\nprint('ARGV-END=' + sys.argv[-1])\n")
+        done = subprocess.run([_binary(), probe, "--pass"], capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("ARGV-END=--pass", done.stdout)
 
     def test_usage_errors_exit_two(self):
         for args in (["out=" + self.out, self.box],               # no to=
