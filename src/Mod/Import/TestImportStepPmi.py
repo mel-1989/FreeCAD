@@ -801,7 +801,8 @@ class TestExportStepPmi(unittest.TestCase):
 
     def test_angles_are_written_in_radians_and_read_back_in_degrees(self):
         obj, planes = self._planar_faces()
-        item = self._add_item("Part::PmiDimension", PmiType="Location_Angular", Value=37.5)
+        item = self._add_item("Part::PmiDimension", PmiType="Location_Angular", Value=37.5, HasBounds=True,
+                              BoundsKind="plus_minus", UpperBound=0.5, LowerBound=-0.25)
         item.References = [(obj, ["Face%d" % planes[0], "Face%d" % planes[1]])]
         item.RawAttributes = {"link.first": "%s.Face%d" % (obj.Name, planes[0]),
                               "link.second": "%s.Face%d" % (obj.Name, planes[1])}
@@ -811,6 +812,29 @@ class TestExportStepPmi(unittest.TestCase):
         back = self._insert(os.path.join(self.dir, "out.stp"))
         ang = [o for o in self._of(back, "Part::PmiDimension") if o.PmiType.endswith("Angular")][0]
         self.assertAlmostEqual(ang.Value, 37.5, places=6)
+        # the deviations are written in radians too and come back in degrees (the kernel hands them back in the file's unit)
+        self.assertAlmostEqual(ang.UpperBound, 0.5, places=6)
+        self.assertAlmostEqual(ang.LowerBound, -0.25, places=6)
+
+    def test_common_datum_keeps_the_modifier_of_each_element(self):
+        obj, planes = self._planar_faces()
+        tol = self._of(self.doc, "Part::PmiTolerance")[0]
+        first = tol.Datums[0]
+        second = self._add_item("Part::PmiDatum", PmiType="Datum", Letter="B", Position=first.Position,
+                                Modifiers=["MAXIMUM_MATERIAL_REQUIREMENT"])
+        second.References = [(obj, ["Face%d" % planes[0]])]
+        tol.Datums = [first, second]
+        tol.DatumReferences = ["A(MAXIMUM_MATERIAL_REQUIREMENT)", "B(MAXIMUM_MATERIAL_REQUIREMENT)"]
+        out = self._export(self.doc)
+        text = self._text(out)
+        self.assertIn("COMMON_DATUM_LIST((", text)
+        elems = [l for l in text.replace("\n    ", "").splitlines() if "DATUM_REFERENCE_ELEMENT(" in l]
+        self.assertEqual(len(elems), 2)
+        for l in elems:
+            self.assertIn("SIMPLE_DATUM_REFERENCE_MODIFIER(.MAXIMUM_MATERIAL_REQUIREMENT.)", l)
+        back = self._insert(out)
+        self.assertEqual(sorted(self._of(back, "Part::PmiTolerance")[0].DatumReferences),
+                         ["A(MAXIMUM_MATERIAL_REQUIREMENT)", "B(MAXIMUM_MATERIAL_REQUIREMENT)"])
 
     def test_one_sided_dimension_is_left_out_with_a_warning_and_the_export_succeeds(self):
         obj, planes = self._planar_faces()

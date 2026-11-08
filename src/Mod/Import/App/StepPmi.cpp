@@ -1803,6 +1803,16 @@ void checkDimension(
                              + ", upper limit " + label6(up->conv) + "; the kernel read no limits");
             }
         }
+        if (angularDim && o->IsDimWithPlusMinusTolerance() && nom && nom->ok && nom->raw != 0.0 && !same(nom->raw, nom->conv)) {
+            // the kernel converts the nominal value of an angle to degrees but hands back the deviations in the unit of the
+            // file (radians here); the nominal's own ratio converts them
+            const double k = nom->conv / nom->raw;
+            kl.push_back("corrected: the kernel read the angle deviations " + label6(item->LowerBound.getValue()) + " and "
+                         + label6(item->UpperBound.getValue()) + " in the unit of the file (" + nom->unit
+                         + ") while the value is in degrees; converted to degrees");
+            item->UpperBound.setValue(item->UpperBound.getValue() * k);
+            item->LowerBound.setValue(item->LowerBound.getValue() * k);
+        }
         for (const auto& f : splitOn(get("step.fits"), '|')) {
             if (!f.empty() && !o->IsDimWithClassOfTolerance()) {
                 kl.push_back("lost: limits-and-fits class '" + f + "' (form variance/zone variance) is stated in the file; the kernel did not read it");
@@ -2258,6 +2268,14 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
                 if (!o->GetPresentation().IsNull()) {
                     ann->Presentation.setValue(o->GetPresentation());
                 }
+                {
+                    // the kernel gives a presentation label the faces its callout points at; the writer needs them to write it
+                    CommonResult ac = resolveCommon(dl, index, stash, araw);
+                    std::vector<long> aids(ac.ids.begin(), ac.ids.end());
+                    ann->StepFaceIds.setValues(aids);
+                    setLinks(ann, ac.hits);
+                    ann->Unattached.setValue(ac.hits.empty());
+                }
                 ann->RawAttributes.setValue(araw);
                 ann->Label.setValue("Annotation " + hstr(o->GetPresentationName()));
                 continue;
@@ -2402,6 +2420,19 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
             CommonResult c = resolveCommon(dl, index, stash, raw);
             std::vector<std::string> kl;
             checkDimension(item, o, c.extra, type, raw, kl);
+            {
+                // a dimensional location relates two shape aspects (CAx-IF PMI practice); when only one side reached the
+                // document the item cannot be written back as a location, so say so (a dimension with no stated value is
+                // flagged above and does not need this second entry)
+                bool noValue = false;
+                for (const auto& k : kl) {
+                    noValue = noValue || k.rfind("lost: no value is stated", 0) == 0;
+                }
+                if (!noValue && type.rfind("Location_", 0) == 0 && !c.hits.empty() && raw["link.second"].empty()) {
+                    kl.push_back("lost: only one side of this location dimension reached the document (the kernel gave no face for the "
+                                 "second shape aspect); a dimensional location needs two, so it is not written on export");
+                }
+            }
             finishItem(item, c, raw, fl, "dimension", kl);
             ++gReport.dimensions;
             if (c.hits.empty()) {
@@ -3152,7 +3183,7 @@ Handle(XCAFDimTolObjects_GeomToleranceObject) buildTolerance(
 Handle(XCAFDimTolObjects_DatumObject) buildDatum(ExportCtx& cx, const Part::PmiDatum* item, const Raw& raw)
 {
     Handle(XCAFDimTolObjects_DatumObject) o = new XCAFDimTolObjects_DatumObject();
-    o->SetName(hs(rawGet(raw, "datum.object_name")));
+    o->SetName(hs(rawGet(raw, "datum.object_name").empty() ? item->Letter.getStrValue() : rawGet(raw, "datum.object_name")));
     o->SetSemanticName(hs(item->SemanticName.getStrValue()));
     o->SetPosition(item->Position.getValue());
     NCollection_Sequence<XCAFDimTolObjects_DatumSingleModif> mods;
@@ -3212,7 +3243,7 @@ TDF_Label writeDatum(ExportCtx& cx, Part::PmiDatum* d, std::string& why)
     }
     Handle(XCAFDimTolObjects_DatumObject) obj = buildDatum(cx, d, raw);
     TDF_Label l = cx.dt->AddDatum(
-        hs(rawGet(raw, "datum.name")),
+        hs(rawGet(raw, "datum.name").empty() ? d->Letter.getStrValue() : rawGet(raw, "datum.name")),
         hs(rawGet(raw, "datum.description")),
         hs(d->Letter.getStrValue())
     );
@@ -3240,7 +3271,7 @@ bool stepPmiWriteEnabled()
 
 int repairWrittenStepPmi(const std::string& path)
 {
-    if (gExport.allAround.empty()) {
+    if (!gExport.ran) {
         return 0;
     }
     try {
@@ -3250,6 +3281,40 @@ int repairWrittenStepPmi(const std::string& path)
             std::ostringstream ss;
             ss << in.rdbuf();
             text = ss.str();
+        }
+        // A common datum (the datums H-J of one compartment): OCCT writes the modifiers of a DATUM_REFERENCE_ELEMENT as bare
+        // enumeration values and the COMMON_DATUM_LIST as a flat argument list. ISO 10303-242 types both: the modifiers are
+        // SIMPLE_DATUM_REFERENCE_MODIFIER selects and the list is one list argument, as the source files write them. Without
+        // the wrappers a reader sees the elements but not their modifiers (MMR is lost).
+        {
+            static const std::regex elem(
+                R"((DATUM_REFERENCE_ELEMENT\([^;]*?,\s*#\d+\s*,\s*)\(\s*(\.[A-Z_]+\.(?:\s*,\s*\.[A-Z_]+\.)*)\s*\)\s*\))"
+            );
+            static const std::regex enumv(R"(\.[A-Z_]+\.)");
+            std::string out;
+            auto last = text.cbegin();
+            for (std::sregex_iterator it(text.begin(), text.end(), elem), end; it != end; ++it) {
+                out.append(last, text.cbegin() + it->position());
+                std::string mods = (*it)[2].str();
+                std::string wrapped;
+                for (std::sregex_iterator e(mods.begin(), mods.end(), enumv), ee; e != ee; ++e) {
+                    wrapped += (wrapped.empty() ? "" : ",") + std::string("SIMPLE_DATUM_REFERENCE_MODIFIER(") + e->str() + ")";
+                }
+                out += (*it)[1].str() + "(" + wrapped + "))";
+                last = text.cbegin() + it->position() + it->length();
+                ++gExport.commonDatumsRepaired;
+            }
+            out.append(last, text.cend());
+            text = out;
+            static const std::regex lst(R"(COMMON_DATUM_LIST\(\s*(#\d+(?:\s*,\s*#\d+)*)\s*\))");
+            text = std::regex_replace(text, lst, "COMMON_DATUM_LIST((" "$1" "))");
+        }
+        if (gExport.allAround.empty()) {
+            if (gExport.commonDatumsRepaired > 0) {
+                std::ofstream outf(path, std::ios::binary | std::ios::trunc);
+                outf << text;
+            }
+            return 0;
         }
         // GEOMETRIC_TOLERANCE(name, description, magnitude, toleranced_shape_aspect); the file lists the tolerances in the order
         // they were written but not every one in this form, so each is paired with the next written tolerance of the same magnitude
@@ -3292,7 +3357,7 @@ int repairWrittenStepPmi(const std::string& path)
             exportWarn("STEP PMI: " + std::to_string(wanted.size() - fixed) + " of " + std::to_string(wanted.size())
                        + " all-around tolerance(s) could not be restated and were written without it");
         }
-        if (fixed > 0) {
+        if (fixed > 0 || gExport.commonDatumsRepaired > 0) {
             std::ofstream outf(path, std::ios::binary | std::ios::trunc);
             outf << text;
         }
@@ -3372,7 +3437,8 @@ int exportStepPmi(
             if (ptype.rfind("Location_", 0) == 0 && second.empty()) {
                 // a dimensional location relates two shape aspects (CAx-IF PMI practice, section 5); one with a single side
                 // (a dimension that states no value) cannot be written, OCCT's writer reports an error for it
-                skip(d, "a location dimension needs two sides and this one has one (the source states no value for it)");
+                const auto& kl = d->KernelLoss.getValues();
+                skip(d, "a location dimension needs two sides and this one has one" + (kl.empty() ? std::string() : " (" + kl.front() + ")"));
                 continue;
             }
             NCollection_Sequence<TDF_Label> f, s;
@@ -3461,6 +3527,7 @@ int exportStepPmi(
         for (auto* it : items) {
             semantic = semantic || !dynamic_cast<Part::PmiAnnotation*>(it);
         }
+        int noFaceCallouts = 0;
         if (gExport.dimensions + gExport.tolerances + gExport.datums > 0 || !semantic) {
             for (auto* it : items) {
                 auto* a = dynamic_cast<Part::PmiAnnotation*>(it);
@@ -3474,6 +3541,17 @@ int exportStepPmi(
                     continue;
                 }
                 if (a->Presentation.getShape().isNull()) {
+                    continue;
+                }
+                NCollection_Sequence<TDF_Label> af;
+                std::string awhy;
+                if (!labelsFor(cx, a->getDocument(), referenceNames(a), af, awhy)) {
+                    skip(a, awhy);
+                    continue;
+                }
+                if (af.Length() == 0) {
+                    // OCCT's writer reports an error for a presentation label that has no shape to refer to
+                    ++noFaceCallouts;
                     continue;
                 }
                 Handle(XCAFDimTolObjects_DimensionObject) obj = new XCAFDimTolObjects_DimensionObject();
@@ -3499,8 +3577,15 @@ int exportStepPmi(
                 });
                 TDF_Label l = cx.dt->AddDimension();
                 XCAFDoc_Dimension::Set(l)->SetObject(obj);
+                cx.dt->SetDimension(af, NCollection_Sequence<TDF_Label>(), l);
                 ++gExport.annotations;
             }
+        }
+        if (noFaceCallouts > 0) {
+            gExport.skipped += noFaceCallouts;
+            exportWarn("STEP PMI: " + std::to_string(noFaceCallouts)
+                       + " graphic callout(s) point at no face and were left out (the STEP writer reports an error for a presentation "
+                         "label without a shape)");
         }
         if (cx.facePresentationStripped > 0) {
             gExport.presentationsStripped = cx.facePresentationStripped;
