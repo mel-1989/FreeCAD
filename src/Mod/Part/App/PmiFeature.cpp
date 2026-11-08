@@ -23,6 +23,8 @@
 
 #include "PreCompiled.h"
 
+#include <App/GeoFeature.h>
+
 #include "PmiFeature.h"
 
 using namespace Part;
@@ -57,6 +59,28 @@ PmiItem::PmiItem()
         "Global placement of the governed object when the item was imported"
     );
     StepFaceIds.setValues({});
+}
+
+void PmiItem::onChanged(const App::Property* prop)
+{
+    if (prop == &ReferencePlacement && isRestoring()) {
+        referencePlacementRestored = true;  // the file carries it
+    }
+    App::DocumentObject::onChanged(prop);
+}
+
+void PmiItem::onDocumentRestored()
+{
+    App::DocumentObject::onDocumentRestored();
+    if (referencePlacementRestored) {
+        return;
+    }
+    for (App::DocumentObject* o : References.getValues()) {
+        if (auto* gf = dynamic_cast<App::GeoFeature*>(o)) {
+            ReferencePlacement.setValue(gf->globalPlacement());
+            break;
+        }
+    }
 }
 
 PROPERTY_SOURCE(Part::PmiDimension, Part::PmiItem)

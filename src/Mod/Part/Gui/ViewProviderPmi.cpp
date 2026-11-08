@@ -76,6 +76,11 @@
 #include <Mod/Part/App/PmiFeature.h>
 #include <Mod/Part/App/TopoShape.h>
 
+#include <tuple>
+
+#include <Mod/Part/App/PartFeature.h>
+
+#include "ViewProviderExt.h"
 #include "ViewProviderPmi.h"
 
 using namespace PartGui;
@@ -143,8 +148,9 @@ private:
     std::map<App::Document*, Entry> docs;
 };
 
-/// Selecting a PMI item adds the faces and edges it governs to the selection (the item stays selected), so the 3D view
-/// highlights them the way it highlights any selected sub-element; deselecting the item removes what this added
+/// Selecting a PMI item highlights the faces it governs through the view provider of the governed object (per-face
+/// materials in the scene graph only: no property of the object changes and nothing is saved); the selection itself
+/// holds only the item. Deselecting the item, clearing the selection or deleting the item restores the colours
 class PmiSelectionObserver: public Gui::SelectionObserver
 {
 public:
@@ -159,13 +165,18 @@ public:
     }
 
 private:
-    using Sub = std::pair<std::string, std::string>;  // object name, sub-element name
+    struct Body
+    {
+        std::string doc, obj;
+        bool operator<(const Body& o) const
+        {
+            return std::tie(doc, obj) < std::tie(o.doc, o.obj);
+        }
+    };
+    using Faces = std::map<Body, std::set<int>>;  // governed object -> 1-based face numbers
 
     void onSelectionChanged(const Gui::SelectionChanges& msg) override
     {
-        if (busy) {
-            return;
-        }
         using T = Gui::SelectionChanges;
         switch (msg.Type) {
             case T::AddSelection:
@@ -181,16 +192,17 @@ private:
                 remove(msg.pDocName, msg.pObjectName);
                 break;
             case T::SetSelection: {
-                added.clear();
+                std::set<Body> touched = clearTracked();
                 for (auto& o : Gui::Selection().getSelection(msg.pDocName, Gui::ResolveMode::NoResolve)) {
                     if (o.pObject) {
-                        add(o.DocName, o.FeatName);
+                        track(o.DocName, o.FeatName, touched);
                     }
                 }
+                refresh(touched);
                 break;
             }
             case T::ClrSelection:
-                added.clear();
+                refresh(clearTracked());
                 break;
             default:
                 break;
@@ -202,48 +214,103 @@ private:
         return std::string(doc ? doc : "") + "#" + (obj ? obj : "");
     }
 
-    void add(const char* docName, const char* objName)
+    std::set<Body> clearTracked()
+    {
+        std::set<Body> bodies;
+        for (auto& [k, faces] : tracked) {
+            for (auto& [b, f] : faces) {
+                bodies.insert(b);
+            }
+        }
+        tracked.clear();
+        return bodies;
+    }
+
+    void track(const char* docName, const char* objName, std::set<Body>& touched)
     {
         App::Document* doc = App::GetApplication().getDocument(docName);
         App::DocumentObject* o = doc && objName ? doc->getObject(objName) : nullptr;
         auto* item = o ? dynamic_cast<Part::PmiItem*>(o) : nullptr;
-        if (!item || added.count(key(docName, objName))) {
+        if (!item || tracked.count(key(docName, objName))) {
             return;
         }
-        std::vector<Sub> mine;
+        Faces mine;
         for (App::DocumentObject* target : item->References.getValues()) {
             if (!target || !target->isAttachedToDocument()) {
                 continue;
             }
             for (const auto& s : item->References.getSubValues(target)) {
-                mine.emplace_back(target->getNameInDocument(), s);
+                if (s.rfind("Face", 0) == 0 && s.size() > 4) {
+                    mine[Body {docName, target->getNameInDocument()}].insert(std::atoi(s.c_str() + 4));
+                }
             }
         }
-        busy = true;
-        for (const auto& [target, sub] : mine) {
-            Gui::Selection().addSelection(docName, target.c_str(), sub.c_str());
+        for (auto& [b, f] : mine) {
+            touched.insert(b);
         }
-        busy = false;
-        added[key(docName, objName)] = mine;
+        tracked[key(docName, objName)] = std::move(mine);
+    }
+
+    void add(const char* docName, const char* objName)
+    {
+        std::set<Body> touched;
+        track(docName, objName, touched);
+        refresh(touched);
     }
 
     void remove(const char* docName, const char* objName)
     {
-        auto it = added.find(key(docName, objName));
-        if (it == added.end()) {
+        auto it = tracked.find(key(docName, objName));
+        if (it == tracked.end()) {
             return;
         }
-        auto subs = it->second;
-        added.erase(it);
-        busy = true;
-        for (const auto& [target, sub] : subs) {
-            Gui::Selection().rmvSelection(docName, target.c_str(), sub.c_str());
+        std::set<Body> touched;
+        for (auto& [b, f] : it->second) {
+            touched.insert(b);
         }
-        busy = false;
+        tracked.erase(it);
+        refresh(touched);
     }
 
-    bool busy {false};
-    std::map<std::string, std::vector<Sub>> added;
+    /// Set or clear the highlight of each body from the union of the faces of every tracked item
+    void refresh(const std::set<Body>& bodies)
+    {
+        for (const Body& b : bodies) {
+            App::Document* doc = App::GetApplication().getDocument(b.doc.c_str());
+            App::DocumentObject* o = doc ? doc->getObject(b.obj.c_str()) : nullptr;
+            auto* feat = o ? dynamic_cast<Part::Feature*>(o) : nullptr;
+            auto* vp = feat ? dynamic_cast<PartGui::ViewProviderPartExt*>(Gui::Application::Instance->getViewProvider(feat))
+                            : nullptr;
+            if (!vp) {
+                continue;
+            }
+            std::set<int> faces;
+            for (auto& [k, f] : tracked) {
+                auto it = f.find(b);
+                if (it != f.end()) {
+                    faces.insert(it->second.begin(), it->second.end());
+                }
+            }
+            const int n = static_cast<int>(feat->Shape.getShape().countSubShapes("Face"));
+            if (faces.empty() || n < 2) {
+                vp->unsetHighlightedFaces();
+                continue;
+            }
+            const std::vector<App::Material> base = vp->ShapeAppearance.getValues();
+            std::vector<App::Material> mats(n);
+            for (int i = 0; i < n; ++i) {
+                if (!base.empty()) {
+                    mats[i] = base[static_cast<size_t>(i) < base.size() ? i : 0];
+                }
+                if (faces.count(i + 1)) {
+                    mats[i].diffuseColor = Base::Color(1.0f, 0.55f, 0.0f);
+                }
+            }
+            vp->setHighlightedFaces(mats);
+        }
+    }
+
+    std::map<std::string, Faces> tracked;
 };
 
 /// Polylines of the edges and triangles of the faces of a presentation shape. Edges that carry a 3D polygon use it,

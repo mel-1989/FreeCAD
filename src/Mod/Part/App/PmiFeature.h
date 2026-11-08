@@ -95,10 +95,20 @@ public:
     /// placement times the inverse of this one; identity when the item governs nothing or the document predates it
     App::PropertyPlacement ReferencePlacement;
 
+    /// A document saved before ReferencePlacement existed has no such property: on restore it is set to the governed
+    /// object's current global placement, so the presentation draws in place
+    void onDocumentRestored() override;
+
     const char* getViewProviderName() const override
     {
         return "PartGui::ViewProviderPmiItem";
     }
+
+protected:
+    void onChanged(const App::Property* prop) override;
+
+private:
+    bool referencePlacementRestored {false};
 };
 
 /// A size or location dimension

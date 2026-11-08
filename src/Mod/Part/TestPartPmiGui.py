@@ -27,7 +27,7 @@ CORPUS = os.environ.get(
     "PMI_CORPUS", os.path.expanduser("~/src/cad-fork/scratch/r068/corpus/nist/NIST-PMI-STEP-Files")
 )
 CORPUS_FILES = sorted(glob.glob(os.path.join(CORPUS, "*ap242*.stp")))
-SELECT_FILES = ("ctc_01_asme1_ap242-e1", "ftc_06_asme1_ap242-e2", "stc_06_asme1_ap242-e3")
+SELECT_FILES = ("nist_ctc_01_asme1_ap242-e1", "nist_ftc_06_asme1_ap242-e2", "nist_stc_06_asme1_ap242-e3")
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -125,6 +125,57 @@ def model_diagonal(doc):
     return box.DiagonalLength if box else 0.0
 
 
+HIGHLIGHT = (1.0, 0.55, 0.0)
+
+
+def body_materials(obj):
+    """Diffuse colour arrays of every SoMaterial under the body's view provider root (the scene-graph state)"""
+    search = coin.SoSearchAction()
+    search.setType(coin.SoMaterial.getClassTypeId())
+    search.setInterest(coin.SoSearchAction.ALL)
+    search.setSearchingAll(True)
+    search.apply(vp_of(obj).RootNode)
+    out = []
+    paths = search.getPaths()
+    for i in range(paths.getLength()):
+        m = paths[i].getTail()
+        out.append(tuple(tuple(round(c, 5) for c in m.diffuseColor[j].getValue()) for j in range(m.diffuseColor.getNum())))
+    return out
+
+
+def highlighted_faces(obj):
+    """1-based face numbers whose scene-graph diffuse colour is the highlight colour"""
+    faces = set()
+    for arr in body_materials(obj):
+        for j, c in enumerate(arr):
+            if len(arr) > 1 and all(abs(a - b) < 1e-4 for a, b in zip(c, HIGHLIGHT)):
+                faces.add(j + 1)
+    return faces
+
+
+def body_colour_properties(obj):
+    v = vp_of(obj)
+    return (str(v.ShapeAppearance), str(v.ShapeColor), v.Transparency)
+
+
+def gui_xml_without_camera(path):
+    import re
+
+    with zipfile.ZipFile(path) as z:
+        text = z.read("GuiDocument.xml").decode("utf-8")
+    # the colour properties of every view provider (tree rank and camera legitimately differ between two saves)
+    props = re.findall(r'<Property name="(?:ShapeAppearance|ShapeMaterial|ShapeColor|Transparency|DiffuseColor|LineColor|PointColor)".*?</Property>', text, flags=re.S)
+    assert props, "no colour property found in GuiDocument.xml"
+    return "\n".join(props)
+
+
+def reference_faces(item):
+    out = {}
+    for obj, subs in item.References:
+        out.setdefault(obj.Name, set()).update(int(x[4:]) for x in subs if x.startswith("Face"))
+    return out
+
+
 def group_of(doc):
     groups = [o for o in doc.Objects if o.TypeId == "Part::PmiGroup"]
     return groups[0] if groups else None
@@ -140,10 +191,12 @@ def polyline(*pts):
     return Part.makePolygon([App.Vector(*p) for p in pts])
 
 
-def make_synthetic(name="PmiSyn"):
+def make_synthetic(name="PmiSyn", body_placement=None):
     doc = App.newDocument(name)
     box = doc.addObject("Part::Feature", "Body")
     box.Shape = Part.makeBox(10, 20, 30)
+    if body_placement is not None:
+        box.Placement = body_placement
     other = doc.addObject("Part::Feature", "Other")
     other.Shape = Part.makeBox(5, 5, 5, App.Vector(100, 0, 0))
     doc.recompute()
@@ -209,23 +262,81 @@ class TestPmiDisplaySynthetic(unittest.TestCase):
             extent = ((box[3] - box[0]) ** 2 + (box[4] - box[1]) ** 2 + (box[5] - box[2]) ** 2) ** 0.5
             self.assertLessEqual(extent, 2 * diag, name)
 
-    def test_selecting_an_item_selects_the_faces_it_governs(self):
+    def test_selecting_an_item_highlights_its_faces_and_selects_only_the_item(self):
+        body = self.s["box"]
+        base_scene = body_materials(body)
+        base_props = body_colour_properties(body)
         for item in self.s["items"]:
             Gui.Selection.clearSelection()
             Gui.Selection.addSelection(item)
-            sel = {o.Object.Name: set(o.SubElementNames) for o in Gui.Selection.getSelectionEx(self.doc.Name)}
-            self.assertIn(item.Name, sel)
-            for obj, subs in item.References:
-                self.assertEqual(sel.get(obj.Name), set(subs), item.Name)
-            if not item.References:
-                self.assertEqual(sorted(sel), [item.Name])
-            Gui.Selection.removeSelection(item)
-            self.assertEqual(Gui.Selection.getSelectionEx(self.doc.Name), [])
+            self.assertEqual([o.Name for o in Gui.Selection.getSelection(self.doc.Name)], [item.Name])
+            self.assertEqual([o.Object.Name for o in Gui.Selection.getSelectionEx(self.doc.Name)], [item.Name])
+            want = reference_faces(item).get(body.Name, set())
+            self.assertEqual(highlighted_faces(body), want, item.Name)
+            self.assertEqual(body_colour_properties(body), base_props)  # no property changes
+            Gui.Selection.clearSelection()
+            self.assertEqual(highlighted_faces(body), set())
+            self.assertEqual(body_materials(body), base_scene, item.Name)
+
+    def test_two_items_union_and_deselect_one(self):
+        body = self.s["box"]
+        d, t = self.s["dim"], self.s["tol"]
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(d)
+        Gui.Selection.addSelection(t)
+        self.assertEqual(highlighted_faces(body), {1, 6})
+        Gui.Selection.removeSelection(d)
+        self.assertEqual(highlighted_faces(body), {6})
+        Gui.Selection.clearSelection()
+        self.assertEqual(highlighted_faces(body), set())
+
+    def test_deleting_the_selected_item_restores_the_colours(self):
+        body = self.s["box"]
+        base_scene = body_materials(body)
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(self.s["dim"])
+        self.assertEqual(highlighted_faces(body), {1})
+        self.doc.removeObject(self.s["dim"].Name)
+        Gui.updateGui()
+        self.assertEqual(highlighted_faces(body), set())
+        self.assertEqual(body_materials(body), base_scene)
+
+    def test_saving_while_an_item_is_selected_writes_no_changed_colours(self):
+        a = os.path.join(self.tmp, "a.FCStd")
+        b = os.path.join(self.tmp, "b.FCStd")
+        self.doc.saveAs(a)
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(self.s["dim"])
+        self.assertEqual(highlighted_faces(self.s["box"]), {1})
+        self.doc.saveAs(b)
+        self.assertEqual(gui_xml_without_camera(a), gui_xml_without_camera(b))
 
     def test_unattached_items_select_alone(self):
         Gui.Selection.clearSelection()
         Gui.Selection.addSelection(self.s["ann"])
         self.assertEqual([o.Object.Name for o in Gui.Selection.getSelectionEx(self.doc.Name)], ["Callout"])
+        self.assertEqual(highlighted_faces(self.s["box"]), set())
+
+    def test_old_document_with_a_body_at_a_non_identity_placement_draws_in_place(self):
+        # check 23 repair: ReferencePlacement missing from the file (not just identity) is set to the body's current
+        # global placement on restore, so the drawing does not move
+        App.closeDocument(self.doc.Name)
+        doc, s = make_synthetic("PmiOld", App.Placement(App.Vector(50, 0, 0), App.Rotation()))
+        Gui.updateGui()
+        before = {n: bbox_of(p) for n, p in drawn_paths(doc).items()}
+        path = os.path.join(self.tmp, "oldp.FCStd")
+        doc.saveAs(path)
+        App.closeDocument(doc.Name)
+        stripped = self._strip_reference_placement(path)
+        doc = App.openDocument(stripped)
+        Gui.updateGui()
+        after = {n: bbox_of(p) for n, p in drawn_paths(doc).items()}
+        self.assertEqual(sorted(after), sorted(before))
+        for n in before:
+            for i in range(6):
+                self.assertAlmostEqual(after[n][i], before[n][i], delta=1e-4, msg=n)
+        dim = doc.getObject("Dim")
+        self.assertAlmostEqual(dim.ReferencePlacement.Base.x, 50.0, delta=1e-9)
 
     def test_item_follows_its_body_and_only_its_body(self):
         before = {n: bbox_of(p) for n, p in drawn_paths(self.doc).items()}
@@ -305,13 +416,10 @@ class TestPmiDisplaySynthetic(unittest.TestCase):
         vp_of(group_of(doc)).Visibility = True  # showing a group shows its members (App::GroupExtension)
         self.assertEqual(visible_names(doc), sorted(["Dim", "Tol", "Callout", "DatumA1", "DatumB1", "DatumA3"]))
 
-    def test_document_without_reference_placement_opens_and_draws(self):
-        # a document saved before this slice has no ReferencePlacement in its Document.xml
-        path = os.path.join(self.tmp, "old.FCStd")
-        self.doc.saveAs(path)
-        App.closeDocument(self.doc.Name)
-        old = os.path.join(self.tmp, "old2.FCStd")
+    def _strip_reference_placement(self, path):
         import re
+
+        old = path[:-6] + "_stripped.FCStd"
 
         with zipfile.ZipFile(path) as zin, zipfile.ZipFile(old, "w", zipfile.ZIP_DEFLATED) as zout:
             for info in zin.infolist():
@@ -329,6 +437,14 @@ class TestPmiDisplaySynthetic(unittest.TestCase):
                     self.assertGreater(removed[0], 0)
                     data = text.encode("utf-8")
                 zout.writestr(info, data)
+        return old
+
+    def test_document_without_reference_placement_opens_and_draws(self):
+        # a document saved before this slice has no ReferencePlacement in its Document.xml
+        path = os.path.join(self.tmp, "old.FCStd")
+        self.doc.saveAs(path)
+        App.closeDocument(self.doc.Name)
+        old = self._strip_reference_placement(path)
         doc = App.openDocument(old)
         Gui.updateGui()
         self.assertEqual(len(visible_names(doc)), 6)
@@ -372,31 +488,51 @@ class TestPmiDisplayCorpus(unittest.TestCase):
                 finally:
                     App.closeDocument(doc.Name)
 
-    def test_selection_matches_references(self):
+    def test_selection_highlights_references(self):
         for stem in SELECT_FILES:
             path = os.path.join(CORPUS, stem + ".stp")
-            if not os.path.exists(path):
-                continue
+            self.assertTrue(os.path.exists(path), path)
             with self.subTest(file=stem):
                 doc = self._open(path)
                 try:
+                    # the objects the items govern (a container above one of them carries its child's nodes in its own root)
+                    governed = {n for i in semantic_items(doc) for n in reference_faces(i)}
+                    bodies = [doc.getObject(n) for n in sorted(governed) if len(doc.getObject(n).Shape.Faces) > 1]
+                    self.assertTrue(bodies)
+                    base_scene = {b.Name: body_materials(b) for b in bodies}
+                    base_props = {b.Name: body_colour_properties(b) for b in bodies}
                     checked = 0
                     for item in semantic_items(doc):
-                        if not item.References:
+                        refs = reference_faces(item)
+                        if not refs:
                             continue
                         Gui.Selection.clearSelection()
                         Gui.Selection.addSelection(item)
-                        sel = {o.Object.Name: set(o.SubElementNames) for o in Gui.Selection.getSelectionEx(doc.Name)}
-                        for obj, subs in item.References:
-                            self.assertEqual(sel.get(obj.Name), set(subs), item.Name)
+                        self.assertEqual([o.Name for o in Gui.Selection.getSelection(doc.Name)], [item.Name])
+                        for b in bodies:
+                            self.assertEqual(highlighted_faces(b), refs.get(b.Name, set()), item.Name)
+                            self.assertEqual(body_colour_properties(b), base_props[b.Name])
                         checked += 1
                     self.assertGreater(checked, 0)
+                    print("PMI_SELECT_CHECKED file=%s items=%d mismatches=0" % (stem, checked))
+                    Gui.Selection.clearSelection()
+                    for b in bodies:
+                        self.assertEqual(highlighted_faces(b), set())
+                        self.assertEqual(body_materials(b), base_scene[b.Name])
+                    # saving while an item is selected writes no changed colours
+                    a = os.path.join(self.tmp, stem + "_a.FCStd")
+                    c = os.path.join(self.tmp, stem + "_b.FCStd")
+                    doc.saveAs(a)
+                    item = next(i for i in semantic_items(doc) if reference_faces(i))
+                    Gui.Selection.addSelection(item)
+                    doc.saveAs(c)
+                    self.assertEqual(gui_xml_without_camera(a), gui_xml_without_camera(c))
                     # an item that governs nothing selects alone
                     for item in semantic_items(doc):
                         if not item.References:
                             Gui.Selection.clearSelection()
                             Gui.Selection.addSelection(item)
-                            self.assertEqual([o.Object.Name for o in Gui.Selection.getSelectionEx(doc.Name)], [item.Name])
+                            self.assertEqual([o.Name for o in Gui.Selection.getSelection(doc.Name)], [item.Name])
                             break
                 finally:
                     Gui.Selection.clearSelection()

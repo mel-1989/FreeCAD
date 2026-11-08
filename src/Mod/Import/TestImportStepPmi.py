@@ -872,6 +872,28 @@ class TestExportStepPmi(unittest.TestCase):
         self.assertNotIn("GEOMETRIC_TOLERANCE", text)
         self.assertIn("MANIFOLD_SOLID_BREP", text)
 
+    def test_write_error_of_an_unknown_kind_falls_back_but_the_known_kind_is_accepted(self):
+        # run 077 repair 1 (mutant of check 15): the check list of the write holds a null reference of the known kind
+        # alone (accepted: the file keeps its PMI) or with a failure of another kind (refused: no-PMI fallback and a warning)
+        self._annotation(True)
+        try:
+            os.environ["FC_STEP_PMI"] = "checkfail:known"
+            out = self._export(self.doc, "known.stp")
+            rep = Import.lastStepPmiExportReport()
+            self.assertFalse(rep["fell_back"])
+            self.assertTrue(rep["write_error_accepted"])
+            self.assertIn("GEOMETRIC_TOLERANCE", self._text(out))
+            os.environ["FC_STEP_PMI"] = "checkfail:other"
+            out = self._export(self.doc, "other.stp")
+            rep = Import.lastStepPmiExportReport()
+            self.assertTrue(rep["fell_back"])
+            self.assertFalse(rep["write_error_accepted"])
+            self.assertTrue(any("written again without PMI" in w for w in rep["warnings"]))
+            self.assertNotIn("GEOMETRIC_TOLERANCE", self._text(out))
+            self.assertIn("MANIFOLD_SOLID_BREP", self._text(out))
+        finally:
+            os.environ.pop("FC_STEP_PMI", None)
+
     # ---- run 076 verifier cases: pairing of all-around, graphic callouts ---------------------------------------------
 
     def _add_tol(self, kind, value, refs, mods=(), datums=(), nfaces=2):

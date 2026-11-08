@@ -148,6 +148,16 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
             }
         }
         IFSelect_ReturnStatus st = writer.Write(name8bit.c_str());
+        // test hook: report the error of a failed check list after a complete write, "known" with the one kind that is
+        // accepted and "other" with a failure of another kind added
+        std::string hook;
+        if (const char* sw = std::getenv("FC_STEP_PMI")) {
+            hook = sw;
+        }
+        const bool injected = withPmi && hasPmi && hook.rfind("checkfail:", 0) == 0;
+        if (injected) {
+            st = IFSelect_RetError;
+        }
         if (withPmi && hasPmi && failed(st)) {
             // judge OCCT's error: accepted only when it is the known one for presentation-only labels (see StepPmi.h)
             std::vector<std::pair<std::string, std::string>> fails;
@@ -162,6 +172,12 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
                     ent.IsNull() ? "" : ent->DynamicType()->Name(),
                     ch->CFail(1) ? ch->CFail(1) : ""
                 );
+            }
+            if (injected) {
+                fails.emplace_back("StepAP242_DraughtingModelItemAssociation", "Null Reference");
+                if (hook == "checkfail:other") {
+                    fails.emplace_back("StepRepr_ShapeAspect", "Null Reference");
+                }
             }
             if (acceptStepPmiWriteError(fails, name8bit)) {
                 return IFSelect_RetDone;
