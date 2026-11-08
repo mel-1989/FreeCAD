@@ -46,6 +46,8 @@ PmiItem::PmiItem()
     ADD_PROPERTY_TYPE(RawAttributes, (), "PMI", App::Prop_None, "All source attributes as text");
     ADD_PROPERTY_TYPE(Unmapped, (false), "PMI", App::Prop_None, "Type or modifier not recognised");
     ADD_PROPERTY_TYPE(Unattached, (false), "PMI", App::Prop_None, "No face or edge could be found");
+    ADD_PROPERTY_TYPE(KernelLoss, (), "PMI", App::Prop_None, "What the STEP reader lost or altered, one reason per entry");
+    ADD_PROPERTY_TYPE(StepEntityName, (""), "PMI", App::Prop_None, "Name of the STEP entity, for example diameter");
     StepFaceIds.setValues({});
 }
 

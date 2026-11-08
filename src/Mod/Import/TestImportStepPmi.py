@@ -374,7 +374,7 @@ class TestImportStepPmi(unittest.TestCase):
         self.assertEqual(dict(datum.RawAttributes)["datum.identification"], "A")
 
     def test_unknown_type_is_unmapped_not_an_error(self):
-        doc = self._insert(FC_STEP_PMI_TEST_UNKNOWN="tolerance")
+        doc = self._insert(FC_STEP_PMI="unknown:tolerance")
         tol = self._items(doc, "Part::PmiTolerance")[0]
         self.assertTrue(tol.Unmapped)
         rep = Import.lastStepPmiReport()
@@ -382,7 +382,7 @@ class TestImportStepPmi(unittest.TestCase):
         self.assertEqual(len(rep["warnings"]), 1)
         self.assertIn("unmapped", rep["warnings"][0])
         # and again for a modifier
-        doc = self._insert(FC_STEP_PMI_TEST_UNKNOWN="modifier")
+        doc = self._insert(FC_STEP_PMI="unknown:modifier")
         self.assertEqual(Import.lastStepPmiReport()["unmapped"], 1)
         self.assertEqual(len(Import.lastStepPmiReport()["warnings"]), 1)
 
@@ -417,3 +417,134 @@ class TestImportStepPmi(unittest.TestCase):
         self.assertEqual(len(tol.References), 1)
         self.assertIsNotNone(tol.References[0][0].Shape.getElement(tol.References[0][1][0]))
         d2.recompute()
+
+
+def _patched_fixture():
+    """The fixture above with four additions, written by hand for this test (no third-party data): the size dimension
+    stated as a limit triple (lower limit, nominal value, upper limit, in inches through a conversion-based unit), a
+    DIMENSIONAL_SIZE 'diameter' without any stated value, a dimension on an edge, and a second tolerance that uses the
+    datum A again in its own reference frame."""
+    import re
+
+    t = FIXTURE
+    t = re.sub(r"#125 = .*?#126 = SHAPE_DIMENSION_REPRESENTATION\('',\(#125\),#113\);", "#126 = SHAPE_DIMENSION_REPRESENTATION('',(#403,#404,#405),#113);", t, flags=re.S)
+    t = re.sub(r"#129 = .*?#132 = PLUS_MINUS_TOLERANCE\(#131,#128\);\n", "", t, flags=re.S)
+    add = """#400 = ( CONVERSION_BASED_UNIT('INCH',#401) LENGTH_UNIT() NAMED_UNIT(#402) );
+#401 = LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),#114);
+#402 = DIMENSIONAL_EXPONENTS(1.,0.,0.,0.,0.,0.,0.);
+#403 = ( LENGTH_MEASURE_WITH_UNIT() MEASURE_REPRESENTATION_ITEM() MEASURE_WITH_UNIT(POSITIVE_LENGTH_MEASURE(0.38),#400) REPRESENTATION_ITEM('lower limit') );
+#404 = ( LENGTH_MEASURE_WITH_UNIT() MEASURE_REPRESENTATION_ITEM() MEASURE_WITH_UNIT(POSITIVE_LENGTH_MEASURE(0.4),#400) REPRESENTATION_ITEM('nominal value') );
+#405 = ( LENGTH_MEASURE_WITH_UNIT() MEASURE_REPRESENTATION_ITEM() MEASURE_WITH_UNIT(POSITIVE_LENGTH_MEASURE(0.42),#400) REPRESENTATION_ITEM('upper limit') );
+#410 = SHAPE_ASPECT('','',#4,.T.);
+#411 = GEOMETRIC_ITEM_SPECIFIC_USAGE('','',#410,#10,#105);
+#412 = DIMENSIONAL_SIZE(#410,'diameter');
+#420 = SHAPE_ASPECT('','',#4,.T.);
+#421 = GEOMETRIC_ITEM_SPECIFIC_USAGE('','',#420,#10,#21);
+#422 = ( LENGTH_MEASURE_WITH_UNIT() MEASURE_REPRESENTATION_ITEM() MEASURE_WITH_UNIT(POSITIVE_LENGTH_MEASURE(7.),#114) REPRESENTATION_ITEM('nominal value') );
+#423 = SHAPE_DIMENSION_REPRESENTATION('',(#422),#113);
+#424 = DIMENSIONAL_CHARACTERISTIC_REPRESENTATION(#425,#423);
+#425 = DIMENSIONAL_SIZE(#420,'diameter');
+#430 = DATUM_REFERENCE_COMPARTMENT('','',#4,.F.,#121,$);
+#431 = DATUM_SYSTEM('','',#4,.F.,(#430));
+#432 = LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-01),#114);
+#433 = SHAPE_ASPECT('','',#4,.T.);
+#434 = GEOMETRIC_ITEM_SPECIFIC_USAGE('','',#433,#10,#17);
+#435 = ( GEOMETRIC_TOLERANCE('','',#432,#433) GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE((#431)) PARALLELISM_TOLERANCE() );
+"""
+    return t.replace("ENDSEC;\nEND-ISO", add + "ENDSEC;\nEND-ISO")
+
+
+class TestImportStepPmiKernelChecks(unittest.TestCase):
+    """What the pass finds in the STEP model that OCCT's reader lost or got wrong (finding H1, M1 to M3 of run 075)."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="g12pmik")
+        self.path = os.path.join(self.dir, "pmi_kernel.stp")
+        with open(self.path, "w") as f:
+            f.write(_patched_fixture())
+        self.docs = []
+        doc = App.newDocument("G12PmiK")
+        self.docs.append(doc)
+        Import.insert(self.path, doc.Name)
+        self.doc = doc
+        self.report = dict(Import.lastStepPmiReport())
+        self.dims = [o for o in doc.Objects if o.TypeId == "Part::PmiDimension"]
+        self.tols = [o for o in doc.Objects if o.TypeId == "Part::PmiTolerance"]
+        self.datums = [o for o in doc.Objects if o.TypeId == "Part::PmiDatum"]
+
+    def tearDown(self):
+        for d in self.docs:
+            try:
+                App.closeDocument(d.Name)
+            except Exception:
+                pass
+        for f in os.listdir(self.dir):
+            os.remove(os.path.join(self.dir, f))
+        os.rmdir(self.dir)
+
+    def test_limit_triple_takes_value_and_limits_from_the_file(self):
+        tri = [o for o in self.dims if "step.stated" in dict(o.RawAttributes) and "lower limit" in dict(o.RawAttributes)["step.stated"]]
+        self.assertEqual(len(tri), 1)
+        d = tri[0]
+        # 0.38, 0.40, 0.42 inch
+        self.assertAlmostEqual(d.Value, 0.4 * 25.4, places=9)
+        self.assertEqual(d.BoundsKind, "range")
+        self.assertAlmostEqual(d.LowerBound, 0.38 * 25.4, places=9)
+        self.assertAlmostEqual(d.UpperBound, 0.42 * 25.4, places=9)
+        self.assertEqual(d.StepEntityName, "diameter")
+        # OCCT's own figures stay in the raw store, and the repair says so (or the kernel read it right)
+        raw = dict(d.RawAttributes)
+        self.assertIn("dim.values", raw)
+        self.assertIn("INCH", raw["step.stated"])
+        # OCCT reads this ordering of the triple wrongly (nominal taken as the lower limit); the pass says it corrected that
+        self.assertEqual(len(d.KernelLoss), 1)
+        self.assertTrue(d.KernelLoss[0].startswith("corrected:"), d.KernelLoss[0])
+        self.assertNotAlmostEqual(float(raw["dim.value"]), d.Value, places=6)
+        self.assertEqual(self.report["kernel_loss"], 2)
+
+    def test_dimension_without_a_stated_value_is_flagged_not_shown_as_zero(self):
+        empty = [o for o in self.dims if o.PmiType == "Location_None"]
+        self.assertEqual(len(empty), 1)
+        d = empty[0]
+        self.assertEqual(d.StepEntityName, "diameter")
+        self.assertEqual(len(d.KernelLoss), 1)
+        self.assertTrue(d.KernelLoss[0].startswith("lost: no value is stated"))
+        self.assertIn("without a stated value", d.Label)
+        self.assertTrue(len(d.References) >= 1)
+        self.assertEqual(self.report["kernel_loss"] >= 1, True)
+
+    def test_dimension_on_an_edge_links_to_the_edge(self):
+        edged = [o for o in self.dims if abs(o.Value - 7.0) < 1e-9]
+        self.assertEqual(len(edged), 1)
+        subs = [s for e in edged[0].References for s in e[1]]
+        self.assertTrue(subs and all(s.startswith("Edge") for s in subs), subs)
+        self.assertFalse(edged[0].Unattached)
+
+    def test_datum_used_in_two_frames_is_linked_in_both(self):
+        letters = [d.Letter for d in self.datums]
+        self.assertEqual(letters.count("A"), 2)
+        for d in self.datums:
+            self.assertEqual(d.Letter, "A")
+            self.assertFalse(d.Unattached, d.Name)
+            self.assertEqual(len(d.References), 1)
+            self.assertEqual(len(d.StepFaceIds), 1)
+        self.assertEqual(self.report["unattached_datums"], 0)
+        self.assertEqual(len(self.tols), 2)
+
+    def test_stopped_pass_leaves_no_pmi_object_behind(self):
+        old = os.environ.get("FC_STEP_PMI")
+        os.environ["FC_STEP_PMI"] = "fail"
+        try:
+            doc = App.newDocument("G12PmiFail")
+            self.docs.append(doc)
+            Import.insert(self.path, doc.Name)
+        finally:
+            if old is None:
+                os.environ.pop("FC_STEP_PMI", None)
+            else:
+                os.environ["FC_STEP_PMI"] = old
+        self.assertEqual([o.Name for o in doc.Objects if o.TypeId.startswith("Part::Pmi")], [])
+        rep = Import.lastStepPmiReport()
+        self.assertEqual(len(rep["warnings"]), 1)
+        self.assertIn("no PMI object was kept", rep["warnings"][0])
+        self.assertEqual((rep["dimensions"], rep["tolerances"], rep["datums"]), (0, 0, 0))

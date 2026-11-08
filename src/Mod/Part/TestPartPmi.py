@@ -29,6 +29,8 @@ class TestPartPmi(unittest.TestCase):
         tol.DatumReferences = ["A", "B(MAXIMUM_MATERIAL_REQUIREMENT)"]
         tol.StepFaceIds = [11, 12]
         tol.RawAttributes = {"tol.type": "Flatness", "x": "y"}
+        tol.KernelLoss = ["lost: example reason", "corrected: another"]
+        tol.StepEntityName = "flatness"
         tol.References = [(self.box, ["Face1"])]
         return tol
 
@@ -69,6 +71,8 @@ class TestPartPmi(unittest.TestCase):
         self.assertEqual(list(tol.DatumReferences), ["A", "B(MAXIMUM_MATERIAL_REQUIREMENT)"])
         self.assertEqual(list(tol.StepFaceIds), [11, 12])
         self.assertEqual(dict(tol.RawAttributes)["x"], "y")
+        self.assertEqual(list(tol.KernelLoss), ["lost: example reason", "corrected: another"])
+        self.assertEqual(tol.StepEntityName, "flatness")
         self.assertEqual(tol.References[0][0].Name, "Box")
         self.assertEqual(list(tol.References[0][1]), ["Face1"])
         self.doc.recompute()

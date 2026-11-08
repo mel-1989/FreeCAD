@@ -54,16 +54,25 @@ struct ImportExport StepPmiReport
     int unmapped {0};
     int unattached {0};        // dimension and tolerance items that attach to no face of the document
     int unresolvedFaces {0};   // governed faces that no imported object carries
+    int unattachedDatums {0};  // datum items that attach to no face of the document
+    int edgesByGeometry {0};   // edge links found by curve type, length and centre of mass, not by shape identity
+    int datumsFromStep {0};    // datum items whose faces were completed from the STEP datum feature
+    int kernelLoss {0};        // items with a KernelLoss entry (the kernel lost or altered something the file states)
+    std::vector<std::string> kernelLossItems;
     std::vector<std::string> unattachedItems;
     std::vector<std::string> warnings;
 };
 
-/// The pass is on unless the environment variable FC_STEP_PMI is 0 (a switch for tests and timing, not a preference).
+/// The pass is on unless the environment variable FC_STEP_PMI is 0 (a switch for tests and timing, not a preference;
+/// FC_STEP_PMI=unknown:dimension|tolerance|modifier is the test hook of the unmapped path).
 ImportExport bool stepPmiEnabled();
 
 /// During STEPCAFControl_Reader's lifetime, after Transfer: record on a private label of hDoc the Part 21 ids
-/// (#n) of the faces each dimension, tolerance and datum label refers to. Never throws.
-ImportExport void stashStepPmiFaceIds(const Handle(XSControl_WorkSession)& ws, const Handle(TDocStd_Document)& hDoc);
+/// (#n) of the faces each dimension, tolerance and datum label refers to, and what the STEP model itself states about
+/// them (stated values, qualifiers, classes of tolerance, the faces of datum features), to check the kernel's reading
+/// against. path, when given, is the file: the one construct OCCT's model loses (an inline SET_REPRESENTATION_ITEM of
+/// faces) is read from its text. Never throws.
+ImportExport void stashStepPmiFaceIds(const Handle(XSControl_WorkSession)& ws, const Handle(TDocStd_Document)& hDoc, const char* path = nullptr);
 
 /// After the XCAF document has been converted into document objects: create one PMI object per semantic
 /// dimension, tolerance and datum in a Part::PmiGroup of doc. The governed faces are found among the

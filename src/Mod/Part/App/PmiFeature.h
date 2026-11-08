@@ -77,6 +77,11 @@ public:
     App::PropertyBool Unmapped;
     /// True when the item could not be attached to any face or edge of the document
     App::PropertyBool Unattached;
+    /// What the kernel (OCCT's STEP reader) lost or altered, found by comparing it with the STEP model, one reason per entry
+    /// and each starting "lost:" (the file states it, the item lacks it) or "corrected:" (the item was repaired from the file); empty when nothing was found
+    App::PropertyStringList KernelLoss;
+    /// Name the STEP file gives the dimension or datum entity (for example "diameter"), empty when it could not be found
+    App::PropertyString StepEntityName;
 
     const char* getViewProviderName() const override
     {

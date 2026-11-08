@@ -73,6 +73,6 @@ void ReaderStep::read(Handle(TDocStd_Document) hDoc, const Message_ProgressRange
     finishStepExternalReferences(aReader, file, external);
     reportStepExternalReferences(external);
     stashStepAttributes(aReader.Reader().WS(), hDoc);
-    stashStepPmiFaceIds(aReader.Reader().WS(), hDoc);
+    stashStepPmiFaceIds(aReader.Reader().WS(), hDoc, name8bit.c_str());
     reportStepValidation(aReader.Reader().WS());
 }

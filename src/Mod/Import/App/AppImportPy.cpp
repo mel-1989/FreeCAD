@@ -148,6 +148,15 @@ private:
         d.setItem("unmapped", Py::Long(r.unmapped));
         d.setItem("unattached", Py::Long(r.unattached));
         d.setItem("unresolved_faces", Py::Long(r.unresolvedFaces));
+        d.setItem("unattached_datums", Py::Long(r.unattachedDatums));
+        d.setItem("edges_by_geometry", Py::Long(r.edgesByGeometry));
+        d.setItem("datums_from_step", Py::Long(r.datumsFromStep));
+        d.setItem("kernel_loss", Py::Long(r.kernelLoss));
+        Py::List kitems;
+        for (const auto& s : r.kernelLossItems) {
+            kitems.append(Py::String(s));
+        }
+        d.setItem("kernel_loss_items", kitems);
         Py::List items;
         for (const auto& s : r.unattachedItems) {
             items.append(Py::String(s));
