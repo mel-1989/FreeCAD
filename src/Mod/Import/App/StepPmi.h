@@ -90,7 +90,7 @@ struct ImportExport StepPmiExportReport
     int dimensions {0};        // written
     int tolerances {0};
     int datums {0};            // datum labels written, one per datum reference use
-    int annotations {0};       // graphic-only callouts written
+    int annotations {0};       // graphic-only callouts handed to the writer (the file may hold fewer: count its occurrences)
     int skipped {0};           // items left out, each with a warning
     int presentationsStripped {0};  // presentations the writer cannot take (faces only), left out
     bool fellBack {false};     // the file was written again without PMI after a write error
