@@ -44,4 +44,5 @@ FreeCAD.addExportType("glTF (*.gltf *.glb)", "ImportGui")
 
 FreeCAD.__unit_test__ += ["TestImportStepValidation"]
 FreeCAD.__unit_test__ += ["TestImportStepAttributes"]
+FreeCAD.__unit_test__ += ["TestImportStepPmi"]
 FreeCAD.__unit_test__ += ["TestImportBatch"]

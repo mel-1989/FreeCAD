@@ -17,6 +17,7 @@ set(Part_Scripts
     MakeBottle.py
     PartEnums.py
     TestPartApp.py
+    TestPartPmi.py
 )
 
 if(BUILD_GUI)

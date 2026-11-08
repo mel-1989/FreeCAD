@@ -68,6 +68,7 @@
 #include "ReaderGltf.h"
 #include "ReaderIges.h"
 #include "ReaderStep.h"
+#include "StepPmi.h"
 #include "StepValidation.h"
 #include "WriterGltf.h"
 #include "WriterIges.h"
@@ -96,6 +97,13 @@ public:
             "export",
             &Module::exporter,
             "export(list,string) -- Export a list of objects into a single file."
+        );
+        add_varargs_method(
+            "lastStepPmiReport",
+            &Module::lastStepPmiReport,
+            "lastStepPmiReport() -- What the PMI pass of the last STEP import found: a dict with the counts "
+            "(dimensions, tolerances, datums, graphic_only, unmapped, unattached), the unattached items and "
+            "the warnings."
         );
         add_varargs_method(
             "validateStep",
@@ -128,6 +136,40 @@ public:
     ~Module() override = default;
 
 private:
+    Py::Object lastStepPmiReport(const Py::Tuple&)
+    {
+        const Import::StepPmiReport& r = Import::lastStepPmiReport();
+        Py::Dict d;
+        d.setItem("ran", Py::Boolean(r.ran));
+        d.setItem("dimensions", Py::Long(r.dimensions));
+        d.setItem("graphic_only", Py::Long(r.graphicOnly));
+        d.setItem("tolerances", Py::Long(r.tolerances));
+        d.setItem("datums", Py::Long(r.datums));
+        d.setItem("unmapped", Py::Long(r.unmapped));
+        d.setItem("unattached", Py::Long(r.unattached));
+        d.setItem("unresolved_faces", Py::Long(r.unresolvedFaces));
+        d.setItem("unattached_datums", Py::Long(r.unattachedDatums));
+        d.setItem("edges_by_geometry", Py::Long(r.edgesByGeometry));
+        d.setItem("datums_from_step", Py::Long(r.datumsFromStep));
+        d.setItem("kernel_loss", Py::Long(r.kernelLoss));
+        Py::List kitems;
+        for (const auto& s : r.kernelLossItems) {
+            kitems.append(Py::String(s));
+        }
+        d.setItem("kernel_loss_items", kitems);
+        Py::List items;
+        for (const auto& s : r.unattachedItems) {
+            items.append(Py::String(s));
+        }
+        d.setItem("unattached_items", items);
+        Py::List warnings;
+        for (const auto& s : r.warnings) {
+            warnings.append(Py::String(s));
+        }
+        d.setItem("warnings", warnings);
+        return d;
+    }
+
     Py::Object importer(const Py::Tuple& args, const Py::Dict& kwds)
     {
         char* Name = nullptr;
@@ -224,6 +266,7 @@ private:
                 ocaf.setMode(mode);
             }
             ocaf.loadShapes();
+            Import::importStepPmi(hDoc, pcDoc);
 
             hApp->Close(hDoc);
 

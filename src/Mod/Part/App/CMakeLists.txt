@@ -243,6 +243,8 @@ SET(Features_SRCS
     PartFeatures.h
     PartFeature.cpp
     PartFeature.h
+    PmiFeature.cpp
+    PmiFeature.h
     PartFeatureReference.cpp
     PartFeatureReference.h
     Part2DObject.cpp
