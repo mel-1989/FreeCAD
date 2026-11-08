@@ -183,6 +183,13 @@ Tok diameterTok()
 
 std::vector<Cell> dimensionCells(const Part::PmiDimension* d)
 {
+    // a dimension whose value the source file does not state carries Value 0.0, which is not a measurement: draw the
+    // word and a question mark instead of a number nobody stated
+    for (const std::string& k : d->KernelLoss.getValues()) {
+        if (k.find("no value is stated") != std::string::npos) {
+            return {{ascii("dimension ?")}};
+        }
+    }
     Cell c;
     const std::string type = d->PmiType.getStrValue();
     if (type == "Size_Diameter") {
@@ -247,6 +254,9 @@ std::vector<Cell> toleranceCells(const Part::PmiTolerance* t)
         }
     }
     for (const std::string& m : t->Modifiers.getValues()) {
+        if (m == "ALL_AROUND" || m == "SEPARATE_REQUIREMENT") {
+            continue;  // notes beside the frame, not part of the tolerance compartment (see frameNotes)
+        }
         zone.push_back(modifierTok(m));
     }
     cells.push_back(zone);
@@ -280,6 +290,23 @@ std::vector<Cell> datumCells(const Part::PmiDatum* d)
 {
     const std::string l = d->Letter.getStrValue();
     return {{Tok {QString::fromStdString(l), "[" + l + "]", l}}};
+}
+
+/// Words ASME Y14.5 draws beside the frame (at the leader or below it) rather than in a compartment
+std::vector<std::string> frameNotes(const Part::PmiItem* item)
+{
+    std::vector<std::string> notes;
+    if (auto* t = dynamic_cast<const Part::PmiTolerance*>(item)) {
+        for (const std::string& m : t->Modifiers.getValues()) {
+            if (m == "ALL_AROUND") {
+                notes.push_back("ALL AROUND");
+            }
+            else if (m == "SEPARATE_REQUIREMENT") {
+                notes.push_back("SEP REQT");
+            }
+        }
+    }
+    return notes;
 }
 
 /// Compartments of the label and whether they are drawn in boxes (frame, datum box) or as plain text (dimension)
@@ -329,6 +356,9 @@ std::string labelText(const Part::PmiItem* item)
             }
             out += cells[i][j].plain;
         }
+    }
+    for (const std::string& n : frameNotes(item)) {
+        out += " [" + n + "]";
     }
     return out;
 }
@@ -397,6 +427,16 @@ Label buildLabel(const Part::PmiItem* item)
         for (size_t i = 0; i + 1 < dividers.size(); ++i) {
             lines.push_back({{dividers[i], top}, {dividers[i], bottom}});
         }
+    }
+
+    // notes below the frame, left-aligned, as text
+    double ny = bottom + cap + 2 * tokenGap;
+    for (const std::string& n : frameNotes(item)) {
+        const QString s = QString::fromStdString(n);
+        QPainterPath p;
+        p.addText(QPointF(0.0, ny), font, s);
+        addPath(p);
+        ny += cap + 2 * tokenGap;
     }
 
     // centre on the bounding box, flip y to up and scale to digit height 1

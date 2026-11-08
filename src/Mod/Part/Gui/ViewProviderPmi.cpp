@@ -36,7 +36,13 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
+#include <BRepClass_FaceClassifier.hxx>
+#include <BRepGProp.hxx>
 #include <BRepGProp_Face.hxx>
+#include <GProp_GProps.hxx>
+#include <Geom_Surface.hxx>
+#include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <gp_Pnt2d.hxx>
 #include <Bnd_OBB.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
@@ -109,7 +115,7 @@ public:
         auto& e = docs[doc];
         if (e.items.empty()) {
             e.connection = doc->signalChangedObject.connect(
-                [this, doc](const App::DocumentObject&, const App::Property& prop) { changed(doc, prop); }
+                [this, doc](const App::DocumentObject& obj, const App::Property& prop) { changed(doc, obj, prop); }
             );
         }
         e.items.insert(vp);
@@ -134,10 +140,14 @@ private:
         fastsignals::scoped_connection connection;
     };
 
-    void changed(App::Document* doc, const App::Property& prop)
+    void changed(App::Document* doc, const App::DocumentObject& obj, const App::Property& prop)
     {
         const char* name = prop.getName();
-        if (!name || std::string(name) != "Placement") {
+        if (!name) {
+            return;
+        }
+        const std::string n = name;
+        if (n != "Placement" && !(n == "Shape" && dynamic_cast<const Part::Feature*>(&obj))) {
             return;
         }
         auto it = docs.find(doc);
@@ -146,7 +156,12 @@ private:
         }
         const std::vector<ViewProviderPmiItem*> items(it->second.items.begin(), it->second.items.end());
         for (auto* vp : items) {
-            vp->updateTransform();
+            if (n == "Placement") {
+                vp->updateTransform();
+            }
+            else {
+                vp->governedShapeChanged(&obj);
+            }
         }
     }
 
@@ -623,11 +638,10 @@ SbVec3f toSb(const gp_Pnt& p)
 
 }  // namespace
 
-/// The fallback label (check 21 of the slice 2 brief): the text of the item laid out as line geometry, centred on the
-/// centre of the bounding box of the governed faces and offset along the outward normal of the first of them by 5% of
-/// the model diagonal, in the plane of that normal (readable from outside, up along the model's z where it can be).
-/// The points are in the governed object's own coordinates; the transform of the drawing is its global placement
-bool ViewProviderPmiItem::buildFallback(std::vector<SbVec3f>& pts, std::vector<int32_t>& lineIdx, std::string& text)
+/// Where the fallback label of this item goes (check 21): the centre of the bounding box of the governed faces and the
+/// outward normal of the first of them, in the governed object's own coordinates. Cached against the shape and the
+/// references it was measured on, because stacking asks every fallback item of a face for the others' anchors
+bool ViewProviderPmiItem::computeAnchor(FallbackAnchor& out)
 {
     auto* item = getObject<Part::PmiItem>();
     auto* feat = dynamic_cast<Part::Feature*>(governedObject());
@@ -636,12 +650,23 @@ bool ViewProviderPmiItem::buildFallback(std::vector<SbVec3f>& pts, std::vector<i
     }
     const Part::TopoShape& ts = feat->Shape.getShape();
     const TopoDS_Shape whole = ts.getShape();
+    std::string refs;
+    for (const std::string& sub : item->References.getSubValues(feat)) {
+        refs += sub + ",";
+    }
+    if (anchorCache.valid && anchorCache.feat == feat && anchorCache.refs == refs && anchorCache.shape.IsPartner(whole)
+        && anchorCache.shape.Location().IsEqual(whole.Location())) {
+        out = anchorCache.value;
+        return out.ok;
+    }
     const TopLoc_Location toLocal = whole.Location().Inverted();
 
     Bnd_Box box, otherBox;  // the faces govern; edges and vertices only when the item names no face
     TopoDS_Face firstFace;
+    int named = 0, resolved = 0;
     for (const std::string& sub : item->References.getSubValues(feat)) {
         TopoDS_Shape s;
+        ++named;
         try {
             if (sub.rfind("Face", 0) == 0 && sub.size() > 4) {
                 s = ts.getSubShape(TopAbs_FACE, std::atoi(sub.c_str() + 4), true);
@@ -659,80 +684,247 @@ bool ViewProviderPmiItem::buildFallback(std::vector<SbVec3f>& pts, std::vector<i
         if (s.IsNull()) {
             continue;
         }
+        ++resolved;
         s = s.Moved(toLocal);
         BRepBndLib::Add(s, s.ShapeType() == TopAbs_FACE ? box : otherBox, true);
         if (firstFace.IsNull() && s.ShapeType() == TopAbs_FACE) {
             firstFace = TopoDS::Face(s);
         }
     }
-    if (box.IsVoid()) {
-        box = otherBox;
+    FallbackAnchor res;
+    if (named > 0 && resolved == 0) {
+        // every reference names a sub-shape that does not exist: no place for the label, so draw nothing
+        if (!warnedMissingRef) {
+            warnedMissingRef = true;
+            Base::Console().warning(
+                "PMI display: %s: its references name no existing face or edge of %s; no fallback label drawn\n",
+                item->getNameInDocument(),
+                feat->getNameInDocument()
+            );
+        }
     }
-    Bnd_Box wholeBox;
-    if (firstFace.IsNull()) {  // only an edge or nothing resolved: the outward direction comes from the whole object
-        BRepBndLib::Add(whole.Moved(toLocal), wholeBox, true);
+    else {
+        if (box.IsVoid()) {
+            box = otherBox;
+        }
+        Bnd_Box wholeBox;
+        if (firstFace.IsNull()) {  // only an edge or nothing resolved: the outward direction comes from the whole object
+            BRepBndLib::Add(whole.Moved(toLocal), wholeBox, true);
+        }
+        if (box.IsVoid()) {
+            box = wholeBox;
+        }
+        if (!box.IsVoid()) {
+            const gp_Pnt lo = box.CornerMin(), hi = box.CornerMax();
+            res.centre = gp_Pnt((lo.X() + hi.X()) / 2, (lo.Y() + hi.Y()) / 2, (lo.Z() + hi.Z()) / 2);
+            res.normal = gp_Dir(0, 0, 1);
+            if (!firstFace.IsNull()) {
+                try {
+                    // the normal where the face is: at the middle of the parameter range when that lies inside the trimmed
+                    // face, else at its centre of mass projected on the surface (when that lies inside), else the middle
+                    BRepGProp_Face gf(firstFace);
+                    double u0, u1, v0, v1;
+                    gf.Bounds(u0, u1, v0, v1);
+                    double u = (u0 + u1) / 2, v = (v0 + v1) / 2;
+                    BRepClass_FaceClassifier mid(firstFace, gp_Pnt2d(u, v), 1e-7);
+                    if (mid.State() != TopAbs_IN && mid.State() != TopAbs_ON) {
+                        GProp_GProps props;
+                        BRepGProp::SurfaceProperties(firstFace, props);
+                        Handle(Geom_Surface) surf = BRep_Tool::Surface(firstFace);
+                        if (!surf.IsNull() && props.Mass() > 0) {
+                            GeomAPI_ProjectPointOnSurf proj(props.CentreOfMass(), surf);
+                            if (proj.NbPoints() > 0) {
+                                double pu, pv;
+                                proj.LowerDistanceParameters(pu, pv);
+                                BRepClass_FaceClassifier cls(firstFace, gp_Pnt2d(pu, pv), 1e-7);
+                                if (cls.State() == TopAbs_IN || cls.State() == TopAbs_ON) {
+                                    u = pu;
+                                    v = pv;
+                                }
+                            }
+                        }
+                    }
+                    gp_Pnt p;
+                    gp_Vec n;
+                    gf.Normal(u, v, p, n);
+                    if (n.Magnitude() > 1e-12) {
+                        res.normal = gp_Dir(n);
+                    }
+                }
+                catch (const Standard_Failure&) {
+                }
+            }
+            else if (!wholeBox.IsVoid()) {
+                const gp_Pnt wl = wholeBox.CornerMin(), wh = wholeBox.CornerMax();
+                const gp_Vec out(
+                    res.centre.X() - (wl.X() + wh.X()) / 2,
+                    res.centre.Y() - (wl.Y() + wh.Y()) / 2,
+                    res.centre.Z() - (wl.Z() + wh.Z()) / 2
+                );
+                if (out.Magnitude() > 1e-9) {
+                    res.normal = gp_Dir(out);
+                }
+            }
+            res.ok = true;
+        }
     }
-    if (box.IsVoid()) {
-        box = wholeBox;  // nothing resolved: the label goes at the object
-    }
-    if (box.IsVoid()) {
+    anchorCache.valid = true;
+    anchorCache.feat = feat;
+    anchorCache.refs = refs;
+    anchorCache.shape = whole;
+    anchorCache.value = res;
+    out = res;
+    return res.ok;
+}
+
+/// The nominal frame of the label (check 21): anchor, reading directions and the half extent of its pick quad in digit
+/// heights. The extent is cached against the text, because laying out a face asks for every neighbour's
+bool ViewProviderPmiItem::baseFrame(LabelFrame& f, double diag)
+{
+    auto* item = getObject<Part::PmiItem>();
+    FallbackAnchor a;
+    if (!item || !computeAnchor(a)) {
         return false;
     }
-    const gp_Pnt lo = box.CornerMin(), hi = box.CornerMax();
-    gp_Pnt centre((lo.X() + hi.X()) / 2, (lo.Y() + hi.Y()) / 2, (lo.Z() + hi.Z()) / 2);
-    gp_Dir normal(0, 0, 1);
-    if (!firstFace.IsNull()) {
-        try {
-            BRepGProp_Face gf(firstFace);
-            double u0, u1, v0, v1;
-            gf.Bounds(u0, u1, v0, v1);
-            gp_Pnt p;
-            gp_Vec n;
-            gf.Normal((u0 + u1) / 2, (v0 + v1) / 2, p, n);
-            if (n.Magnitude() > 1e-12) {
-                normal = gp_Dir(n);
+    const std::string text = PmiLayout::labelText(item);
+    if (text.empty()) {
+        return false;
+    }
+    if (!extentCache.valid || extentCache.text != text) {
+        PmiLayout::Label label = PmiLayout::buildLabel(item);
+        if (label.lines.empty()) {
+            return false;
+        }
+        double hw = 0, hh = 0;
+        for (const auto& pl : label.lines) {
+            for (const auto& q : pl) {
+                hw = std::max(hw, std::fabs(q[0]));
+                hh = std::max(hh, std::fabs(q[1]));
             }
         }
-        catch (const Standard_Failure&) {
-        }
+        extentCache = {true, text, hw + 0.3, hh + 0.3};  // the pick quad is a little larger than the label
     }
-    else if (!wholeBox.IsVoid()) {
-        const gp_Pnt wl = wholeBox.CornerMin(), wh = wholeBox.CornerMax();
-        const gp_Vec out(
-            centre.X() - (wl.X() + wh.X()) / 2,
-            centre.Y() - (wl.Y() + wh.Y()) / 2,
-            centre.Z() - (wl.Z() + wh.Z()) / 2
-        );
-        if (out.Magnitude() > 1e-9) {
-            normal = gp_Dir(out);
-        }
-    }
+    const gp_Dir normal = a.normal;
+    f.h = 0.025 * diag;  // digit height of the label
+    const gp_Vec up0 = std::fabs(normal.Z()) < 0.9 ? gp_Vec(0, 0, 1) : gp_Vec(0, 1, 0);
+    f.right = gp_Dir(up0.Crossed(gp_Vec(normal)));  // right x up = normal: the label faces outward
+    f.up = gp_Dir(gp_Vec(normal).Crossed(gp_Vec(f.right)));
+    f.normal = normal;
+    f.anchor = gp_Pnt(
+        a.centre.X() + normal.X() * 0.05 * diag,
+        a.centre.Y() + normal.Y() * 0.05 * diag,
+        a.centre.Z() + normal.Z() * 0.05 * diag
+    );
+    f.hw = extentCache.hw;
+    f.hh = extentCache.hh;
+    f.text = text;
+    return true;
+}
 
-    const double diag = modelDiagonal(item->getDocument());
-    if (diag <= 0) {
+namespace
+{
+
+/// Whether two label frames cover each other: coplanar and their rectangles intersect (separating axes in the plane)
+bool framesOverlap(const ViewProviderPmiItem::LabelFrame& a, const ViewProviderPmiItem::LabelFrame& b, double diag)
+{
+    if (std::fabs(a.normal.Dot(b.normal)) < 0.999) {
         return false;
     }
-    const double h = 0.025 * diag;  // digit height of the label
-    const gp_Pnt anchor(
-        centre.X() + normal.X() * 0.05 * diag,
-        centre.Y() + normal.Y() * 0.05 * diag,
-        centre.Z() + normal.Z() * 0.05 * diag
-    );
-    const gp_Vec up0 = std::fabs(normal.Z()) < 0.9 ? gp_Vec(0, 0, 1) : gp_Vec(0, 1, 0);
-    const gp_Vec right = up0.Crossed(gp_Vec(normal));  // right x up = normal: the label faces outward
-    const gp_Dir rightDir(right);
-    const gp_Vec up = gp_Vec(normal).Crossed(gp_Vec(rightDir));
+    const gp_Vec d(a.anchor, b.anchor);
+    if (std::fabs(d.Dot(gp_Vec(a.normal))) > 1e-3 * diag) {
+        return false;
+    }
+    const gp_Dir axes[4] = {a.right, a.up, b.right, b.up};
+    for (const gp_Dir& ax : axes) {
+        const double ra = a.h * (a.hw * std::fabs(ax.Dot(a.right)) + a.hh * std::fabs(ax.Dot(a.up)));
+        const double rb = b.h * (b.hw * std::fabs(ax.Dot(b.right)) + b.hh * std::fabs(ax.Dot(b.up)));
+        if (std::fabs(d.Dot(gp_Vec(ax))) >= ra + rb - 1e-6) {
+            return false;
+        }
+    }
+    return true;
+}
 
+}  // namespace
+
+/// Labels that would cover one another are stacked: by object name, the first sits at its anchor and each next one is
+/// moved up its reading direction by whole pitches (3 digit heights: a frame is 2.2 tall, the rest is a gap) until it
+/// covers none of the labels already placed on the same object
+bool ViewProviderPmiItem::finalFrame(LabelFrame& mine, double diag)
+{
+    auto* item = getObject<Part::PmiItem>();
+    App::DocumentObject* gov = governedObject();
+    std::vector<ViewProviderPmiItem*> peers;
+    for (auto* vp : aliveProviders()) {
+        auto* other = vp == this ? nullptr : vp->getObject<Part::PmiItem>();
+        if (other && vp->governedObject() == gov && other->getDocument() == item->getDocument()
+            && std::string(other->getNameInDocument()) < item->getNameInDocument() && vp->drawMode() == PmiDrawMode::Fallback) {
+            peers.push_back(vp);
+        }
+    }
+    std::sort(peers.begin(), peers.end(), [](ViewProviderPmiItem* x, ViewProviderPmiItem* y) {
+        return std::string(x->getObject()->getNameInDocument()) < y->getObject()->getNameInDocument();
+    });
+    std::vector<LabelFrame> placed;
+    auto place = [&](LabelFrame& f) {
+        const gp_Pnt base = f.anchor;
+        for (int k = 0; k < 400; ++k) {
+            f.anchor = gp_Pnt(
+                base.X() + f.up.X() * 3.0 * f.h * k,
+                base.Y() + f.up.Y() * 3.0 * f.h * k,
+                base.Z() + f.up.Z() * 3.0 * f.h * k
+            );
+            bool clash = false;
+            for (const LabelFrame& p : placed) {
+                if (framesOverlap(f, p, diag)) {
+                    clash = true;
+                    break;
+                }
+            }
+            if (!clash) {
+                break;
+            }
+        }
+        placed.push_back(f);
+    };
+    for (auto* vp : peers) {
+        LabelFrame f;
+        if (vp->baseFrame(f, diag)) {
+            place(f);
+        }
+    }
+    if (!baseFrame(mine, diag)) {
+        return false;
+    }
+    place(mine);
+    return true;
+}
+
+/// The fallback label (check 21 of the slice 2 brief): the text of the item laid out as line geometry, centred on the
+/// centre of the bounding box of the governed faces and offset along the outward normal of the first of them by 5% of
+/// the model diagonal, in the plane of that normal (readable from outside, up along the model's z where it can be).
+/// The points are in the governed object's own coordinates; the transform of the drawing is its global placement
+bool ViewProviderPmiItem::buildFallback(std::vector<SbVec3f>& pts, std::vector<int32_t>& lineIdx, std::string& text)
+{
+    auto* item = getObject<Part::PmiItem>();
+    if (!item) {
+        return false;
+    }
+    const double diag = modelDiagonal(item->getDocument());
+    LabelFrame f;
+    if (diag <= 0 || !finalFrame(f, diag)) {
+        return false;
+    }
     PmiLayout::Label label = PmiLayout::buildLabel(item);
     if (label.lines.empty()) {
         return false;
     }
     text = label.text;
-    double hw = 0, hh = 0;
+    const gp_Dir rightDir = f.right, up = f.up;
+    const gp_Pnt anchor = f.anchor;
+    const double h = f.h;
     for (const auto& pl : label.lines) {
         for (const auto& q : pl) {
-            hw = std::max(hw, std::fabs(q[0]));
-            hh = std::max(hh, std::fabs(q[1]));
             const gp_Pnt p(
                 anchor.X() + h * (q[0] * rightDir.X() + q[1] * up.X()),
                 anchor.Y() + h * (q[0] * rightDir.Y() + q[1] * up.Y()),
@@ -743,18 +935,18 @@ bool ViewProviderPmiItem::buildFallback(std::vector<SbVec3f>& pts, std::vector<i
         }
         lineIdx.push_back(-1);
     }
-    // the pick quad, a little larger than the label
-    hw += 0.3;
-    hh += 0.3;
     std::vector<SbVec3f> quad;
     for (const auto& [sx, sy] : corners) {
         quad.push_back(toSb(gp_Pnt(
-            anchor.X() + h * (sx * hw * rightDir.X() + sy * hh * up.X()),
-            anchor.Y() + h * (sx * hw * rightDir.Y() + sy * hh * up.Y()),
-            anchor.Z() + h * (sx * hw * rightDir.Z() + sy * hh * up.Z())
+            anchor.X() + h * (sx * f.hw * rightDir.X() + sy * f.hh * up.X()),
+            anchor.Y() + h * (sx * f.hw * rightDir.Y() + sy * f.hh * up.Y()),
+            anchor.Z() + h * (sx * f.hw * rightDir.Z() + sy * f.hh * up.Z())
         )));
     }
     setPickProxy(quad);
+    if (auto* feat = dynamic_cast<Part::Feature*>(governedObject())) {
+        laidOutShape = feat->Shape.getShape().getShape();  // what the label was laid out on
+    }
     return true;
 }
 
@@ -819,28 +1011,8 @@ void ViewProviderPmiItem::rebuildGeometry()
                 e.GetMessageString()
             );
         }
-        // an oriented box over the annotation makes the whole of it one click target
-        std::vector<SbVec3f> quad;
-        try {
-            Bnd_OBB obb;
-            BRepBndLib::AddOBB(shape, obb, true, false, false);
-            if (!obb.IsVoid()) {
-                const gp_XYZ ax[3] = {obb.XDirection(), obb.YDirection(), obb.ZDirection()};
-                double hs[3] = {obb.XHSize(), obb.YHSize(), obb.ZHSize()};
-                int order[3] = {0, 1, 2};
-                std::sort(order, order + 3, [&hs](int a, int b) { return hs[a] > hs[b]; });
-                const double floor = 1e-4;
-                const gp_XYZ u = ax[order[0]] * std::max(hs[order[0]], floor);
-                const gp_XYZ v = ax[order[1]] * std::max(hs[order[1]], floor);
-                const gp_XYZ c = obb.Center();
-                for (const auto& [su, sv] : corners) {
-                    quad.push_back(toSb(gp_Pnt(c + u * su + v * sv)));
-                }
-            }
-        }
-        catch (const Standard_Failure&) {
-        }
-        setPickProxy(quad);
+        // lines only: a quad over a presentation would cover the items drawn near it, and it is picked on its own lines
+        setPickProxy({});
     }
     else if (!buildFallback(pts, lineIdx, text)) {
         // the object cannot give a place for the label: draw nothing for this item
@@ -933,6 +1105,21 @@ void ViewProviderPmiItem::requestRebuild()
     }
 }
 
+void ViewProviderPmiItem::governedShapeChanged(const App::DocumentObject* obj)
+{
+    if (!attached || governedObject() != obj || mode != PmiDrawMode::Fallback) {
+        return;
+    }
+    auto* feat = dynamic_cast<const Part::Feature*>(obj);
+    if (feat && !laidOutShape.IsNull() && laidOutShape.IsPartner(feat->Shape.getShape().getShape())) {
+        return;  // a move of the body re-sets its shape's location only: the transform follows, the label stays as laid out
+    }
+    stale = true;
+    anchorCache.valid = false;
+    rebuildGeometry();
+    applyVisibility();
+}
+
 void ViewProviderPmiItem::refreshSiblingUses()
 {
     // another use of the same letter on the same object may now be the one that draws (or no longer be)
@@ -941,10 +1128,17 @@ void ViewProviderPmiItem::refreshSiblingUses()
     if (!me || !group) {
         return;
     }
+    const std::string now = me->Letter.getStrValue();
+    const std::string before = siblingLetter;
+    siblingLetter = now;
     const std::set<ViewProviderPmiItem*> alive = aliveProviders();
     for (auto* vp : alive) {
         auto* other = vp == this ? nullptr : vp->getObject<Part::PmiDatum>();
-        if (other && other->Letter.getStrValue() == me->Letter.getStrValue() && groupOf(other) == group) {
+        if (!other || groupOf(other) != group) {
+            continue;
+        }
+        const std::string l = other->Letter.getStrValue();
+        if (l == now || (!before.empty() && l == before)) {  // the new letter's uses and the old letter's
             vp->rebuildGeometry();
             vp->applyVisibility();
         }
@@ -954,6 +1148,9 @@ void ViewProviderPmiItem::refreshSiblingUses()
 void ViewProviderPmiItem::refresh()
 {
     rebuildGeometry();
+    if (auto* d = getObject<Part::PmiDatum>()) {
+        siblingLetter = d->Letter.getStrValue();
+    }
     updateTransform();
     applyVisibility();
 }

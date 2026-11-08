@@ -34,6 +34,10 @@
 #include <vector>
 
 #include <Inventor/SbVec3f.h>
+#include <Mod/Part/PartGlobal.h>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+#include <TopoDS_Shape.hxx>
 
 #include <Base/Placement.h>
 #include <Gui/ViewProviderDocumentObject.h>
@@ -86,6 +90,8 @@ public:
 
     /// Rebuild what is drawn and where (after the group or the governed object changed)
     void refresh();
+    /// The shape of a Part feature changed: re-lay out the fallback labels placed on it
+    void governedShapeChanged(const App::DocumentObject* obj);
     /// Set the transform from the governed object's current global placement
     void updateTransform();
     /// Show or hide the drawing from the item's own and its group's visibility
@@ -100,6 +106,27 @@ public:
 private:
     void rebuildGeometry();
     bool fallbackEligible() const;
+    struct FallbackAnchor
+    {
+        bool ok {false};
+        gp_Pnt centre;
+        gp_Dir normal {0, 0, 1};
+    };
+    bool computeAnchor(FallbackAnchor& out);
+
+public:
+    struct LabelFrame
+    {
+        gp_Pnt anchor;
+        gp_Dir right {1, 0, 0}, up {0, 0, 1}, normal {0, 1, 0};
+        double h {1.0};   // digit height
+        double hw {1.0}, hh {1.0};  // half extent of the pick quad, in digit heights
+        std::string text;
+    };
+
+private:
+    bool baseFrame(LabelFrame& f, double diag);
+    bool finalFrame(LabelFrame& f, double diag);
     bool buildFallback(std::vector<SbVec3f>& pts, std::vector<int32_t>& lineIdx, std::string& text);
     void setPickProxy(const std::vector<SbVec3f>& quad);
     void requestRebuild();
@@ -119,6 +146,23 @@ private:
     SoCoordinate3* proxyCoords {nullptr};  // invisible, pickable quad over the drawing
     SoIndexedFaceSet* proxyFaces {nullptr};
     PmiDrawMode mode {PmiDrawMode::None};
+    struct
+    {
+        bool valid {false};
+        const App::DocumentObject* feat {nullptr};
+        std::string refs;
+        TopoDS_Shape shape;
+        FallbackAnchor value;
+    } anchorCache;
+    struct
+    {
+        bool valid {false};
+        std::string text;
+        double hw {0}, hh {0};
+    } extentCache;
+    TopoDS_Shape laidOutShape;  // the governed shape the fallback label was last laid out on
+    bool warnedMissingRef {false};
+    std::string siblingLetter;  // the letter at the last sibling refresh, to refresh the old letter's uses too
     bool attached {false};
     bool drawing {false};
     bool rebuildPending {false};
