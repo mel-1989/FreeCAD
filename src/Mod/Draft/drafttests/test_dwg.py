@@ -39,6 +39,7 @@ LibreDWG programs skip when dwg2dxf is not installed.
 # @{
 
 import os
+import platform
 import shutil
 import stat
 import tempfile
@@ -196,6 +197,25 @@ class DraftDWG(unittest.TestCase):
         os.environ["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
         importDWG.insert(self.dwg, self.doc.Name)
         self.assertGreater(len(self.doc.Objects), 0)
+
+    def test_real_fixed_places_name_the_package_manager_prefixes(self):
+        importDWG._libredwg_fixed_dirs = self.saved[2]
+        if platform.system() == "Darwin":
+            self.assertEqual(importDWG._libredwg_fixed_dirs(), ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"])
+        elif platform.system() == "Linux":
+            self.assertEqual(importDWG._libredwg_fixed_dirs(), ["/usr/bin", "/usr/local/bin"])
+
+    def test_path_wins_over_fixed_places(self):
+        other = os.path.join(self.tmp, "fixed")
+        os.makedirs(other)
+        for folder in (self.bin, other):
+            path = os.path.join(folder, "dwg2dxf")
+            with open(path, "w") as f:
+                f.write(FAKE_DWG2DXF["ok"])
+            os.chmod(path, 0o755)
+        os.environ["PATH"] = self.bin
+        importDWG._libredwg_fixed_dirs = lambda: [other]
+        self.assertEqual(importDWG.get_libredwg_converter("dwg2dxf"), os.path.join(self.bin, "dwg2dxf"))
 
     def test_no_converter_raises(self):
         for call in self.calls():

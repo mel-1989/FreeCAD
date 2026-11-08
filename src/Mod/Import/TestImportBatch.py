@@ -66,6 +66,7 @@ class BatchTranslateCase(unittest.TestCase):
                      ["to=step"],                           # no input
                      ["to=step", os.path.join(self.dir, "missing.step")],
                      ["to=step", "timeout=-1", self.box],
+                     ["to=step", "timeout=abc", self.box],      # a value that is not a number
                      ["to=step", "bogus=1", self.box]):
             done, _ = self.run_batch(*args)
             self.assertEqual(done.returncode, 2, args)
@@ -133,6 +134,18 @@ class BatchTranslateCase(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("overwrite", done.stdout)
         self.assertTrue(os.path.getsize(self.box) > 0)
+
+    def test_tolerances_are_the_decided_ones(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("translate_under_test", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)  # without --pass on the command line it only defines names
+        self.assertEqual(module.DEFAULT_TOLERANCE, 1e-6)
+        self.assertEqual(module.TOLERANCE["brep"], 1e-9)
+        self.assertFalse(module._differs(1000.0, 1000.0005, module.DEFAULT_TOLERANCE))
+        self.assertTrue(module._differs(1000.0, 1000.002, module.DEFAULT_TOLERANCE))
+        self.assertTrue(module._differs(1000.0, 1000.0005, module.TOLERANCE["brep"]))
 
     # -- failures lose one file only
 
