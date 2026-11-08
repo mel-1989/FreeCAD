@@ -230,6 +230,8 @@ SET(PartGui_SRCS
     ViewProviderImport.h
     ViewProviderPmi.cpp
     ViewProviderPmi.h
+    ViewProviderPmiLayout.cpp
+    ViewProviderPmiLayout.h
     ViewProviderExtrusion.cpp
     ViewProviderExtrusion.h
     ViewProviderScale.cpp

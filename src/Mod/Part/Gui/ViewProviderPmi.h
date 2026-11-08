@@ -27,8 +27,17 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <set>
+#include <string>
+#include <vector>
+
+#include <Inventor/SbVec3f.h>
+#include <Mod/Part/PartGlobal.h>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+#include <TopoDS_Shape.hxx>
 
 #include <Base/Placement.h>
 #include <Gui/ViewProviderDocumentObject.h>
@@ -41,6 +50,7 @@ class SoCoordinate3;
 class SoIndexedLineSet;
 class SoIndexedFaceSet;
 class SoBaseColor;
+class SoInfo;
 
 namespace App
 {
@@ -51,9 +61,17 @@ class DocumentObject;
 namespace PartGui
 {
 
-/// Draws the Presentation of one Part::PmiItem as one SoSeparator named PMI_<object name>, under a transform that
-/// follows the governed object. Datums draw one symbol per letter per governed object (the first use that has a
-/// presentation); other uses draw nothing. Items without a presentation draw nothing in this slice.
+/// Draws one Part::PmiItem as one SoSeparator named PMI_<object name>, under a transform that follows the governed
+/// object: its Presentation when it has one, otherwise (slice 2b) a fallback label laid out at the governed faces. Datums
+/// draw one symbol per letter per governed object (the first use that has a presentation, else the first use); other
+/// uses draw nothing. Unattached items without a presentation draw nothing.
+enum class PmiDrawMode
+{
+    None,
+    Presentation,  // the geometry the source file authored
+    Fallback       // our own layout: a text label at the governed faces
+};
+
 class PartGuiExport ViewProviderPmiItem: public Gui::ViewProviderDocumentObject
 {
     PROPERTY_HEADER_WITH_OVERRIDE(PartGui::ViewProviderPmiItem);
@@ -72,16 +90,47 @@ public:
 
     /// Rebuild what is drawn and where (after the group or the governed object changed)
     void refresh();
+    /// The shape of a Part feature changed: re-lay out the fallback labels placed on it
+    void governedShapeChanged(const App::DocumentObject* obj);
     /// Set the transform from the governed object's current global placement
     void updateTransform();
     /// Show or hide the drawing from the item's own and its group's visibility
     void applyVisibility();
-    /// Whether this item draws anything (has a presentation, and for datums is the first use of its letter on its object)
-    bool isDrawn() const;
+    /// What this item draws (for datums only the first use of its letter on its object draws)
+    PmiDrawMode drawMode() const;
+    bool isDrawn() const
+    {
+        return drawMode() != PmiDrawMode::None;
+    }
 
 private:
     void rebuildGeometry();
+    bool fallbackEligible() const;
+    struct FallbackAnchor
+    {
+        bool ok {false};
+        gp_Pnt centre;
+        gp_Dir normal {0, 0, 1};
+    };
+    bool computeAnchor(FallbackAnchor& out);
+
+public:
+    struct LabelFrame
+    {
+        gp_Pnt anchor;
+        gp_Dir right {1, 0, 0}, up {0, 0, 1}, normal {0, 1, 0};
+        double h {1.0};   // digit height
+        double hw {1.0}, hh {1.0};  // half extent of the pick quad, in digit heights
+        std::string text;
+    };
+
+private:
+    bool baseFrame(LabelFrame& f, double diag);
+    bool finalFrame(LabelFrame& f, double diag);
+    bool buildFallback(std::vector<SbVec3f>& pts, std::vector<int32_t>& lineIdx, std::string& text);
+    void setPickProxy(const std::vector<SbVec3f>& quad);
     void requestRebuild();
+    void refreshSiblingUses();
     static std::set<ViewProviderPmiItem*>& aliveProviders();
     bool wantVisible() const;
     App::DocumentObject* governedObject() const;
@@ -93,6 +142,27 @@ private:
     SoCoordinate3* coords {nullptr};
     SoIndexedLineSet* lines {nullptr};
     SoIndexedFaceSet* faces {nullptr};
+    SoInfo* info {nullptr};              // the text of a fallback label, empty otherwise
+    SoCoordinate3* proxyCoords {nullptr};  // invisible, pickable quad over the drawing
+    SoIndexedFaceSet* proxyFaces {nullptr};
+    PmiDrawMode mode {PmiDrawMode::None};
+    struct
+    {
+        bool valid {false};
+        const App::DocumentObject* feat {nullptr};
+        std::string refs;
+        TopoDS_Shape shape;
+        FallbackAnchor value;
+    } anchorCache;
+    struct
+    {
+        bool valid {false};
+        std::string text;
+        double hw {0}, hh {0};
+    } extentCache;
+    TopoDS_Shape laidOutShape;  // the governed shape the fallback label was last laid out on
+    bool warnedMissingRef {false};
+    std::string siblingLetter;  // the letter at the last sibling refresh, to refresh the old letter's uses too
     bool attached {false};
     bool drawing {false};
     bool rebuildPending {false};
