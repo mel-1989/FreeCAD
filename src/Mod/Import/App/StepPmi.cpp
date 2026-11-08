@@ -3307,7 +3307,11 @@ int repairWrittenStepPmi(const std::string& path)
             out.append(last, text.cend());
             text = out;
             static const std::regex lst(R"(COMMON_DATUM_LIST\(\s*(#\d+(?:\s*,\s*#\d+)*)\s*\))");
+            const std::string before = text;
             text = std::regex_replace(text, lst, "COMMON_DATUM_LIST((" "$1" "))");
+            if (text != before) {
+                ++gExport.commonDatumsRepaired;
+            }
         }
         if (gExport.allAround.empty()) {
             if (gExport.commonDatumsRepaired > 0) {
@@ -3444,7 +3448,11 @@ int repairWrittenStepPmi(const std::string& path)
                     comps.push_back(j);
                 }
             }
-            if (static_cast<int>(comps.size()) == nWanted) {
+            bool exact = static_cast<int>(comps.size()) == nWanted;
+            for (size_t j : comps) {
+                exact = exact && wanted.count(static_cast<int>(j));  // every composite one is flagged, hence every flagged one is composite
+            }
+            if (exact) {
                 for (size_t j : group) {
                     target.erase(static_cast<int>(j));
                 }

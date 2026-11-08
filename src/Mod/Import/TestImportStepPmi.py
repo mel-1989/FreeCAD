@@ -874,10 +874,10 @@ class TestExportStepPmi(unittest.TestCase):
 
     # ---- run 076 verifier cases: pairing of all-around, graphic callouts ---------------------------------------------
 
-    def _add_tol(self, kind, value, refs, mods=(), datums=()):
+    def _add_tol(self, kind, value, refs, mods=(), datums=(), nfaces=2):
         obj, planes = self._planar_faces()
         t = self._add_item("Part::PmiTolerance", PmiType=kind, Value=value, Modifiers=list(mods))
-        t.References = [(obj, ["Face%d" % planes[0], "Face%d" % planes[1]])]
+        t.References = [(obj, ["Face%d" % planes[i] for i in range(nfaces)])]
         if datums:
             t.Datums = list(datums)
             t.DatumReferences = [d.Letter for d in datums]
@@ -935,3 +935,26 @@ class TestExportStepPmi(unittest.TestCase):
         self.assertEqual(len([w for w in rep["warnings"] if "point at no face" in w]), 1)
         self.assertNotIn("TESSELLATED_ANNOTATION_OCCURRENCE", self._text(out))
         self.assertFalse(rep["fell_back"])
+
+    def test_all_around_is_left_alone_when_the_flagged_one_is_not_the_composite_one(self):
+        # identical datum-less Flatness 0.1: the flagged one governs one face (a plain shape aspect), the other two faces (composite)
+        self._add_tol("Flatness", 0.1, None, mods=["ALL_AROUND"], nfaces=1)
+        self._add_tol("Flatness", 0.1, None, nfaces=2)
+        out = self._export(self.doc)
+        rep = Import.lastStepPmiExportReport()
+        self.assertEqual(self._all_around_entities(self._text(out)), 0)
+        self.assertTrue(any("all-around" in w and "could not be restated" in w for w in rep["warnings"]), rep["warnings"])
+
+    def test_common_datum_list_is_restated_even_without_modifiers(self):
+        obj, planes = self._planar_faces()
+        tol = self._of(self.doc, "Part::PmiTolerance")[0]
+        first = tol.Datums[0]
+        first.Modifiers = []
+        second = self._add_item("Part::PmiDatum", PmiType="Datum", Letter="B", Position=first.Position)
+        second.References = [(obj, ["Face%d" % planes[0]])]
+        tol.Datums = [first, second]
+        tol.DatumReferences = ["A", "B"]
+        tol.Modifiers = []
+        text = self._text(self._export(self.doc))
+        self.assertIn("COMMON_DATUM_LIST((", text)
+        self.assertNotIn("COMMON_DATUM_LIST(\n", text.replace("COMMON_DATUM_LIST(\n    (", "COMMON_DATUM_LIST("))
