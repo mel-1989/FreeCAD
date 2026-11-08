@@ -548,3 +548,90 @@ class TestImportStepPmiKernelChecks(unittest.TestCase):
         self.assertEqual(len(rep["warnings"]), 1)
         self.assertIn("no PMI object was kept", rep["warnings"][0])
         self.assertEqual((rep["dimensions"], rep["tolerances"], rep["datums"]), (0, 0, 0))
+        # nothing stays, so no count of the stopped pass does either
+        self.assertEqual((rep["kernel_loss"], rep["unattached"], rep["unattached_datums"], rep["datums_from_step"], rep["unresolved_faces"]), (0, 0, 0, 0, 0))
+
+
+def _fixture_with_duplicate_size(lower):
+    """_patched_fixture() plus a second diameter dimension on the same face as the limit-triple one (#17), in inches
+    like it, stating nominal 0.40 and upper 0.42 and a lower limit of its own."""
+    add = """#450 = LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),#114);
+#451 = SHAPE_ASPECT('','',#4,.T.);
+#452 = GEOMETRIC_ITEM_SPECIFIC_USAGE('','',#451,#10,#17);
+#453 = ( LENGTH_MEASURE_WITH_UNIT() MEASURE_REPRESENTATION_ITEM() MEASURE_WITH_UNIT(POSITIVE_LENGTH_MEASURE(%s),#400) REPRESENTATION_ITEM('lower limit') );
+#454 = ( LENGTH_MEASURE_WITH_UNIT() MEASURE_REPRESENTATION_ITEM() MEASURE_WITH_UNIT(POSITIVE_LENGTH_MEASURE(0.4),#400) REPRESENTATION_ITEM('nominal value') );
+#455 = ( LENGTH_MEASURE_WITH_UNIT() MEASURE_REPRESENTATION_ITEM() MEASURE_WITH_UNIT(POSITIVE_LENGTH_MEASURE(0.42),#400) REPRESENTATION_ITEM('upper limit') );
+#456 = SHAPE_DIMENSION_REPRESENTATION('',(#453,#454,#455),#113);
+#457 = DIMENSIONAL_CHARACTERISTIC_REPRESENTATION(#458,#456);
+#458 = DIMENSIONAL_SIZE(#451,'diameter');
+""" % lower
+    return _patched_fixture().replace("ENDSEC;\nEND-ISO", add + "ENDSEC;\nEND-ISO")
+
+
+def _fixture_with_inline_datum_set(inner, name="''"):
+    """_patched_fixture() with the geometric usage of datum feature A (#120) replaced by an inline
+    SET_REPRESENTATION_ITEM of the faces #109 and #17, the one construct whose faces are read from the file text;
+    inner is put inside the statement (a comment, or text a careless reader would take for syntax)."""
+    t = _patched_fixture()
+    old = "#120 = GEOMETRIC_ITEM_SPECIFIC_USAGE('','',#119,#10,#109);"
+    assert old in t
+    new = "#120 = ITEM_IDENTIFIED_REPRESENTATION_USAGE(%s,$,#119,#10,%s SET_REPRESENTATION_ITEM((#109,#17)));" % (name, inner)
+    return t.replace(old, new)
+
+
+class _ImportedText(unittest.TestCase):
+    def _import(self, text):
+        d = tempfile.mkdtemp(prefix="g12pmir")
+        self.addCleanup(lambda: [os.remove(os.path.join(d, f)) for f in os.listdir(d)] or os.rmdir(d))
+        path = os.path.join(d, "pmi_text.stp")
+        with open(path, "w") as f:
+            f.write(text)
+        doc = App.newDocument("G12PmiT")
+        self.addCleanup(lambda: App.closeDocument(doc.Name))
+        Import.insert(path, doc.Name)
+        return doc
+
+
+class TestImportStepPmiDuplicateDimensions(_ImportedText):
+    """Two STEP dimensions on the same faces that differ only in a limit cannot be told apart by the label, so the
+    value is not taken from either and the item says it was not verified (run 075 repair round 2, finding M1, M3)."""
+
+    def test_ambiguous_pairing_is_refused_and_flagged(self):
+        doc = self._import(_fixture_with_duplicate_size("0.37"))
+        rng = [o for o in doc.Objects if o.TypeId == "Part::PmiDimension" and o.BoundsKind == "range"]
+        self.assertEqual(len(rng), 2)
+        for d in rng:
+            self.assertEqual(dict(d.RawAttributes)["step.match"], "ambiguous", d.Name)
+            self.assertFalse([k for k in d.KernelLoss if k.startswith("corrected:")], list(d.KernelLoss))
+            self.assertTrue([k for k in d.KernelLoss if "not verified against the file" in k], list(d.KernelLoss))
+        self.assertGreaterEqual(Import.lastStepPmiReport()["kernel_loss"], 3)
+
+    def test_identical_duplicates_confirm_the_same_figures(self):
+        doc = self._import(_fixture_with_duplicate_size("0.38"))
+        rng = [o for o in doc.Objects if o.TypeId == "Part::PmiDimension" and o.BoundsKind == "range"]
+        self.assertEqual(len(rng), 2)
+        for d in rng:
+            self.assertFalse([k for k in d.KernelLoss if "not verified" in k], list(d.KernelLoss))
+            self.assertAlmostEqual(d.LowerBound, 0.38 * 25.4, places=9)
+            self.assertAlmostEqual(d.Value, 0.4 * 25.4, places=9)
+
+
+class TestImportStepPmiPart21Text(_ImportedText):
+    """The Part 21 text is read for the one construct the kernel loses: comments (/* */) and strings (with '' as an
+    escaped quote) are opaque, ISO 10303-21 section 5 (run 075 repair round 2, finding M2, M3)."""
+
+    @staticmethod
+    def _datum_faces(doc):
+        ds = [o for o in doc.Objects if o.TypeId == "Part::PmiDatum" and o.Letter == "A"]
+        assert ds, "no datum A"
+        return sorted({i for d in ds for i in d.StepFaceIds})
+
+    def test_comment_and_string_text_does_not_change_the_faces(self):
+        base = self._datum_faces(self._import(_fixture_with_inline_datum_set("")))
+        self.assertEqual(len(base), 2)  # both faces of the inline set arrived
+        for inner, name in [
+            ("/* see #105 */", "''"),
+            ("/* it's; #105 */", "''"),
+            ("", "'#105; it''s =ITEM_IDENTIFIED_REPRESENTATION_USAGE(#105'"),
+        ]:
+            self.assertEqual(self._datum_faces(self._import(_fixture_with_inline_datum_set(inner, name))), base, (inner, name))

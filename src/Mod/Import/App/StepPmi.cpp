@@ -866,6 +866,48 @@ private:
     std::map<const Standard_Transient*, std::vector<const Standard_Transient*>> down;
     std::map<const Standard_Transient*, std::vector<const Standard_Transient*>> up;
 
+    /// Blank, in place and keeping every offset, what ISO 10303-21 makes opaque: /* ... */ comments, and the characters
+    /// between the quotes of a string ('' inside a string is an escaped quote, not its end). What stays can be scanned
+    /// for #n references and ';' without a comment or a name string being taken for syntax.
+    static void blankOpaque(std::string& t)
+    {
+        const size_t n = t.size();
+        size_t i = 0;
+        while (i < n) {
+            if (t[i] == '/' && i + 1 < n && t[i + 1] == '*') {
+                size_t e = t.find("*/", i + 2);
+                size_t stop = e == std::string::npos ? n : e + 2;
+                for (size_t k = i; k < stop; ++k) {
+                    if (t[k] != '\n') {
+                        t[k] = ' ';
+                    }
+                }
+                i = stop;
+            }
+            else if (t[i] == '\'') {
+                size_t k = i + 1;
+                while (k < n) {
+                    if (t[k] == '\'') {
+                        if (k + 1 < n && t[k + 1] == '\'') {
+                            t[k] = t[k + 1] = ' ';
+                            k += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    if (t[k] != '\n') {
+                        t[k] = ' ';
+                    }
+                    ++k;
+                }
+                i = k + 1;  // past the closing quote
+            }
+            else {
+                ++i;
+            }
+        }
+    }
+
     /// Entity references (#n) of one Part 21 statement, outside quoted strings, in order
     static std::vector<int> refsOf(const std::string& stmt)
     {
@@ -927,7 +969,8 @@ private:
         }
         std::stringstream buf;
         buf << in.rdbuf();
-        const std::string txt = buf.str();
+        std::string txt = buf.str();
+        blankOpaque(txt);
         std::map<int, const Standard_Transient*> byIdent;
         for (int i = 1; i <= model->NbEntities(); ++i) {
             byIdent[static_cast<int>(model->IdentLabel(model->Value(i)))] = model->Value(i).get();
@@ -1163,20 +1206,26 @@ const DimEntity* matchDimension(
         note = "none";
         return nullptr;
     }
+    // what a candidate states, without its own name: candidates that differ only in the entity name state the same
+    // values on the same faces, so either pairing confirms the same figures
     auto sig = [](const DimEntity* e) {
-        std::string s = e->name + kRecordSep + encodeItems(e->items);
+        std::string s = encodeItems(e->items);
         for (const auto& f : e->fits) {
             s += kRecordSep + f;
         }
         return s;
     };
+    bool sameStated = true;
+    bool sameName = true;
     for (const auto* e : byFace) {
-        if (sig(e) != sig(byFace[0])) {
-            note = "ambiguous";
-            return nullptr;
-        }
+        sameStated = sameStated && sig(e) == sig(byFace[0]);
+        sameName = sameName && e->name == byFace[0]->name;
     }
-    note = "unique";
+    if (!sameStated) {
+        note = "ambiguous";
+        return nullptr;
+    }
+    note = sameName ? "unique" : "equivalent";
     return byFace[0];
 }
 
@@ -1645,12 +1694,23 @@ void checkDimension(
     if (!get("step.match").empty()) {
         raw["step.match"] = get("step.match");
     }
-    if (!get("step.entity").empty()) {
-        nameInFile = get("step.name");
-        raw["step.entity"] = "#" + get("step.entity");
-        raw["step.name"] = nameInFile;
+    const std::string matchNote = get("step.match");
+    if (matchNote == "none" || matchNote == "ambiguous") {
+        // the check against the file was tried and could not run: the kernel's figures stay unconfirmed
+        kl.push_back(std::string("lost: value not verified against the file (")
+                     + (matchNote == "none" ? "no STEP dimension entity states this label's value on its faces"
+                                            : "several STEP dimensions on the same faces state different values and the label "
+                                              "cannot be paired with one of them")
+                     + "); the kernel's value and limits are kept as read");
+    }
+    if (get("step.stated") == "1") {
+        if (!get("step.entity").empty()) {
+            nameInFile = get("step.name");
+            raw["step.entity"] = "#" + get("step.entity");
+            raw["step.name"] = nameInFile;
+            item->StepEntityName.setValue(nameInFile);
+        }
         raw["step.kind"] = get("step.kind");
-        item->StepEntityName.setValue(nameInFile);
         std::vector<StatedValue> items = decodeItems(get("step.items"));
         std::vector<std::string> txt;
         const StatedValue *nom = nullptr, *lo = nullptr, *up = nullptr;
@@ -1673,6 +1733,31 @@ void checkDimension(
             }
         }
         raw["step.stated"] = join(txt, "; ");
+        // a stated figure whose unit is not understood, or a plane angle unit on a length item (or a length unit on an
+        // angle), cannot confirm or correct the kernel's figures
+        const bool angularDim = type.find("Angular") != std::string::npos;
+        bool unverified = false;
+        std::string why;
+        for (auto& v : items) {
+            std::string un = lowerOf(v.unit);
+            bool angleUnit = un.find("radian") != std::string::npos || un.find("degree") != std::string::npos;
+            if (!v.ok) {
+                unverified = true;
+                why = "the unit of '" + v.name + "' is not understood";
+            }
+            else if (angleUnit != angularDim) {
+                v.ok = false;
+                unverified = true;
+                why = "the unit of '" + v.name + "' (" + v.unit + ") does not suit " + (angularDim ? "an angle" : "a length");
+            }
+        }
+        if (unverified) {
+            kl.push_back("lost: value not verified against the file (" + why + "); the kernel's value and limits are kept as read");
+        }
+        if (nom && lo && up && nom->ok && lo->ok && up->ok && lo->conv > up->conv && !same(lo->conv, up->conv)) {
+            kl.push_back("lost: the file states a lower limit (" + label6(lo->conv) + ") above the upper limit ("
+                         + label6(up->conv) + "); shown as stated");
+        }
         if (nom && lo && up && nom->ok && lo->ok && up->ok) {
             if (o->IsDimWithRange()) {
                 if (!same(item->Value.getValue(), nom->conv) || !same(item->LowerBound.getValue(), lo->conv)
@@ -1703,7 +1788,7 @@ void checkDimension(
             }
         }
     }
-    if (type == "Location_None" && item->Value.getValue() == 0.0 && !o->IsDimWithRange()
+    if (type == "Location_None" && get("step.items").empty() && item->Value.getValue() == 0.0 && !o->IsDimWithRange()
         && !o->IsDimWithPlusMinusTolerance() && !o->IsDimWithClassOfTolerance()) {
         kl.push_back(std::string("lost: no value is stated for this dimension")
                      + (nameInFile.empty() ? std::string() : " (STEP entity '" + nameInFile + "')")
@@ -1841,11 +1926,16 @@ void stashStepPmiFaceIds(const Handle(XSControl_WorkSession)& ws, const Handle(T
                 const DimEntity* e = matchDimension(scan.dims, ids, attr->GetObject(), note);
                 extra["step.match"] = note;
                 if (e) {
-                    extra["step.entity"] = std::to_string(e->ident);
-                    extra["step.name"] = e->name;
+                    // several entities that state the same values (equivalent) confirm the figures but not which
+                    // entity this is: the entity number and name are left out then
+                    if (note == "unique") {
+                        extra["step.entity"] = std::to_string(e->ident);
+                        extra["step.name"] = e->name;
+                    }
                     extra["step.kind"] = e->location ? "location" : "size";
                     extra["step.items"] = encodeItems(e->items);
                     extra["step.fits"] = join(e->fits, "|");
+                    extra["step.stated"] = "1";
                 }
             }
             put(dims.Value(i), extra);
@@ -2071,7 +2161,11 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
             }
         }
         created.clear();
-        gReport.dimensions = gReport.tolerances = gReport.datums = 0;
+        // nothing of the pass stays, so its counts do not either (the warnings do: they say why)
+        std::vector<std::string> kept = gReport.warnings;
+        gReport = StepPmiReport();
+        gReport.ran = true;
+        gReport.warnings = kept;
     };
     try {
         if (!stepPmiEnabled() || hDoc.IsNull() || !doc) {
