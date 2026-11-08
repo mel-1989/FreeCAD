@@ -21,9 +21,10 @@
  *                                                                         *
  **************************************************************************/
 
-// G12 slice 2a. Sources: CAx-IF Recommended Practices for the Representation and Presentation of PMI (AP242), for
+// G12 slices 2a and 2b. Sources: CAx-IF Recommended Practices for the Representation and Presentation of PMI (AP242), for
 // presentation geometry authored by the source file and kept in its coordinates; ISO 10303-242 for the annotation
-// occurrences that carry it.
+// occurrences that carry it. Slice 2b lays out items without a presentation (see ViewProviderPmiLayout.cpp for the
+// symbol sources): a label at the centre of the governed faces, offset along the first face's outward normal.
 
 #include <algorithm>
 #include <cmath>
@@ -35,6 +36,8 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
+#include <BRepGProp_Face.hxx>
+#include <Bnd_OBB.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
@@ -57,6 +60,7 @@
 #include <Inventor/nodes/SoCoordinate3.h>
 #include <Inventor/nodes/SoDrawStyle.h>
 #include <Inventor/nodes/SoIndexedFaceSet.h>
+#include <Inventor/nodes/SoInfo.h>
 #include <Inventor/nodes/SoIndexedLineSet.h>
 #include <Inventor/nodes/SoLightModel.h>
 #include <Inventor/nodes/SoPickStyle.h>
@@ -82,6 +86,7 @@
 
 #include "ViewProviderExt.h"
 #include "ViewProviderPmi.h"
+#include "ViewProviderPmiLayout.h"
 
 using namespace PartGui;
 
@@ -443,7 +448,7 @@ void ViewProviderPmiItem::attach(App::DocumentObject* obj)
     drawRoot->ref();
     drawRoot->setName(SbName((std::string("PMI_") + obj->getNameInDocument()).c_str()));
     auto* pick = new SoPickStyle;
-    pick->style = SoPickStyle::UNPICKABLE;  // picking in the view is slice 2b
+    pick->style = SoPickStyle::SHAPE;  // clicking an item in the view picks the item, not the body behind it
     drawRoot->addChild(pick);
     auto* light = new SoLightModel;
     light->model = SoLightModel::BASE_COLOR;
@@ -466,6 +471,20 @@ void ViewProviderPmiItem::attach(App::DocumentObject* obj)
     drawRoot->addChild(lines);
     faces = new SoIndexedFaceSet;
     drawRoot->addChild(faces);
+    info = new SoInfo;  // the text of a fallback label; empty for presentation items
+    info->string.setValue("");
+    drawRoot->addChild(info);
+    // lines are hard to hit: an invisible quad over the drawing (Coin still picks invisible shapes) makes the whole
+    // label or annotation one click target
+    auto* proxy = new SoSeparator;
+    auto* invisible = new SoDrawStyle;
+    invisible->style = SoDrawStyle::INVISIBLE;
+    proxy->addChild(invisible);
+    proxyCoords = new SoCoordinate3;
+    proxy->addChild(proxyCoords);
+    proxyFaces = new SoIndexedFaceSet;
+    proxy->addChild(proxyFaces);
+    drawRoot->addChild(proxy);
 
     addDisplayMaskMode(modeRoot, "Pmi");
     setDisplayMaskMode("Pmi");
@@ -496,35 +515,57 @@ App::DocumentObject* ViewProviderPmiItem::governedObject() const
     return nullptr;
 }
 
-bool ViewProviderPmiItem::isDrawn() const
+bool ViewProviderPmiItem::fallbackEligible() const
 {
     auto* item = getObject<Part::PmiItem>();
-    if (!item || item->Presentation.getShape().isNull()) {
+    if (!item || item->Unattached.getValue() || dynamic_cast<Part::PmiAnnotation*>(item)) {
         return false;
     }
+    auto* feat = dynamic_cast<Part::Feature*>(governedObject());
+    return feat && !feat->Shape.getShape().isNull();
+}
+
+PmiDrawMode ViewProviderPmiItem::drawMode() const
+{
+    auto* item = getObject<Part::PmiItem>();
+    if (!item) {
+        return PmiDrawMode::None;
+    }
+    const bool hasPresentation = !item->Presentation.getShape().isNull();
+    const PmiDrawMode own = hasPresentation ? PmiDrawMode::Presentation
+                                            : (fallbackEligible() ? PmiDrawMode::Fallback : PmiDrawMode::None);
     auto* datum = dynamic_cast<Part::PmiDatum*>(item);
     if (!datum) {
-        return true;
+        return own;
     }
-    // ruling 3 of the slice 2 brief: one symbol per letter per governed object, the first use that has a presentation
+    // ruling 3 of the slice 2 brief: one symbol per letter per governed object, the first use that has a presentation,
+    // or, when no use of the letter has one, the first use
     App::DocumentObject* group = groupOf(item);
     auto* grp = group ? group->getExtensionByType<App::GroupExtension>(true) : nullptr;
     if (!grp) {
-        return true;
+        return own;
     }
     const App::DocumentObject* body = governedObject();
+    const Part::PmiDatum* firstPresented = nullptr;
+    const Part::PmiDatum* firstAny = nullptr;
     for (App::DocumentObject* o : grp->Group.getValues()) {
         auto* other = dynamic_cast<Part::PmiDatum*>(o);
-        if (!other || other->Letter.getStrValue() != datum->Letter.getStrValue()
-            || other->Presentation.getShape().isNull()) {
+        if (!other || other->Letter.getStrValue() != datum->Letter.getStrValue()) {
             continue;
         }
         const App::DocumentObject* ob = other->References.getValues().empty() ? nullptr : other->References.getValues().front();
-        if (ob == body) {
-            return other == datum;
+        if (ob != body) {
+            continue;
+        }
+        firstAny = firstAny ? firstAny : other;
+        if (!firstPresented && !other->Presentation.getShape().isNull()) {
+            firstPresented = other;
         }
     }
-    return true;
+    if (firstPresented) {
+        return firstPresented == datum ? PmiDrawMode::Presentation : PmiDrawMode::None;
+    }
+    return firstAny == datum ? own : PmiDrawMode::None;
 }
 
 bool ViewProviderPmiItem::wantVisible() const
@@ -539,6 +580,203 @@ bool ViewProviderPmiItem::wantVisible() const
     return Visibility.getValue() && groupOn;
 }
 
+namespace
+{
+
+/// The model diagonal: the bounding box of every Part feature of the document (the shapes carry their placement);
+/// cached per object against the shape it was measured on, because every fallback item asks for it
+double modelDiagonal(const App::Document* doc)
+{
+    static std::map<const App::DocumentObject*, std::pair<TopoDS_Shape, Bnd_Box>> cache;
+    Bnd_Box all;
+    for (App::DocumentObject* o : doc->getObjects()) {
+        auto* feat = dynamic_cast<Part::Feature*>(o);
+        if (!feat || feat->Shape.getShape().isNull()) {
+            continue;
+        }
+        const TopoDS_Shape shape = feat->Shape.getShape().getShape();
+        auto it = cache.find(feat);
+        if (it == cache.end() || !it->second.first.IsPartner(shape) || !it->second.first.Location().IsEqual(shape.Location())) {
+            Bnd_Box box;
+            try {
+                BRepBndLib::Add(shape, box, true);
+            }
+            catch (const Standard_Failure&) {
+                continue;
+            }
+            it = cache.insert_or_assign(feat, std::make_pair(shape, box)).first;
+        }
+        // datum planes and axes are infinite: they say nothing about the size of the model
+        if (!it->second.second.IsVoid() && !it->second.second.IsOpen() && it->second.second.SquareExtent() < 1e18) {
+            all.Add(it->second.second);
+        }
+    }
+    return all.IsVoid() ? 0.0 : std::sqrt(all.SquareExtent());
+}
+
+const std::pair<int, int> corners[4] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+
+SbVec3f toSb(const gp_Pnt& p)
+{
+    return SbVec3f(static_cast<float>(p.X()), static_cast<float>(p.Y()), static_cast<float>(p.Z()));
+}
+
+}  // namespace
+
+/// The fallback label (check 21 of the slice 2 brief): the text of the item laid out as line geometry, centred on the
+/// centre of the bounding box of the governed faces and offset along the outward normal of the first of them by 5% of
+/// the model diagonal, in the plane of that normal (readable from outside, up along the model's z where it can be).
+/// The points are in the governed object's own coordinates; the transform of the drawing is its global placement
+bool ViewProviderPmiItem::buildFallback(std::vector<SbVec3f>& pts, std::vector<int32_t>& lineIdx, std::string& text)
+{
+    auto* item = getObject<Part::PmiItem>();
+    auto* feat = dynamic_cast<Part::Feature*>(governedObject());
+    if (!item || !feat) {
+        return false;
+    }
+    const Part::TopoShape& ts = feat->Shape.getShape();
+    const TopoDS_Shape whole = ts.getShape();
+    const TopLoc_Location toLocal = whole.Location().Inverted();
+
+    Bnd_Box box, otherBox;  // the faces govern; edges and vertices only when the item names no face
+    TopoDS_Face firstFace;
+    for (const std::string& sub : item->References.getSubValues(feat)) {
+        TopoDS_Shape s;
+        try {
+            if (sub.rfind("Face", 0) == 0 && sub.size() > 4) {
+                s = ts.getSubShape(TopAbs_FACE, std::atoi(sub.c_str() + 4), true);
+            }
+            else if (sub.rfind("Edge", 0) == 0 && sub.size() > 4) {
+                s = ts.getSubShape(TopAbs_EDGE, std::atoi(sub.c_str() + 4), true);
+            }
+            else if (sub.rfind("Vertex", 0) == 0 && sub.size() > 6) {
+                s = ts.getSubShape(TopAbs_VERTEX, std::atoi(sub.c_str() + 6), true);
+            }
+        }
+        catch (const Standard_Failure&) {
+            continue;
+        }
+        if (s.IsNull()) {
+            continue;
+        }
+        s = s.Moved(toLocal);
+        BRepBndLib::Add(s, s.ShapeType() == TopAbs_FACE ? box : otherBox, true);
+        if (firstFace.IsNull() && s.ShapeType() == TopAbs_FACE) {
+            firstFace = TopoDS::Face(s);
+        }
+    }
+    if (box.IsVoid()) {
+        box = otherBox;
+    }
+    Bnd_Box wholeBox;
+    if (firstFace.IsNull()) {  // only an edge or nothing resolved: the outward direction comes from the whole object
+        BRepBndLib::Add(whole.Moved(toLocal), wholeBox, true);
+    }
+    if (box.IsVoid()) {
+        box = wholeBox;  // nothing resolved: the label goes at the object
+    }
+    if (box.IsVoid()) {
+        return false;
+    }
+    const gp_Pnt lo = box.CornerMin(), hi = box.CornerMax();
+    gp_Pnt centre((lo.X() + hi.X()) / 2, (lo.Y() + hi.Y()) / 2, (lo.Z() + hi.Z()) / 2);
+    gp_Dir normal(0, 0, 1);
+    if (!firstFace.IsNull()) {
+        try {
+            BRepGProp_Face gf(firstFace);
+            double u0, u1, v0, v1;
+            gf.Bounds(u0, u1, v0, v1);
+            gp_Pnt p;
+            gp_Vec n;
+            gf.Normal((u0 + u1) / 2, (v0 + v1) / 2, p, n);
+            if (n.Magnitude() > 1e-12) {
+                normal = gp_Dir(n);
+            }
+        }
+        catch (const Standard_Failure&) {
+        }
+    }
+    else if (!wholeBox.IsVoid()) {
+        const gp_Pnt wl = wholeBox.CornerMin(), wh = wholeBox.CornerMax();
+        const gp_Vec out(
+            centre.X() - (wl.X() + wh.X()) / 2,
+            centre.Y() - (wl.Y() + wh.Y()) / 2,
+            centre.Z() - (wl.Z() + wh.Z()) / 2
+        );
+        if (out.Magnitude() > 1e-9) {
+            normal = gp_Dir(out);
+        }
+    }
+
+    const double diag = modelDiagonal(item->getDocument());
+    if (diag <= 0) {
+        return false;
+    }
+    const double h = 0.025 * diag;  // digit height of the label
+    const gp_Pnt anchor(
+        centre.X() + normal.X() * 0.05 * diag,
+        centre.Y() + normal.Y() * 0.05 * diag,
+        centre.Z() + normal.Z() * 0.05 * diag
+    );
+    const gp_Vec up0 = std::fabs(normal.Z()) < 0.9 ? gp_Vec(0, 0, 1) : gp_Vec(0, 1, 0);
+    const gp_Vec right = up0.Crossed(gp_Vec(normal));  // right x up = normal: the label faces outward
+    const gp_Dir rightDir(right);
+    const gp_Vec up = gp_Vec(normal).Crossed(gp_Vec(rightDir));
+
+    PmiLayout::Label label = PmiLayout::buildLabel(item);
+    if (label.lines.empty()) {
+        return false;
+    }
+    text = label.text;
+    double hw = 0, hh = 0;
+    for (const auto& pl : label.lines) {
+        for (const auto& q : pl) {
+            hw = std::max(hw, std::fabs(q[0]));
+            hh = std::max(hh, std::fabs(q[1]));
+            const gp_Pnt p(
+                anchor.X() + h * (q[0] * rightDir.X() + q[1] * up.X()),
+                anchor.Y() + h * (q[0] * rightDir.Y() + q[1] * up.Y()),
+                anchor.Z() + h * (q[0] * rightDir.Z() + q[1] * up.Z())
+            );
+            lineIdx.push_back(static_cast<int32_t>(pts.size()));
+            pts.push_back(toSb(p));
+        }
+        lineIdx.push_back(-1);
+    }
+    // the pick quad, a little larger than the label
+    hw += 0.3;
+    hh += 0.3;
+    std::vector<SbVec3f> quad;
+    for (const auto& [sx, sy] : corners) {
+        quad.push_back(toSb(gp_Pnt(
+            anchor.X() + h * (sx * hw * rightDir.X() + sy * hh * up.X()),
+            anchor.Y() + h * (sx * hw * rightDir.Y() + sy * hh * up.Y()),
+            anchor.Z() + h * (sx * hw * rightDir.Z() + sy * hh * up.Z())
+        )));
+    }
+    setPickProxy(quad);
+    return true;
+}
+
+void ViewProviderPmiItem::setPickProxy(const std::vector<SbVec3f>& quad)
+{
+    if (quad.size() < 3) {
+        proxyCoords->point.setNum(0);
+        proxyFaces->coordIndex.setNum(0);
+        return;
+    }
+    proxyCoords->point.setNum(static_cast<int>(quad.size()));
+    SbVec3f* dst = proxyCoords->point.startEditing();
+    std::copy(quad.begin(), quad.end(), dst);
+    proxyCoords->point.finishEditing();
+    std::vector<int32_t> idx;
+    for (size_t i = 0; i < quad.size(); ++i) {
+        idx.push_back(static_cast<int32_t>(i));
+    }
+    idx.push_back(-1);
+    proxyFaces->coordIndex.setValues(0, static_cast<int>(idx.size()), idx.data());
+}
+
 void ViewProviderPmiItem::rebuildGeometry()
 {
     // Geometry is built only for what is visible (a group hidden at open costs no drawing); stale until then
@@ -546,7 +784,9 @@ void ViewProviderPmiItem::rebuildGeometry()
         return;
     }
     stale = true;
-    if (!isDrawn()) {
+    mode = drawMode();
+    updateTransform();  // the transform depends on what is drawn
+    if (mode == PmiDrawMode::None) {
         if (drawing) {
             modeRoot->removeAllChildren();
             drawing = false;
@@ -554,6 +794,8 @@ void ViewProviderPmiItem::rebuildGeometry()
         coords->point.setNum(0);
         lines->coordIndex.setNum(0);
         faces->coordIndex.setNum(0);
+        setPickProxy({});
+        info->string.setValue("");
         stale = false;
         return;
     }
@@ -562,19 +804,59 @@ void ViewProviderPmiItem::rebuildGeometry()
     }
     stale = false;
     auto* item = getObject<Part::PmiItem>();
-    const TopoDS_Shape shape = item->Presentation.getShape().getShape();
     std::vector<SbVec3f> pts;
     std::vector<int32_t> lineIdx, faceIdx;
-    try {
-        discretize(shape, pts, lineIdx, faceIdx);
+    std::string text;
+    if (mode == PmiDrawMode::Presentation) {
+        const TopoDS_Shape shape = item->Presentation.getShape().getShape();
+        try {
+            discretize(shape, pts, lineIdx, faceIdx);
+        }
+        catch (const Standard_Failure& e) {
+            Base::Console().warning(
+                "PMI display: %s: the presentation could not be read (%s)\n",
+                item->getNameInDocument(),
+                e.GetMessageString()
+            );
+        }
+        // an oriented box over the annotation makes the whole of it one click target
+        std::vector<SbVec3f> quad;
+        try {
+            Bnd_OBB obb;
+            BRepBndLib::AddOBB(shape, obb, true, false, false);
+            if (!obb.IsVoid()) {
+                const gp_XYZ ax[3] = {obb.XDirection(), obb.YDirection(), obb.ZDirection()};
+                double hs[3] = {obb.XHSize(), obb.YHSize(), obb.ZHSize()};
+                int order[3] = {0, 1, 2};
+                std::sort(order, order + 3, [&hs](int a, int b) { return hs[a] > hs[b]; });
+                const double floor = 1e-4;
+                const gp_XYZ u = ax[order[0]] * std::max(hs[order[0]], floor);
+                const gp_XYZ v = ax[order[1]] * std::max(hs[order[1]], floor);
+                const gp_XYZ c = obb.Center();
+                for (const auto& [su, sv] : corners) {
+                    quad.push_back(toSb(gp_Pnt(c + u * su + v * sv)));
+                }
+            }
+        }
+        catch (const Standard_Failure&) {
+        }
+        setPickProxy(quad);
     }
-    catch (const Standard_Failure& e) {
-        Base::Console().warning(
-            "PMI display: %s: the presentation could not be read (%s)\n",
-            item->getNameInDocument(),
-            e.GetMessageString()
-        );
+    else if (!buildFallback(pts, lineIdx, text)) {
+        // the object cannot give a place for the label: draw nothing for this item
+        mode = PmiDrawMode::None;
+        if (drawing) {
+            modeRoot->removeAllChildren();
+            drawing = false;
+        }
+        coords->point.setNum(0);
+        lines->coordIndex.setNum(0);
+        faces->coordIndex.setNum(0);
+        setPickProxy({});
+        info->string.setValue("");
+        return;
     }
+    info->string.setValue(text.c_str());
     coords->point.setNum(static_cast<int>(pts.size()));
     SbVec3f* dst = coords->point.startEditing();
     std::copy(pts.begin(), pts.end(), dst);
@@ -602,7 +884,9 @@ void ViewProviderPmiItem::updateTransform()
     auto* item = getObject<Part::PmiItem>();
     Base::Placement delta;  // identity: items whose object is not found draw where they were imported
     if (auto* body = dynamic_cast<App::GeoFeature*>(governedObject())) {
-        delta = body->globalPlacement() * item->ReferencePlacement.getValue().inverse();
+        // presentation geometry is in the global coordinates of import; a fallback label is in the object's own
+        delta = mode == PmiDrawMode::Fallback ? body->globalPlacement()
+                                              : body->globalPlacement() * item->ReferencePlacement.getValue().inverse();
     }
     double q0, q1, q2, q3;
     delta.getRotation().getValue(q0, q1, q2, q3);
@@ -633,6 +917,7 @@ void ViewProviderPmiItem::requestRebuild()
     if (groupOf(getObject())) {
         rebuildGeometry();
         applyVisibility();
+        refreshSiblingUses();
         return;
     }
     // An item is created before its group takes it up: wait for the group (its refresh builds, or not, by its visibility);
@@ -645,6 +930,24 @@ void ViewProviderPmiItem::requestRebuild()
                 refresh();
             }
         });
+    }
+}
+
+void ViewProviderPmiItem::refreshSiblingUses()
+{
+    // another use of the same letter on the same object may now be the one that draws (or no longer be)
+    auto* me = getObject<Part::PmiDatum>();
+    App::DocumentObject* group = groupOf(getObject());
+    if (!me || !group) {
+        return;
+    }
+    const std::set<ViewProviderPmiItem*> alive = aliveProviders();
+    for (auto* vp : alive) {
+        auto* other = vp == this ? nullptr : vp->getObject<Part::PmiDatum>();
+        if (other && other->Letter.getStrValue() == me->Letter.getStrValue() && groupOf(other) == group) {
+            vp->rebuildGeometry();
+            vp->applyVisibility();
+        }
     }
 }
 
@@ -674,6 +977,15 @@ void ViewProviderPmiItem::updateData(const App::Property* prop)
     }
     else if (auto* datum = dynamic_cast<Part::PmiDatum*>(item); datum && prop == &datum->Letter) {
         requestRebuild();
+    }
+    else if (prop->getContainer() == item && prop->getName()) {
+        // what the fallback label says, and whether it can be drawn at all
+        static const std::set<std::string> labelProps {
+            "PmiType", "Value", "HasBounds", "BoundsKind", "UpperBound", "LowerBound", "Modifiers", "DatumReferences",
+            "ToleranceClass", "ZoneShape", "ZoneModifier", "ZoneModifierValue", "Unattached"};
+        if (labelProps.count(prop->getName())) {
+            requestRebuild();
+        }
     }
 }
 
