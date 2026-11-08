@@ -30,6 +30,8 @@
 #include <App/PropertyStandard.h>
 #include <Mod/Part/PartGlobal.h>
 
+#include "PropertyTopoShape.h"
+
 // Semantic product and manufacturing information (PMI): the dimensions, geometric tolerances and
 // datums of a 3D model. The vocabulary follows the CAx-IF recommended practices for the
 // representation and presentation of PMI (AP242), ASME Y14.5 and ISO 1101; the type names are the
@@ -82,6 +84,10 @@ public:
     App::PropertyStringList KernelLoss;
     /// Name the STEP file gives the dimension or datum entity (for example "diameter"), empty when it could not be found
     App::PropertyString StepEntityName;
+    /// The graphic presentation the source file carries for the item (the kernel's presentation compound: leader and
+    /// extension lines, text outlines, in the frame of the shape the item annotates); null if the file has none.
+    /// Written back on export (CAx-IF PMI recommended practice, "Representation and Presentation of PMI", tessellated annotation)
+    Part::PropertyPartShape Presentation;
 
     const char* getViewProviderName() const override
     {
@@ -129,6 +135,16 @@ public:
     /// Place of the datum in the reference frame of its tolerance (1 is primary)
     App::PropertyInteger Position;
     App::PropertyBool IsTarget;
+};
+
+/// A graphic-only annotation: a presentation (callout) the file carries with no semantic dimension, tolerance or
+/// datum behind it (XCAF types CommonLabel and DimensionPresentation). It governs nothing and is written back as it was read
+class PartExport PmiAnnotation: public PmiItem
+{
+    PROPERTY_HEADER_WITH_OVERRIDE(Part::PmiAnnotation);
+
+public:
+    PmiAnnotation();
 };
 
 /// The group that holds all PMI items of one import

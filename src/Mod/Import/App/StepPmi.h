@@ -83,6 +83,48 @@ ImportExport void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Docum
 
 ImportExport const StepPmiReport& lastStepPmiReport();
 
+/// What the last STEP PMI export did (see Import.lastStepPmiExportReport in Python).
+struct ImportExport StepPmiExportReport
+{
+    bool ran {false};          // the document held PMI items
+    int dimensions {0};        // written
+    int tolerances {0};
+    int datums {0};            // datum labels written, one per datum reference use
+    int annotations {0};       // graphic-only callouts written
+    int skipped {0};           // items left out, each with a warning
+    int presentationsStripped {0};  // presentations the writer cannot take (faces only), left out
+    bool fellBack {false};     // the file was written again without PMI after a write error
+    std::vector<double> writtenToleranceValues;  // in write order
+    std::vector<int> allAround;                  // ordinals (in write order) of the written tolerances that carry ALL_AROUND
+    std::vector<std::string> warnings;
+};
+
+class ExportOCAF2;
+
+/// True unless the preference User parameter:BaseApp/Preferences/Mod/Part/STEP/WritePmi is off.
+ImportExport bool stepPmiWriteEnabled();
+
+/// After ExportOCAF2::exportObjects and before WriterStep::write: rebuild the PMI items of the documents of objs as XCAF
+/// dimensions, tolerances and datums on hDoc, on the labels ExportOCAF2 made for the objects they govern. Writes nothing
+/// (and says why in one warning) under a schema other than AP242. Never throws; leaves hDoc without GD&T if it stops.
+/// Returns the number of labels written.
+ImportExport int exportStepPmi(
+    const Handle(TDocStd_Document)& hDoc,
+    const ExportOCAF2& ocaf,
+    const std::vector<App::DocumentObject*>& objs
+);
+
+/// Called by WriterStep when the file had to be written again without PMI.
+ImportExport void reportStepPmiExportFallback(const std::string& why);
+
+/// After STEPCAFControl_Writer::Write succeeded with PMI: make the file state what OCCT's writer cannot. A tolerance that
+/// applies all around is written by OCCT with a COMPOSITE_SHAPE_ASPECT; ISO 10303-242 (and the CAx-IF PMI practice,
+/// "all around" and "all over" tolerance zones) states it with the subtype ALL_AROUND_SHAPE_ASPECT of the same attributes,
+/// so the entity is renamed in the file text. Returns the number of tolerances repaired; warns when it cannot.
+ImportExport int repairWrittenStepPmi(const std::string& path);
+
+ImportExport const StepPmiExportReport& lastStepPmiExportReport();
+
 }  // namespace Import
 
 #endif  // IMPORT_STEPPMI_H

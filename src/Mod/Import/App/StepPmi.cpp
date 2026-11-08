@@ -35,6 +35,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <regex>
+#include <functional>
 #include <cstring>
 #include <map>
 #include <set>
@@ -103,6 +105,7 @@
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_GeomTolerance.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <XCAFDoc_ShapeMapTool.hxx>
 #include <XSControl_TransferReader.hxx>
 
 #include <App/Document.h>
@@ -111,8 +114,14 @@
 #include <Base/Exception.h>
 #include <Mod/Part/App/PartFeature.h>
 #include <Mod/Part/App/PmiFeature.h>
+#include <Mod/Part/App/Interface.h>
+#include <App/Application.h>
 
 #include "StepPmi.h"
+#include <TDF_AttributeSequence.hxx>
+#include <TDF_LabelSequence.hxx>
+#include <Quantity_ColorRGBA.hxx>
+#include "ExportOCAF2.h"
 
 namespace Import
 {
@@ -1603,8 +1612,26 @@ CommonResult resolveCommon(
     CommonResult r;
     NCollection_Sequence<TDF_Label> f, s;
     XCAFDoc_DimTolTool::GetRefShapeLabel(label, f, s);
-    index.resolve(f, r.hits, r.unresolved);
-    index.resolve(s, r.hits, r.unresolved);
+    // the faces of each list, in order, so that export can rebuild the two lists of a location dimension
+    auto resolveList = [&](const NCollection_Sequence<TDF_Label>& labs, const char* key) {
+        std::vector<std::string> names;
+        for (int k = 1; k <= labs.Length(); ++k) {
+            NCollection_Sequence<TDF_Label> one;
+            one.Append(labs.Value(k));
+            std::vector<FaceHit> tmp;
+            index.resolve(one, tmp, r.unresolved);
+            for (const auto& h : tmp) {
+                std::string n = std::string(h.obj->getNameInDocument()) + "." + h.sub;
+                if (std::find(names.begin(), names.end(), n) == names.end()) {
+                    names.push_back(n);
+                }
+                ShapeIndex::addHit(r.hits, h);
+            }
+        }
+        raw[key] = join(names, ";");
+    };
+    resolveList(f, "link.first");
+    resolveList(s, "link.second");
     auto it = stash.find(entryOf(label));
     if (it != stash.end()) {
         r.ids = it->second.first;
@@ -2063,7 +2090,14 @@ Part::PmiDatum* makeDatum(
         if (o->HasPoint()) {
             rawPnt(raw, "datum.point", o->GetPoint());
         }
+        raw["datum.has_text_point"] = o->HasPointText() ? "1" : "0";
+        if (o->HasPointText()) {
+            rawPnt(raw, "datum.text_point", o->GetPointTextAttach());
+        }
         raw["datum.presentation_name"] = hstr(o->GetPresentationName());
+        if (!o->GetPresentation().IsNull()) {
+            item->Presentation.setValue(o->GetPresentation());
+        }
     }
     item->Modifiers.setValues(mods);
     CommonResult c = resolveCommon(dl, index, stash, raw);
@@ -2199,7 +2233,33 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
             bool known = true;
             std::string type = dimTypeName(o->GetType(), known);
             if (type == "DimensionPresentation" || type == "CommonLabel") {
-                ++gReport.graphicOnly;  // graphic-only presentation: counted, not an item
+                ++gReport.graphicOnly;  // graphic-only presentation: counted, kept as an annotation, not a semantic item
+                auto* ann = doc->addObject<Part::PmiAnnotation>("PmiAnnotation");
+                created.push_back(ann);
+                Raw araw;
+                ann->PmiType.setValue(type);
+                ann->SemanticName.setValue(hstr(o->GetSemanticName()));
+                araw["dim.type"] = type;
+                araw["dim.semantic_name"] = hstr(o->GetSemanticName());
+                araw["dim.presentation_name"] = hstr(o->GetPresentationName());
+                araw["dim.has_text_point"] = o->HasTextPoint() ? "1" : "0";
+                if (o->HasTextPoint()) {
+                    rawPnt(araw, "dim.text_point", o->GetPointTextAttach());
+                }
+                araw["dim.has_plane"] = o->HasPlane() ? "1" : "0";
+                if (o->HasPlane()) {
+                    rawAx2(araw, "dim.plane", o->GetPlane());
+                }
+                araw["dim.descriptions"] = std::to_string(o->NbDescriptions());
+                for (int k = 1; k <= o->NbDescriptions(); ++k) {
+                    araw["dim.description." + std::to_string(k)] = hstr(o->GetDescription(k));
+                    araw["dim.description_name." + std::to_string(k)] = hstr(o->GetDescriptionName(k));
+                }
+                if (!o->GetPresentation().IsNull()) {
+                    ann->Presentation.setValue(o->GetPresentation());
+                }
+                ann->RawAttributes.setValue(araw);
+                ann->Label.setValue("Annotation " + hstr(o->GetPresentationName()));
                 continue;
             }
             bool semantic = type.rfind("Size_", 0) == 0 || type.rfind("Location_", 0) == 0;
@@ -2331,6 +2391,9 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
                 raw["dim.point2_is_point"] = o->IsPointConnection2() ? "1" : "0";
             }
             raw["dim.presentation_name"] = hstr(o->GetPresentationName());
+            if (!o->GetPresentation().IsNull()) {
+                item->Presentation.setValue(o->GetPresentation());
+            }
             raw["dim.descriptions"] = std::to_string(o->NbDescriptions());
             for (int k = 1; k <= o->NbDescriptions(); ++k) {
                 raw["dim.description." + std::to_string(k)] = hstr(o->GetDescription(k));
@@ -2450,7 +2513,13 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
             rawAx2(raw, "tol.plane", o->GetPlane());
             rawPnt(raw, "tol.point", o->GetPoint());
             rawPnt(raw, "tol.text_point", o->GetPointTextAttach());
+            raw["tol.has_plane"] = o->HasPlane() ? "1" : "0";
+            raw["tol.has_point"] = o->HasPoint() ? "1" : "0";
+            raw["tol.has_text_point"] = o->HasPointText() ? "1" : "0";
             raw["tol.presentation_name"] = hstr(o->GetPresentationName());
+            if (!o->GetPresentation().IsNull()) {
+                item->Presentation.setValue(o->GetPresentation());
+            }
 
             // datum uses in precedence order (OCCT's position: 1 primary, 2 secondary, ...)
             NCollection_Sequence<TDF_Label> dl;
@@ -2512,17 +2581,16 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
             }
         }
 
-        if (gReport.dimensions + gReport.tolerances + gReport.datums == 0) {
-            for (auto* obj : created) {
-                doc->removeObject(obj->getNameInDocument());
-            }
-            created.clear();
+        bool graphicOnlyFile = gReport.dimensions + gReport.tolerances + gReport.datums == 0;
+        if (graphicOnlyFile) {
             if (gReport.graphicOnly > 0) {
                 warn("STEP PMI: only graphic PMI was found (" + std::to_string(gReport.graphicOnly)
                      + " presentation-only dimension labels); there are no semantic dimensions, tolerances or "
-                       "datums to import");
+                       "datums to import; the graphic callouts are kept as annotations");
             }
-            return;
+            if (created.empty()) {
+                return;
+            }
         }
         if (pmiSwitch() == "fail") {
             throw Base::RuntimeError("FC_STEP_PMI=fail: test of the rollback");
@@ -2574,6 +2642,903 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
         rollback();
         warn(std::string("STEP PMI: import stopped, no PMI object was kept: ") + e.what());
     }
+}
+
+
+// =============================================================================================
+// export: write the PMI items of the document back as AP242 semantic PMI (G12 slice 1b-ii)
+//
+// Each PmiDimension, PmiTolerance, PmiDatum and PmiAnnotation is rebuilt as the XCAF object OCCT's STEPCAFControl_Writer
+// writes (XCAFDoc_DimTolTool: AddDimension/SetDimension, AddGeomTolerance/SetGeomTolerance, AddDatum/SetDatum/
+// SetDatumToGeomTol) from the item's properties; RawAttributes only fills the fields the model has no property for
+// (planes, points, decimal places, descriptions, names). The output follows the CAx-IF Recommended Practices for the
+// Representation and Presentation of PMI (AP242): one DATUM per datum reference use, tessellated annotations for the
+// presentation, values in the unit of the file (angles in radians, OCCT's writer assumes it).
+// =============================================================================================
+
+namespace
+{
+
+StepPmiExportReport gExport;
+
+void exportWarn(const std::string& msg)
+{
+    gExport.warnings.push_back(msg);
+    Base::Console().warning("{}\n", msg);
+}
+
+template<class E, class F>
+bool enumFromName(const std::string& name, F fn, E& out, int maxv = 64)
+{
+    for (int i = 0; i < maxv; ++i) {
+        bool known = true;
+        std::string n = fn(static_cast<E>(i), known);
+        if (known && n == name) {
+            out = static_cast<E>(i);
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string rawGet(const Raw& raw, const std::string& key)
+{
+    auto it = raw.find(key);
+    return it == raw.end() ? std::string() : it->second;
+}
+
+bool rawFlag(const Raw& raw, const std::string& key)
+{
+    return rawGet(raw, key) == "1";
+}
+
+double rawNum(const Raw& raw, const std::string& key, double dflt = 0.0)
+{
+    auto it = raw.find(key);
+    if (it == raw.end() || it->second.empty()) {
+        return dflt;
+    }
+    return std::strtod(it->second.c_str(), nullptr);
+}
+
+bool parseNums(const std::string& t, std::vector<double>& v)
+{
+    std::istringstream is(t);
+    double d;
+    while (is >> d) {
+        v.push_back(d);
+    }
+    return !v.empty();
+}
+
+bool rawPoint(const Raw& raw, const std::string& key, gp_Pnt& p)
+{
+    std::vector<double> v;
+    if (!parseNums(rawGet(raw, key), v) || v.size() != 3) {
+        return false;
+    }
+    p = gp_Pnt(v[0], v[1], v[2]);
+    return true;
+}
+
+bool rawAxis(const Raw& raw, const std::string& key, gp_Ax2& a)
+{
+    std::string t = rawGet(raw, key);
+    std::vector<double> v;
+    for (char& c : t) {
+        if (c == '|') {
+            c = ' ';
+        }
+    }
+    if (!parseNums(t, v) || v.size() != 9) {
+        return false;
+    }
+    try {
+        a = gp_Ax2(gp_Pnt(v[0], v[1], v[2]), gp_Dir(v[3], v[4], v[5]), gp_Dir(v[6], v[7], v[8]));
+    }
+    catch (const Standard_Failure&) {
+        return false;
+    }
+    return true;
+}
+
+Handle(TCollection_HAsciiString) hs(const std::string& s)
+{
+    return new TCollection_HAsciiString(s.c_str());
+}
+
+bool isAngular(const std::string& type)
+{
+    return type.find("Angular") != std::string::npos;
+}
+
+int countEdges(const TopoDS_Shape& s)
+{
+    int n = 0;
+    for (TopExp_Explorer ex(s, TopAbs_EDGE); ex.More(); ex.Next()) {
+        ++n;
+    }
+    return n;
+}
+
+/// Everything a pass needs to turn document objects into labels
+struct ExportCtx
+{
+    Handle(TDocStd_Document) doc;
+    Handle(XCAFDoc_ShapeTool) st;
+    Handle(XCAFDoc_DimTolTool) dt;
+    const ExportOCAF2& ocaf;
+    std::map<std::string, TDF_Label> cache;
+    int facePresentationStripped {0};
+    std::vector<std::string> strippedNames;
+};
+
+/// The label of a sub-shape (FaceN or EdgeN) of an exported object, on the label that holds the object's own shape;
+/// null label and a reason if there is none
+TDF_Label subShapeLabel(ExportCtx& cx, App::DocumentObject* obj, const std::string& sub, std::string& why)
+{
+    std::string key = std::string(obj->getNameInDocument()) + "." + sub;
+    auto cit = cx.cache.find(key);
+    if (cit != cx.cache.end()) {
+        return cit->second;
+    }
+    TDF_Label proto = cx.ocaf.exportedLabel(obj);
+    if (proto.IsNull()) {
+        why = std::string(obj->getNameInDocument()) + " is not part of the export";
+        return TDF_Label();
+    }
+    TopAbs_ShapeEnum kind;
+    int idx = 0;
+    if (sub.rfind("Face", 0) == 0) {
+        kind = TopAbs_FACE;
+        idx = std::atoi(sub.c_str() + 4);
+    }
+    else if (sub.rfind("Edge", 0) == 0) {
+        kind = TopAbs_EDGE;
+        idx = std::atoi(sub.c_str() + 4);
+    }
+    else {
+        why = "unsupported reference " + sub;
+        return TDF_Label();
+    }
+    auto* feat = dynamic_cast<Part::Feature*>(obj);
+    TopoDS_Shape protoShape = XCAFDoc_ShapeTool::GetShape(proto);
+    if (!feat || protoShape.IsNull()) {
+        why = std::string(obj->getNameInDocument()) + " has no shape in the export";
+        return TDF_Label();
+    }
+    TopoDS_Shape orig;
+    try {
+        orig = feat->Shape.getShape().getSubShape(sub.c_str(), true);
+    }
+    catch (...) {
+    }
+    TopoDS_Shape pick;
+    if (!orig.IsNull()) {
+        // the exported shape keeps the TShapes of the object's own (location stripped), so a partner is the same face
+        for (TopExp_Explorer ex(protoShape, kind); ex.More(); ex.Next()) {
+            if (ex.Current().IsPartner(orig)) {
+                pick = ex.Current();
+                break;
+            }
+        }
+    }
+    if (pick.IsNull()) {
+        // a copied shape (placement kept in the geometry): same structure, so the same index
+        TopTools_IndexedMapOfShape m;
+        TopExp::MapShapes(protoShape, kind, m);
+        if (idx >= 1 && idx <= m.Extent()) {
+            pick = m(idx);
+        }
+    }
+    if (pick.IsNull()) {
+        why = std::string(obj->getNameInDocument()) + "." + sub + " is not in the exported shape";
+        return TDF_Label();
+    }
+    // the same work-around ExportOCAF2 uses for OCCT versions that do not set the shape map of a label
+    Handle(XCAFDoc_ShapeMapTool) A;
+    if (!proto.FindAttribute(XCAFDoc_ShapeMapTool::GetID(), A)) {
+        A = XCAFDoc_ShapeMapTool::Set(proto);
+        A->SetShape(protoShape);
+    }
+    TDF_Label l = cx.st->AddSubShape(proto, pick);
+    if (l.IsNull()) {
+        why = std::string(obj->getNameInDocument()) + "." + sub + " could not be added as a sub-shape";
+        return TDF_Label();
+    }
+    cx.cache[key] = l;
+    return l;
+}
+
+/// The labels for a list of "Object.FaceN" names; false and a reason if one cannot be made
+bool labelsFor(
+    ExportCtx& cx,
+    App::Document* doc,
+    const std::vector<std::string>& names,
+    NCollection_Sequence<TDF_Label>& out,
+    std::string& why
+)
+{
+    for (const auto& n : names) {
+        auto dot = n.rfind('.');
+        if (dot == std::string::npos) {
+            why = "bad reference " + n;
+            return false;
+        }
+        App::DocumentObject* obj = doc->getObject(n.substr(0, dot).c_str());
+        if (!obj) {
+            why = "object " + n.substr(0, dot) + " is gone";
+            return false;
+        }
+        TDF_Label l = subShapeLabel(cx, obj, n.substr(dot + 1), why);
+        if (l.IsNull()) {
+            return false;
+        }
+        out.Append(l);
+    }
+    return true;
+}
+
+std::vector<std::string> splitNames(const std::string& t)
+{
+    std::vector<std::string> v;
+    std::string cur;
+    for (char c : t) {
+        if (c == ';') {
+            if (!cur.empty()) {
+                v.push_back(cur);
+            }
+            cur.clear();
+        }
+        else {
+            cur += c;
+        }
+    }
+    if (!cur.empty()) {
+        v.push_back(cur);
+    }
+    return v;
+}
+
+/// The "Object.FaceN" names the item's References hold
+std::vector<std::string> referenceNames(const Part::PmiItem* item)
+{
+    std::vector<std::string> v;
+    for (App::DocumentObject* o : item->References.getValues()) {
+        if (!o) {
+            continue;
+        }
+        for (const auto& s : item->References.getSubValues(o)) {
+            v.push_back(std::string(o->getNameInDocument()) + "." + s);
+        }
+    }
+    return v;
+}
+
+/// The two lists of faces of a dimension: those recorded at import when they still are the References, else all in the first
+void dimensionLists(
+    const Part::PmiItem* item,
+    const Raw& raw,
+    std::vector<std::string>& first,
+    std::vector<std::string>& second
+)
+{
+    std::vector<std::string> all = referenceNames(item);
+    std::vector<std::string> a = splitNames(rawGet(raw, "link.first"));
+    std::vector<std::string> b = splitNames(rawGet(raw, "link.second"));
+    std::set<std::string> u(a.begin(), a.end());
+    u.insert(b.begin(), b.end());
+    if (u == std::set<std::string>(all.begin(), all.end())) {
+        first = a;
+        second = b;
+    }
+    else {
+        first = all;
+        second.clear();
+    }
+}
+
+void setPresentation(
+    ExportCtx& cx,
+    const Part::PmiItem* item,
+    const std::string& nameKey,
+    const Raw& raw,
+    const std::function<void(const TopoDS_Shape&, const Handle(TCollection_HAsciiString)&)>& put
+)
+{
+    const TopoDS_Shape sh = item->Presentation.getShape().getShape();
+    if (sh.IsNull()) {
+        return;
+    }
+    if (countEdges(sh) == 0) {
+        // OCCT's writer reports an error for a presentation that holds faces only (nothing to draw as a curve set)
+        ++cx.facePresentationStripped;
+        cx.strippedNames.push_back(item->getNameInDocument());
+        return;
+    }
+    put(sh, hs(rawGet(raw, nameKey)));
+}
+
+Handle(XCAFDimTolObjects_DimensionObject) buildDimension(
+    ExportCtx& cx,
+    const Part::PmiItem* item,
+    const Raw& raw,
+    const std::string& tolClass,
+    std::string& why
+)
+{
+    XCAFDimTolObjects_DimensionType type;
+    if (item->Unmapped.getValue()
+        || !enumFromName(item->PmiType.getStrValue(), dimTypeName, type)) {
+        why = "its type " + item->PmiType.getStrValue() + " is not one the writer knows";
+        return nullptr;
+    }
+    Handle(XCAFDimTolObjects_DimensionObject) o = new XCAFDimTolObjects_DimensionObject();
+    o->SetType(type);
+    o->SetSemanticName(hs(item->SemanticName.getStrValue()));
+    const double k = isAngular(item->PmiType.getStrValue()) ? std::acos(-1.0) / 180.0 : 1.0;
+    // SetValue resets the values array and with it the bounds, so the value comes first
+    o->SetValue(item->Value.getValue() * k);
+    if (item->HasBounds.getValue()) {
+        if (item->BoundsKind.getStrValue() == "range") {
+            o->SetUpperBound(item->UpperBound.getValue() * k);
+            o->SetLowerBound(item->LowerBound.getValue() * k);
+        }
+        else if (item->BoundsKind.getStrValue() == "plus_minus") {
+            // OCCT keeps the lower deviation as a magnitude
+            o->SetUpperTolValue(item->UpperBound.getValue() * k);
+            o->SetLowerTolValue(-item->LowerBound.getValue() * k);
+        }
+    }
+    if (!tolClass.empty()) {
+        std::string letters, digits;
+        for (char c : tolClass) {
+            (std::isdigit(static_cast<unsigned char>(c)) ? digits : letters) += c;
+        }
+        bool hole = !letters.empty() && std::isupper(static_cast<unsigned char>(letters[0]));
+        std::string up = letters;
+        std::transform(up.begin(), up.end(), up.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        XCAFDimTolObjects_DimensionFormVariance fv = XCAFDimTolObjects_DimensionFormVariance_None;
+        XCAFDimTolObjects_DimensionGrade gr;
+        bool okFv = up.empty() || enumFromName(up, formVarianceName, fv);
+        bool okGr = !digits.empty() && enumFromName("IT" + digits, gradeName, gr);
+        if (okFv && okGr) {
+            o->SetClassOfTolerance(hole, fv, gr);
+        }
+    }
+    const std::string q = item->Qualifier.getStrValue();
+    if (!q.empty()) {
+        XCAFDimTolObjects_DimensionQualifier dq;
+        XCAFDimTolObjects_AngularQualifier aq;
+        if (enumFromName(q, dimQualifierName, dq)) {
+            o->SetQualifier(dq);
+        }
+        else if (enumFromName(q, angQualifierName, aq)) {
+            o->SetAngularQualifier(aq);
+        }
+    }
+    NCollection_Sequence<XCAFDimTolObjects_DimensionModif> mods;
+    for (const auto& m : item->Modifiers.getValues()) {
+        XCAFDimTolObjects_DimensionModif dm;
+        if (enumFromName(m, dimModifName, dm)) {
+            mods.Append(dm);
+        }
+    }
+    o->SetModifiers(mods);
+    std::string dp = rawGet(raw, "dim.decimal_places");
+    if (!dp.empty()) {
+        int l = 0, r = 0;
+        if (std::sscanf(dp.c_str(), "%d,%d", &l, &r) == 2) {
+            o->SetNbOfDecimalPlaces(l, r);
+        }
+    }
+    std::vector<double> dv;
+    if (parseNums(rawGet(raw, "dim.direction"), dv) && dv.size() == 3) {
+        try {
+            o->SetDirection(gp_Dir(dv[0], dv[1], dv[2]));
+        }
+        catch (const Standard_Failure&) {
+        }
+    }
+    gp_Pnt p;
+    gp_Ax2 ax;
+    if (rawFlag(raw, "dim.has_text_point") && rawPoint(raw, "dim.text_point", p)) {
+        o->SetPointTextAttach(p);
+    }
+    if (rawFlag(raw, "dim.has_plane") && rawAxis(raw, "dim.plane", ax)) {
+        o->SetPlane(ax);
+    }
+    if (rawPoint(raw, "dim.point1", p)) {
+        o->SetPoint(p);
+    }
+    if (rawPoint(raw, "dim.point2", p)) {
+        o->SetPoint2(p);
+    }
+    int nd = std::atoi(rawGet(raw, "dim.descriptions").c_str());
+    for (int i = 1; i <= nd; ++i) {
+        o->AddDescription(
+            hs(rawGet(raw, "dim.description." + std::to_string(i))),
+            hs(rawGet(raw, "dim.description_name." + std::to_string(i)))
+        );
+    }
+    setPresentation(cx, item, "dim.presentation_name", raw, [&](const TopoDS_Shape& s, const Handle(TCollection_HAsciiString)& n) {
+        o->SetPresentation(s, n);
+    });
+    return o;
+}
+
+Handle(XCAFDimTolObjects_GeomToleranceObject) buildTolerance(
+    ExportCtx& cx,
+    const Part::PmiTolerance* item,
+    const Raw& raw,
+    std::string& why
+)
+{
+    XCAFDimTolObjects_GeomToleranceType type;
+    if (item->Unmapped.getValue() || !enumFromName(item->PmiType.getStrValue(), tolTypeName, type)) {
+        why = "its type " + item->PmiType.getStrValue() + " is not one the writer knows";
+        return nullptr;
+    }
+    Handle(XCAFDimTolObjects_GeomToleranceObject) o = new XCAFDimTolObjects_GeomToleranceObject();
+    o->SetType(type);
+    o->SetSemanticName(hs(item->SemanticName.getStrValue()));
+    o->SetValue(item->Value.getValue());
+    XCAFDimTolObjects_GeomToleranceTypeValue tv;
+    if (enumFromName(item->ZoneShape.getStrValue(), zoneValueName, tv)) {
+        o->SetTypeOfValue(tv);
+    }
+    XCAFDimTolObjects_GeomToleranceZoneModif zm;
+    if (enumFromName(item->ZoneModifier.getStrValue(), zoneModifName, zm)) {
+        o->SetZoneModifier(zm);
+        o->SetValueOfZoneModifier(item->ZoneModifierValue.getValue());
+    }
+    // item modifiers hold the material requirement first, then the other modifiers; a modifier the file lists among the
+    // object's own modifiers is written there too
+    std::set<std::string> own;
+    {
+        std::string t = rawGet(raw, "tol.modifiers");
+        std::string cur;
+        for (char c : t + ",") {
+            if (c == ',') {
+                if (!cur.empty()) {
+                    own.insert(cur);
+                }
+                cur.clear();
+            }
+            else {
+                cur += c;
+            }
+        }
+    }
+    NCollection_Sequence<XCAFDimTolObjects_GeomToleranceModif> mods;
+    for (const auto& m : item->Modifiers.getValues()) {
+        XCAFDimTolObjects_GeomToleranceMatReqModif mr;
+        XCAFDimTolObjects_GeomToleranceModif tm;
+        bool isMat = (m == "MAXIMUM_MATERIAL_REQUIREMENT" || m == "LEAST_MATERIAL_REQUIREMENT")
+            && enumFromName(m, matReqName, mr);
+        if (isMat) {
+            o->SetMaterialRequirementModifier(mr);
+        }
+        if ((!isMat || own.count(m)) && enumFromName(m, tolModifName, tm)) {
+            mods.Append(tm);
+        }
+    }
+    o->SetModifiers(mods);
+    o->SetMaxValueModifier(rawNum(raw, "tol.max_value_modifier"));
+    gp_Pnt p;
+    gp_Ax2 ax;
+    if (rawFlag(raw, "tol.has_axis") && rawAxis(raw, "tol.axis", ax)) {
+        o->SetAxis(ax);
+    }
+    if (rawFlag(raw, "tol.has_plane") && rawAxis(raw, "tol.plane", ax)) {
+        o->SetPlane(ax);
+    }
+    if (rawFlag(raw, "tol.has_point") && rawPoint(raw, "tol.point", p)) {
+        o->SetPoint(p);
+    }
+    if (rawFlag(raw, "tol.has_text_point") && rawPoint(raw, "tol.text_point", p)) {
+        o->SetPointTextAttach(p);
+    }
+    XCAFDimTolObjects_ToleranceZoneAffectedPlane ap;
+    if (enumFromName(rawGet(raw, "tol.affected_plane_type"), affectedPlaneName, ap)) {
+        o->SetAffectedPlaneType(ap);
+    }
+    setPresentation(cx, item, "tol.presentation_name", raw, [&](const TopoDS_Shape& s, const Handle(TCollection_HAsciiString)& n) {
+        o->SetPresentation(s, n);
+    });
+    return o;
+}
+
+Handle(XCAFDimTolObjects_DatumObject) buildDatum(ExportCtx& cx, const Part::PmiDatum* item, const Raw& raw)
+{
+    Handle(XCAFDimTolObjects_DatumObject) o = new XCAFDimTolObjects_DatumObject();
+    o->SetName(hs(rawGet(raw, "datum.object_name")));
+    o->SetSemanticName(hs(item->SemanticName.getStrValue()));
+    o->SetPosition(item->Position.getValue());
+    NCollection_Sequence<XCAFDimTolObjects_DatumSingleModif> mods;
+    XCAFDimTolObjects_DatumModifWithValue withValue = XCAFDimTolObjects_DatumModifWithValue_None;
+    for (const auto& m : item->Modifiers.getValues()) {
+        XCAFDimTolObjects_DatumSingleModif dm;
+        XCAFDimTolObjects_DatumModifWithValue vm;
+        if (enumFromName(m, datumModifName, dm)) {
+            mods.Append(dm);
+        }
+        else if (enumFromName(m, datumValueModifName, vm)) {
+            withValue = vm;
+        }
+    }
+    o->SetModifiers(mods);
+    if (withValue != XCAFDimTolObjects_DatumModifWithValue_None) {
+        o->SetModifierWithValue(withValue, rawNum(raw, "datum.modifier_value"));
+    }
+    if (item->IsTarget.getValue()) {
+        o->IsDatumTarget(true);
+        XCAFDimTolObjects_DatumTargetType tt;
+        if (enumFromName(rawGet(raw, "datum.target_type"), targetTypeName, tt)) {
+            o->SetDatumTargetType(tt);
+        }
+        o->SetDatumTargetNumber(std::atoi(rawGet(raw, "datum.target_number").c_str()));
+        o->SetDatumTargetLength(rawNum(raw, "datum.target_length"));
+        o->SetDatumTargetWidth(rawNum(raw, "datum.target_width"));
+        gp_Ax2 ax;
+        if (rawAxis(raw, "datum.target_axis", ax)) {
+            o->SetDatumTargetAxis(ax);
+        }
+    }
+    gp_Pnt p;
+    gp_Ax2 ax;
+    if (rawFlag(raw, "datum.has_plane") && rawAxis(raw, "datum.plane", ax)) {
+        o->SetPlane(ax);
+    }
+    if (rawFlag(raw, "datum.has_point") && rawPoint(raw, "datum.point", p)) {
+        o->SetPoint(p);
+    }
+    if (rawFlag(raw, "datum.has_text_point") && rawPoint(raw, "datum.text_point", p)) {
+        o->SetPointTextAttach(p);
+    }
+    setPresentation(cx, item, "datum.presentation_name", raw, [&](const TopoDS_Shape& s, const Handle(TCollection_HAsciiString)& n) {
+        o->SetPresentation(s, n);
+    });
+    return o;
+}
+
+/// One datum label for one use; the faces come from the item's References. Empty label if it cannot be made
+TDF_Label writeDatum(ExportCtx& cx, Part::PmiDatum* d, std::string& why)
+{
+    Raw raw = d->RawAttributes.getValues();
+    NCollection_Sequence<TDF_Label> faces;
+    if (!labelsFor(cx, d->getDocument(), referenceNames(d), faces, why)) {
+        return TDF_Label();
+    }
+    Handle(XCAFDimTolObjects_DatumObject) obj = buildDatum(cx, d, raw);
+    TDF_Label l = cx.dt->AddDatum(
+        hs(rawGet(raw, "datum.name")),
+        hs(rawGet(raw, "datum.description")),
+        hs(d->Letter.getStrValue())
+    );
+    XCAFDoc_Datum::Set(l)->SetObject(obj);
+    if (faces.Length() > 0) {
+        cx.dt->SetDatum(faces, l);
+    }
+    return l;
+}
+
+}  // namespace
+
+const StepPmiExportReport& lastStepPmiExportReport()
+{
+    return gExport;
+}
+
+bool stepPmiWriteEnabled()
+{
+    Base::Reference<ParameterGrp> grp = App::GetApplication().GetParameterGroupByPath(
+        "User parameter:BaseApp/Preferences/Mod/Part/STEP"
+    );
+    return grp->GetBool("WritePmi", true);
+}
+
+int repairWrittenStepPmi(const std::string& path)
+{
+    if (gExport.allAround.empty()) {
+        return 0;
+    }
+    try {
+        std::string text;
+        {
+            std::ifstream in(path, std::ios::binary);
+            std::ostringstream ss;
+            ss << in.rdbuf();
+            text = ss.str();
+        }
+        // GEOMETRIC_TOLERANCE(name, description, magnitude, toleranced_shape_aspect); the file lists the tolerances in the order
+        // they were written but not every one in this form, so each is paired with the next written tolerance of the same magnitude
+        static const std::regex tol(
+            R"(GEOMETRIC_TOLERANCE\(\s*'(?:[^']|'')*'\s*,\s*'(?:[^']|'')*'\s*,\s*#(\d+)\s*,\s*#(\d+)\s*\))"
+        );
+        static const std::regex measure(R"(#(\d+)\s*=\s*LENGTH_MEASURE_WITH_UNIT\(\s*LENGTH_MEASURE\(([^)]*)\))");
+        std::map<std::string, double> lengths;
+        for (std::sregex_iterator it(text.begin(), text.end(), measure), end; it != end; ++it) {
+            lengths[(*it)[1].str()] = std::strtod((*it)[2].str().c_str(), nullptr);
+        }
+        const auto& vals = gExport.writtenToleranceValues;
+        std::set<int> wanted(gExport.allAround.begin(), gExport.allAround.end());
+        size_t j = 0;
+        int fixed = 0;
+        for (std::sregex_iterator it(text.begin(), text.end(), tol), end; it != end; ++it) {
+            auto m = lengths.find((*it)[1].str());
+            if (m == lengths.end()) {
+                continue;
+            }
+            while (j < vals.size() && std::fabs(vals[j] - m->second) > 1e-6 * std::max(1.0, std::fabs(m->second))) {
+                ++j;
+            }
+            if (j >= vals.size()) {
+                break;
+            }
+            int ord = static_cast<int>(j++);
+            if (!wanted.count(ord)) {
+                continue;
+            }
+            const std::string def = "#" + (*it)[2].str() + " = COMPOSITE_SHAPE_ASPECT(";
+            auto pos = text.find(def);
+            if (pos == std::string::npos) {
+                continue;  // a tolerance on one face has a plain shape aspect: all-around has no meaning to state
+            }
+            text.replace(pos, def.size(), "#" + (*it)[2].str() + " = ALL_AROUND_SHAPE_ASPECT(");
+            ++fixed;
+        }
+        if (fixed != static_cast<int>(wanted.size())) {
+            exportWarn("STEP PMI: " + std::to_string(wanted.size() - fixed) + " of " + std::to_string(wanted.size())
+                       + " all-around tolerance(s) could not be restated and were written without it");
+        }
+        if (fixed > 0) {
+            std::ofstream outf(path, std::ios::binary | std::ios::trunc);
+            outf << text;
+        }
+        return fixed;
+    }
+    catch (const std::exception& e) {
+        exportWarn(std::string("STEP PMI: the all-around tolerances could not be restated: ") + e.what());
+    }
+    return 0;
+}
+
+void reportStepPmiExportFallback(const std::string& why)
+{
+    gExport.fellBack = true;
+    exportWarn("STEP PMI: the file could not be written with PMI (" + why + "); it was written again without PMI");
+}
+
+int exportStepPmi(
+    const Handle(TDocStd_Document)& hDoc,
+    const ExportOCAF2& ocaf,
+    const std::vector<App::DocumentObject*>& objs
+)
+{
+    gExport = StepPmiExportReport();
+    try {
+        if (hDoc.IsNull() || !stepPmiWriteEnabled() || pmiSwitch() == "0") {
+            return 0;
+        }
+        std::vector<App::Document*> docs;
+        for (auto* o : objs) {
+            if (o && o->getDocument() && std::find(docs.begin(), docs.end(), o->getDocument()) == docs.end()) {
+                docs.push_back(o->getDocument());
+            }
+        }
+        std::vector<Part::PmiItem*> items;
+        for (auto* d : docs) {
+            for (auto* o : d->getObjectsOfType(Part::PmiItem::getClassTypeId())) {
+                items.push_back(static_cast<Part::PmiItem*>(o));
+            }
+        }
+        if (items.empty()) {
+            return 0;
+        }
+        gExport.ran = true;
+        // PMI goes out under an AP242 schema only (ISO 10303-242 is the first protocol with semantic PMI; AP203 and AP214
+        // have none); the saved schema stays, run 070
+        std::string scheme = Part::Interface::preferredStepScheme();
+        if (scheme.rfind("AP242", 0) != 0) {
+            exportWarn("STEP PMI: not written, the STEP schema is " + scheme + " and semantic PMI needs an AP242 schema");
+            return 0;
+        }
+
+        ExportCtx cx {hDoc, XCAFDoc_DocumentTool::ShapeTool(hDoc->Main()), XCAFDoc_DocumentTool::DimTolTool(hDoc->Main()), ocaf, {}, 0, {}};
+        std::set<Part::PmiItem*> done;
+        auto skip = [&](Part::PmiItem* it, const std::string& why) {
+            ++gExport.skipped;
+            exportWarn(
+                std::string("STEP PMI: ") + it->getNameInDocument() + " (" + it->Label.getStrValue() + ") not written: " + why
+            );
+        };
+
+        // dimensions
+        for (auto* it : items) {
+            auto* d = dynamic_cast<Part::PmiDimension*>(it);
+            if (!d) {
+                continue;
+            }
+            Raw raw = d->RawAttributes.getValues();
+            std::vector<std::string> first, second;
+            dimensionLists(d, raw, first, second);
+            std::string why;
+            if (first.empty()) {
+                skip(d, "it governs no face or edge of the export");
+                continue;
+            }
+            const std::string ptype = d->PmiType.getStrValue();
+            if (ptype.rfind("Location_", 0) == 0 && second.empty()) {
+                // a dimensional location relates two shape aspects (CAx-IF PMI practice, section 5); one with a single side
+                // (a dimension that states no value) cannot be written, OCCT's writer reports an error for it
+                skip(d, "a location dimension needs two sides and this one has one (the source states no value for it)");
+                continue;
+            }
+            NCollection_Sequence<TDF_Label> f, s;
+            if (!labelsFor(cx, d->getDocument(), first, f, why) || !labelsFor(cx, d->getDocument(), second, s, why)) {
+                skip(d, why);
+                continue;
+            }
+            Handle(XCAFDimTolObjects_DimensionObject) obj = buildDimension(cx, d, raw, d->ToleranceClass.getStrValue(), why);
+            if (obj.IsNull()) {
+                skip(d, why);
+                continue;
+            }
+            TDF_Label l = cx.dt->AddDimension();
+            XCAFDoc_Dimension::Set(l)->SetObject(obj);
+            cx.dt->SetDimension(f, s, l);
+            ++gExport.dimensions;
+        }
+
+        // tolerances with their datum uses
+        for (auto* it : items) {
+            auto* t = dynamic_cast<Part::PmiTolerance*>(it);
+            if (!t) {
+                continue;
+            }
+            Raw raw = t->RawAttributes.getValues();
+            std::string why;
+            if (referenceNames(t).empty()) {
+                skip(t, "it governs no face or edge of the export");
+                continue;
+            }
+            NCollection_Sequence<TDF_Label> f;
+            if (!labelsFor(cx, t->getDocument(), referenceNames(t), f, why)) {
+                skip(t, why);
+                continue;
+            }
+            Handle(XCAFDimTolObjects_GeomToleranceObject) obj = buildTolerance(cx, t, raw, why);
+            if (obj.IsNull()) {
+                skip(t, why);
+                continue;
+            }
+            {
+                const auto& tm = t->Modifiers.getValues();
+                if (std::find(tm.begin(), tm.end(), "ALL_AROUND") != tm.end()) {
+                    gExport.allAround.push_back(gExport.tolerances);
+                }
+                gExport.writtenToleranceValues.push_back(t->Value.getValue());
+            }
+            TDF_Label l = cx.dt->AddGeomTolerance();
+            XCAFDoc_GeomTolerance::Set(l)->SetObject(obj);
+            cx.dt->SetGeomTolerance(f, l);
+            for (auto* dobj : t->Datums.getValues()) {
+                auto* dd = dynamic_cast<Part::PmiDatum*>(dobj);
+                if (!dd) {
+                    continue;
+                }
+                std::string dwhy;
+                TDF_Label dl = writeDatum(cx, dd, dwhy);
+                done.insert(dd);
+                if (dl.IsNull()) {
+                    skip(dd, dwhy);
+                    continue;
+                }
+                cx.dt->SetDatumToGeomTol(dl, l);
+                ++gExport.datums;
+            }
+            ++gExport.tolerances;
+        }
+
+        // datums no written tolerance refers to (targets, loose datums)
+        for (auto* it : items) {
+            auto* dd = dynamic_cast<Part::PmiDatum*>(it);
+            if (!dd || done.count(dd)) {
+                continue;
+            }
+            std::string why;
+            TDF_Label dl = writeDatum(cx, dd, why);
+            if (dl.IsNull()) {
+                skip(dd, why);
+                continue;
+            }
+            ++gExport.datums;
+        }
+
+        // graphic-only callouts: with the semantic items they came with, or alone when the document has none
+        bool semantic = false;
+        for (auto* it : items) {
+            semantic = semantic || !dynamic_cast<Part::PmiAnnotation*>(it);
+        }
+        if (gExport.dimensions + gExport.tolerances + gExport.datums > 0 || !semantic) {
+            for (auto* it : items) {
+                auto* a = dynamic_cast<Part::PmiAnnotation*>(it);
+                if (!a) {
+                    continue;
+                }
+                Raw raw = a->RawAttributes.getValues();
+                XCAFDimTolObjects_DimensionType type;
+                if (!enumFromName(a->PmiType.getStrValue(), dimTypeName, type)) {
+                    skip(a, "its type " + a->PmiType.getStrValue() + " is not one the writer knows");
+                    continue;
+                }
+                if (a->Presentation.getShape().isNull()) {
+                    continue;
+                }
+                Handle(XCAFDimTolObjects_DimensionObject) obj = new XCAFDimTolObjects_DimensionObject();
+                obj->SetType(type);
+                obj->SetSemanticName(hs(a->SemanticName.getStrValue()));
+                gp_Pnt p;
+                gp_Ax2 ax;
+                if (rawFlag(raw, "dim.has_text_point") && rawPoint(raw, "dim.text_point", p)) {
+                    obj->SetPointTextAttach(p);
+                }
+                if (rawFlag(raw, "dim.has_plane") && rawAxis(raw, "dim.plane", ax)) {
+                    obj->SetPlane(ax);
+                }
+                int nd = std::atoi(rawGet(raw, "dim.descriptions").c_str());
+                for (int i = 1; i <= nd; ++i) {
+                    obj->AddDescription(
+                        hs(rawGet(raw, "dim.description." + std::to_string(i))),
+                        hs(rawGet(raw, "dim.description_name." + std::to_string(i)))
+                    );
+                }
+                setPresentation(cx, a, "dim.presentation_name", raw, [&](const TopoDS_Shape& s, const Handle(TCollection_HAsciiString)& n) {
+                    obj->SetPresentation(s, n);
+                });
+                TDF_Label l = cx.dt->AddDimension();
+                XCAFDoc_Dimension::Set(l)->SetObject(obj);
+                ++gExport.annotations;
+            }
+        }
+        if (cx.facePresentationStripped > 0) {
+            gExport.presentationsStripped = cx.facePresentationStripped;
+            exportWarn(
+                "STEP PMI: " + std::to_string(cx.facePresentationStripped)
+                + " presentation(s) hold faces and no curves and were left out (the writer reports an error for them): "
+                + join(std::vector<std::string>(cx.strippedNames.begin(), cx.strippedNames.begin() + std::min<size_t>(5, cx.strippedNames.size())), ", ")
+                + (cx.strippedNames.size() > 5 ? ", ..." : "")
+            );
+        }
+        return gExport.dimensions + gExport.tolerances + gExport.datums + gExport.annotations;
+    }
+    catch (const Standard_Failure& e) {
+        exportWarn(std::string("STEP PMI: not written, the writer stopped: ") + e.GetMessageString());
+    }
+    catch (const Base::Exception& e) {
+        exportWarn(std::string("STEP PMI: not written, the writer stopped: ") + e.what());
+    }
+    catch (const std::exception& e) {
+        exportWarn(std::string("STEP PMI: not written: ") + e.what());
+    }
+    // nothing of a stopped pass stays in the XCAF document
+    try {
+        Handle(XCAFDoc_DimTolTool) dt = XCAFDoc_DocumentTool::DimTolTool(hDoc->Main());
+        NCollection_Sequence<TDF_Label> dims, tols, datums;
+        dt->GetDimensionLabels(dims);
+        dt->GetGeomToleranceLabels(tols);
+        dt->GetDatumLabels(datums);
+        for (auto* seq : {&dims, &tols, &datums}) {
+            for (int i = 1; i <= seq->Length(); ++i) {
+                seq->Value(i).ForgetAllAttributes(true);
+            }
+        }
+    }
+    catch (...) {
+    }
+    gExport.dimensions = gExport.tolerances = gExport.datums = gExport.annotations = 0;
+    return 0;
 }
 
 }  // namespace Import

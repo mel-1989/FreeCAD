@@ -79,6 +79,9 @@ public:
     }
     void exportObjects(std::vector<App::DocumentObject*>& objs, const char* name = nullptr);
     bool canFallback(std::vector<App::DocumentObject*> objs);
+    /// The label that holds the own, unlocated shape of an exported object (the prototype when the object is a component),
+    /// or a null label if the object was not exported as a shape
+    TDF_Label exportedLabel(App::DocumentObject* obj) const;
 
 private:
     TDF_Label exportObject(

@@ -635,3 +635,215 @@ class TestImportStepPmiPart21Text(_ImportedText):
             ("", "'#105; it''s =ITEM_IDENTIFIED_REPRESENTATION_USAGE(#105'"),
         ]:
             self.assertEqual(self._datum_faces(self._import(_fixture_with_inline_datum_set(inner, name))), base, (inner, name))
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Export and round trip (G12 slice 1b-ii). The same generated fixture; behaviour follows the CAx-IF PMI
+# practice and ISO 10303-242: PMI is written under an AP242 schema only, angles in radians, one datum per use.
+# ----------------------------------------------------------------------------------------------------------
+
+
+class TestExportStepPmi(unittest.TestCase):
+    PREF = "User parameter:BaseApp/Preferences/Mod/Part/STEP"
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="g12pmiexp")
+        self.src = _write_fixture(self.dir)
+        self.docs = []
+        grp = App.ParamGet(self.PREF)
+        self._saved = (grp.GetBool("WritePmi", True), grp.GetString("Scheme"))
+        grp.SetBool("WritePmi", True)
+        self.doc = self._insert(self.src)
+
+    def tearDown(self):
+        grp = App.ParamGet(self.PREF)
+        grp.SetBool("WritePmi", self._saved[0])
+        grp.SetString("Scheme", self._saved[1])
+        os.environ.pop("FC_STEP_PMI", None)
+        for d in self.docs:
+            try:
+                App.closeDocument(d.Name)
+            except Exception:
+                pass
+        for f in os.listdir(self.dir):
+            os.remove(os.path.join(self.dir, f))
+        os.rmdir(self.dir)
+
+    def _insert(self, path):
+        doc = App.newDocument("G12PmiExp")
+        self.docs.append(doc)
+        Import.insert(path, doc.Name)
+        return doc
+
+    @staticmethod
+    def _roots(doc):
+        return [o for o in doc.Objects if not o.TypeId.startswith("Part::Pmi")
+                and not [p for p in o.InList if not p.TypeId.startswith("Part::Pmi")]]
+
+    def _export(self, doc, name="out.stp"):
+        path = os.path.join(self.dir, name)
+        Import.export(self._roots(doc), path)
+        return path
+
+    @staticmethod
+    def _of(doc, typeid):
+        return [o for o in doc.Objects if o.TypeId == typeid]
+
+    @staticmethod
+    def _text(path):
+        with open(path) as f:
+            return f.read()
+
+    def _face_area(self, item):
+        return sorted(round(ob.Shape.Faces[int(sub[4:]) - 1].Area, 6)
+                      for ob, subs in [(e[0], e[1]) for e in item.References] for sub in subs if sub.startswith("Face"))
+
+    def test_round_trip_keeps_items_values_bounds_modifiers_datums(self):
+        out = self._export(self.doc)
+        rep = Import.lastStepPmiExportReport()
+        self.assertEqual((rep["dimensions"], rep["tolerances"], rep["datums"]), (2, 1, 1))
+        self.assertFalse(rep["fell_back"])
+        back = self._insert(out)
+        self.assertEqual(len(self._of(back, "Part::PmiDimension")), 2)
+        self.assertEqual(len(self._of(back, "Part::PmiTolerance")), 1)
+        self.assertEqual(len(self._of(back, "Part::PmiDatum")), 1)
+        size = [o for o in self._of(back, "Part::PmiDimension") if o.PmiType == "Size_Diameter"][0]
+        self.assertAlmostEqual(size.Value, 10.0, places=9)
+        self.assertEqual(size.BoundsKind, "plus_minus")
+        self.assertAlmostEqual(size.UpperBound, 0.1, places=9)
+        self.assertAlmostEqual(size.LowerBound, -0.2, places=9)
+        loc = [o for o in self._of(back, "Part::PmiDimension") if o.PmiType == "Location_LinearDistance"][0]
+        self.assertAlmostEqual(loc.Value, 20.0, places=9)
+        tol = self._of(back, "Part::PmiTolerance")[0]
+        self.assertEqual(tol.PmiType, "Perpendicularity")
+        self.assertAlmostEqual(tol.Value, 0.05, places=9)
+        self.assertEqual(list(tol.Modifiers), ["MAXIMUM_MATERIAL_REQUIREMENT"])
+        self.assertEqual(list(tol.DatumReferences), ["A(MAXIMUM_MATERIAL_REQUIREMENT)"])
+        self.assertEqual(self._of(back, "Part::PmiDatum")[0].Letter, "A")
+        # the governed faces are the same faces (by area) in and out
+        for a, b in zip(sorted(self._of(self.doc, "Part::PmiTolerance"), key=lambda o: o.Name),
+                        sorted(self._of(back, "Part::PmiTolerance"), key=lambda o: o.Name)):
+            self.assertEqual(self._face_area(a), self._face_area(b))
+        for a in self._of(self.doc, "Part::PmiDimension"):
+            m = [b for b in self._of(back, "Part::PmiDimension") if b.PmiType == a.PmiType][0]
+            self.assertEqual(self._face_area(a), self._face_area(m))
+
+    def test_second_round_trip_gives_the_same_items(self):
+        back = self._insert(self._export(self.doc))
+        back2 = self._insert(self._export(back, "out2.stp"))
+        for t in ("Part::PmiDimension", "Part::PmiTolerance", "Part::PmiDatum"):
+            self.assertEqual(
+                sorted((o.PmiType, round(o.Value, 9), tuple(o.Modifiers), tuple(o.DatumReferences)) for o in self._of(back, t)),
+                sorted((o.PmiType, round(o.Value, 9), tuple(o.Modifiers), tuple(o.DatumReferences)) for o in self._of(back2, t)),
+            )
+
+    def test_an_edited_value_is_what_is_written(self):
+        tol = self._of(self.doc, "Part::PmiTolerance")[0]
+        tol.Value = 0.07
+        size = [o for o in self._of(self.doc, "Part::PmiDimension") if o.PmiType == "Size_Diameter"][0]
+        size.UpperBound = 0.3
+        back = self._insert(self._export(self.doc))
+        self.assertAlmostEqual(self._of(back, "Part::PmiTolerance")[0].Value, 0.07, places=9)
+        size2 = [o for o in self._of(back, "Part::PmiDimension") if o.PmiType == "Size_Diameter"][0]
+        self.assertAlmostEqual(size2.UpperBound, 0.3, places=9)
+        self.assertAlmostEqual(size2.LowerBound, -0.2, places=9)
+
+    def test_datum_modifier_and_order_follow_the_item(self):
+        tol = self._of(self.doc, "Part::PmiTolerance")[0]
+        datum = self._of(self.doc, "Part::PmiDatum")[0]
+        datum.Modifiers = []
+        back = self._insert(self._export(self.doc))
+        self.assertEqual(list(self._of(back, "Part::PmiTolerance")[0].DatumReferences), ["A"])
+        self.assertEqual(tol.Datums[0].Name, datum.Name)
+
+    def test_write_pmi_off_gives_the_output_of_a_document_without_pmi(self):
+        App.ParamGet(self.PREF).SetBool("WritePmi", False)
+        off = self._text(self._export(self.doc, "off.stp"))
+        self.assertEqual(Import.lastStepPmiExportReport()["dimensions"], 0)
+        self.assertNotIn("GEOMETRIC_TOLERANCE", off)
+        self.assertNotIn("DIMENSIONAL_", off)
+        bare = self._insert(self.src)
+        for o in list(bare.Objects):
+            if o.TypeId.startswith("Part::Pmi"):
+                bare.removeObject(o.Name)
+        plain = self._text(self._export(bare, "plain.stp"))
+
+        def norm(t):
+            return "\n".join(l for l in t.splitlines() if not l.startswith("FILE_NAME"))
+        self.assertEqual(norm(off), norm(plain))
+        App.ParamGet(self.PREF).SetBool("WritePmi", True)
+        on = self._text(self._export(self.doc, "on.stp"))
+        self.assertIn("GEOMETRIC_TOLERANCE", on)
+
+    def test_other_schema_writes_no_pmi_and_warns_once(self):
+        App.ParamGet(self.PREF).SetString("Scheme", "AP214IS")
+        text = self._text(self._export(self.doc, "ap214.stp"))
+        rep = Import.lastStepPmiExportReport()
+        self.assertNotIn("GEOMETRIC_TOLERANCE", text)
+        self.assertEqual((rep["dimensions"], rep["tolerances"], rep["datums"]), (0, 0, 0))
+        self.assertEqual(len(rep["warnings"]), 1)
+        self.assertIn("AP214IS", rep["warnings"][0])
+        self.assertIn("AP242", rep["warnings"][0])
+
+    def _planar_faces(self):
+        for o in self.doc.Objects:
+            if o.TypeId == "Part::Feature" and not o.Shape.isNull():
+                planes = [i + 1 for i, f in enumerate(o.Shape.Faces) if f.Surface.__class__.__name__ == "Plane"]
+                if len(planes) >= 2:
+                    return o, planes
+        self.fail("no object with two planar faces")
+
+    def _add_item(self, kind, **props):
+        item = self.doc.addObject(kind, kind.split("::")[1])
+        for k, v in props.items():
+            setattr(item, k, v)
+        return item
+
+    def test_angles_are_written_in_radians_and_read_back_in_degrees(self):
+        obj, planes = self._planar_faces()
+        item = self._add_item("Part::PmiDimension", PmiType="Location_Angular", Value=37.5)
+        item.References = [(obj, ["Face%d" % planes[0], "Face%d" % planes[1]])]
+        item.RawAttributes = {"link.first": "%s.Face%d" % (obj.Name, planes[0]),
+                              "link.second": "%s.Face%d" % (obj.Name, planes[1])}
+        text = self._text(self._export(self.doc))
+        self.assertEqual(Import.lastStepPmiExportReport()["dimensions"], 3)
+        self.assertIn("POSITIVE_PLANE_ANGLE_MEASURE(0.65449846949", text)  # 37.5 degrees in radians, the unit of the file
+        back = self._insert(os.path.join(self.dir, "out.stp"))
+        ang = [o for o in self._of(back, "Part::PmiDimension") if o.PmiType.endswith("Angular")][0]
+        self.assertAlmostEqual(ang.Value, 37.5, places=6)
+
+    def test_one_sided_dimension_is_left_out_with_a_warning_and_the_export_succeeds(self):
+        obj, planes = self._planar_faces()
+        item = self._add_item("Part::PmiDimension", PmiType="Location_None", Value=0.0)
+        item.References = [(obj, ["Face%d" % planes[0]])]
+        out = self._export(self.doc)
+        rep = Import.lastStepPmiExportReport()
+        self.assertEqual(rep["skipped"], 1)
+        self.assertEqual(len([w for w in rep["warnings"] if "two sides" in w]), 1)
+        self.assertEqual(rep["dimensions"], 2)
+        self.assertFalse(rep["fell_back"])
+        self.assertEqual(len(self._of(self._insert(out), "Part::PmiDimension")), 2)
+
+    def test_item_governing_an_object_outside_the_export_is_skipped_with_a_warning(self):
+        obj, planes = self._planar_faces()
+        other = self.doc.addObject("Part::Feature", "Other")
+        other.Shape = Part.makeBox(1, 1, 1)
+        item = self._add_item("Part::PmiTolerance", PmiType="Flatness", Value=0.01)
+        item.References = [(other, ["Face1"])]
+        out = os.path.join(self.dir, "subset.stp")
+        Import.export([obj], out)
+        rep = Import.lastStepPmiExportReport()
+        self.assertEqual(rep["skipped"], 1)
+        self.assertEqual(rep["tolerances"], 1)
+        self.assertTrue(any("not part of the export" in w for w in rep["warnings"]))
+
+    def test_a_failing_pmi_write_falls_back_to_a_file_without_pmi(self):
+        os.environ["FC_STEP_PMI"] = "writefail"
+        out = self._export(self.doc)
+        os.environ.pop("FC_STEP_PMI")
+        rep = Import.lastStepPmiExportReport()
+        self.assertTrue(rep["fell_back"])
+        self.assertTrue(any("written again without PMI" in w for w in rep["warnings"]))
+        text = self._text(out)
+        self.assertNotIn("GEOMETRIC_TOLERANCE", text)
+        self.assertIn("MANIFOLD_SOLID_BREP", text)

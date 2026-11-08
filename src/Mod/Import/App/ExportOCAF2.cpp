@@ -642,6 +642,19 @@ TDF_Label ExportOCAF2::exportObject(
     return label;
 }
 
+TDF_Label ExportOCAF2::exportedLabel(App::DocumentObject* obj) const
+{
+    auto it = myObjects.find(obj);
+    if (it == myObjects.end()) {
+        return {};
+    }
+    TDF_Label ref;
+    if (aShapeTool->IsReference(it->second) && aShapeTool->GetReferredShape(it->second, ref)) {
+        return ref;
+    }
+    return it->second;
+}
+
 bool ExportOCAF2::canFallback(std::vector<App::DocumentObject*> objs)
 {
     for (size_t i = 0; i < objs.size(); ++i) {

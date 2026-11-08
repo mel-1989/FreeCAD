@@ -106,6 +106,13 @@ public:
             "the warnings."
         );
         add_varargs_method(
+            "lastStepPmiExportReport",
+            &Module::lastStepPmiExportReport,
+            "lastStepPmiExportReport() -- What the PMI pass of the last STEP export did: a dict with the counts "
+            "written (dimensions, tolerances, datums, annotations), the items skipped, whether the file had to be "
+            "written again without PMI, and the warnings."
+        );
+        add_varargs_method(
             "validateStep",
             &Module::validateStep,
             "validateStep(path) -- Compare the geometric validation properties stated in a STEP "
@@ -162,6 +169,26 @@ private:
             items.append(Py::String(s));
         }
         d.setItem("unattached_items", items);
+        Py::List warnings;
+        for (const auto& s : r.warnings) {
+            warnings.append(Py::String(s));
+        }
+        d.setItem("warnings", warnings);
+        return d;
+    }
+
+    Py::Object lastStepPmiExportReport(const Py::Tuple&)
+    {
+        const Import::StepPmiExportReport& r = Import::lastStepPmiExportReport();
+        Py::Dict d;
+        d.setItem("ran", Py::Boolean(r.ran));
+        d.setItem("dimensions", Py::Long(r.dimensions));
+        d.setItem("tolerances", Py::Long(r.tolerances));
+        d.setItem("datums", Py::Long(r.datums));
+        d.setItem("annotations", Py::Long(r.annotations));
+        d.setItem("skipped", Py::Long(r.skipped));
+        d.setItem("presentations_stripped", Py::Long(r.presentationsStripped));
+        d.setItem("fell_back", Py::Boolean(r.fellBack));
         Py::List warnings;
         for (const auto& s : r.warnings) {
             warnings.append(Py::String(s));
@@ -382,6 +409,7 @@ private:
                 return cols;
             };
 
+            bool pmiExportable = false;
             Import::ExportOCAF2 ocaf(hDoc, getShapeColors);
             if (!legacyExport || !ocaf.canFallback(objs)) {
                 ocaf.setExportOptions(ExportOCAF2::customExportOptions());
@@ -389,6 +417,7 @@ private:
                 ocaf.setKeepPlacement(keepPlacement);
 
                 ocaf.exportObjects(objs);
+                pmiExportable = true;
             }
             else {
                 bool keepExplicitPlacement = true;
@@ -399,6 +428,10 @@ private:
 
             Base::FileInfo file(Utf8Name.c_str());
             if (file.hasExtension({"stp", "step"})) {
+                if (pmiExportable) {
+                    // semantic PMI of the documents goes on the labels ExportOCAF2 made (preference WritePmi, AP242 only)
+                    Import::exportStepPmi(hDoc, ocaf, objs);
+                }
                 Import::WriterStep writer(file);
                 writer.write(hDoc);
             }
