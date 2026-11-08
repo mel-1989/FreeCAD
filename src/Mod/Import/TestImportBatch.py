@@ -211,6 +211,27 @@ class BatchTranslateCase(unittest.TestCase):
             self.assertEqual(handle.read(), "KEEP\n")
         self.assertEqual(sorted(os.listdir(self.out)), ["box.step"])
 
+    def test_child_that_dies_after_writing_leaves_an_existing_output_alone(self):
+        os.makedirs(self.out)
+        keep = os.path.join(self.out, "box.step")
+        with open(keep, "w") as handle:
+            handle.write("KEEP\n")
+        done, _ = self.run_batch("to=step", "out=" + self.out, self.box, fault="dirty:box")
+        self.assertEqual(done.returncode, 1, done.stdout)
+        with open(keep) as handle:
+            self.assertEqual(handle.read(), "KEEP\n")
+        self.assertEqual(sorted(os.listdir(self.out)), ["box.step"])
+
+    def test_child_that_ignores_sigterm_is_killed_after_the_grace_period(self):
+        report = os.path.join(self.dir, "report.json")
+        done, seconds = self.run_batch("to=step", "out=" + self.out, "report=" + report, "timeout=4",
+                                       self.box, self.cyl, fault="deaf:box")
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertLess(seconds, 60)
+        entries = {os.path.basename(e["input"]): e for e in self.report()["files"]}
+        self.assertEqual(entries["box.brep"]["status"], "timeout")
+        self.assertEqual(entries["cyl.brep"]["status"], "ok")
+
     def test_successful_conversion_replaces_a_file_that_is_not_an_input(self):
         os.makedirs(self.out)
         old = os.path.join(self.out, "box.step")

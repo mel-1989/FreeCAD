@@ -65,8 +65,9 @@ TOLERANCE = {"brep": 1e-9}
 DEFAULT_TOLERANCE = 1e-6
 READABLE = ("step", "stp", "iges", "igs", "brep", "brp", "stl", "obj", "3mf", "dxf", "dwg", "fcstd")
 
-# Test hook for the batch command's own tests: "crash:<text>" aborts the child and "hang:<text>" makes it
-# sleep, for inputs whose file name contains <text>; "internal:<any>" raises in the parent. Unset in normal use.
+# Test hook for the batch command's own tests: "crash:<text>" aborts the child, "hang:<text>" makes it
+# sleep, "deaf:<text>" makes it sleep with SIGTERM ignored and "dirty:<text>" aborts it after it wrote its
+# output, for inputs whose file name contains <text>; "internal:<any>" raises in the parent. Unset in normal use.
 FAULT_VARIABLE = "FREECAD_TRANSLATE_TEST_FAULT"
 
 
@@ -141,14 +142,21 @@ def _write(doc, path, fmt):
     raise RuntimeError("; ".join(errors) or "no exporter for ." + fmt)
 
 
-def _inject_fault(source):
+def _inject_fault(source, stage="start"):
     spec = os.environ.get(FAULT_VARIABLE, "")
     kind, _, text = spec.partition(":")
     if not text or text not in os.path.basename(source):
         return
+    if stage == "written":
+        if kind == "dirty":  # die after the output exists
+            os.abort()
+        return
     if kind == "crash":
         os.abort()
     if kind == "hang":
+        time.sleep(3600)
+    if kind == "deaf":  # ignores SIGTERM, so only the parent's SIGKILL ends it
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         time.sleep(3600)
 
 
@@ -169,6 +177,7 @@ def child(source, target_path, fmt, result_path):
         if not doc.Objects:
             result["messages"].append("the file gave no objects")
         _write(doc, target_path, fmt)
+        _inject_fault(source, "written")
         FreeCAD.closeDocument(doc.Name)
         result.update({"solids_in": before["solids"], "volume_in": before["volume"], "area_in": before["area"]})
         if fmt in SOLID_TARGETS:
