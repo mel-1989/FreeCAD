@@ -415,6 +415,9 @@ ViewProviderPmiItem::ViewProviderPmiItem()
 ViewProviderPmiItem::~ViewProviderPmiItem()
 {
     aliveProviders().erase(this);
+    if (drawRoot) {
+        drawRoot->unref();
+    }
     if (watchedDoc) {
         PlacementWatcher::instance().remove(watchedDoc, this);
     }

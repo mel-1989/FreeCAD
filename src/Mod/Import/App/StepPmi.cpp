@@ -1545,9 +1545,13 @@ void setLinks(Part::PmiItem* item, const std::vector<FaceHit>& hits)
     }
     if (!grouped.empty()) {
         item->References.setValues(grouped);
-        // the presentation is in the coordinates of the file: remember where the governed object stood (slice 2 display)
-        if (auto* gf = dynamic_cast<App::GeoFeature*>(order.front())) {
-            item->ReferencePlacement.setValue(gf->globalPlacement());
+        // the presentation is in the coordinates of the file: remember where the governed object stood (slice 2 display).
+        // setValues orders the objects by pointer, and the display follows References[0], so take that one
+        const auto& linked = item->References.getValues();
+        if (!linked.empty()) {
+            if (auto* gf = dynamic_cast<App::GeoFeature*>(linked.front())) {
+                item->ReferencePlacement.setValue(gf->globalPlacement());
+            }
         }
     }
 }

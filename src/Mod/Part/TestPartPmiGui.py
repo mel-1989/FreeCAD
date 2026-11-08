@@ -317,6 +317,56 @@ class TestPmiDisplaySynthetic(unittest.TestCase):
         self.assertEqual([o.Object.Name for o in Gui.Selection.getSelectionEx(self.doc.Name)], ["Callout"])
         self.assertEqual(highlighted_faces(self.s["box"]), set())
 
+    def _two_body_doc(self):
+        App.closeDocument(self.doc.Name)
+        doc = App.newDocument("PmiTwo")
+        b1 = doc.addObject("Part::Feature", "B1")
+        b1.Shape = Part.makeBox(10, 10, 10)
+        b1.Placement = App.Placement(App.Vector(30, 0, 0), App.Rotation())
+        b2 = doc.addObject("Part::Feature", "B2")
+        b2.Shape = Part.makeBox(10, 10, 10)
+        b2.Placement = App.Placement(App.Vector(0, 70, 0), App.Rotation(App.Vector(0, 0, 1), 90))
+        grp = doc.addObject("Part::PmiGroup", "PMI")
+        dim = doc.addObject("Part::PmiDimension", "Dim")
+        dim.Presentation = Part.Compound([polyline((30, 0, 20), (0, 70, 20))])
+        dim.References = [(b2, ["Face1"]), (b1, ["Face1"])]  # the item governs both; References[0] decides what it follows
+        first = dim.References[0][0]
+        dim.ReferencePlacement = first.Placement
+        grp.addObjects([dim])
+        doc.recompute()
+        Gui.updateGui()
+        return doc, b1, b2, dim, first
+
+    def test_item_referencing_two_bodies_follows_the_first_reference_only(self):
+        doc, b1, b2, dim, first = self._two_body_doc()
+        other = b1 if first is b2 else b2
+        before = bbox_of(drawn_paths(doc)["Dim"])
+        # placement of the first reference moves it, the other body does not
+        other.Placement = App.Placement(other.Placement.Base + App.Vector(10, 0, 0), other.Placement.Rotation)
+        Gui.updateGui()
+        same = bbox_of(drawn_paths(doc)["Dim"])
+        for i in range(6):
+            self.assertAlmostEqual(same[i], before[i], delta=1e-4)
+        first.Placement = App.Placement(first.Placement.Base + App.Vector(10, 0, 0), first.Placement.Rotation)
+        Gui.updateGui()
+        moved = bbox_of(drawn_paths(doc)["Dim"])
+        self.assertAlmostEqual(moved[0] - before[0], 10.0, delta=1e-4)
+        self.assertAlmostEqual(moved[3] - before[3], 10.0, delta=1e-4)
+
+    def test_old_document_with_two_bodies_draws_in_place(self):
+        doc, b1, b2, dim, first = self._two_body_doc()
+        before = bbox_of(drawn_paths(doc)["Dim"])
+        path = os.path.join(self.tmp, "two.FCStd")
+        doc.saveAs(path)
+        App.closeDocument(doc.Name)
+        doc = App.openDocument(self._strip_reference_placement(path))
+        Gui.updateGui()
+        after = bbox_of(drawn_paths(doc)["Dim"])
+        for i in range(6):
+            self.assertAlmostEqual(after[i], before[i], delta=1e-4)
+        d = doc.getObject("Dim")
+        self.assertEqual(d.ReferencePlacement.Base, d.References[0][0].Placement.Base)
+
     def test_old_document_with_a_body_at_a_non_identity_placement_draws_in_place(self):
         # check 23 repair: ReferencePlacement missing from the file (not just identity) is set to the body's current
         # global placement on restore, so the drawing does not move

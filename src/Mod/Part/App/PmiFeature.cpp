@@ -75,10 +75,11 @@ void PmiItem::onDocumentRestored()
     if (referencePlacementRestored) {
         return;
     }
-    for (App::DocumentObject* o : References.getValues()) {
-        if (auto* gf = dynamic_cast<App::GeoFeature*>(o)) {
+    // the display follows References[0], so the placement is that object's
+    const auto& linked = References.getValues();
+    if (!linked.empty()) {
+        if (auto* gf = dynamic_cast<App::GeoFeature*>(linked.front())) {
             ReferencePlacement.setValue(gf->globalPlacement());
-            break;
         }
     }
 }
