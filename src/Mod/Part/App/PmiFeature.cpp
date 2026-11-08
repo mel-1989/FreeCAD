@@ -48,6 +48,7 @@ PmiItem::PmiItem()
     ADD_PROPERTY_TYPE(Unattached, (false), "PMI", App::Prop_None, "No face or edge could be found");
     ADD_PROPERTY_TYPE(KernelLoss, (), "PMI", App::Prop_None, "What the STEP reader lost or altered, one reason per entry");
     ADD_PROPERTY_TYPE(StepEntityName, (""), "PMI", App::Prop_None, "Name of the STEP entity, for example diameter");
+    ADD_PROPERTY_TYPE(Presentation, (TopoDS_Shape()), "PMI", App::Prop_None, "Graphic presentation of the item from the source file");
     StepFaceIds.setValues({});
 }
 
@@ -76,5 +77,9 @@ PmiDatum::PmiDatum()
     ADD_PROPERTY_TYPE(Position, (0), "PMI", App::Prop_None, "Precedence in the datum reference frame");
     ADD_PROPERTY_TYPE(IsTarget, (false), "PMI", App::Prop_None, "Datum target");
 }
+
+PROPERTY_SOURCE(Part::PmiAnnotation, Part::PmiItem)
+
+PmiAnnotation::PmiAnnotation() = default;
 
 PROPERTY_SOURCE(Part::PmiGroup, App::DocumentObjectGroup)

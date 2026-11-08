@@ -575,6 +575,7 @@ private:
             Handle(TDocStd_Document) hDoc;
             hApp->NewDocument(TCollection_ExtendedString("MDTV-CAF"), hDoc);
 
+            bool pmiExportable = false;
             Import::ExportOCAF2 ocaf(hDoc, &getShapeColors);
             if (!legacyExport || !ocaf.canFallback(objs)) {
                 ocaf.setExportOptions(Import::ExportOCAF2::customExportOptions());
@@ -582,6 +583,7 @@ private:
                 ocaf.setKeepPlacement(keepPlacement);
 
                 ocaf.exportObjects(objs);
+                pmiExportable = true;
             }
             else {
                 bool keepExplicitPlacement = true;
@@ -591,6 +593,10 @@ private:
 
             Base::FileInfo file(Utf8Name.c_str());
             if (file.hasExtension({"stp", "step"})) {
+                if (pmiExportable) {
+                    // semantic PMI of the documents goes on the labels ExportOCAF2 made (preference WritePmi, AP242 only)
+                    Import::exportStepPmi(hDoc, ocaf, objs);
+                }
                 Import::WriterStep writer(file);
                 writer.write(hDoc);
             }

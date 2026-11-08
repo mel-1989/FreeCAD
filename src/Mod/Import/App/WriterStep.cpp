@@ -25,11 +25,18 @@
 #include <APIHeaderSection_MakeHeader.hxx>
 #include <NCollection_Vector.hxx>
 #include <STEPCAFControl_Writer.hxx>
+#include <NCollection_Sequence.hxx>
+#include <TDF_Label.hxx>
+#include <XCAFDoc_DimTolTool.hxx>
+#include <XCAFDoc_DocumentTool.hxx>
+#include <cstdlib>
+#include <string>
 
 
 #include "WriterStep.h"
 #include "StepAttributes.h"
 #include "StepValidation.h"
+#include "StepPmi.h"
 #include <Base/Exception.h>
 #include <App/Application.h>
 #include <Mod/Part/App/encodeFilename.h>
@@ -46,7 +53,7 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
     std::string utf8Name = file.filePath();
     std::string name8bit = Part::encodeFilename(utf8Name);
 
-    STEPCAFControl_Writer writer;
+    auto configure = [](STEPCAFControl_Writer& writer) {
 #if OCC_VERSION_HEX >= 0x070900
     // Temporary workaround for OCCT 7.9+, see: https://github.com/Open-Cascade-SAS/OCCT/issues/1327
     // TODO: Remove or refine the guards or remove when the issue is fixed in OCCT 8.0.1
@@ -56,6 +63,9 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
     aFlags.set(ShapeProcess::Operation::DirectFaces);
     writer.SetShapeProcessFlags(aFlags);
 #endif
+    };
+    STEPCAFControl_Writer writer;
+    configure(writer);
     Part::Interface::writeStepAssembly(Part::Interface::Assembly::On);
     Part::Interface::applyStepSchemePreference();
 
@@ -72,41 +82,94 @@ void WriterStep::write(Handle(TDocStd_Document) hDoc) const  // NOLINT
     if (withProps) {
         attachValidationProperties(hDoc, &independent);
     }
-    writer.Transfer(hDoc, STEPControl_AsIs);
-    writeStepAttributes(writer.ChangeWriter().Model(), writer.ChangeWriter().WS(), hDoc);
-    int partsWithProps = 0;
-    if (withProps) {
-        partsWithProps = addPartLevelValidationProperties(writer.ChangeWriter().Model(), independent);
+    // PMI (G12): when the hDoc holds GD&T labels the first attempt writes them; if OCCT's writer reports an error or
+    // throws, the file is written again without PMI and Import::reportStepPmiExportFallback says so. Without GD&T labels
+    // there is one attempt, exactly as before.
+    bool hasPmi = false;
+    {
+        Handle(XCAFDoc_DimTolTool) dtool = XCAFDoc_DocumentTool::DimTolTool(hDoc->Main());
+        NCollection_Sequence<TDF_Label> dims, tols, datums;  // each Get...Labels call clears the sequence it is given
+        dtool->GetDimensionLabels(dims);
+        dtool->GetGeomToleranceLabels(tols);
+        dtool->GetDatumLabels(datums);
+        hasPmi = dims.Length() + tols.Length() + datums.Length() > 0;
     }
+    auto attempt = [&](bool withPmi, STEPCAFControl_Writer& writer) -> IFSelect_ReturnStatus {
+        if (!withPmi && hasPmi) {
+            writer.SetDimTolMode(false);
+        }
+        writer.Transfer(hDoc, STEPControl_AsIs);
+        writeStepAttributes(writer.ChangeWriter().Model(), writer.ChangeWriter().WS(), hDoc);
+        int partsWithProps = 0;
+        if (withProps) {
+            partsWithProps = addPartLevelValidationProperties(writer.ChangeWriter().Model(), independent);
+        }
 
-    APIHeaderSection_MakeHeader makeHeader(writer.ChangeWriter().Model());
-    Base::Reference<ParameterGrp> hGrp = App::GetApplication()
-                                             .GetUserParameter()
-                                             .GetGroup("BaseApp")
-                                             ->GetGroup("Preferences")
-                                             ->GetGroup("Mod/Part")
-                                             ->GetGroup("STEP");
+        APIHeaderSection_MakeHeader makeHeader(writer.ChangeWriter().Model());
+        Base::Reference<ParameterGrp> hGrp = App::GetApplication()
+                                                 .GetUserParameter()
+                                                 .GetGroup("BaseApp")
+                                                 ->GetGroup("Preferences")
+                                                 ->GetGroup("Mod/Part")
+                                                 ->GetGroup("STEP");
 
-    // Don't set name because STEP doesn't support UTF-8
-    // https://forum.freecad.org/viewtopic.php?f=8&t=52967
-    makeHeader.SetAuthorValue(
-        1,
-        new TCollection_HAsciiString(hGrp->GetASCII("Author", "Author").c_str())
-    );
-    makeHeader.SetOrganizationValue(1, new TCollection_HAsciiString(hGrp->GetASCII("Company").c_str()));
-    makeHeader.SetOriginatingSystem(
-        new TCollection_HAsciiString(App::Application::getExecutableName().c_str())
-    );
-    makeHeader.SetDescriptionValue(1, new TCollection_HAsciiString("FreeCAD Model"));
-    if (partsWithProps > 0) {
-        // the practice's document identification string (its section 3)
-        auto desc = new NCollection_HArray1<Handle(TCollection_HAsciiString)>(1, 2);
-        desc->SetValue(1, new TCollection_HAsciiString("FreeCAD Model"));
-        desc->SetValue(2, new TCollection_HAsciiString(validationPropertiesHeaderId()));
-        makeHeader.SetDescription(desc);
+        // Don't set name because STEP doesn't support UTF-8
+        // https://forum.freecad.org/viewtopic.php?f=8&t=52967
+        makeHeader.SetAuthorValue(
+            1,
+            new TCollection_HAsciiString(hGrp->GetASCII("Author", "Author").c_str())
+        );
+        makeHeader.SetOrganizationValue(1, new TCollection_HAsciiString(hGrp->GetASCII("Company").c_str()));
+        makeHeader.SetOriginatingSystem(
+            new TCollection_HAsciiString(App::Application::getExecutableName().c_str())
+        );
+        makeHeader.SetDescriptionValue(1, new TCollection_HAsciiString("FreeCAD Model"));
+        if (partsWithProps > 0) {
+            // the practice's document identification string (its section 3)
+            auto desc = new NCollection_HArray1<Handle(TCollection_HAsciiString)>(1, 2);
+            desc->SetValue(1, new TCollection_HAsciiString("FreeCAD Model"));
+            desc->SetValue(2, new TCollection_HAsciiString(validationPropertiesHeaderId()));
+            makeHeader.SetDescription(desc);
+        }
+        if (withPmi && hasPmi) {
+            const char* sw = std::getenv("FC_STEP_PMI");
+            if (sw && std::string(sw) == "writefail") {
+                return IFSelect_RetError;  // test hook: a PMI write that fails
+            }
+        }
+        return writer.Write(name8bit.c_str());
+    };
+    auto failed = [](IFSelect_ReturnStatus r) {
+        return r == IFSelect_RetError || r == IFSelect_RetFail || r == IFSelect_RetStop;
+    };
+    IFSelect_ReturnStatus ret = IFSelect_RetError;
+    bool pmiFailed = false;
+    std::string pmiWhy;
+    if (hasPmi) {
+        try {
+            ret = attempt(true, writer);
+            pmiFailed = failed(ret);
+            pmiWhy = "the STEP writer reported an error";
+        }
+        catch (const Standard_Failure& e) {
+            pmiFailed = true;
+            pmiWhy = e.GetMessageString() ? e.GetMessageString() : "the STEP writer stopped";
+        }
+        if (pmiFailed) {
+            reportStepPmiExportFallback(pmiWhy);
+            STEPCAFControl_Writer again;
+            configure(again);
+            again.SetPropsMode(withProps);
+            ret = attempt(false, again);
+        }
     }
-    IFSelect_ReturnStatus ret = writer.Write(name8bit.c_str());
-    if (ret == IFSelect_RetError || ret == IFSelect_RetFail || ret == IFSelect_RetStop) {
+    else {
+        ret = attempt(true, writer);
+    }
+    if (failed(ret)) {
         throw Base::FileException("Cannot open file: ", file);
+    }
+    if (hasPmi && !pmiFailed) {
+        repairWrittenStepPmi(name8bit);
     }
 }
