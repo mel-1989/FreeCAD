@@ -458,8 +458,9 @@ class TestPmiDisplayCorpus(unittest.TestCase):
         # check 24: the largest file by item count, display on versus the group hidden at open (preference ShowOnOpen)
         sizes = {}
         for path in CORPUS_FILES:
-            with open(path, errors="replace") as f:
-                sizes[path] = f.read().count("TESSELLATED_ANNOTATION_OCCURRENCE")
+            doc = self._open(path)
+            sizes[path] = len(semantic_items(doc))
+            App.closeDocument(doc.Name)
         biggest = max(sizes, key=sizes.get)
         pref = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Part/PmiDisplay")
         saved = pref.GetBool("ShowOnOpen", True)
@@ -479,7 +480,7 @@ class TestPmiDisplayCorpus(unittest.TestCase):
             pref.SetBool("ShowOnOpen", saved)
         on = sorted(res["on"])[1]
         hidden = sorted(res["hidden"])[1]
-        print("PMI_OPEN_TIME file=%s on=%.3fs hidden=%.3fs ratio=%.3f drawn_separators_on=%d" % (os.path.basename(biggest), on, hidden, on / hidden, res["nodes"]))
+        print("PMI_OPEN_TIME items=%d file=%s on=%.3fs hidden=%.3fs ratio=%.3f drawn_separators_on=%d" % (sizes[biggest], os.path.basename(biggest), on, hidden, on / hidden, res["nodes"]))
         self.assertLessEqual(on / hidden, 1.5)
 
 
