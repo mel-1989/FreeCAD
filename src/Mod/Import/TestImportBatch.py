@@ -158,6 +158,8 @@ class BatchTranslateCase(unittest.TestCase):
         self.assertEqual(done.returncode, 1, done.stdout)
         status = {os.path.basename(e["input"]): e["status"] for e in self.report()["files"]}
         self.assertEqual(status["bad.step"], "failed")
+        failed = [e for e in self.report()["files"] if e["input"] == bad][0]
+        self.assertFalse(any("reported success" in m for m in failed["messages"]))  # the child itself said failed
         self.assertEqual(status["box.brep"], "ok")
         self.assertFalse(os.path.exists(os.path.join(self.out, "bad.brep")))
 
