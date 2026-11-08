@@ -3342,7 +3342,38 @@ int repairWrittenStepPmi(const std::string& path)
             std::string kind, aspect;
             bool datum;
             double value;
+            std::string letters;
         };
+        std::map<std::string, std::string> bodies;
+        for (std::sregex_iterator it(text.begin(), text.end(), entity), end; it != end; ++it) {
+            bodies[(*it)[1].str()] = (*it)[2].str();
+        }
+        // the datum letters a datum system lists, in order: a system holds compartments, a compartment a datum or a common list of
+        // elements, an element a datum (the first #id of each is the product definition shape)
+        std::function<std::string(const std::string&, int)> letters = [&](const std::string& id, int depth) -> std::string {
+            auto b = bodies.find(id);
+            if (b == bodies.end() || depth > 6) {
+                return "?";
+            }
+            const std::string& body = b->second;
+            if (body.rfind("DATUM(", 0) == 0 || body.find("DATUM(") == 0) {
+                auto q2 = body.rfind('\'');
+                auto q1 = q2 == std::string::npos || q2 == 0 ? std::string::npos : body.rfind('\'', q2 - 1);
+                return q1 == std::string::npos ? "?" : body.substr(q1 + 1, q2 - q1 - 1);
+            }
+            std::string out;
+            bool first = true;
+            static const std::regex idref(R"(#(\d+))");
+            for (std::sregex_iterator r(body.begin(), body.end(), idref), e; r != e; ++r) {
+                if (first) {
+                    first = false;
+                    continue;
+                }
+                out += (out.empty() ? "" : ",") + letters((*r)[1].str(), depth + 1);
+            }
+            return out;
+        };
+        static const std::regex dref(R"(GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE\(\(\s*#(\d+))");
         std::vector<Found> found;
         for (std::sregex_iterator it(text.begin(), text.end(), entity), end; it != end; ++it) {
             const std::string body = (*it)[2].str();
@@ -3356,8 +3387,14 @@ int repairWrittenStepPmi(const std::string& path)
                 std::smatch m;
                 std::string rest = body.substr(pos + head.size());
                 if (std::regex_search(rest, m, args, std::regex_constants::match_continuous) && lengths.count(m[1].str())) {
+                    std::string let;
+                    std::smatch dm;
+                    if (std::regex_search(body, dm, dref)) {
+                        let = letters(dm[1].str(), 0);
+                        let.erase(std::remove(let.begin(), let.end(), '('), let.end());
+                    }
                     found.push_back({kv.second, m[2].str(), body.find("GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE") != std::string::npos,
-                                     lengths[m[1].str()]});
+                                     lengths[m[1].str()], let});
                 }
                 break;
             }
@@ -3365,28 +3402,65 @@ int repairWrittenStepPmi(const std::string& path)
         const auto& vals = gExport.writtenToleranceValues;
         const auto& wkinds = gExport.writtenToleranceKinds;
         const auto& wdat = gExport.writtenToleranceDatum;
+        const auto& wlet = gExport.writtenToleranceLetters;
         std::set<int> wanted(gExport.allAround.begin(), gExport.allAround.end());
         bool proved = found.size() == vals.size();
         for (size_t i = 0; proved && i < vals.size(); ++i) {
             auto k = kinds.find(wkinds[i]);
-            proved = k != kinds.end() && k->second == found[i].kind && wdat[i] == found[i].datum
+            proved = k != kinds.end() && k->second == found[i].kind && wdat[i] == found[i].datum && wlet[i] == found[i].letters
                 && std::fabs(vals[i] - found[i].value) <= 1e-6 * std::max(1.0, std::fabs(vals[i]));
         }
-        // identical neighbours (same kind, datum use and magnitude) cannot be told apart by order: they must agree on all-around
-        std::set<int> unproved;
+        // Identical tolerances (same kind, datums and magnitude) cannot be told apart by order. Only a composite shape aspect can
+        // be all-around, so when a group of identical ones disagrees on all-around, it is settled only if as many of them have
+        // a COMPOSITE_SHAPE_ASPECT as are all-around; then those are the ones. Otherwise they stay as OCCT wrote them.
+        auto sameTol = [&](size_t i, size_t j) {
+            return found[i].kind == found[j].kind && found[i].datum == found[j].datum && found[i].letters == found[j].letters
+                && std::fabs(vals[i] - vals[j]) <= 1e-6 * std::max(1.0, std::fabs(vals[i]));
+        };
+        auto composite = [&](size_t i) {
+            auto b = bodies.find(found[i].aspect);
+            return b != bodies.end() && b->second.rfind("COMPOSITE_SHAPE_ASPECT(", 0) == 0;
+        };
+        std::set<int> unproved, target = wanted;
         for (size_t i = 0; proved && i < vals.size(); ++i) {
-            for (size_t j = i + 1; j < vals.size(); ++j) {
-                if (found[i].kind == found[j].kind && found[i].datum == found[j].datum
-                    && std::fabs(vals[i] - vals[j]) <= 1e-6 * std::max(1.0, std::fabs(vals[i]))
-                    && wanted.count(static_cast<int>(i)) != wanted.count(static_cast<int>(j))) {
-                    unproved.insert(static_cast<int>(i));
+            std::vector<size_t> group;
+            int nWanted = 0;
+            bool mixed = false;
+            for (size_t j = 0; j < vals.size(); ++j) {
+                if (sameTol(i, j)) {
+                    group.push_back(j);
+                    nWanted += wanted.count(static_cast<int>(j)) ? 1 : 0;
+                }
+            }
+            for (size_t j : group) {
+                mixed = mixed || (wanted.count(static_cast<int>(j)) != wanted.count(static_cast<int>(i)));
+            }
+            if (!mixed) {
+                continue;
+            }
+            std::vector<size_t> comps;
+            for (size_t j : group) {
+                if (composite(j)) {
+                    comps.push_back(j);
+                }
+            }
+            if (static_cast<int>(comps.size()) == nWanted) {
+                for (size_t j : group) {
+                    target.erase(static_cast<int>(j));
+                }
+                for (size_t j : comps) {
+                    target.insert(static_cast<int>(j));
+                }
+            }
+            else {
+                for (size_t j : group) {
                     unproved.insert(static_cast<int>(j));
                 }
             }
         }
         int fixed = 0;
         if (proved) {
-            for (int ord : wanted) {
+            for (int ord : target) {
                 if (unproved.count(ord)) {
                     continue;
                 }
@@ -3535,6 +3609,23 @@ int exportStepPmi(
                 gExport.writtenToleranceValues.push_back(t->Value.getValue());
                 gExport.writtenToleranceKinds.push_back(t->PmiType.getStrValue());
                 gExport.writtenToleranceDatum.push_back(!t->Datums.getValues().empty());
+                {
+                    // OCCT lists the datums by their position in the frame, in the order they were added within a position
+                    std::vector<Part::PmiDatum*> ds;
+                    for (auto* o : t->Datums.getValues()) {
+                        if (auto* d = dynamic_cast<Part::PmiDatum*>(o)) {
+                            ds.push_back(d);
+                        }
+                    }
+                    std::stable_sort(ds.begin(), ds.end(), [](auto* x, auto* y) {
+                        return x->Position.getValue() < y->Position.getValue();
+                    });
+                    std::string l;
+                    for (auto* d : ds) {
+                        l += (l.empty() ? "" : ",") + d->Letter.getStrValue();
+                    }
+                    gExport.writtenToleranceLetters.push_back(l);
+                }
             }
             TDF_Label l = cx.dt->AddGeomTolerance();
             XCAFDoc_GeomTolerance::Set(l)->SetObject(obj);
