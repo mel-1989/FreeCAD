@@ -4367,7 +4367,10 @@ def readPreferences():
         import_mode = 3
     else:  # Default to "Individual part shapes"
         import_mode = 2
-    hGrp.SetInt("DxfImportMode", import_mode)
+    # Write only on a change: every reader defaults to 2, so an import with untouched
+    # preferences leaves user.cfg as it was.
+    if hGrp.GetInt("DxfImportMode", 2) != import_mode:
+        hGrp.SetInt("DxfImportMode", import_mode)
 
     # The legacy importer logic now reads the unified import_mode integer.
     # The modern importer reads its settings directly in C++.

@@ -506,6 +506,7 @@ def _get_param_dictionary():
         "DefaultDrawStyle":            ("int",       0),
         "DefaultPrintColor":           ("unsigned",  255),
         "DimAutoFlipText":             ("bool",      True),
+        "DWGConversionTimeout":        ("int",       300),  # seconds, 0 means no limit
         "Draft_array_fuse":            ("bool",      False),
         "Draft_array_Link":            ("bool",      True),
         "FilletChamferMode":           ("bool",      False),
