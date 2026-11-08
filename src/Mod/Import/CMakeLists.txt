@@ -52,6 +52,8 @@ set(Import_Scripts
     stepZ.py
     TestImportStepValidation.py
     TestImportStepAttributes.py
+    TestImportBatch.py
+    translate.py
 )
 
 if(BUILD_GUI)
