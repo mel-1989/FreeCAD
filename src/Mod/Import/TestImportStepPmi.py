@@ -871,3 +871,67 @@ class TestExportStepPmi(unittest.TestCase):
         text = self._text(out)
         self.assertNotIn("GEOMETRIC_TOLERANCE", text)
         self.assertIn("MANIFOLD_SOLID_BREP", text)
+
+    # ---- run 076 verifier cases: pairing of all-around, graphic callouts ---------------------------------------------
+
+    def _add_tol(self, kind, value, refs, mods=(), datums=()):
+        obj, planes = self._planar_faces()
+        t = self._add_item("Part::PmiTolerance", PmiType=kind, Value=value, Modifiers=list(mods))
+        t.References = [(obj, ["Face%d" % planes[0], "Face%d" % planes[1]])]
+        if datums:
+            t.Datums = list(datums)
+            t.DatumReferences = [d.Letter for d in datums]
+        return t
+
+    def _all_around_entities(self, text):
+        return text.count("ALL_AROUND_SHAPE_ASPECT(")
+
+    def test_all_around_goes_to_the_right_tolerance_when_forms_and_magnitudes_mix(self):
+        # a datum-less Flatness 0.1 (written as a plain FLATNESS_TOLERANCE entity) with ALL_AROUND, and a Position 0.1 without
+        flat = self._add_tol("Flatness", 0.1, None, mods=["ALL_AROUND"])
+        pos = self._add_tol("Position", 0.1, None)
+        out = self._export(self.doc)
+        self.assertEqual(self._all_around_entities(self._text(out)), 1)
+        back = self._insert(out)
+        got = {o.PmiType: list(o.Modifiers) for o in self._of(back, "Part::PmiTolerance") if o.PmiType in ("Flatness", "Position")}
+        self.assertIn("ALL_AROUND", got["Flatness"])
+        self.assertNotIn("ALL_AROUND", got["Position"])
+
+    def test_all_around_is_left_alone_when_the_pairing_cannot_be_proved(self):
+        datum = self._of(self.doc, "Part::PmiDatum")[0]
+        a = self._add_tol("Position", 0.1, None, mods=["ALL_AROUND"], datums=[datum])
+        b = self._add_tol("Position", 0.1, None, datums=[datum])
+        out = self._export(self.doc)
+        rep = Import.lastStepPmiExportReport()
+        self.assertEqual(self._all_around_entities(self._text(out)), 0)
+        self.assertTrue(any("all-around" in w and "could not be restated" in w for w in rep["warnings"]), rep["warnings"])
+        self.assertEqual(rep["tolerances"], 3)
+
+    def _annotation(self, with_face):
+        ann = self._add_item("Part::PmiAnnotation", PmiType="DimensionPresentation")
+        ann.Presentation = Part.makePolygon([App.Vector(0, 0, 0), App.Vector(5, 0, 0), App.Vector(5, 5, 0)])
+        if with_face:
+            obj, planes = self._planar_faces()
+            ann.References = [(obj, ["Face%d" % planes[0]])]
+        return ann
+
+    def test_graphic_callout_with_a_face_is_written_and_read_back_with_its_face(self):
+        self._annotation(True)
+        out = self._export(self.doc)
+        rep = Import.lastStepPmiExportReport()
+        self.assertEqual(rep["annotations"], 1)
+        self.assertIn("TESSELLATED_ANNOTATION_OCCURRENCE", self._text(out))
+        back = self._insert(out)
+        anns = self._of(back, "Part::PmiAnnotation")
+        self.assertEqual(len(anns), 1)
+        self.assertGreaterEqual(len(anns[0].References), 1)  # import keeps the faces of a callout
+        self.assertFalse(anns[0].Presentation.isNull())
+
+    def test_graphic_callout_pointing_at_no_face_is_left_out_with_one_warning(self):
+        self._annotation(False)
+        out = self._export(self.doc)
+        rep = Import.lastStepPmiExportReport()
+        self.assertEqual(rep["annotations"], 0)
+        self.assertEqual(len([w for w in rep["warnings"] if "point at no face" in w]), 1)
+        self.assertNotIn("TESSELLATED_ANNOTATION_OCCURRENCE", self._text(out))
+        self.assertFalse(rep["fell_back"])

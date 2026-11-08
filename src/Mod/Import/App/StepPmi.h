@@ -95,6 +95,8 @@ struct ImportExport StepPmiExportReport
     int presentationsStripped {0};  // presentations the writer cannot take (faces only), left out
     bool fellBack {false};     // the file was written again without PMI after a write error
     std::vector<double> writtenToleranceValues;  // in write order
+    std::vector<std::string> writtenToleranceKinds;
+    std::vector<bool> writtenToleranceDatum;
     int commonDatumsRepaired {0};                // datum reference elements whose modifiers were restated
     std::vector<int> allAround;                  // ordinals (in write order) of the written tolerances that carry ALL_AROUND
     std::vector<std::string> warnings;

@@ -3316,46 +3316,94 @@ int repairWrittenStepPmi(const std::string& path)
             }
             return 0;
         }
-        // GEOMETRIC_TOLERANCE(name, description, magnitude, toleranced_shape_aspect); the file lists the tolerances in the order
-        // they were written but not every one in this form, so each is paired with the next written tolerance of the same magnitude
-        static const std::regex tol(
-            R"(GEOMETRIC_TOLERANCE\(\s*'(?:[^']|'')*'\s*,\s*'(?:[^']|'')*'\s*,\s*#(\d+)\s*,\s*#(\d+)\s*\))"
-        );
+        // Pair the tolerances of the file with the ones written. The writer's tolerance entities come in write order but not in
+        // one form (a tolerance with datums is a complex GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE instance, one without is a plain
+        // FLATNESS_TOLERANCE(...)), and nothing in them names the item. So the file's sequence of (kind, datum or not, magnitude)
+        // must equal the written sequence exactly, and within a run of identical entries the all-around flag must be the same;
+        // otherwise the pairing is not proved and the entities stay as OCCT wrote them, with a warning.
+        static const std::map<std::string, std::string> kinds = {
+            {"Flatness", "FLATNESS_TOLERANCE"}, {"Straightness", "STRAIGHTNESS_TOLERANCE"},
+            {"CircularityOrRoundness", "ROUNDNESS_TOLERANCE"}, {"Cylindricity", "CYLINDRICITY_TOLERANCE"},
+            {"ProfileOfLine", "LINE_PROFILE_TOLERANCE"}, {"ProfileOfSurface", "SURFACE_PROFILE_TOLERANCE"},
+            {"Position", "POSITION_TOLERANCE"}, {"Perpendicularity", "PERPENDICULARITY_TOLERANCE"},
+            {"Parallelism", "PARALLELISM_TOLERANCE"}, {"Angularity", "ANGULARITY_TOLERANCE"},
+            {"Concentricity", "CONCENTRICITY_TOLERANCE"}, {"Coaxiality", "COAXIALITY_TOLERANCE"},
+            {"Symmetry", "SYMMETRY_TOLERANCE"}, {"CircularRunout", "CIRCULAR_RUNOUT_TOLERANCE"},
+            {"TotalRunout", "TOTAL_RUNOUT_TOLERANCE"}};
         static const std::regex measure(R"(#(\d+)\s*=\s*LENGTH_MEASURE_WITH_UNIT\(\s*LENGTH_MEASURE\(([^)]*)\))");
+        static const std::regex entity(R"((?:^|\n)#(\d+)\s*=\s*([^;]*);)");
+        static const std::regex args(R"(\(\s*'(?:[^']|'')*'\s*,\s*'(?:[^']|'')*'\s*,\s*#(\d+)\s*,\s*#(\d+)\s*\))");
         std::map<std::string, double> lengths;
         for (std::sregex_iterator it(text.begin(), text.end(), measure), end; it != end; ++it) {
             lengths[(*it)[1].str()] = std::strtod((*it)[2].str().c_str(), nullptr);
         }
-        const auto& vals = gExport.writtenToleranceValues;
-        std::set<int> wanted(gExport.allAround.begin(), gExport.allAround.end());
-        size_t j = 0;
-        int fixed = 0;
-        for (std::sregex_iterator it(text.begin(), text.end(), tol), end; it != end; ++it) {
-            auto m = lengths.find((*it)[1].str());
-            if (m == lengths.end()) {
-                continue;
-            }
-            while (j < vals.size() && std::fabs(vals[j] - m->second) > 1e-6 * std::max(1.0, std::fabs(m->second))) {
-                ++j;
-            }
-            if (j >= vals.size()) {
+        struct Found
+        {
+            std::string kind, aspect;
+            bool datum;
+            double value;
+        };
+        std::vector<Found> found;
+        for (std::sregex_iterator it(text.begin(), text.end(), entity), end; it != end; ++it) {
+            const std::string body = (*it)[2].str();
+            for (const auto& kv : kinds) {
+                if (body.find(kv.second + "(") == std::string::npos) {
+                    continue;
+                }
+                // the plain form carries the arguments on the kind itself, the complex one on GEOMETRIC_TOLERANCE
+                std::string head = body.find("GEOMETRIC_TOLERANCE(") != std::string::npos ? "GEOMETRIC_TOLERANCE" : kv.second;
+                auto pos = body.find(head + "(");
+                std::smatch m;
+                std::string rest = body.substr(pos + head.size());
+                if (std::regex_search(rest, m, args, std::regex_constants::match_continuous) && lengths.count(m[1].str())) {
+                    found.push_back({kv.second, m[2].str(), body.find("GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE") != std::string::npos,
+                                     lengths[m[1].str()]});
+                }
                 break;
             }
-            int ord = static_cast<int>(j++);
-            if (!wanted.count(ord)) {
-                continue;
+        }
+        const auto& vals = gExport.writtenToleranceValues;
+        const auto& wkinds = gExport.writtenToleranceKinds;
+        const auto& wdat = gExport.writtenToleranceDatum;
+        std::set<int> wanted(gExport.allAround.begin(), gExport.allAround.end());
+        bool proved = found.size() == vals.size();
+        for (size_t i = 0; proved && i < vals.size(); ++i) {
+            auto k = kinds.find(wkinds[i]);
+            proved = k != kinds.end() && k->second == found[i].kind && wdat[i] == found[i].datum
+                && std::fabs(vals[i] - found[i].value) <= 1e-6 * std::max(1.0, std::fabs(vals[i]));
+        }
+        // identical neighbours (same kind, datum use and magnitude) cannot be told apart by order: they must agree on all-around
+        std::set<int> unproved;
+        for (size_t i = 0; proved && i < vals.size(); ++i) {
+            for (size_t j = i + 1; j < vals.size(); ++j) {
+                if (found[i].kind == found[j].kind && found[i].datum == found[j].datum
+                    && std::fabs(vals[i] - vals[j]) <= 1e-6 * std::max(1.0, std::fabs(vals[i]))
+                    && wanted.count(static_cast<int>(i)) != wanted.count(static_cast<int>(j))) {
+                    unproved.insert(static_cast<int>(i));
+                    unproved.insert(static_cast<int>(j));
+                }
             }
-            const std::string def = "#" + (*it)[2].str() + " = COMPOSITE_SHAPE_ASPECT(";
-            auto pos = text.find(def);
-            if (pos == std::string::npos) {
-                continue;  // a tolerance on one face has a plain shape aspect: all-around has no meaning to state
+        }
+        int fixed = 0;
+        if (proved) {
+            for (int ord : wanted) {
+                if (unproved.count(ord)) {
+                    continue;
+                }
+                const std::string def = "\n#" + found[ord].aspect + " = COMPOSITE_SHAPE_ASPECT(";
+                auto pos = text.find(def);
+                if (pos == std::string::npos) {
+                    continue;  // a tolerance on one face has a plain shape aspect: all-around has no meaning to state
+                }
+                text.replace(pos, def.size(), "\n#" + found[ord].aspect + " = ALL_AROUND_SHAPE_ASPECT(");
+                ++fixed;
             }
-            text.replace(pos, def.size(), "#" + (*it)[2].str() + " = ALL_AROUND_SHAPE_ASPECT(");
-            ++fixed;
         }
         if (fixed != static_cast<int>(wanted.size())) {
             exportWarn("STEP PMI: " + std::to_string(wanted.size() - fixed) + " of " + std::to_string(wanted.size())
-                       + " all-around tolerance(s) could not be restated and were written without it");
+                       + " all-around tolerance(s) could not be restated and were written without it"
+                       + (proved && unproved.empty() ? std::string()
+                                                     : " (the written tolerances could not be paired with the items with certainty)"));
         }
         if (fixed > 0 || gExport.commonDatumsRepaired > 0) {
             std::ofstream outf(path, std::ios::binary | std::ios::trunc);
@@ -3485,6 +3533,8 @@ int exportStepPmi(
                     gExport.allAround.push_back(gExport.tolerances);
                 }
                 gExport.writtenToleranceValues.push_back(t->Value.getValue());
+                gExport.writtenToleranceKinds.push_back(t->PmiType.getStrValue());
+                gExport.writtenToleranceDatum.push_back(!t->Datums.getValues().empty());
             }
             TDF_Label l = cx.dt->AddGeomTolerance();
             XCAFDoc_GeomTolerance::Set(l)->SetObject(obj);
