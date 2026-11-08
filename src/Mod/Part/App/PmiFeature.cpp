@@ -49,6 +49,13 @@ PmiItem::PmiItem()
     ADD_PROPERTY_TYPE(KernelLoss, (), "PMI", App::Prop_None, "What the STEP reader lost or altered, one reason per entry");
     ADD_PROPERTY_TYPE(StepEntityName, (""), "PMI", App::Prop_None, "Name of the STEP entity, for example diameter");
     ADD_PROPERTY_TYPE(Presentation, (TopoDS_Shape()), "PMI", App::Prop_None, "Graphic presentation of the item from the source file");
+    ADD_PROPERTY_TYPE(
+        ReferencePlacement,
+        (Base::Placement()),
+        "PMI",
+        App::Prop_None,
+        "Global placement of the governed object when the item was imported"
+    );
     StepFaceIds.setValues({});
 }
 

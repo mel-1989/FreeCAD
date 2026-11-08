@@ -27,6 +27,7 @@
 #include <App/DocumentObject.h>
 #include <App/DocumentObjectGroup.h>
 #include <App/PropertyLinks.h>
+#include <App/PropertyGeo.h>
 #include <App/PropertyStandard.h>
 #include <Mod/Part/PartGlobal.h>
 
@@ -89,9 +90,14 @@ public:
     /// Written back on export (CAx-IF PMI recommended practice, "Representation and Presentation of PMI", tessellated annotation)
     Part::PropertyPartShape Presentation;
 
+    /// Global placement of the governed object (the first of References) when the item was imported. The presentation
+    /// is stored in the coordinates of the source file, so the display moves it by the object's current global
+    /// placement times the inverse of this one; identity when the item governs nothing or the document predates it
+    App::PropertyPlacement ReferencePlacement;
+
     const char* getViewProviderName() const override
     {
-        return "Gui::ViewProviderDocumentObject";
+        return "PartGui::ViewProviderPmiItem";
     }
 };
 
@@ -154,6 +160,11 @@ class PartExport PmiGroup: public App::DocumentObjectGroup
 
 public:
     PmiGroup() = default;
+
+    const char* getViewProviderName() const override
+    {
+        return "PartGui::ViewProviderPmiGroup";
+    }
 };
 
 }  // namespace Part

@@ -24,6 +24,7 @@ if(BUILD_GUI)
     list (APPEND Part_Scripts
           InitGui.py
           TestPartGui.py
+          TestPartPmiGui.py
           TestPartPreview.py
           TestUpstreamCommandsGui.py
     )

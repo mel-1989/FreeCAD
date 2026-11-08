@@ -35,6 +35,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <App/GeoFeature.h>
 #include <regex>
 #include <functional>
 #include <cstring>
@@ -1544,6 +1545,10 @@ void setLinks(Part::PmiItem* item, const std::vector<FaceHit>& hits)
     }
     if (!grouped.empty()) {
         item->References.setValues(grouped);
+        // the presentation is in the coordinates of the file: remember where the governed object stood (slice 2 display)
+        if (auto* gf = dynamic_cast<App::GeoFeature*>(order.front())) {
+            item->ReferencePlacement.setValue(gf->globalPlacement());
+        }
     }
 }
 
