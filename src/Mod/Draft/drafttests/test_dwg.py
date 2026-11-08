@@ -75,6 +75,7 @@ FAKE_DWG2DXF = {
     "rc0_nothing": PARSE + 'echo "fake: said nothing" >&2\nexit 0\n',
     "rc0_empty": PARSE + ': > "$out"\necho "fake: wrote nothing" >&2\nexit 0\n',
     "sleep": PARSE + "sleep 600\nexit 0\n",
+    "sleep_marker": PARSE + "sleep 600123\nexit 0\n",
     "slow_ok": PARSE + "sleep 1\n" + WRITE_DXF + "exit 0\n",
 }
 FAKE_DXF2DWG = {
@@ -293,6 +294,30 @@ class DraftDWG(unittest.TestCase):
         self.assertIn("dwg2dxf", str(cm.exception))
         self.assertEqual(self.tempEntries(), [])
 
+    def test_interrupt_kills_the_converter_and_removes_the_temp_folder(self):
+        # a batch parent's SIGTERM reaches importDWG as an exception raised while it waits for the converter
+        import signal
+
+        self.install(to_dxf="sleep_marker", DWGConversionTimeout=0)
+
+        def interrupt(signum, frame):
+            raise KeyboardInterrupt()
+
+        old = signal.signal(signal.SIGALRM, interrupt)
+        signal.setitimer(signal.ITIMER_REAL, 1.5)
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                importDWG.insert(self.dwg, self.doc.Name)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, old)
+        time.sleep(0.3)
+        self.assertEqual(self.tempEntries(), [])
+        import subprocess
+
+        left = subprocess.run(["/usr/bin/pgrep", "-f", "sleep 600123"], capture_output=True, text=True).stdout.split()
+        self.assertEqual(left, [], "the converter survived the interrupt")
+
     def test_timeout_zero_means_none(self):
         self.install(to_dxf="slow_ok", DWGConversionTimeout=0)
         importDWG.insert(self.dwg, self.doc.Name)
@@ -327,6 +352,16 @@ class DraftDWG(unittest.TestCase):
         self.install(to_dwg="ok")
         self.assertEqual(importDWG.export(self.shapes(), out), out)
         self.assertTrue(os.path.getsize(out) > 0)
+
+    def test_export_onto_an_existing_folder_raises(self):
+        folder = os.path.join(self.tmp, "adir")
+        os.makedirs(folder)
+        self.install(to_dwg="ok")
+        with self.assertRaises(RuntimeError) as cm:
+            importDWG.export(self.shapes(), folder)
+        self.assertIn("folder", str(cm.exception))
+        self.assertEqual(os.listdir(folder), [])
+        self.assertEqual(self.tempEntries(), [])
 
     def test_export_into_read_only_folder_raises(self):
         ro = os.path.join(self.tmp, "ro")

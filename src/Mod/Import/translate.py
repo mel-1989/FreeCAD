@@ -29,6 +29,13 @@ Options::
     report=FILE     write a JSON report: one entry per file and a summary
     --help          this text
 
+Each result is written to a hidden scratch folder inside the output folder and moved to its final name only
+when the conversion is ok or changed, so a failed or timed-out file never removes or damages a file that was
+already there.
+An existing file at an output path is replaced by a successful conversion, unless it is one of the inputs of
+the same batch: then the output gets a numbered name (``a_2.step``), and a conversion whose output would be
+its own input fails.
+
 One line is printed per file, then a summary.
 Status ``ok``: converted, and a B-rep output read back with the same solid count, volume and area
 (relative 1e-6, 1e-9 for brep).
@@ -41,7 +48,9 @@ The command reads the user's preferences and writes none.
 
 import glob
 import json
+import math
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -57,7 +66,7 @@ DEFAULT_TOLERANCE = 1e-6
 READABLE = ("step", "stp", "iges", "igs", "brep", "brp", "stl", "obj", "3mf", "dxf", "dwg", "fcstd")
 
 # Test hook for the batch command's own tests: "crash:<text>" aborts the child and "hang:<text>" makes it
-# sleep, for inputs whose file name contains <text>. Unset in normal use.
+# sleep, for inputs whose file name contains <text>; "internal:<any>" raises in the parent. Unset in normal use.
 FAULT_VARIABLE = "FREECAD_TRANSLATE_TEST_FAULT"
 
 
@@ -206,45 +215,94 @@ def _collect(inputs):
     return list(dict.fromkeys(files)), ""
 
 
-def _unique(path, used):
+def _same_file(a, b):
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def _unique(path, used, protected=()):
+    """First free name for `path`: not handed out yet and not one of the `protected` input files."""
     base, ext = os.path.splitext(path)
     candidate, number = path, 1
-    while candidate in used:
+    while candidate in used or any(_same_file(candidate, other) for other in protected):
         number += 1
         candidate = "%s_%d%s" % (base, number, ext)
     used.add(candidate)
     return candidate
 
 
+class _Terminated(BaseException):
+    """Raised in the child by SIGTERM so that its converters and temporary folders are cleaned up."""
+
+
+def _on_sigterm(signum, frame):
+    raise _Terminated()
+
+
+GRACE = 3.0  # seconds between SIGTERM and SIGKILL for a child that timed out
+
+
+def _stop(process):
+    """SIGTERM the child's process group, wait for GRACE seconds, then SIGKILL it."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except OSError:
+        process.terminate()
+    try:
+        return process.communicate(timeout=GRACE)[0]
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        process.kill()
+    return process.communicate()[0]
+
+
 def _run_child(binary, source, target, fmt, timeout):
-    """Run one child; return (result dict, seconds)."""
+    """Run one child and move its result to `target` when it is ok or changed; return (result, seconds).
+
+    The child writes inside a hidden scratch folder next to `target`, so `target` itself is touched only by
+    the final os.replace of a good result.
+    """
     with tempfile.TemporaryDirectory(prefix="translate") as scratch:
         result_path = os.path.join(scratch, "result.json")
-        command = [binary, os.path.abspath(__file__), "--pass", "--child", source, target, fmt, result_path]
-        start = time.monotonic()
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   start_new_session=True)
-        timed_out = False
+        out_dir = os.path.dirname(target)
+        work = tempfile.mkdtemp(prefix=".translate-partial-", dir=out_dir)
+        partial = os.path.join(work, os.path.basename(target))
         try:
-            output, _ = process.communicate(timeout=timeout or None)
-        except subprocess.TimeoutExpired:
-            timed_out = True
+            command = [binary, os.path.abspath(__file__), "--pass", "--child", source, partial, fmt, result_path]
+            start = time.monotonic()
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                       start_new_session=True)
+            timed_out = False
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except OSError:
-                process.kill()
-            output, _ = process.communicate()
-        seconds = time.monotonic() - start
-        tail = (output or b"").decode("utf-8", "replace").strip().splitlines()
-        if timed_out:
-            return {"status": "timeout", "messages": ["no result within %g s; the child was killed" % timeout]}, seconds
-        if os.path.isfile(result_path):
-            with open(result_path, encoding="utf-8") as handle:
-                return json.load(handle), seconds
-        reason = "the child ended with signal %d" % -process.returncode if process.returncode < 0 \
-            else "the child ended with code %d" % process.returncode
-        message = reason + (": " + tail[-1] if tail else "")
-        return {"status": "failed", "messages": [message]}, seconds
+                output, _ = process.communicate(timeout=timeout or None)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                output = _stop(process)
+            seconds = time.monotonic() - start
+            tail = (output or b"").decode("utf-8", "replace").strip().splitlines()
+            if timed_out:
+                return {"status": "timeout",
+                        "messages": ["no result within %g s; the child was stopped" % timeout]}, seconds
+            if os.path.isfile(result_path):
+                with open(result_path, encoding="utf-8") as handle:
+                    result = json.load(handle)
+                if result.get("status") in ("ok", "changed"):
+                    if os.path.isfile(partial):
+                        os.replace(partial, target)
+                    else:
+                        result = {"status": "failed", "messages": ["the child reported success but wrote no file"]}
+                return result, seconds
+            reason = "the child ended with signal %d" % -process.returncode if process.returncode < 0 \
+                else "the child ended with code %d" % process.returncode
+            message = reason + (": " + tail[-1] if tail else "")
+            return {"status": "failed", "messages": [message]}, seconds
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
 
 def _line(entry):
@@ -292,6 +350,8 @@ def main(arguments):
         options = parser.parse_args(arguments)
     except SystemExit:
         return 2
+    if os.environ.get(FAULT_VARIABLE, "").startswith("internal:"):
+        raise RuntimeError("test fault in the parent")
     if options.help:
         print(__doc__)
         return 0
@@ -299,8 +359,13 @@ def main(arguments):
         return _usage_error("to= must be one of " + ", ".join(TARGETS))
     if not options.inputs:
         return _usage_error("no input files, folders or patterns given")
-    if options.timeout < 0:
-        return _usage_error("timeout must not be negative")
+    if not math.isfinite(options.timeout) or options.timeout < 0:
+        return _usage_error("timeout must be a finite number of seconds, 0 or more")
+    if options.report:
+        report_dir = os.path.dirname(os.path.abspath(options.report))
+        if not os.path.isdir(report_dir) or os.path.isdir(options.report):
+            return _usage_error("cannot write the report %s: its folder does not exist or it is a folder"
+                                % options.report)
     fmt = options.to.lower()
     files, problem = _collect(options.inputs)
     if files is None:
@@ -315,19 +380,22 @@ def main(arguments):
     used = set()
     for source in files:
         stem = os.path.splitext(os.path.basename(source))[0]
-        target = _unique(os.path.join(os.path.abspath(options.out), stem + "." + EXTENSION[fmt]), used)
+        target = os.path.join(os.path.abspath(options.out), stem + "." + EXTENSION[fmt])
+        if not _same_file(target, source):
+            # another input of the batch is never a place to write; this input's own path fails below
+            target = _unique(target, used, [f for f in files if f != source])
         entry = {"input": source, "output": target, "status": "failed", "seconds": 0.0,
                  "solids_in": None, "volume_in": None, "area_in": None,
                  "solids_out": None, "volume_out": None, "area_out": None, "messages": []}
-        if os.path.realpath(target) == os.path.realpath(source):
+        if _same_file(target, source) or os.path.realpath(target) == os.path.realpath(source):
             entry["messages"].append("the output would overwrite the input; choose another --out")
             entry["output"] = None
         else:
             result, seconds = _run_child(binary, source, target, fmt, options.timeout)
             entry.update(result)
             entry["seconds"] = round(seconds, 3)
-            if entry["status"] in ("failed", "timeout") and os.path.isfile(target):
-                os.remove(target)  # never leave a half-written output next to a failure line
+            if entry["status"] in ("failed", "timeout"):
+                entry["output"] = None
         entries.append(entry)
         print(_line(entry))
         sys.stdout.flush()
@@ -349,13 +417,32 @@ def _entry():
         arguments = arguments[arguments.index("--pass") + 1:]
     else:
         arguments = [a for a in arguments if not a.endswith("translate.py")]
+    # Paths that the locale cannot encode (LC_ALL=C) must not make printing fail
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
     if arguments[:1] == ["--child"]:
-        child(*arguments[1:5])
+        signal.signal(signal.SIGTERM, _on_sigterm)
+        code = 0
+        try:
+            child(*arguments[1:5])
+        except BaseException:  # _Terminated, or anything the child's own handler missed
+            code = 143
         sys.stdout.flush()
-        os._exit(0)
-    code = main(arguments)
-    sys.stdout.flush()
-    sys.stderr.flush()
+        os._exit(code)
+    # FreeCADCmd swallows an uncaught exception and exits 0, so turn it into exit code 1 here
+    try:
+        code = main(arguments)
+    except BaseException as exc:
+        sys.stderr.write("translate.py: internal error: %s: %s\n" % (type(exc).__name__, exc))
+        code = 1
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
     os._exit(code)
 
 

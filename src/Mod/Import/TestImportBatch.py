@@ -184,6 +184,145 @@ class BatchTranslateCase(unittest.TestCase):
         self.assertIn("0 changed, 0 failed, 1 timeout", done.stdout)
         self.assertFalse(os.path.exists(os.path.join(self.out, "box.step")))
 
+    def test_failed_file_never_removes_an_existing_output(self):
+        os.makedirs(self.out)
+        keep = os.path.join(self.out, "bad.step")
+        with open(keep, "w") as handle:
+            handle.write("KEEP\n")
+        bad = os.path.join(self.dir, "bad.iges")
+        with open(bad, "w") as handle:
+            handle.write("garbage\n")
+        done, _ = self.run_batch("to=step", "out=" + self.out, bad)
+        self.assertEqual(done.returncode, 1, done.stdout)
+        with open(keep) as handle:
+            self.assertEqual(handle.read(), "KEEP\n")
+        self.assertEqual(sorted(os.listdir(self.out)), ["bad.step"])  # no scratch folder left either
+
+    def test_timed_out_file_never_removes_an_existing_output(self):
+        os.makedirs(self.out)
+        keep = os.path.join(self.out, "box.step")
+        with open(keep, "w") as handle:
+            handle.write("KEEP\n")
+        done, _ = self.run_batch("to=step", "out=" + self.out, "timeout=4", self.box, fault="hang:box")
+        self.assertEqual(done.returncode, 1, done.stdout)
+        with open(keep) as handle:
+            self.assertEqual(handle.read(), "KEEP\n")
+        self.assertEqual(sorted(os.listdir(self.out)), ["box.step"])
+
+    def test_successful_conversion_replaces_a_file_that_is_not_an_input(self):
+        os.makedirs(self.out)
+        old = os.path.join(self.out, "box.step")
+        with open(old, "w") as handle:
+            handle.write("OLD\n")
+        done, _ = self.run_batch("to=step", "out=" + self.out, self.box)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertGreater(os.path.getsize(old), 10)
+        with open(old) as handle:
+            self.assertNotEqual(handle.read(), "OLD\n")
+        self.assertEqual(sorted(os.listdir(self.out)), ["box.step"])
+
+    def test_output_never_overwrites_another_input_of_the_batch(self):
+        part = os.path.join(self.dir, "part.step")
+        Part.makeSphere(4).exportStep(part)
+        with open(part, "rb") as handle:
+            original = handle.read()
+        sibling = os.path.join(self.dir, "part.brep")
+        Part.makeBox(1, 2, 3).exportBrep(sibling)
+        report = os.path.join(self.dir, "report.json")
+        done, _ = self.run_batch("to=step", "out=" + self.dir, "report=" + report, sibling, part)
+        with open(part, "rb") as handle:
+            self.assertEqual(handle.read(), original)
+        entries = {os.path.basename(e["input"]): e for e in self.report()["files"]}
+        self.assertEqual(entries["part.brep"]["status"], "ok", done.stdout)
+        self.assertNotEqual(os.path.realpath(entries["part.brep"]["output"]), os.path.realpath(part))
+        self.assertTrue(os.path.getsize(entries["part.brep"]["output"]) > 0)
+        self.assertIn("_2", os.path.basename(entries["part.brep"]["output"]))
+
+    def test_failed_and_timed_out_entries_have_no_output(self):
+        bad = os.path.join(self.dir, "bad.step")
+        with open(bad, "w") as handle:
+            handle.write("nope\n")
+        report = os.path.join(self.dir, "report.json")
+        self.run_batch("to=brep", "out=" + self.out, "report=" + report, "timeout=4", bad, self.box, self.cyl,
+                       fault="hang:cyl")
+        entries = {os.path.basename(e["input"]): e for e in self.report()["files"]}
+        self.assertIsNone(entries["bad.step"]["output"])
+        self.assertEqual(entries["cyl.brep"]["status"], "timeout")
+        self.assertIsNone(entries["cyl.brep"]["output"])
+        self.assertTrue(entries["box.brep"]["output"].endswith("box.brep"))
+
+    # -- internal failures and odd arguments exit with a code, not 0
+
+    def test_report_in_a_missing_folder_is_a_usage_error(self):
+        done, _ = self.run_batch("to=step", "out=" + self.out, "report=/nonexistent-dir/r.json", self.box)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_non_finite_timeouts_are_usage_errors(self):
+        for value in ("nan", "inf", "-inf"):
+            done, _ = self.run_batch("to=step", "out=" + self.out, "timeout=" + value, self.box)
+            self.assertEqual(done.returncode, 2, value)
+
+    def test_report_below_a_file_is_a_usage_error(self):
+        blocker = os.path.join(self.dir, "blocker")
+        with open(blocker, "w") as handle:
+            handle.write("x")
+        done, _ = self.run_batch("to=step", "out=" + self.out, "report=" + os.path.join(blocker, "r.json"), self.box)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+
+    def test_internal_error_exits_one_with_a_message(self):
+        done, _ = self.run_batch("to=step", "out=" + self.out, self.box, fault="internal:test")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("internal error", done.stderr)
+
+    def test_non_ascii_paths_under_the_c_locale(self):
+        folder = os.path.join(self.dir, "caf\u00e9 \u6a21\u578b")
+        os.makedirs(folder)
+        source = os.path.join(folder, "b\u00f6x.brep")
+        shutil.copy(self.box, source)
+        env = dict(os.environ, LC_ALL="C", LANG="C")
+        env.pop("PYTHONUTF8", None)
+        env.pop("PYTHONIOENCODING", None)
+        out = os.path.join(self.dir, "ut\u00e9")
+        done = subprocess.run([_binary(), SCRIPT, "--pass", "to=step", "out=" + out, source], env=env,
+                              capture_output=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("1 files: 1 ok", done.stdout.decode("ascii", "replace"))
+        self.assertTrue(os.path.isfile(os.path.join(out, "b\u00f6x.step")))
+
+    # -- a timed-out child takes its DWG converter with it
+
+    def test_timeout_leaves_no_converter_process_and_no_temp_folder(self):
+        marker = "sleep 7%d" % (os.getpid() % 100000 + 100000)
+        fakes = os.path.join(self.dir, "fakebin")
+        os.makedirs(fakes)
+        fake = os.path.join(fakes, "dwg2dxf")
+        with open(fake, "w") as handle:
+            handle.write("#!/bin/sh\n%s\n" % marker)
+        os.chmod(fake, 0o755)
+        dwg = os.path.join(self.dir, "x.dwg")
+        with open(dwg, "wb") as handle:
+            handle.write(b"AC1015 not a dwg")
+        scratch = os.path.join(self.dir, "tmp")
+        os.makedirs(scratch)
+        env = dict(os.environ, PATH=fakes + os.pathsep + os.environ.get("PATH", ""), TMPDIR=scratch)
+        env.pop(FAULT, None)
+        done = subprocess.run([_binary(), SCRIPT, "--pass", "to=step", "out=" + self.out, "timeout=6", dwg],
+                              env=env, capture_output=True, text=True, timeout=120)
+        time.sleep(0.5)
+        left = subprocess.run(["pgrep", "-f", marker], capture_output=True, text=True).stdout.split()
+        try:
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            self.assertIn("timeout", done.stdout)
+            self.assertEqual(left, [], "converter survived the batch timeout")
+            self.assertEqual(os.listdir(scratch), [], "temporary folders left behind")
+        finally:
+            for pid in left:
+                try:
+                    os.kill(int(pid), 9)
+                except OSError:
+                    pass
+
     def test_exit_zero_when_only_ok_and_changed(self):
         done, _ = self.run_batch("to=iges", "out=" + self.out, self.box, self.cyl)
         self.assertEqual(done.returncode, 0, done.stdout)

@@ -158,7 +158,12 @@ def _run_converter(name, cmdline, result, cwd=None):
         return f"{name} could not be started: {exc}"
     try:
         out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+    except BaseException as exc:
+        # The converter runs in its own session, so a signal aimed at our group never reaches it. Kill it
+        # on the way out of any exception (a batch parent's SIGTERM arrives here as an exception).
+        if not isinstance(exc, subprocess.TimeoutExpired):
+            _kill(proc)
+            raise
         _kill(proc)
         try:
             out, err = proc.communicate(timeout=10)
@@ -266,6 +271,8 @@ def export(objectslist, filename):
     """
     import importDXF
 
+    if os.path.isdir(filename):
+        raise RuntimeError(translate("draft", "Cannot write the DWG file, this is a folder:") + " " + filename)
     outdir = tempfile.mkdtemp()
     try:
         _basename = os.path.splitext(os.path.basename(filename))[0]
@@ -433,7 +440,11 @@ def _dwg_to_dxf(dwgfilename):
     def attempt(name, program, make_cmdline, cwd=None):
         outdir = tempfile.mkdtemp().replace("\\", "/")
         result = outdir + "/" + stem + ".dxf"
-        err = _run_converter(name, make_cmdline(outdir, result), result, cwd)
+        try:
+            err = _run_converter(name, make_cmdline(outdir, result), result, cwd)
+        except BaseException:
+            _clean(outdir)
+            raise
         if err is None:
             FCC.PrintMessage(translate("draft", "Conversion successful") + "\n")
             return result, outdir
