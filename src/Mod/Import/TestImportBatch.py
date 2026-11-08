@@ -351,5 +351,69 @@ class BatchTranslateCase(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
 
 
+    # -- second verifier's findings (run 073)
+
+    def test_names_that_differ_only_in_case_never_share_an_output(self):
+        upper = os.path.join(self.dir, "X.brep")
+        Part.makeBox(1, 1, 1).exportBrep(upper)
+        lower_dir = os.path.join(self.dir, "lower")
+        os.makedirs(lower_dir)
+        lower = os.path.join(lower_dir, "x.brep")
+        Part.makeBox(2, 2, 2).exportBrep(lower)
+        report = os.path.join(self.dir, "report.json")
+        done, _ = self.run_batch("to=step", "out=" + self.out, "report=" + report, upper, lower)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        outputs = [e["output"] for e in self.report()["files"]]
+        self.assertEqual(len({o.casefold() for o in outputs}), 2, outputs)
+        self.assertEqual(len(os.listdir(self.out)), 2, os.listdir(self.out))
+
+    def test_folder_at_the_output_fails_that_file_only(self):
+        os.makedirs(os.path.join(self.out, "box.step"))
+        report = os.path.join(self.dir, "report.json")
+        done, _ = self.run_batch("to=step", "out=" + self.out, "report=" + report, self.box, self.cyl)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        entries = {os.path.basename(e["input"]): e for e in self.report()["files"]}
+        self.assertEqual(entries["box.brep"]["status"], "failed")
+        self.assertEqual(entries["cyl.brep"]["status"], "ok")
+        self.assertNotIn("internal error", done.stderr)
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root ignores folder permissions")
+    def test_read_only_out_fails_each_file_and_still_reports(self):
+        os.makedirs(self.out)
+        os.chmod(self.out, 0o555)
+        try:
+            report = os.path.join(self.dir, "report.json")
+            done, _ = self.run_batch("to=step", "out=" + self.out, "report=" + report, self.box, self.cyl)
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            self.assertNotIn("internal error", done.stderr)
+            self.assertEqual([e["status"] for e in self.report()["files"]], ["failed", "failed"])
+        finally:
+            os.chmod(self.out, 0o755)
+
+    def test_sigterm_to_the_batch_stops_its_child(self):
+        env = dict(os.environ, **{FAULT: "hang:box"})
+        process = subprocess.Popen([_binary(), SCRIPT, "--pass", "to=step", "out=" + self.out, "timeout=0",
+                                    self.box], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not (os.path.isdir(self.out) and any(
+                n.startswith(".translate-partial-") for n in os.listdir(self.out))):
+            time.sleep(0.2)
+        time.sleep(2.0)  # let the child reach its hang
+        process.terminate()
+        process.communicate(timeout=60)
+        time.sleep(0.5)
+        left = subprocess.run(["pgrep", "-f", "child " + self.box], capture_output=True, text=True).stdout.split()
+        try:
+            self.assertNotEqual(process.returncode, 0)
+            self.assertEqual(left, [], "the child outlived the batch")
+            self.assertEqual(os.listdir(self.out), [], "scratch folder left in the output folder")
+        finally:
+            for pid in left:
+                try:
+                    os.kill(int(pid), 9)
+                except OSError:
+                    pass
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -235,10 +235,12 @@ def _unique(path, used, protected=()):
     """First free name for `path`: not handed out yet and not one of the `protected` input files."""
     base, ext = os.path.splitext(path)
     candidate, number = path, 1
-    while candidate in used or any(_same_file(candidate, other) for other in protected):
+    # names are compared case-folded: on a case-insensitive file system (APFS, NTFS by default)
+    # X.step and x.step are one file, and the second conversion would replace the first
+    while candidate.casefold() in used or any(_same_file(candidate, other) for other in protected):
         number += 1
         candidate = "%s_%d%s" % (base, number, ext)
-    used.add(candidate)
+    used.add(candidate.casefold())
     return candidate
 
 
@@ -292,6 +294,11 @@ def _run_child(binary, source, target, fmt, timeout):
             except subprocess.TimeoutExpired:
                 timed_out = True
                 output = _stop(process)
+            except BaseException:
+                # the batch itself was interrupted (SIGINT, or SIGTERM through _on_sigterm):
+                # take the child and its converters down before the scratch folder goes
+                _stop(process)
+                raise
             seconds = time.monotonic() - start
             tail = (output or b"").decode("utf-8", "replace").strip().splitlines()
             if timed_out:
@@ -400,7 +407,13 @@ def main(arguments):
             entry["messages"].append("the output would overwrite the input; choose another --out")
             entry["output"] = None
         else:
-            result, seconds = _run_child(binary, source, target, fmt, options.timeout)
+            try:
+                if os.path.isdir(target):
+                    raise IsADirectoryError("a folder is in the way: %s" % target)
+                result, seconds = _run_child(binary, source, target, fmt, options.timeout)
+            except OSError as exc:
+                # a read-only --out, a folder at the target or a failed move loses this file only
+                result, seconds = {"status": "failed", "messages": ["cannot write the output: %s" % exc]}, 0.0
             entry.update(result)
             entry["seconds"] = round(seconds, 3)
             if entry["status"] in ("failed", "timeout"):
@@ -441,7 +454,9 @@ def _entry():
             code = 143
         sys.stdout.flush()
         os._exit(code)
-    # FreeCADCmd swallows an uncaught exception and exits 0, so turn it into exit code 1 here
+    # FreeCADCmd swallows an uncaught exception and exits 0, so turn it into exit code 1 here.
+    # SIGTERM to the batch stops the running child (see _run_child) instead of orphaning it.
+    signal.signal(signal.SIGTERM, _on_sigterm)
     try:
         code = main(arguments)
     except BaseException as exc:
