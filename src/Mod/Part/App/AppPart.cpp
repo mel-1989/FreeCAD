@@ -66,6 +66,7 @@
 #include "DatumFeature.h"
 #include "EllipsePy.h"
 #include "FaceMaker.h"
+#include "PmiFeature.h"
 #include "FaceMakerBullseye.h"
 #include "FaceMakerBuildFace.h"
 #include "FaceMakerCheese.h"
@@ -472,6 +473,11 @@ PyMOD_INIT_FUNC(Part)
     Part::LinkArrayPoint        ::init();
     Part::PointPatternExtension ::init();
 
+    Part::PmiItem               ::init();
+    Part::PmiDimension          ::init();
+    Part::PmiTolerance          ::init();
+    Part::PmiDatum              ::init();
+    Part::PmiGroup              ::init();
     Part::Feature               ::init();
     Part::FeatureExt            ::init();
     Part::BodyBase              ::init();

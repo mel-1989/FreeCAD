@@ -1,0 +1,140 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+
+/***************************************************************************
+ *   Copyright (c) 2026 FreeCAD fork contributors                          *
+ *                                                                         *
+ *   This file is part of FreeCAD.                                         *
+ *                                                                         *
+ *   FreeCAD is free software: you can redistribute it and/or modify it    *
+ *   under the terms of the GNU Lesser General Public License as           *
+ *   published by the Free Software Foundation, either version 2.1 of the  *
+ *   License, or (at your option) any later version.                       *
+ *                                                                         *
+ *   FreeCAD is distributed in the hope that it will be useful, but        *
+ *   WITHOUT ANY WARRANTY; without even the implied warranty of            *
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU      *
+ *   Lesser General Public License for more details.                       *
+ *                                                                         *
+ *   You should have received a copy of the GNU Lesser General Public      *
+ *   License along with FreeCAD. If not, see                               *
+ *   <https://www.gnu.org/licenses/>.                                      *
+ *                                                                         *
+ **************************************************************************/
+
+#ifndef PART_PMIFEATURE_H
+#define PART_PMIFEATURE_H
+
+#include <App/DocumentObject.h>
+#include <App/DocumentObjectGroup.h>
+#include <App/PropertyLinks.h>
+#include <App/PropertyStandard.h>
+#include <Mod/Part/PartGlobal.h>
+
+// Semantic product and manufacturing information (PMI): the dimensions, geometric tolerances and
+// datums of a 3D model. The vocabulary follows the CAx-IF recommended practices for the
+// representation and presentation of PMI (AP242), ASME Y14.5 and ISO 1101; the type names are the
+// ones of OCCT's XCAFDimTolObjects enumerations, so an item can be rebuilt as an XCAF object.
+
+namespace Part
+{
+
+/**
+ * Common data of one PMI item. Not a Part::Feature: it has no shape, only values and links to the
+ * faces or edges it governs.
+ */
+class PartExport PmiItem: public App::DocumentObject
+{
+    PROPERTY_HEADER_WITH_OVERRIDE(Part::PmiItem);
+
+public:
+    PmiItem();
+
+    /// Type name from the XCAF enumeration, e.g. Size_Diameter, Location_LinearDistance, Position, Flatness, Datum
+    App::PropertyString PmiType;
+    /// Semantic name the source file gave the item (for example "diameter" or "Position.1")
+    App::PropertyString SemanticName;
+    /// Nominal value (millimetre, or degree for angles); the tolerance magnitude for a tolerance
+    App::PropertyFloat Value;
+    /// True when UpperBound and LowerBound are set
+    App::PropertyBool HasBounds;
+    /// "range" (absolute limits), "plus_minus" (deviations from the nominal) or "class" (limits and fits), empty without bounds
+    App::PropertyString BoundsKind;
+    App::PropertyFloat UpperBound;
+    App::PropertyFloat LowerBound;
+    /// Qualifier of the item (Min, Max, Avg; Small, Large, Equal for angles); empty if none
+    App::PropertyString Qualifier;
+    /// Modifiers in the source order, upper case names such as MAXIMUM_MATERIAL_REQUIREMENT
+    App::PropertyStringList Modifiers;
+    /// Datum references in compartment order, one per use, e.g. "A", "B(MAXIMUM_MATERIAL_REQUIREMENT)"
+    App::PropertyStringList DatumReferences;
+    /// The imported shape objects and the Face/Edge names this item governs
+    App::PropertyXLinkSubList References;
+    /// Part 21 entity ids (#n) of the faces governed at import, ascending
+    App::PropertyIntegerList StepFaceIds;
+    /// Every field of the source object as text; enough to rebuild the XCAF object
+    App::PropertyMap RawAttributes;
+    /// True when the type or a modifier was not recognised
+    App::PropertyBool Unmapped;
+    /// True when the item could not be attached to any face or edge of the document
+    App::PropertyBool Unattached;
+
+    const char* getViewProviderName() const override
+    {
+        return "Gui::ViewProviderDocumentObject";
+    }
+};
+
+/// A size or location dimension
+class PartExport PmiDimension: public PmiItem
+{
+    PROPERTY_HEADER_WITH_OVERRIDE(Part::PmiDimension);
+
+public:
+    PmiDimension();
+    /// ISO 286 class of tolerance such as "H7" (empty if none); hole is capital, shaft is lower case
+    App::PropertyString ToleranceClass;
+};
+
+/// A geometric tolerance with its datum references
+class PartExport PmiTolerance: public PmiItem
+{
+    PROPERTY_HEADER_WITH_OVERRIDE(Part::PmiTolerance);
+
+public:
+    PmiTolerance();
+    /// "", "Diameter" or "SphericalDiameter": the shape of the tolerance zone value
+    App::PropertyString ZoneShape;
+    /// "", "Projected", "Runout" or "NonUniform"
+    App::PropertyString ZoneModifier;
+    /// The value that goes with the zone modifier (projected zone height, for example)
+    App::PropertyFloat ZoneModifierValue;
+    /// One datum object per datum reference, in the order of DatumReferences
+    App::PropertyLinkList Datums;
+};
+
+/// A datum, or a datum target; one object per datum reference use, as OCCT stores them
+class PartExport PmiDatum: public PmiItem
+{
+    PROPERTY_HEADER_WITH_OVERRIDE(Part::PmiDatum);
+
+public:
+    PmiDatum();
+    /// The datum letter
+    App::PropertyString Letter;
+    /// Place of the datum in the reference frame of its tolerance (1 is primary)
+    App::PropertyInteger Position;
+    App::PropertyBool IsTarget;
+};
+
+/// The group that holds all PMI items of one import
+class PartExport PmiGroup: public App::DocumentObjectGroup
+{
+    PROPERTY_HEADER_WITH_OVERRIDE(Part::PmiGroup);
+
+public:
+    PmiGroup() = default;
+};
+
+}  // namespace Part
+
+#endif  // PART_PMIFEATURE_H
