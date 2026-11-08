@@ -66,6 +66,7 @@
 #include "ViewProviderPrimitive.h"
 #include "ViewProviderPython.h"
 #include "ViewProviderImport.h"
+#include "ViewProviderPmi.h"
 #include "ViewProviderLineParametric.h"
 #include "ViewProviderLinkArray.h"
 #include "ViewProviderMirror.h"
@@ -190,6 +191,8 @@ PyMOD_INIT_FUNC(PartGui)
     PartGui::ViewProviderRegularPolygon             ::init();
     PartGui::ViewProviderWedge                      ::init();
     PartGui::ViewProviderImport                     ::init();
+    PartGui::ViewProviderPmiItem                    ::init();
+    PartGui::ViewProviderPmiGroup                   ::init();
     PartGui::ViewProviderCurveNet                   ::init();
     PartGui::ViewProviderExtrusion                  ::init();
     PartGui::ViewProviderScale                      ::init();

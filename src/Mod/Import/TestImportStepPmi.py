@@ -872,6 +872,28 @@ class TestExportStepPmi(unittest.TestCase):
         self.assertNotIn("GEOMETRIC_TOLERANCE", text)
         self.assertIn("MANIFOLD_SOLID_BREP", text)
 
+    def test_write_error_of_an_unknown_kind_falls_back_but_the_known_kind_is_accepted(self):
+        # run 077 repair 1 (mutant of check 15): the check list of the write holds a null reference of the known kind
+        # alone (accepted: the file keeps its PMI) or with a failure of another kind (refused: no-PMI fallback and a warning)
+        self._annotation(True)
+        try:
+            os.environ["FC_STEP_PMI"] = "checkfail:known"
+            out = self._export(self.doc, "known.stp")
+            rep = Import.lastStepPmiExportReport()
+            self.assertFalse(rep["fell_back"])
+            self.assertTrue(rep["write_error_accepted"])
+            self.assertIn("GEOMETRIC_TOLERANCE", self._text(out))
+            os.environ["FC_STEP_PMI"] = "checkfail:other"
+            out = self._export(self.doc, "other.stp")
+            rep = Import.lastStepPmiExportReport()
+            self.assertTrue(rep["fell_back"])
+            self.assertFalse(rep["write_error_accepted"])
+            self.assertTrue(any("written again without PMI" in w for w in rep["warnings"]))
+            self.assertNotIn("GEOMETRIC_TOLERANCE", self._text(out))
+            self.assertIn("MANIFOLD_SOLID_BREP", self._text(out))
+        finally:
+            os.environ.pop("FC_STEP_PMI", None)
+
     # ---- run 076 verifier cases: pairing of all-around, graphic callouts ---------------------------------------------
 
     def _add_tol(self, kind, value, refs, mods=(), datums=(), nfaces=2):
@@ -927,14 +949,18 @@ class TestExportStepPmi(unittest.TestCase):
         self.assertGreaterEqual(len(anns[0].References), 1)  # import keeps the faces of a callout
         self.assertFalse(anns[0].Presentation.isNull())
 
-    def test_graphic_callout_pointing_at_no_face_is_left_out_with_one_warning(self):
+    def test_graphic_callout_pointing_at_no_face_is_written_with_one_warning(self):
+        # run 077, check 15: OCCT's writer reports an error for a presentation label without a shape although the file
+        # is complete; the error is accepted only for that known kind, and the file keeps its semantic PMI and the callout
         self._annotation(False)
         out = self._export(self.doc)
         rep = Import.lastStepPmiExportReport()
-        self.assertEqual(rep["annotations"], 0)
-        self.assertEqual(len([w for w in rep["warnings"] if "point at no face" in w]), 1)
-        self.assertNotIn("TESSELLATED_ANNOTATION_OCCURRENCE", self._text(out))
+        self.assertEqual(rep["shapeless_callouts"], 1)
         self.assertFalse(rep["fell_back"])
+        self.assertEqual(len([w for w in rep["warnings"] if "point at no face" in w]), 1)
+        self.assertGreater(rep["dimensions"] + rep["tolerances"] + rep["datums"], 0)
+        back = self._insert(out)
+        self.assertEqual(len(self._of(back, "Part::PmiDimension")), len(self._of(self.doc, "Part::PmiDimension")))
 
     def test_all_around_is_left_alone_when_the_flagged_one_is_not_the_composite_one(self):
         # identical datum-less Flatness 0.1: the flagged one governs one face (a plain shape aspect), the other two faces (composite)

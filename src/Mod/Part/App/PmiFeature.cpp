@@ -23,6 +23,8 @@
 
 #include "PreCompiled.h"
 
+#include <App/GeoFeature.h>
+
 #include "PmiFeature.h"
 
 using namespace Part;
@@ -49,7 +51,37 @@ PmiItem::PmiItem()
     ADD_PROPERTY_TYPE(KernelLoss, (), "PMI", App::Prop_None, "What the STEP reader lost or altered, one reason per entry");
     ADD_PROPERTY_TYPE(StepEntityName, (""), "PMI", App::Prop_None, "Name of the STEP entity, for example diameter");
     ADD_PROPERTY_TYPE(Presentation, (TopoDS_Shape()), "PMI", App::Prop_None, "Graphic presentation of the item from the source file");
+    ADD_PROPERTY_TYPE(
+        ReferencePlacement,
+        (Base::Placement()),
+        "PMI",
+        App::Prop_None,
+        "Global placement of the governed object when the item was imported"
+    );
     StepFaceIds.setValues({});
+}
+
+void PmiItem::onChanged(const App::Property* prop)
+{
+    if (prop == &ReferencePlacement && isRestoring()) {
+        referencePlacementRestored = true;  // the file carries it
+    }
+    App::DocumentObject::onChanged(prop);
+}
+
+void PmiItem::onDocumentRestored()
+{
+    App::DocumentObject::onDocumentRestored();
+    if (referencePlacementRestored) {
+        return;
+    }
+    // the display follows References[0], so the placement is that object's
+    const auto& linked = References.getValues();
+    if (!linked.empty()) {
+        if (auto* gf = dynamic_cast<App::GeoFeature*>(linked.front())) {
+            ReferencePlacement.setValue(gf->globalPlacement());
+        }
+    }
 }
 
 PROPERTY_SOURCE(Part::PmiDimension, Part::PmiItem)
