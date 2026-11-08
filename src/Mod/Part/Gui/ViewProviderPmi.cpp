@@ -697,7 +697,7 @@ bool ViewProviderPmiItem::computeAnchor(FallbackAnchor& out)
         if (!warnedMissingRef) {
             warnedMissingRef = true;
             Base::Console().warning(
-                "PMI display: %s: its references name no existing face or edge of %s; no fallback label drawn\n",
+                "PMI display: {}: its references name no existing face or edge of {}; no fallback label drawn\n",
                 item->getNameInDocument(),
                 feat->getNameInDocument()
             );
@@ -1006,7 +1006,7 @@ void ViewProviderPmiItem::rebuildGeometry()
         }
         catch (const Standard_Failure& e) {
             Base::Console().warning(
-                "PMI display: %s: the presentation could not be read (%s)\n",
+                "PMI display: {}: the presentation could not be read ({})\n",
                 item->getNameInDocument(),
                 e.GetMessageString()
             );
