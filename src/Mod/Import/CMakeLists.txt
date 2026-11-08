@@ -52,6 +52,7 @@ set(Import_Scripts
     stepZ.py
     TestImportStepValidation.py
     TestImportStepAttributes.py
+    TestImportStepPmi.py
     TestImportBatch.py
     translate.py
 )

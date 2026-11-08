@@ -30,6 +30,8 @@ SET(Import_SRCS
     StepAttributes.h
     StepExternalRefs.cpp
     StepExternalRefs.h
+    StepPmi.cpp
+    StepPmi.h
     StepValidation.cpp
     StepValidation.h
     StepShape.h

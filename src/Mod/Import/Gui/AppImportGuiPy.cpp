@@ -65,6 +65,7 @@
 #include <Mod/Import/App/ReaderGltf.h>
 #include <Mod/Import/App/ReaderIges.h>
 #include <Mod/Import/App/ReaderStep.h>
+#include <Mod/Import/App/StepPmi.h>
 #include <Mod/Import/App/WriterGltf.h>
 #include <Mod/Import/App/WriterIges.h>
 #include <Mod/Import/App/WriterStep.h>
@@ -374,6 +375,7 @@ private:
                 ocaf.setMode(mode);
             }
             auto ret = ocaf.loadShapes();
+            Import::importStepPmi(hDoc, pcDoc);
             hApp->Close(hDoc);
 
             if (ret) {
