@@ -2519,7 +2519,7 @@ void parseProgramOptions(int ac, char ** av, const std::string& exe, boost::prog
     ("disable-addon", boost::program_options::value< std::vector<std::string> >()->composing(),"Disable a given addon.")
     ("single-instance", "Allow to run a single instance of the application")
     ("safe-mode", "Force enable safe mode")
-    ("pass", boost::program_options::value< std::vector<std::string> >()->multitoken(), "Ignores the following arguments and pass them through to be used by a script")
+    ("pass", boost::program_options::value< std::vector<std::string> >()->multitoken(), "Ignores all following arguments, options and input files included, which a script reads from sys.argv")
     ;
 
 
@@ -2562,6 +2562,12 @@ void parseProgramOptions(int ac, char ** av, const std::string& exe, boost::prog
     std::vector<std::string> args;
     bool merge=false;
     for (int i=1; i<ac; i++) {
+        // Everything after --pass belongs to the script, which reads it from sys.argv. Boost.Program_options
+        // would take only the first following token as an option name and reject the others, and a bare
+        // --pass would be an error, so the parser never sees --pass or what follows it.
+        if (!merge && strcmp(av[i], "--pass") == 0) {
+            break;
+        }
         if (merge) {
             merge = false;
             args.back() += "=";

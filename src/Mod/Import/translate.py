@@ -10,24 +10,22 @@
 
 """Batch translation command.
 
-Run it with FreeCADCmd; ``--pass`` hands the rest of the command line to the script::
+Run it with FreeCADCmd; ``--pass`` hands the rest of the command line to the script untouched::
 
-    FreeCADCmd <install>/Mod/Import/translate.py --pass to=step out=outdir part1.iges models/ "cad/*.brep"
+    FreeCADCmd <install>/Mod/Import/translate.py --pass --to step --out outdir part1.iges models/ "cad/*.brep"
 
-FreeCAD's own command-line parser accepts only the first unknown ``--option`` after ``--pass`` (a second one
-stops FreeCADCmd with "unrecognised option" before this script runs), so every option can also be written
-as ``name=value``, and that is the form to use with more than one option.
-``--to step`` is accepted when it is the only option or comes first, and so is ``--help``.
+Every option is written as ``--name value``, and also as ``name=value`` (``to=step out=outdir``), which older
+builds of FreeCADCmd needed because they refused a second dash option after ``--pass``.
 
 Inputs are files, folders (searched for files FreeCAD can read, not recursively) or glob patterns.
 
 Options::
 
-    to=FORMAT       step, iges, brep, stl, obj, 3mf, dxf or fcstd (required)
-    out=DIR         folder for the results (default: the current folder)
-    timeout=SEC     seconds allowed per file (default 300, 0 means no limit)
-    report=FILE     write a JSON report: one entry per file and a summary
-    --help          this text
+    --to FORMAT       step, iges, brep, stl, obj, 3mf, dxf or fcstd (required)
+    --out DIR         folder for the results (default: the current folder)
+    --timeout SEC     seconds allowed per file (default 300, 0 means no limit)
+    --report FILE     write a JSON report: one entry per file and a summary
+    --help            this text
 
 Each result is written to a hidden scratch folder inside the output folder and moved to its final name only
 when the conversion is ok or changed, so a failed or timed-out file never removes or damages a file that was
