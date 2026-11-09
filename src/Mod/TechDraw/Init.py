@@ -25,4 +25,4 @@
 
 # FreeCAD init script of the TechDraw module
 
-FreeCAD.__unit_test__ += ["TestTechDrawApp", "TestTechDrawPmi"]
+FreeCAD.__unit_test__ += ["TestTechDrawApp", "TestTechDrawPmi", "TestTechDrawLayout"]

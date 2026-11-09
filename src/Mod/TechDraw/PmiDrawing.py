@@ -672,11 +672,12 @@ class _View:
 
 
 def anchorEnd(leader):
-    """The end of a leader in unscaled view coordinates: (X, Y) plus the last waypoint delta over the scale."""
+    """The end of a leader in unscaled view coordinates: (X, Y) plus the last waypoint delta over the scale (way points are
+    page millimetres with y pointing down, as TechDraw draws them; the leader's X, Y are unscaled with y up)."""
     wp = leader.WayPoints
     s = _leader_scale(leader)
     last = wp[-1]
-    return App.Vector(leader.X.Value + last.x / s, leader.Y.Value + last.y / s, 0)
+    return App.Vector(leader.X.Value + last.x / s, leader.Y.Value - last.y / s, 0)  # way points are y down, the position y up
 
 
 def _leader_scale(leader):
@@ -910,14 +911,14 @@ class _Projector:
         x, y = self._place(vw, u)
         s = vw.scale
         ld = self.doc.addObject("TechDraw::DrawLeaderLine", "PmiLeader")
+        ld.LeaderParent = vw.view  # the parent before the page: with the page open the GUI looks the parent up when the item is made
         self.page.addView(ld)
-        ld.LeaderParent = vw.view
         ld.Scalable = False
         ld.AutoHorizontal = False
         ld.RotatesWithParent = False
         ld.X = x
         ld.Y = y
-        ld.WayPoints = [App.Vector(0, 0, 0), App.Vector((u.x - x) * s, (u.y - y) * s, 0)]
+        ld.WayPoints = [App.Vector(0, 0, 0), App.Vector((u.x - x) * s, -(u.y - y) * s, 0)]
         ld.EndSymbol = "Filled triangle"
         ld.Label = "Leader " + label
         _dyn(ld, "App::PropertyVector", "PmiOffset", "Annotation position minus anchor, unscaled view coordinates")
@@ -931,8 +932,8 @@ class _Projector:
 
     def _make_anno(self, item, ld, text, role, label, frame):
         an = self.doc.addObject("TechDraw::DrawRichAnno", "PmiAnno")
+        an.AnnoParent = ld  # before the page: with the page open the GUI looks the parent up when the item is made
         self.page.addView(an)
-        an.AnnoParent = ld
         an.AnnoText = text
         an.ShowFrame = frame
         an.Label = label
@@ -1001,10 +1002,10 @@ class _Projector:
     def _try_dimension(self, item, vw, typ, ref3d, prefix=None):
         d = self.doc.addObject("TechDraw::DrawViewDimension", "PmiDimension")
         try:
-            self.page.addView(d)
             d.Type = typ
             d.References2D = [(vw.view, "")]
             d.References3D = ref3d
+            self.page.addView(d)
             d.recompute()
             ok = self._measured_ok(item, d)
         except Exception:
@@ -1248,13 +1249,15 @@ def _close(a, b, rel=NOMINAL_REL):
 # ------------------------------------------------------------------------------------------------
 
 
-def project(page, source, items=None, view=None):
+def project(page, source, items=None, view=None, layout=True):
     """Put PMI on views of ``page``.
 
     source: the body (or a list of bodies) the views show.  items: PMI items to project, default every dimension, tolerance
     and datum of the document.  view: a DrawViewPart to put everything on; default is a projection group (Front, Top, Right,
-    Left, Rear and Bottom only when an item needs them).  Returns {item name: ([drawing object names], view label)} or
-    {item name: ("not projected", reason)} with reason one of ``unattached``, ``geometry``, ``no view``."""
+    Left, Rear and Bottom only when an item needs them).  layout: lay the page out afterwards (DrawingLayout.layout: scale,
+    view positions, annotation positions), in the same undo transaction; False leaves every annotation stacked beside its view.
+    Returns {item name: ([drawing object names], view label)} or {item name: ("not projected", reason)} with reason one of
+    ``unattached``, ``geometry``, ``no view``."""
     sources = list(source) if isinstance(source, (list, tuple)) else [source]
     doc = page.Document
     if items is None:
@@ -1263,12 +1266,58 @@ def project(page, source, items=None, view=None):
     try:
         _remove_orphans(page)
         report = _Projector(page, sources, view).run(list(items))
+        if layout:
+            import DrawingLayout
+
+            DrawingLayout.layout(page, _in_transaction=True)
     except Exception:
         doc.abortTransaction()
         raise
     doc.commitTransaction()
     _fill_datum_uses(page, items, report)
     return report
+
+
+def clear(page, view=None):
+    """Remove the PMI drawing objects (dimensions, frames, datum symbols and their leaders) of ``page``, or only those on
+    ``view`` (a view or a projection group item; a projection group stands for its members), in one undo transaction.  The
+    views stay; afterwards TechDraw's own delete of a view works, because nothing hangs from it.  Returns the names removed."""
+    doc = page.Document
+    objs = _all_pmi_objects(page)
+    if view is not None:
+        views = set()
+        members = list(view.Views) if view.TypeId == "TechDraw::DrawProjGroup" else []
+        views = {view.Name} | {m.Name for m in members}
+
+        def parent(o):
+            if o.PmiRole == "dimension":
+                r2 = o.References2D
+                return r2[0][0] if len(r2) and r2[0][0] is not None else None
+            if o.PmiRole == "leader":
+                return o.LeaderParent
+            return o.AnnoParent.LeaderParent if o.AnnoParent is not None else None
+
+        objs = [o for o in objs if parent(o) is not None and parent(o).Name in views]
+    names = [o.Name for o in objs]
+    for o in objs:  # a frame or datum symbol takes its leader with it, and a leader its annotation
+        if o.PmiRole in ("frame", "datum") and o.AnnoParent is not None and o.AnnoParent.Name not in names:
+            names.append(o.AnnoParent.Name)
+        if o.PmiRole == "leader":
+            for x in o.InList:
+                if x.TypeId == "TechDraw::DrawRichAnno" and x.Name not in names:
+                    names.append(x.Name)
+    leaders = [n for n in names if doc.getObject(n) is not None and doc.getObject(n).PmiRole == "leader"]
+    names = [n for n in names if n not in leaders] + leaders  # annotations first, then the leaders they hung from
+    doc.openTransaction("PMI clear")
+    try:
+        for n in names:
+            if doc.getObject(n) is not None:
+                doc.removeObject(n)
+    except Exception:
+        doc.abortTransaction()
+        raise
+    doc.commitTransaction()
+    return names
 
 
 def _fill_datum_uses(page, items, report):
@@ -1466,10 +1515,20 @@ def _refresh_leader(ld, item, geo):
     u = vw.u(p)
     off = ld.PmiOffset
     s = vw.scale
+    if "PmiLayout" in ld.PropertiesList:
+        st = ld.PmiLayout
+        if abs(ld.X.Value - st.x) > 1e-4 or abs(ld.Y.Value - st.y) > 1e-4:
+            # the user moved this leader after the last layout (a pin): keep it where it is, whatever the anchor did
+            off = App.Vector(ld.X.Value - u.x, ld.Y.Value - u.y, 0)
+            if (ld.PmiOffset - off).Length > 1e-9:
+                ld.PmiOffset = off
+                changed = True
     x, y = u.x + off.x, u.y + off.y
-    wp = [App.Vector(0, 0, 0), App.Vector(-off.x * s, -off.y * s, 0)]
+    wp = [App.Vector(0, 0, 0), App.Vector(-off.x * s, off.y * s, 0)]  # page mm, y down
     if abs(ld.X.Value - x) > 1e-9 or abs(ld.Y.Value - y) > 1e-9:
         ld.X, ld.Y = x, y
+        if "PmiLayout" in ld.PropertiesList:
+            ld.PmiLayout = App.Vector(ld.X.Value, ld.Y.Value, 0)
         changed = True
     cur = ld.WayPoints
     if len(cur) != 2 or (cur[1] - wp[1]).Length > 1e-9:

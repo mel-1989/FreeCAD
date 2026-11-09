@@ -14,7 +14,9 @@ set(TechDraw_Scripts
     TestTechDrawApp.py
     TestTechDrawGui.py
     TestTechDrawPmi.py
+    TestTechDrawLayout.py
     PmiDrawing.py
+    DrawingLayout.py
 )
 
 if(BUILD_GUI)
@@ -197,6 +199,7 @@ SET(TDTest_SRCS
     TDTest/TechDrawTaskTest.py
     TDTest/TechDrawTestUtilities.py
     TDTest/PmiDrawingTest.py
+    TDTest/DrawingLayoutTest.py
 )
 
 SET(TDTestFile_SRCS
