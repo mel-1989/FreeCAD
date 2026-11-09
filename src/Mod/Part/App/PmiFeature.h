@@ -58,6 +58,8 @@ public:
     App::PropertyString SemanticName;
     /// Nominal value (millimetre, or degree for angles); the tolerance magnitude for a tolerance
     App::PropertyFloat Value;
+    /// False for a dimension the author gave no stated value (Value is then 0.0 and means nothing; the writer writes no nominal)
+    App::PropertyBool HasValue;
     /// True when UpperBound and LowerBound are set
     App::PropertyBool HasBounds;
     /// "range" (absolute limits), "plus_minus" (deviations from the nominal) or "class" (limits and fits), empty without bounds
@@ -72,6 +74,13 @@ public:
     App::PropertyStringList DatumReferences;
     /// The imported shape objects and the Face/Edge names this item governs
     App::PropertyXLinkSubList References;
+    /// "Object.FaceN" names, a subset of References: the faces on the second side of a location dimension (the other
+    /// faces of References are its first side). Empty for an imported item (its sides are kept in RawAttributes) and for
+    /// every item that has one side
+    App::PropertyStringList SecondSide;
+    /// Standards rule checks of the authoring tool (PmiAuthoring.checkPmi): one entry per broken rule, "<rule id>: <message>";
+    /// empty when none was found. A warning only, nothing in the export depends on it
+    App::PropertyStringList RuleWarnings;
     /// Part 21 entity ids (#n) of the faces governed at import, ascending
     App::PropertyIntegerList StepFaceIds;
     /// Every field of the source object as text; enough to rebuild the XCAF object

@@ -36,6 +36,7 @@ PmiItem::PmiItem()
     ADD_PROPERTY_TYPE(PmiType, (""), "PMI", App::Prop_None, "XCAF type name of the item");
     ADD_PROPERTY_TYPE(SemanticName, (""), "PMI", App::Prop_None, "Name given by the source file");
     ADD_PROPERTY_TYPE(Value, (0.0), "PMI", App::Prop_None, "Nominal value (mm or degrees) or tolerance magnitude");
+    ADD_PROPERTY_TYPE(HasValue, (true), "PMI", App::Prop_None, "False when no value is stated for the item (Value is then not a measurement)");
     ADD_PROPERTY_TYPE(HasBounds, (false), "PMI", App::Prop_None, "UpperBound and LowerBound are set");
     ADD_PROPERTY_TYPE(BoundsKind, (""), "PMI", App::Prop_None, "range, plus_minus or class");
     ADD_PROPERTY_TYPE(UpperBound, (0.0), "PMI", App::Prop_None, "Upper limit or deviation");
@@ -44,6 +45,8 @@ PmiItem::PmiItem()
     ADD_PROPERTY_TYPE(Modifiers, (), "PMI", App::Prop_None, "Modifiers in source order");
     ADD_PROPERTY_TYPE(DatumReferences, (), "PMI", App::Prop_None, "Datum references in compartment order");
     ADD_PROPERTY_TYPE(References, (nullptr), "PMI", App::Prop_None, "Governed faces and edges");
+    ADD_PROPERTY_TYPE(SecondSide, (), "PMI", App::Prop_None, "Faces on the second side of a location dimension, as Object.FaceN");
+    ADD_PROPERTY_TYPE(RuleWarnings, (), "PMI", App::Prop_None, "Broken standards rules found by the authoring tool, one per entry");
     ADD_PROPERTY_TYPE(StepFaceIds, (0), "PMI", App::Prop_None, "Part 21 ids of the governed faces at import");
     ADD_PROPERTY_TYPE(RawAttributes, (), "PMI", App::Prop_None, "All source attributes as text");
     ADD_PROPERTY_TYPE(Unmapped, (false), "PMI", App::Prop_None, "Type or modifier not recognised");
