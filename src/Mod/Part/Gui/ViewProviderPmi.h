@@ -33,6 +33,7 @@
 #include <string>
 #include <vector>
 
+#include <Inventor/SbMatrix.h>
 #include <Inventor/SbVec3f.h>
 #include <Mod/Part/PartGlobal.h>
 #include <gp_Dir.hxx>
@@ -51,6 +52,7 @@ class SoIndexedLineSet;
 class SoIndexedFaceSet;
 class SoBaseColor;
 class SoInfo;
+class SoTranslation;
 
 namespace App
 {
@@ -103,6 +105,21 @@ public:
         return drawMode() != PmiDrawMode::None;
     }
 
+    /// What the per-camera screen layout needs of a drawn fallback label: its nominal pick quad and the point it governs
+    /// (in the governed object's coordinates) and the object-to-world matrix
+    struct ScreenData
+    {
+        SbVec3f quad[4];
+        SbVec3f anchor;
+        SbMatrix toWorld, toLocal;
+    };
+    bool screenData(ScreenData& out) const;
+    /// Shift the drawn label by a vector in the governed object's coordinates; the pick quad, the label's
+    /// transformation and, when leader is set, its leader line move together
+    void setScreenOffset(const SbVec3f& shift, bool leader = false);
+    /// The drawn fallback labels of a document, ordered by object name
+    static std::vector<ViewProviderPmiItem*> fallbackProviders(const App::Document* doc);
+
 private:
     void rebuildGeometry();
     bool fallbackEligible() const;
@@ -137,6 +154,13 @@ private:
 
     SoSeparator* modeRoot {nullptr};  // child of the mode switch; holds drawRoot when the item draws
     SoSeparator* drawRoot {nullptr};  // named PMI_<name>
+    SoSeparator* labelRoot {nullptr};   // the label proper: a translation (the screen layout's shift), lines, text, pick quad
+    SoTranslation* offsetT {nullptr};
+    SoSeparator* leaderRoot {nullptr};  // named Leader_<name>
+    SoCoordinate3* leaderCoords {nullptr};
+    SoIndexedLineSet* leaderLines {nullptr};
+    SbVec3f baseQuad[4], baseAnchor;    // the label's nominal pick quad and the point it governs, in object coordinates
+    bool haveBaseQuad {false};
     SoTransform* transform {nullptr};
     SoBaseColor* color {nullptr};
     SoCoordinate3* coords {nullptr};
