@@ -440,6 +440,9 @@ ViewProviderPmiItem::~ViewProviderPmiItem()
     if (drawRoot) {
         drawRoot->unref();
     }
+    if (leaderRoot) {
+        leaderRoot->unref();
+    }
     if (watchedDoc) {
         PlacementWatcher::instance().remove(watchedDoc, this);
     }
@@ -502,6 +505,25 @@ void ViewProviderPmiItem::attach(App::DocumentObject* obj)
     proxyFaces = new SoIndexedFaceSet;
     proxy->addChild(proxyFaces);
     drawRoot->addChild(proxy);
+
+    leaderRoot = new SoSeparator;  // not named PMI_*: the drawn-item search counts one separator per item
+    leaderRoot->ref();
+    leaderRoot->setName(SbName((std::string("Leader_") + obj->getNameInDocument()).c_str()));
+    auto* leaderPick = new SoPickStyle;
+    leaderPick->style = SoPickStyle::UNPICKABLE;  // a leader never takes a click from a label or from the body
+    leaderRoot->addChild(leaderPick);
+    auto* leaderLight = new SoLightModel;
+    leaderLight->model = SoLightModel::BASE_COLOR;
+    leaderRoot->addChild(leaderLight);
+    leaderTransform = new SoTransform;
+    leaderRoot->addChild(leaderTransform);
+    auto* leaderColor = new SoBaseColor;
+    leaderColor->rgb.setValue(0.05f, 0.25f, 0.65f);
+    leaderRoot->addChild(leaderColor);
+    leaderCoords = new SoCoordinate3;
+    leaderRoot->addChild(leaderCoords);
+    leaderLines = new SoIndexedLineSet;
+    leaderRoot->addChild(leaderLines);
 
     addDisplayMaskMode(modeRoot, "Pmi");
     setDisplayMaskMode("Pmi");
@@ -807,7 +829,7 @@ bool ViewProviderPmiItem::baseFrame(LabelFrame& f, double diag)
         extentCache = {true, text, hw + 0.3, hh + 0.3};  // the pick quad is a little larger than the label
     }
     const gp_Dir normal = a.normal;
-    f.h = 0.035 * diag;  // digit height of the label
+    f.h = 0.033 * diag;  // digit height of the label
     const gp_Vec up0 = std::fabs(normal.Z()) < 0.9 ? gp_Vec(0, 0, 1) : gp_Vec(0, 1, 0);
     f.right = gp_Dir(up0.Crossed(gp_Vec(normal)));  // right x up = normal: the label faces outward
     f.up = gp_Dir(gp_Vec(normal).Crossed(gp_Vec(f.right)));
@@ -817,6 +839,7 @@ bool ViewProviderPmiItem::baseFrame(LabelFrame& f, double diag)
         a.centre.Y() + normal.Y() * 0.05 * diag,
         a.centre.Z() + normal.Z() * 0.05 * diag
     );
+    f.origin = f.anchor;
     f.hw = extentCache.hw;
     f.hh = extentCache.hh;
     f.text = text;
@@ -835,10 +858,10 @@ struct Vec2
 
 /// Whether two convex polygons (up to four corners, possibly degenerate to a segment) overlap with positive area
 /// (separating axes from the edges of both)
-bool convexOverlap(const std::vector<Vec2>& a, const std::vector<Vec2>& b)
+bool convexOverlap(const std::array<Vec2, 4>& a, const std::array<Vec2, 4>& b)
 {
-    for (const std::vector<Vec2>* poly : {&a, &b}) {
-        const size_t n = poly->size();
+    for (const std::array<Vec2, 4>* poly : {&a, &b}) {
+        constexpr size_t n = 4;
         for (size_t i = 0; i < n; ++i) {
             const Vec2 p = (*poly)[i], q = (*poly)[(i + 1) % n];
             double ax = -(q.y - p.y), ay = q.x - p.x;
@@ -894,12 +917,13 @@ bool coverAlong(const LabelFrame& a, const LabelFrame& b, const gp_Dir& d)
     }
     const gp_Dir e1 = std::fabs(d.Z()) < 0.9 ? gp_Dir(gp_Vec(0, 0, 1).Crossed(gp_Vec(d))) : gp_Dir(gp_Vec(0, 1, 0).Crossed(gp_Vec(d)));
     const gp_Dir e2 = gp_Dir(gp_Vec(d).Crossed(gp_Vec(e1)));
-    std::vector<Vec2> pa, pb;
-    for (const gp_Vec& v : frameCorners(a, a.anchor, 0.2 * a.h)) {
-        pa.push_back({v.Dot(gp_Vec(e1)), v.Dot(gp_Vec(e2))});
-    }
-    for (const gp_Vec& v : frameCorners(b, a.anchor, 0.0)) {
-        pb.push_back({v.Dot(gp_Vec(e1)), v.Dot(gp_Vec(e2))});
+    std::array<Vec2, 4> pa, pb;
+    const gp_Vec g1(e1), g2(e2);
+    const auto ca = frameCorners(a, a.anchor, 0.2 * a.h);
+    const auto cb = frameCorners(b, a.anchor, 0.0);
+    for (size_t i = 0; i < 4; ++i) {
+        pa[i] = {ca[i].Dot(g1), ca[i].Dot(g2)};
+        pb[i] = {cb[i].Dot(g1), cb[i].Dot(g2)};
     }
     return convexOverlap(pa, pb);
 }
@@ -930,7 +954,7 @@ bool framesCover(const LabelFrame& a, const LabelFrame& b)
 const std::vector<std::pair<int, int>>& candidateCells()
 {
     static const std::vector<std::pair<int, int>> cells = []() {
-        constexpr int radius = 24;
+        constexpr int radius = 6;  // the reach of 0.25 diagonals is 5 cells of 1.5 digit heights at 0.033
         std::vector<std::pair<int, int>> v;
         for (int i = -radius; i <= radius; ++i) {
             for (int j = -radius; j <= radius; ++j) {
@@ -1008,30 +1032,32 @@ bool ViewProviderPmiItem::finalFrame(LabelFrame& mine, double diag)
                 continue;
             }
             const gp_Pnt base = f.anchor;
-            const double pitch = 3.0 * f.h;
+            const double pitch = 1.5 * f.h;  // cells of half a pitch: a stack still moves in whole pitches (two cells)
+            const double reach = 0.25 * diag;  // a label stays within a quarter of the model diagonal of its anchor
             LabelFrame best = f;
-            bool found = false;
+            int fewest = 1 << 30;
             for (const auto& [ci, cj] : candidateCells()) {
+                if (pitch * std::hypot(static_cast<double>(ci), static_cast<double>(cj)) > reach) {
+                    continue;
+                }
                 f.anchor = gp_Pnt(
                     base.X() + f.right.X() * pitch * ci + f.up.X() * pitch * cj,
                     base.Y() + f.right.Y() * pitch * ci + f.up.Y() * pitch * cj,
                     base.Z() + f.right.Z() * pitch * ci + f.up.Z() * pitch * cj
                 );
-                bool clash = false;
+                int clashes = 0;
                 for (const LabelFrame& p : placed) {
                     if (framesCover(f, p)) {
-                        clash = true;
+                        ++clashes;
+                    }
+                }
+                if (clashes < fewest) {  // nearest cell first: the first free cell, else the one covering the fewest
+                    fewest = clashes;
+                    best = f;
+                    if (!clashes) {
                         break;
                     }
                 }
-                if (!clash) {
-                    best = f;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                best.anchor = base;  // no free cell within reach: stay at the anchor
             }
             placed.push_back(best);
             entry.frames[vp->getObject()->getNameInDocument()] = best;
@@ -1089,6 +1115,23 @@ bool ViewProviderPmiItem::buildFallback(std::vector<SbVec3f>& pts, std::vector<i
         )));
     }
     setPickProxy(quad);
+    // a label that was moved from its anchor draws a leader from the nearest point of its frame to the anchor
+    leaderCoords->point.setNum(0);
+    leaderLines->coordIndex.setNum(0);
+    if (f.anchor.Distance(f.origin) > 1e-6 * diag) {
+        const gp_Vec d(f.anchor, f.origin);
+        const double lx = std::clamp(d.Dot(gp_Vec(rightDir)), -f.hw * h, f.hw * h);
+        const double ly = std::clamp(d.Dot(gp_Vec(up)), -f.hh * h, f.hh * h);
+        const gp_Pnt start(
+            anchor.X() + lx * rightDir.X() + ly * up.X(),
+            anchor.Y() + lx * rightDir.Y() + ly * up.Y(),
+            anchor.Z() + lx * rightDir.Z() + ly * up.Z()
+        );
+        leaderCoords->point.set1Value(0, toSb(start));
+        leaderCoords->point.set1Value(1, toSb(f.origin));
+        const int32_t idx[3] = {0, 1, -1};
+        leaderLines->coordIndex.setValues(0, 3, idx);
+    }
     if (auto* feat = dynamic_cast<Part::Feature*>(governedObject())) {
         laidOutShape = feat->Shape.getShape().getShape();  // what the label was laid out on
     }
@@ -1120,6 +1163,8 @@ void ViewProviderPmiItem::rebuildGeometry()
     if (!attached) {
         return;
     }
+    leaderCoords->point.setNum(0);
+    leaderLines->coordIndex.setNum(0);
     stale = true;
     mode = drawMode();
     updateTransform();  // the transform depends on what is drawn
@@ -1189,6 +1234,7 @@ void ViewProviderPmiItem::rebuildGeometry()
 
     if (!drawing) {
         modeRoot->addChild(drawRoot);
+        modeRoot->addChild(leaderRoot);
         drawing = true;
     }
 }
@@ -1210,6 +1256,8 @@ void ViewProviderPmiItem::updateTransform()
     const Base::Vector3d& t = delta.getPosition();
     transform->translation.setValue(static_cast<float>(t.x), static_cast<float>(t.y), static_cast<float>(t.z));
     transform->rotation.setValue(SbRotation(static_cast<float>(q0), static_cast<float>(q1), static_cast<float>(q2), static_cast<float>(q3)));
+    leaderTransform->translation.setValue(static_cast<float>(t.x), static_cast<float>(t.y), static_cast<float>(t.z));
+    leaderTransform->rotation.setValue(SbRotation(static_cast<float>(q0), static_cast<float>(q1), static_cast<float>(q2), static_cast<float>(q3)));
 }
 
 void ViewProviderPmiItem::applyVisibility()

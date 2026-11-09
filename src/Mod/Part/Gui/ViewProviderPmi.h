@@ -118,6 +118,7 @@ public:
     struct LabelFrame
     {
         gp_Pnt anchor;
+        gp_Pnt origin;  // the anchor of check 21, where the label starts before it is moved
         gp_Dir right {1, 0, 0}, up {0, 0, 1}, normal {0, 1, 0};
         double h {1.0};   // digit height
         double hw {1.0}, hh {1.0};  // half extent of the pick quad, in digit heights
@@ -143,6 +144,10 @@ private:
     SoIndexedLineSet* lines {nullptr};
     SoIndexedFaceSet* faces {nullptr};
     SoInfo* info {nullptr};              // the text of a fallback label, empty otherwise
+    SoSeparator* leaderRoot {nullptr};   // Leader_<name>: the leader of a displaced label, beside the drawing so its box is unchanged
+    SoTransform* leaderTransform {nullptr};
+    SoCoordinate3* leaderCoords {nullptr};
+    SoIndexedLineSet* leaderLines {nullptr};
     SoCoordinate3* proxyCoords {nullptr};  // invisible, pickable quad over the drawing
     SoIndexedFaceSet* proxyFaces {nullptr};
     PmiDrawMode mode {PmiDrawMode::None};
