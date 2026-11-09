@@ -16,8 +16,11 @@ set(Part_Scripts
     JoinFeatures.py
     MakeBottle.py
     PartEnums.py
+    PmiAuthoring.py
+    PmiRules.json
     TestPartApp.py
     TestPartPmi.py
+    TestPartPmiAuthoring.py
 )
 
 if(BUILD_GUI)

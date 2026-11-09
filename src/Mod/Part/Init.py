@@ -44,3 +44,4 @@ FreeCAD.addTranslatableExportType(
 
 FreeCAD.__unit_test__ += ["TestPartApp"]
 FreeCAD.__unit_test__ += ["TestPartPmi"]
+FreeCAD.__unit_test__ += ["TestPartPmiAuthoring"]

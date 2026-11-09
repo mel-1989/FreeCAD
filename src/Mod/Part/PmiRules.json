@@ -1,0 +1,215 @@
+{
+  "note": "Rules written in our own words as a check table. Clause numbers come from public contents lists and secondary summaries and have not been checked against a licensed copy of each standard; no standard text is copied.",
+  "rules": [
+    {
+      "id": "form-no-datum",
+      "severity": "warning",
+      "message": "A form tolerance (flatness, straightness, circularity, cylindricity) controls one feature on its own, so it takes no datum reference.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "9.1"
+        },
+        {
+          "standard": "ISO 1101:2017",
+          "clause": "17.3"
+        }
+      ]
+    },
+    {
+      "id": "datum-needed",
+      "severity": "warning",
+      "message": "An orientation, runout, concentricity, coaxiality or symmetry tolerance relates a feature to a datum, so its frame needs at least one datum reference.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "6.1"
+        },
+        {
+          "standard": "ISO 1101:2017",
+          "clause": "17.7"
+        }
+      ]
+    },
+    {
+      "id": "material-needs-fos",
+      "severity": "warning",
+      "message": "A maximum or least material modifier only means something on a feature of size (a cylinder, a sphere or two opposed parallel planes); the governed faces are not one.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "7.3"
+        },
+        {
+          "standard": "ISO 1101:2017",
+          "clause": "18.1"
+        }
+      ]
+    },
+    {
+      "id": "diameter-zone-feature",
+      "severity": "warning",
+      "message": "A diameter or spherical diameter tolerance zone belongs to a round feature or an axis; the governed faces are not round.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "7.2.1"
+        },
+        {
+          "standard": "ISO 1101:2017",
+          "clause": "14.2"
+        }
+      ]
+    },
+    {
+      "id": "value-positive",
+      "severity": "error",
+      "message": "The width of a tolerance zone is a positive number; zero or negative cannot be inspected.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "3.4.1"
+        },
+        {
+          "standard": "ISO 1101:2017",
+          "clause": "13.1"
+        }
+      ]
+    },
+    {
+      "id": "bounds-ordered",
+      "severity": "error",
+      "message": "The upper size limit must not be below the lower size limit.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "2.1.1"
+        },
+        {
+          "standard": "ISO 1101:2017",
+          "clause": "ISO 286-1:2010 4.1"
+        }
+      ]
+    },
+    {
+      "id": "letters-excluded",
+      "severity": "warning",
+      "message": "The letters I, O and Q are left out of datum labels so they cannot be mistaken for digits or other symbols.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "4.4"
+        },
+        {
+          "standard": "ISO 5459:2011",
+          "clause": "6.2"
+        }
+      ]
+    },
+    {
+      "id": "letter-repeat",
+      "severity": "warning",
+      "message": "One datum letter can appear only once in a single tolerance frame.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "4.17"
+        },
+        {
+          "standard": "ISO 5459:2011",
+          "clause": "7.2"
+        }
+      ]
+    },
+    {
+      "id": "letter-exists",
+      "severity": "warning",
+      "message": "A tolerance frame refers to a datum letter that no datum feature in the document carries.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "4.4"
+        },
+        {
+          "standard": "ISO 5459:2011",
+          "clause": "6.1"
+        }
+      ]
+    },
+    {
+      "id": "nominal-agrees",
+      "severity": "warning",
+      "message": "The stated nominal size, distance or angle differs from what the governed faces measure.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "2.1.1"
+        },
+        {
+          "standard": "ISO 1101:2017",
+          "clause": "ISO 14405-1:2016 3.1"
+        }
+      ]
+    },
+    {
+      "id": "compartment-order",
+      "severity": "warning",
+      "message": "Datum references run in order of precedence, the primary datum first; the recorded order of the datum uses does not follow the frame.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "4.17.2"
+        },
+        {
+          "standard": "ISO 5459:2011",
+          "clause": "7.1"
+        }
+      ]
+    },
+    {
+      "id": "max-compartments",
+      "severity": "warning",
+      "message": "A tolerance frame has room for a primary, secondary and tertiary datum, three compartments at most.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "4.17.2"
+        },
+        {
+          "standard": "ISO 5459:2011",
+          "clause": "7.1"
+        }
+      ]
+    },
+    {
+      "id": "round-form",
+      "severity": "warning",
+      "message": "Circularity and cylindricity are controls of round surfaces; the governed faces include one that is not round.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "9.4.3"
+        },
+        {
+          "standard": "ISO 1101:2017",
+          "clause": "17.3"
+        }
+      ]
+    },
+    {
+      "id": "projected-height",
+      "severity": "warning",
+      "message": "A projected tolerance zone needs a stated height greater than zero.",
+      "citations": [
+        {
+          "standard": "ASME Y14.5-2018",
+          "clause": "7.5"
+        },
+        {
+          "standard": "ISO 1101:2017",
+          "clause": "ISO 10578:2022 4"
+        }
+      ]
+    }
+  ]
+}

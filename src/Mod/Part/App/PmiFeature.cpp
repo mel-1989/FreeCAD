@@ -44,6 +44,8 @@ PmiItem::PmiItem()
     ADD_PROPERTY_TYPE(Modifiers, (), "PMI", App::Prop_None, "Modifiers in source order");
     ADD_PROPERTY_TYPE(DatumReferences, (), "PMI", App::Prop_None, "Datum references in compartment order");
     ADD_PROPERTY_TYPE(References, (nullptr), "PMI", App::Prop_None, "Governed faces and edges");
+    ADD_PROPERTY_TYPE(SecondSide, (), "PMI", App::Prop_None, "Faces on the second side of a location dimension, as Object.FaceN");
+    ADD_PROPERTY_TYPE(RuleWarnings, (), "PMI", App::Prop_None, "Broken standards rules found by the authoring tool, one per entry");
     ADD_PROPERTY_TYPE(StepFaceIds, (0), "PMI", App::Prop_None, "Part 21 ids of the governed faces at import");
     ADD_PROPERTY_TYPE(RawAttributes, (), "PMI", App::Prop_None, "All source attributes as text");
     ADD_PROPERTY_TYPE(Unmapped, (false), "PMI", App::Prop_None, "Type or modifier not recognised");

@@ -2701,6 +2701,16 @@ namespace
 
 StepPmiExportReport gExport;
 
+/// A size or location written with absolute limits: OCCT's writer states the nominal value as the middle of the limits,
+/// so the nominal the item holds is put back in the file text (repairWrittenStepPmi). Values in the units of the file
+/// (millimetres, radians).
+struct RangeNominal
+{
+    double upper, lower, nominal;
+    bool angular;
+};
+std::vector<RangeNominal> gRangeNominals;
+
 void exportWarn(const std::string& msg)
 {
     gExport.warnings.push_back(msg);
@@ -2964,6 +2974,14 @@ void dimensionLists(
 )
 {
     std::vector<std::string> all = referenceNames(item);
+    if (rawGet(raw, "link.first").empty() && rawGet(raw, "link.second").empty() && !item->SecondSide.getValues().empty()) {
+        // an authored location dimension (PmiAuthoring) names the faces of its second side; the rest of References is the first
+        std::set<std::string> sec(item->SecondSide.getValues().begin(), item->SecondSide.getValues().end());
+        for (const auto& n : all) {
+            (sec.count(n) ? second : first).push_back(n);
+        }
+        return;
+    }
     std::vector<std::string> a = splitNames(rawGet(raw, "link.first"));
     std::vector<std::string> b = splitNames(rawGet(raw, "link.second"));
     std::set<std::string> u(a.begin(), a.end());
@@ -3278,6 +3296,175 @@ bool stepPmiWriteEnabled()
     return grp->GetBool("WritePmi", true);
 }
 
+
+/// OCCT writes one DATUM_SYSTEM (with its own compartments) per tolerance frame. Frames that name the same datums with the
+/// same modifiers state the same datum reference frame, which source files (the NIST test models) write once and share
+/// (CAx-IF PMI recommended practice, datum systems). Merges the systems whose compartments are identical in the file text:
+/// the duplicate and its compartments are dropped and the frames refer to the first. Returns the number of systems removed.
+static int mergeIdenticalDatumSystems(std::string& text)
+{
+    static const std::regex comp(R"(\n#(\d+)\s*=\s*DATUM_REFERENCE_COMPARTMENT\(([^;]*)\);)");
+    static const std::regex sys(R"(\n#(\d+)\s*=\s*DATUM_SYSTEM\(([^;]*?)\(\s*(#\d+(?:\s*,\s*#\d+)*)\s*\)\s*\);)");
+    std::map<std::string, std::string> compArgs;
+    for (std::sregex_iterator it(text.begin(), text.end(), comp), end; it != end; ++it) {
+        std::string a = (*it)[2].str();
+        a.erase(std::remove_if(a.begin(), a.end(), [](unsigned char c) { return std::isspace(c); }), a.end());
+        compArgs[(*it)[1].str()] = a;
+    }
+    struct Sys
+    {
+        std::string id, sig;
+        std::vector<std::string> comps;
+    };
+    std::vector<Sys> systems;
+    for (std::sregex_iterator it(text.begin(), text.end(), sys), end; it != end; ++it) {
+        Sys sy;
+        sy.id = (*it)[1].str();
+        std::string head = (*it)[2].str();
+        head.erase(std::remove_if(head.begin(), head.end(), [](unsigned char c) { return std::isspace(c); }), head.end());
+        std::string list = (*it)[3].str();
+        sy.sig = head + "|";
+        bool ok = true;
+        static const std::regex idr(R"(#(\d+))");
+        for (std::sregex_iterator c(list.begin(), list.end(), idr), ce; c != ce; ++c) {
+            auto f = compArgs.find((*c)[1].str());
+            if (f == compArgs.end()) {
+                ok = false;
+                break;
+            }
+            sy.comps.push_back((*c)[1].str());
+            sy.sig += f->second + "|";
+        }
+        if (ok) {
+            systems.push_back(sy);
+        }
+    }
+    auto uses = [&](const std::string& id) {
+        int n = 0;
+        const std::string tok = "#" + id;
+        for (size_t p = text.find(tok); p != std::string::npos; p = text.find(tok, p + 1)) {
+            if (p + tok.size() >= text.size() || !std::isdigit(static_cast<unsigned char>(text[p + tok.size()]))) {
+                ++n;
+            }
+        }
+        return n;
+    };
+    std::map<std::string, std::string> keeper;
+    std::map<std::string, std::string> replace;
+    std::vector<Sys> drop;
+    for (const auto& sy : systems) {
+        auto k = keeper.find(sy.sig);
+        if (k == keeper.end()) {
+            keeper[sy.sig] = sy.id;
+            continue;
+        }
+        bool exclusive = true;
+        for (const auto& c : sy.comps) {
+            exclusive = exclusive && uses(c) == 2;  // its definition and the list of the system
+        }
+        if (exclusive) {
+            replace[sy.id] = k->second;
+            drop.push_back(sy);
+        }
+    }
+    for (const auto& sy : drop) {
+        auto removeDef = [&](const std::string& id, const char* kind) {
+            const std::regex def("\\n#" + id + "\\s*=\\s*" + kind + "\\([^;]*\\);");
+            text = std::regex_replace(text, def, "");
+        };
+        removeDef(sy.id, "DATUM_SYSTEM");
+        for (const auto& c : sy.comps) {
+            removeDef(c, "DATUM_REFERENCE_COMPARTMENT");
+        }
+    }
+    for (const auto& r : replace) {
+        const std::regex ref("#" + r.first + R"((?!\d))");
+        text = std::regex_replace(text, ref, "#" + r.second);
+    }
+    return static_cast<int>(drop.size());
+}
+
+
+/// Puts the nominal value of the dimensions written with absolute limits back (see RangeNominal). A triple of 'nominal value',
+/// 'lower limit' and 'upper limit' items whose limits belong to items that agree on one nominal gets that nominal; limits
+/// shared by items that disagree are left as written, with a warning. Returns the number of nominals restated.
+static int restateRangeNominals(std::string& text)
+{
+    if (gRangeNominals.empty()) {
+        return 0;
+    }
+    static const std::regex sdr(R"(SHAPE_DIMENSION_REPRESENTATION\(\s*'[^']*'\s*,\s*\(\s*(#\d+)\s*,\s*(#\d+)\s*,\s*(#\d+)\s*\))");
+    auto number = [&](const std::string& id, const std::string& name, double& v, size_t& numPos, size_t& numLen) {
+        const std::string def = "\n" + id + " = ( ";
+        size_t p = text.find(def);
+        if (p == std::string::npos) {
+            return false;
+        }
+        size_t e = text.find(';', p);
+        const std::string ent = text.substr(p, e - p);
+        if (ent.find("'" + name + "'") == std::string::npos) {
+            return false;
+        }
+        static const std::regex mw(R"(MEASURE_WITH_UNIT\(\s*[A-Z_]+\(\s*([-+0-9.eE]+)\s*\))");
+        std::smatch m;
+        if (!std::regex_search(ent, m, mw)) {
+            return false;
+        }
+        v = std::strtod(m[1].str().c_str(), nullptr);
+        numPos = p + m.position(1);
+        numLen = m[1].length();
+        return true;
+    };
+    struct Edit
+    {
+        size_t pos, len;
+        std::string txt;
+    };
+    std::vector<Edit> edits;
+    int ambiguous = 0;
+    for (std::sregex_iterator it(text.begin(), text.end(), sdr), end; it != end; ++it) {
+        double nom = 0, lo = 0, up = 0;
+        size_t pn = 0, ln = 0, pl = 0, ll = 0, pu = 0, lu = 0;
+        if (!number((*it)[1].str(), "nominal value", nom, pn, ln) || !number((*it)[2].str(), "lower limit", lo, pl, ll)
+            || !number((*it)[3].str(), "upper limit", up, pu, lu)) {
+            continue;
+        }
+        std::vector<double> want;
+        for (const auto& r : gRangeNominals) {
+            const double tol = 1e-9 * std::max(1.0, std::fabs(up));
+            if (std::fabs(r.upper - up) <= tol && std::fabs(r.lower - lo) <= tol) {
+                want.push_back(r.nominal);
+            }
+        }
+        if (want.empty()) {
+            continue;
+        }
+        if (std::any_of(want.begin(), want.end(), [&](double w) { return std::fabs(w - want.front()) > 1e-12 * std::max(1.0, std::fabs(w)); })) {
+            ++ambiguous;
+            continue;
+        }
+        if (std::fabs(want.front() - nom) <= 1e-12 * std::max(1.0, std::fabs(nom))) {
+            continue;
+        }
+        std::ostringstream os;
+        os.precision(15);
+        os << want.front();
+        std::string t = os.str();
+        if (t.find_first_of(".eE") == std::string::npos) {
+            t += ".";
+        }
+        edits.push_back({pn, ln, t});
+    }
+    std::sort(edits.begin(), edits.end(), [](const Edit& a, const Edit& b) { return a.pos > b.pos; });
+    for (const auto& e : edits) {
+        text.replace(e.pos, e.len, e.txt);
+    }
+    if (ambiguous > 0) {
+        exportWarn("STEP PMI: " + std::to_string(ambiguous) + " dimension(s) with absolute limits share their limits with a dimension of another nominal value; their nominal was written as the middle of the limits");
+    }
+    return static_cast<int>(edits.size());
+}
+
 int repairWrittenStepPmi(const std::string& path)
 {
     if (!gExport.ran) {
@@ -3322,8 +3509,9 @@ int repairWrittenStepPmi(const std::string& path)
                 ++gExport.commonDatumsRepaired;
             }
         }
+        const int mergedSystems = mergeIdenticalDatumSystems(text) + restateRangeNominals(text);
         if (gExport.allAround.empty()) {
-            if (gExport.commonDatumsRepaired > 0) {
+            if (gExport.commonDatumsRepaired > 0 || mergedSystems > 0) {
                 std::ofstream outf(path, std::ios::binary | std::ios::trunc);
                 outf << text;
             }
@@ -3496,7 +3684,7 @@ int repairWrittenStepPmi(const std::string& path)
                        + (proved && unproved.empty() ? std::string()
                                                      : " (the written tolerances could not be paired with the items with certainty)"));
         }
-        if (fixed > 0 || gExport.commonDatumsRepaired > 0) {
+        if (fixed > 0 || gExport.commonDatumsRepaired > 0 || mergedSystems > 0) {
             std::ofstream outf(path, std::ios::binary | std::ios::trunc);
             outf << text;
         }
@@ -3567,6 +3755,7 @@ int exportStepPmi(
 )
 {
     gExport = StepPmiExportReport();
+    gRangeNominals.clear();
     try {
         if (hDoc.IsNull() || !stepPmiWriteEnabled() || pmiSwitch() == "0") {
             return 0;
@@ -3640,6 +3829,11 @@ int exportStepPmi(
             XCAFDoc_Dimension::Set(l)->SetObject(obj);
             cx.dt->SetDimension(f, s, l);
             ++gExport.dimensions;
+            if (d->HasBounds.getValue() && d->BoundsKind.getStrValue() == "range") {
+                const bool ang = isAngular(d->PmiType.getStrValue());
+                const double k = ang ? std::acos(-1.0) / 180.0 : 1.0;
+                gRangeNominals.push_back({d->UpperBound.getValue() * k, d->LowerBound.getValue() * k, d->Value.getValue() * k, ang});
+            }
         }
 
         // tolerances with their datum uses
