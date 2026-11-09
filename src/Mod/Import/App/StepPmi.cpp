@@ -3017,6 +3017,10 @@ void setPresentation(
     put(sh, hs(rawGet(raw, nameKey)));
 }
 
+/// The nominal written for a dimension that states no value (HasValue false): OCCT writes a nominal for every dimension, so the
+/// item gets this marker and the repair pass takes the nominal out of the file again (see dropValuelessNominals).
+constexpr double kNoValueMarker = 1.2345678901234e-123;
+
 Handle(XCAFDimTolObjects_DimensionObject) buildDimension(
     ExportCtx& cx,
     const Part::PmiItem* item,
@@ -3035,8 +3039,10 @@ Handle(XCAFDimTolObjects_DimensionObject) buildDimension(
     o->SetType(type);
     o->SetSemanticName(hs(item->SemanticName.getStrValue()));
     const double k = isAngular(item->PmiType.getStrValue()) ? std::acos(-1.0) / 180.0 : 1.0;
-    // SetValue resets the values array and with it the bounds, so the value comes first
-    o->SetValue(item->Value.getValue() * k);
+    // SetValue resets the values array and with it the bounds, so the value comes first; an item with no stated value
+    // (HasValue false, never with bounds) gets the marker nominal, which the repair pass removes from the file again
+    const bool valueless = !item->HasValue.getValue() && !item->HasBounds.getValue();
+    o->SetValue(valueless ? kNoValueMarker : item->Value.getValue() * k);
     if (item->HasBounds.getValue()) {
         if (item->BoundsKind.getStrValue() == "range") {
             o->SetUpperBound(item->UpperBound.getValue() * k);
@@ -3385,6 +3391,45 @@ static int mergeIdenticalDatumSystems(std::string& text)
 }
 
 
+/// Takes the nominal out of the dimensions written with kNoValueMarker: the measure entity, the SHAPE_DIMENSION_REPRESENTATION
+/// that holds it and the DIMENSIONAL_CHARACTERISTIC_REPRESENTATION that links it, so the dimension entity stands alone as the
+/// NIST files write a size or location with no stated value. Returns the number of dimensions treated.
+static int dropValuelessNominals(std::string& text)
+{
+    static const std::regex measure(
+        R"(\n(#\d+)\s*=\s*\(\s*[A-Z_]+_MEASURE_WITH_UNIT\(\)\s*MEASURE_REPRESENTATION_ITEM\(\)\s*MEASURE_WITH_UNIT\(\s*[A-Z_]+\(\s*([-+0-9.eE]+)\s*\)[^;]*'nominal value'\s*\)\s*\)\s*;)"
+    );
+    std::vector<std::string> measures;
+    for (std::sregex_iterator it(text.begin(), text.end(), measure), end; it != end; ++it) {
+        const double v = std::strtod((*it)[2].str().c_str(), nullptr);
+        if (std::fabs(v - kNoValueMarker) <= 1e-9 * kNoValueMarker) {
+            measures.push_back((*it)[1].str());
+        }
+    }
+    int n = 0;
+    for (const auto& m : measures) {
+        const std::regex sdr("\\n(#\\d+)\\s*=\\s*SHAPE_DIMENSION_REPRESENTATION\\(\\s*'[^']*'\\s*,\\s*\\(\\s*" + m + "\\s*\\)[^;]*;");
+        std::smatch sm;
+        std::string rep;
+        if (std::regex_search(text, sm, sdr)) {
+            rep = sm[1].str();
+            text.erase(sm.position(0), sm.length(0));
+            const std::regex dcr("\\n#\\d+\\s*=\\s*DIMENSIONAL_CHARACTERISTIC_REPRESENTATION\\(\\s*#\\d+\\s*,\\s*" + rep + "\\s*\\)\\s*;");
+            std::smatch dm;
+            if (std::regex_search(text, dm, dcr)) {
+                text.erase(dm.position(0), dm.length(0));
+            }
+        }
+        const std::regex me("\\n" + m + "\\s*=\\s*\\([^;]*;");
+        std::smatch mm;
+        if (std::regex_search(text, mm, me)) {
+            text.erase(mm.position(0), mm.length(0));
+        }
+        ++n;
+    }
+    return n;
+}
+
 /// Puts the nominal value of the dimensions written with absolute limits back (see RangeNominal). A triple of 'nominal value',
 /// 'lower limit' and 'upper limit' items whose limits belong to items that agree on one nominal gets that nominal; limits
 /// shared by items that disagree are left as written, with a warning. Returns the number of nominals restated.
@@ -3509,7 +3554,7 @@ int repairWrittenStepPmi(const std::string& path)
                 ++gExport.commonDatumsRepaired;
             }
         }
-        const int mergedSystems = mergeIdenticalDatumSystems(text) + restateRangeNominals(text);
+        const int mergedSystems = mergeIdenticalDatumSystems(text) + restateRangeNominals(text) + dropValuelessNominals(text);
         if (gExport.allAround.empty()) {
             if (gExport.commonDatumsRepaired > 0 || mergedSystems > 0) {
                 std::ofstream outf(path, std::ios::binary | std::ios::trunc);

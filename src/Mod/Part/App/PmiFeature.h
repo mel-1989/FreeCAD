@@ -58,6 +58,8 @@ public:
     App::PropertyString SemanticName;
     /// Nominal value (millimetre, or degree for angles); the tolerance magnitude for a tolerance
     App::PropertyFloat Value;
+    /// False for a dimension the author gave no stated value (Value is then 0.0 and means nothing; the writer writes no nominal)
+    App::PropertyBool HasValue;
     /// True when UpperBound and LowerBound are set
     App::PropertyBool HasBounds;
     /// "range" (absolute limits), "plus_minus" (deviations from the nominal) or "class" (limits and fits), empty without bounds

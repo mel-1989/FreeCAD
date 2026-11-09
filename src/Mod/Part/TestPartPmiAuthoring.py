@@ -429,7 +429,7 @@ class TestPmiRules(PmiAuthoringBase):
             self.assertGreater(len(r["message"]), 20)
             self.assertTrue(r["citations"])
             for c in r["citations"]:
-                self.assertRegex(c["standard"], r"^(ASME Y14\.5-2018|ISO 1101:2017|ISO 5459:2011)$")
+                self.assertRegex(c["standard"], r"^(ASME Y14\.5-2018|ISO 1101:2017|ISO 5459:2011|ISO 286-1:2010|ISO 14405-1:2016|ISO 10578:1992)$")
                 self.assertTrue(c["clause"])
         self.assertEqual(set(ids), set(SCENARIOS), "every rule needs a firing and a quiet scenario")
         self.assertGreaterEqual(len({c["standard"] for r in rules for c in r["citations"]}), 3)
@@ -470,6 +470,120 @@ class TestPmiRules(PmiAuthoringBase):
         self.assertEqual(self.rules_of(t), [])
         t.Datums[1].Position = 3
         self.assertIn("compartment-order", self.rules_of(t))
+
+    def test_citations_name_the_standard_the_clause_belongs_to(self):
+        for r in PA.loadRules():
+            for c in r["citations"]:
+                self.assertNotRegex(c["clause"], r"ISO", "the clause of %s carries a standard name of its own" % r["id"])
+
+    def test_nominal_tolerance_boundary(self):
+        # a relative difference of 0.5e-6 is quiet, 5e-6 fires (the tolerance is NOMINAL_REL = 1e-6, not looser)
+        self.assertEqual(PA.NOMINAL_REL, 1e-6)
+        for rel, fires in ((0.5e-6, False), (5e-6, True), (-0.5e-6, False), (-5e-6, True)):
+            d = PA.addSizeDimension((self.cyl, ["Face1"]), value=10.0 * (1 + rel))
+            self.assertEqual("nominal-agrees" in self.rules_of(d), fires, "diameter, relative %g" % rel)
+            loc = PA.addLocationDimension((self.box, ["Face1"]), (self.box, ["Face2"]), value=100.0 * (1 + rel))
+            self.assertEqual("nominal-agrees" in self.rules_of(loc), fires, "distance, relative %g" % rel)
+            ang = PA.addAngularDimension((self.box, ["Face1"]), (self.box, ["Face3"]), value=90.0 * (1 + rel))
+            self.assertEqual("nominal-agrees" in self.rules_of(ang), fires, "angle, relative %g" % rel)
+
+    def test_small_nominal_is_judged_by_its_own_size(self):
+        doc = self.doc
+        tiny = doc.addObject("Part::Cylinder", "Tiny")
+        tiny.Radius, tiny.Height = 0.0005, 1.0
+        doc.recompute()
+        quiet = PA.addSizeDimension((tiny, ["Face1"]), value=0.001 * (1 + 0.5e-6))
+        self.assertNotIn("nominal-agrees", self.rules_of(quiet))
+        fires = PA.addSizeDimension((tiny, ["Face1"]), value=0.0010005)  # 5e-4 relative, 5e-7 absolute
+        self.assertIn("nominal-agrees", self.rules_of(fires))
+
+    def test_non_finite_values_are_refused(self):
+        n = len(self.pmi_objects())
+        for bad in (float("nan"), float("inf"), -float("inf")):
+            with self.assertRaises(ValueError):
+                PA.addSizeDimension((self.cyl, ["Face1"]), value=bad)
+            with self.assertRaises(ValueError):
+                PA.addSizeDimension((self.cyl, ["Face1"]), plus_minus=(bad, -0.1))
+            with self.assertRaises(ValueError):
+                PA.addLocationDimension((self.box, ["Face1"]), (self.box, ["Face2"]), value=bad)
+            with self.assertRaises(ValueError):
+                PA.addAngularDimension((self.box, ["Face1"]), (self.box, ["Face3"]), value=bad)
+            with self.assertRaises(ValueError):
+                PA.addTolerance("Flatness", bad, (self.box, ["Face6"]))
+            with self.assertRaises(ValueError):
+                PA.addTolerance("Position", 0.1, (self.cyl, ["Face1"]), zone_modifier="Projected", zone_modifier_value=bad)
+        self.assertEqual(len(self.pmi_objects()), n)
+
+    def test_default_type_follows_the_faces(self):
+        thick = PA.addSizeDimension((self.box, ["Face1", "Face2"]), value=100.0)
+        self.assertEqual(thick.PmiType, "Size_Thickness")
+        self.assertEqual(self.rules_of(thick), [])
+        wrong = PA.addSizeDimension((self.box, ["Face1", "Face2"]), value=99.0)
+        self.assertIn("nominal-agrees", self.rules_of(wrong))
+        self.assertEqual(PA.addSizeDimension((self.cyl, ["Face1"]), value=10.0).PmiType, "Size_Diameter")
+        # nothing to go by: the long-standing default
+        self.assertEqual(PA.addSizeDimension((self.box, ["Face1"]), value=5.0).PmiType, "Size_Diameter")
+        self.assertEqual(PA.addSizeDimension((self.box, ["Face1", "Face2"]), value=100.0, pmi_type="Size_Diameter").PmiType, "Size_Diameter")
+
+    def test_size_with_no_stated_value(self):
+        d = PA.addSizeDimension((self.cyl, ["Face1"]), derive=False)
+        self.assertFalse(d.HasValue)
+        self.assertEqual(d.Value, 0.0)
+        self.assertEqual(d.PmiType, "Size_Diameter")
+        self.assertEqual(self.rules_of(d), [])
+        self.assertIn("no value", d.Label)
+        # derivation stays the default, a stated value sets the flag, a stated zero is a value
+        self.assertTrue(PA.addSizeDimension((self.cyl, ["Face1"])).HasValue)
+        z = PA.addSizeDimension((self.cyl, ["Face1"]), value=0.0)
+        self.assertTrue(z.HasValue)
+        self.assertEqual(PA.addLocationDimension((self.box, ["Face1"]), (self.box, ["Face2"]), derive=False).HasValue, False)
+        self.assertEqual(PA.addAngularDimension((self.box, ["Face1"]), (self.box, ["Face3"]), derive=False).HasValue, False)
+        with self.assertRaises(ValueError):
+            PA.addSizeDimension((self.cyl, ["Face1"]), derive=False, plus_minus=(0.1, -0.1))
+
+    def test_a_failing_check_is_reported_not_swallowed(self):
+        t = PA.addTolerance("Flatness", 0.1, (self.box, ["Face6"]))
+        saved = PA._CHECKS["round-form"]
+
+        def boom(item, doc):
+            raise RuntimeError("broken check")
+
+        PA._CHECKS["round-form"] = boom
+        try:
+            hits = PA.ruleHits(t)
+            self.assertEqual([h[0] for h in hits], ["round-form"])
+            self.assertIn("broken check", hits[0][1])
+            self.assertIn("could not run", hits[0][1])
+            self.assertEqual([w.split(":")[0] for w in PA.checkItem(t)], ["round-form"])
+        finally:
+            PA._CHECKS["round-form"] = saved
+
+    def test_round_face_of_another_object_is_not_the_feature(self):
+        mm = ["MAXIMUM_MATERIAL_REQUIREMENT"]
+        both = [(self.cyl, ["Face1"]), (self.box, ["Face6"])]
+        self.assertIn("material-needs-fos", self.rules_of(PA.addTolerance("Position", 0.1, both, modifiers=mm)))
+        self.assertIn("diameter-zone-feature", self.rules_of(PA.addTolerance("Position", 0.1, both, zone_shape="Diameter")))
+        # a flat face of the same object that is not square to the round one's axis is not part of the feature either
+        tilted = Part.makeBox(10, 10, 10)
+        tilted.rotate(App.Vector(0, 0, 0), App.Vector(1, 0, 0), 45)
+        both_shape = self.cyl.Shape.copy().fuse(tilted.translated(App.Vector(300, 0, 0)))
+        one = self.doc.addObject("Part::Feature", "Mixed")
+        one.Shape = both_shape
+        round_face = next(i for i, f in enumerate(one.Shape.Faces, 1) if f.Surface.TypeId == "Part::GeomCylinder")
+        flat_face = next(i for i, f in enumerate(one.Shape.Faces, 1) if f.Surface.TypeId == "Part::GeomPlane" and abs(f.normalAt(0, 0).z) < 0.9)
+        mixed = [(one, ["Face%d" % round_face, "Face%d" % flat_face])]
+        self.assertIn("diameter-zone-feature", self.rules_of(PA.addTolerance("Position", 0.1, mixed, zone_shape="Diameter")))
+        self.assertIn("material-needs-fos", self.rules_of(PA.addTolerance("Position", 0.1, mixed, modifiers=mm)))
+        # the floor of a counterbore (a plane square to the axis) is part of the feature
+        floor = next(i for i, f in enumerate(one.Shape.Faces, 1) if f.Surface.TypeId == "Part::GeomPlane" and abs(f.normalAt(0, 0).z) > 0.99 and f.CenterOfMass.x < 250)
+        ok = [(one, ["Face%d" % round_face, "Face%d" % floor])]
+        self.assertEqual(self.rules_of(PA.addTolerance("Position", 0.1, ok, modifiers=mm, zone_shape="Diameter")), [])
+        # a pattern of round faces on several objects, and a pair of opposed planes, are features
+        other = self.doc.addObject("Part::Cylinder", "Cyl2")
+        self.doc.recompute()
+        pat = [(self.cyl, ["Face1"]), (other, ["Face1"])]
+        self.assertEqual(self.rules_of(PA.addTolerance("Position", 0.1, pat, modifiers=mm, zone_shape="Diameter")), [])
+        self.assertEqual(self.rules_of(PA.addTolerance("Position", 0.1, (self.box, ["Face1", "Face2"]), modifiers=mm)), [])
 
     def test_nominal_follows_the_geometry(self):
         d = PA.addSizeDimension((self.cyl, ["Face1"]))
@@ -629,6 +743,20 @@ class TestPmiAuthoringExport(PmiAuthoringBase):
         self.assertEqual(pos.ZoneShape, "Diameter")
         self.assertIn("MAXIMUM_MATERIAL_REQUIREMENT", list(pos.Modifiers))
         self.assertEqual(sorted(t.PmiType for t in tols), ["Flatness", "Perpendicularity", "Position"])
+
+    def test_size_with_no_stated_value_is_written_without_a_nominal(self):
+        PA.addSizeDimension((self.cyl, ["Face1"]), derive=False)
+        PA.addSizeDimension((self.box, ["Face1", "Face2"]), 100.0)
+        back, path = self._round_trip()
+        rep = self.Import.lastStepPmiExportReport()
+        self.assertEqual(rep["skipped"], 0, rep["warnings"])
+        dims = self._of(back, "Part::PmiDimension")
+        self.assertEqual(len(dims), 2)
+        none = [d for d in dims if any("no value is stated" in k for k in d.KernelLoss)]
+        self.assertEqual(len(none), 1)
+        self.assertEqual(none[0].Value, 0.0)
+        self.assertEqual([round(d.Value, 6) for d in dims if d not in none], [100.0])
+        self.assertEqual(len(re.findall(r"NOMINAL", open(path, encoding="latin-1").read().upper())), 1)
 
     def test_range_nominal_is_written_as_given(self):
         # OCCT's writer states the middle of the limits as the nominal; the file must carry the nominal the item holds

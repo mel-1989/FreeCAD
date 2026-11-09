@@ -36,6 +36,7 @@ PmiItem::PmiItem()
     ADD_PROPERTY_TYPE(PmiType, (""), "PMI", App::Prop_None, "XCAF type name of the item");
     ADD_PROPERTY_TYPE(SemanticName, (""), "PMI", App::Prop_None, "Name given by the source file");
     ADD_PROPERTY_TYPE(Value, (0.0), "PMI", App::Prop_None, "Nominal value (mm or degrees) or tolerance magnitude");
+    ADD_PROPERTY_TYPE(HasValue, (true), "PMI", App::Prop_None, "False when no value is stated for the item (Value is then not a measurement)");
     ADD_PROPERTY_TYPE(HasBounds, (false), "PMI", App::Prop_None, "UpperBound and LowerBound are set");
     ADD_PROPERTY_TYPE(BoundsKind, (""), "PMI", App::Prop_None, "range, plus_minus or class");
     ADD_PROPERTY_TYPE(UpperBound, (0.0), "PMI", App::Prop_None, "Upper limit or deviation");

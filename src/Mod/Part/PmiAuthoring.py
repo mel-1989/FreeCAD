@@ -8,7 +8,7 @@
 #                                                                           *
 #   Public sources of the vocabulary: the CAx-IF recommended practices for  *
 #   the representation and presentation of PMI (AP242), ASME Y14.5-2018,    *
-#   ISO 1101:2017 and ISO 5459:2011 (the rules table cites them by clause). *
+#   ISO 1101:2017, ISO 5459:2011, ISO 286-1:2010, ISO 14405-1:2016 (clauses). *
 # **************************************************************************
 
 """Author semantic PMI on a model.
@@ -59,6 +59,8 @@ LOCATION_TYPES = ("Location_None", "Location_LinearDistance", "Location_CurvedDi
 EXCLUDED_LETTERS = ("I", "O", "Q")
 MAX_COMPARTMENTS = 3
 REL = 1e-9
+# the relative difference between a stated nominal and the measured geometry that the nominal-agrees rule tolerates
+NOMINAL_REL = 1e-6
 
 _SEMANTIC = {
     "Size_Diameter": "diameter",
@@ -132,6 +134,8 @@ def _unit(v):
 
 def _desc(face):
     """('plane', point, normal) | ('cylinder', point, axis, radius) | ('sphere', centre, radius) | (kind,)"""
+    if not hasattr(face, "Surface"):  # an edge or a vertex: no surface to describe
+        return ("shape",)
     s = face.Surface
     t = s.TypeId
     if t == "Part::GeomPlane":
@@ -147,8 +151,9 @@ def _desc(face):
     return (t,)
 
 
-def _close(a, b, rel=1e-7):
-    return abs(a - b) <= rel * max(1.0, abs(a), abs(b))
+def _close(a, b, rel=1e-7, floor=1e-12):
+    """Relative closeness with a tiny absolute floor, so a nominal of 0.001 mm is judged by its own size."""
+    return abs(a - b) <= max(rel * max(abs(a), abs(b)), floor)
 
 
 def _parallel(n1, n2):
@@ -236,22 +241,30 @@ def deriveAngle(first, second):
 # ------------------------------------------------------------------------------------------------
 
 
+def _finite(x, what):
+    if not math.isfinite(x):
+        raise ValueError("%s must be a finite number, got %r" % (what, x))
+    return x
+
+
 def _length(v, what="value"):
     if isinstance(v, App.Units.Quantity):
-        return v.getValueAs("mm").Value
+        return _finite(v.getValueAs("mm").Value, what)
     try:
-        return float(v)
+        x = float(v)
     except (TypeError, ValueError):
-        raise ValueError("%s must be a number or a length Quantity, got %r" % (what, v))
+        raise ValueError("%s must be a finite number or a length Quantity, got %r" % (what, v))
+    return _finite(x, what)
 
 
 def _angle(v, what="value"):
     if isinstance(v, App.Units.Quantity):
-        return v.getValueAs("deg").Value
+        return _finite(v.getValueAs("deg").Value, what)
     try:
-        return float(v)
+        x = float(v)
     except (TypeError, ValueError):
-        raise ValueError("%s must be a number (degrees) or an angle Quantity, got %r" % (what, v))
+        raise ValueError("%s must be a finite number (degrees) or an angle Quantity, got %r" % (what, v))
+    return _finite(x, what)
 
 
 def _bounds(plus_minus, limits, fit_class, conv):
@@ -326,6 +339,8 @@ def _label(item, text):
 
 
 def _fmt(x):
+    if x is None:
+        return "no value"
     return ("%.6f" % x).rstrip("0").rstrip(".") or "0"
 
 
@@ -347,7 +362,8 @@ def _finish(item, doc):
 def _dimension_common(item, pmi_type, value, bnds, qualifier, modifiers, semantic):
     item.PmiType = pmi_type
     item.SemanticName = semantic or _SEMANTIC.get(pmi_type, "")
-    item.Value = value
+    item.HasValue = value is not None
+    item.Value = 0.0 if value is None else value
     if bnds is not None:
         kind, up, lo, cls = bnds
         if kind == "class":
@@ -363,10 +379,16 @@ def _dimension_common(item, pmi_type, value, bnds, qualifier, modifiers, semanti
         item.Modifiers = list(modifiers)
 
 
+def _valueless_without_bounds(v, bnds):
+    if v is None and bnds is not None:
+        raise ValueError("a dimension with no stated value cannot carry bounds; give value=")
+
+
 def addSizeDimension(
     picks,
     value=None,
     *,
+    derive=True,
     pmi_type=None,
     plus_minus=None,
     limits=None,
@@ -378,21 +400,27 @@ def addSizeDimension(
     """A size dimension on the faces of one feature of size.
 
     value: explicit nominal (mm); when omitted it is derived from one cylinder (diameter) or two parallel planes
-    (thickness).  plus_minus=(upper, lower) signed deviations; limits=(upper, lower) absolute limits; fit_class="H7"."""
+    (thickness).  derive=False with no value authors a size that states no value (HasValue False; the file gets no
+    nominal), and it takes no bounds.  pmi_type defaults from the faces (a cylinder is a diameter, two parallel planes a
+    thickness), else a diameter.  plus_minus=(upper, lower) signed deviations; limits=(upper, lower) absolute limits;
+    fit_class="H7"."""
     pairs = _as_pairs(picks)
     doc = _doc_of(pairs)
     if pmi_type is not None and pmi_type not in SIZE_TYPES:
         raise ValueError("%s is not a size dimension type" % pmi_type)
-    if value is None:
+    if value is None and derive:
         d = deriveSize(pairs, pmi_type)
         if d is None:
-            raise ValueError("the nominal size cannot be derived from these faces; give value=")
+            raise ValueError("the nominal size cannot be derived from these faces; give value= (or derive=False for a size with no stated value)")
         pmi_type, v = d
     else:
-        v = _angle(value) if pmi_type == "Size_Angular" else _length(value)
-        pmi_type = pmi_type or "Size_Diameter"
+        v = None if value is None else (_angle(value) if pmi_type == "Size_Angular" else _length(value))
+        if pmi_type is None:
+            d = deriveSize(pairs)
+            pmi_type = d[0] if d is not None else "Size_Diameter"
     conv = _angle if pmi_type == "Size_Angular" else _length
     bnds = _bounds(plus_minus, limits, fit_class, conv)
+    _valueless_without_bounds(v, bnds)
     with _Transaction(doc, "Add PMI size"):
         item = doc.addObject("Part::PmiDimension", "PmiDimension")
         _dimension_common(item, pmi_type, v, bnds, qualifier, modifiers, semantic_name)
@@ -408,6 +436,7 @@ def addLocationDimension(
     second,
     value=None,
     *,
+    derive=True,
     pmi_type="Location_LinearDistance",
     plus_minus=None,
     limits=None,
@@ -416,18 +445,20 @@ def addLocationDimension(
     modifiers=(),
     semantic_name=None,
 ):
-    """A location dimension between two face sets.  value omitted: the distance between two parallel planes."""
+    """A location dimension between two face sets.  value omitted: the distance between two parallel planes;
+    derive=False with no value authors a location that states no value (a basic dimension without text)."""
     p1, p2 = _as_pairs(first), _as_pairs(second)
     doc = _doc_of(p1 + p2)
     if pmi_type not in LOCATION_TYPES or pmi_type == "Location_Angular":
         raise ValueError("%s is not a linear location dimension type" % pmi_type)
-    if value is None:
+    if value is None and derive:
         v = deriveDistance(p1, p2)
         if v is None:
-            raise ValueError("the distance cannot be derived from these faces; give value=")
+            raise ValueError("the distance cannot be derived from these faces; give value= (or derive=False for a location with no stated value)")
     else:
-        v = _length(value)
+        v = None if value is None else _length(value)
     bnds = _bounds(plus_minus, limits, fit_class, _length)
+    _valueless_without_bounds(v, bnds)
     with _Transaction(doc, "Add PMI location"):
         item = doc.addObject("Part::PmiDimension", "PmiDimension")
         _dimension_common(item, pmi_type, v, bnds, qualifier, modifiers, semantic_name)
@@ -443,22 +474,25 @@ def addAngularDimension(
     second,
     value=None,
     *,
+    derive=True,
     plus_minus=None,
     limits=None,
     qualifier="",
     modifiers=(),
     semantic_name=None,
 ):
-    """An angular location dimension between two face sets (degrees).  value omitted: the acute angle of two planes."""
+    """An angular location dimension between two face sets (degrees).  value omitted: the acute angle of two planes;
+    derive=False with no value authors an angle that states no value."""
     p1, p2 = _as_pairs(first), _as_pairs(second)
     doc = _doc_of(p1 + p2)
-    if value is None:
+    if value is None and derive:
         v = deriveAngle(p1, p2)
         if v is None:
-            raise ValueError("the angle cannot be derived from these faces; give value=")
+            raise ValueError("the angle cannot be derived from these faces; give value= (or derive=False for an angle with no stated value)")
     else:
-        v = _angle(value)
+        v = None if value is None else _angle(value)
     bnds = _bounds(plus_minus, limits, None, _angle)
+    _valueless_without_bounds(v, bnds)
     with _Transaction(doc, "Add PMI angle"):
         item = doc.addObject("Part::PmiDimension", "PmiDimension")
         _dimension_common(item, "Location_Angular", v, bnds, qualifier, modifiers, semantic_name)
@@ -637,18 +671,62 @@ def _side_faces(item):
     return first, second
 
 
+ROUND = ("cylinder", "cone", "sphere")
+
+
+def _plane_in_round_feature(p, planes, axes):
+    """A plane that can belong to a round feature: square to one of its axes (a floor), or parallel to the axes with a
+    parallel partner among the planes (a slot flank)."""
+    if any(_parallel(p[2], a) for a in axes):
+        return True
+    return any(abs(p[2].dot(a)) < 1e-9 for a in axes) and any(q is not p and _parallel(p[2], q[2]) for q in planes)
+
+
 def _is_fos(descs):
-    """Could these faces carry a feature of size?  True when they include a cylinder, cone or sphere (a hole, a boss, a
-    pattern of them, with their chamfers) or two distinct parallel planes (a slot, a width); a single plane or planes
-    without a parallel partner are not."""
+    """Could these faces (of one object) be a feature of size?  True when they are
+
+    - all round (a hole, a boss, a pattern of them, with their chamfers), or round faces with planes square to the axis of
+      one of them (the floor of a counterbore, the end of a hole) or opposed planes along it (the flanks of a slot), or
+    - all planes in which every plane has a parallel partner (a slot, a width).
+
+    A single plane, planes without a partner, a plane not square to any round axis beside round faces: not."""
     if not descs:
         return None
-    if any(d[0] in ("cylinder", "cone", "sphere") for d in descs):
-        return True
+    rounds = [d for d in descs if d[0] in ROUND]
+    planes = [d for d in descs if d[0] == "plane"]
+    if rounds and len(rounds) + len(planes) == len(descs):
+        axes = [d[2] for d in rounds if d[0] in ("cylinder", "cone")]
+        return all(_plane_in_round_feature(p, planes, axes) for p in planes)
     g = _plane_groups(descs)
     if g is not None:
-        return any(_parallel(a[0][2], b[0][2]) for i, a in enumerate(g) for b in g[i + 1:])
+        return all(any(_parallel(a[0][2], b[0][2]) for b in g if b is not a) for a in g)
     return False
+
+
+def _item_descs_by_object(item):
+    """{object name: [face descriptors]} of an item's References; {} when something does not resolve or is not a face."""
+    out = {}
+    for o, subs in item.References:
+        if o is None or not hasattr(o, "Shape"):
+            return {}
+        for s in subs:
+            try:
+                d = _desc(o.Shape.getElement(s))
+            except Exception:
+                return {}
+            if d[0] == "shape":  # an edge: the rules judge faces only
+                return {}
+            out.setdefault(o.Name, []).append(d)
+    return out
+
+
+def _fos_verdict(item):
+    """None when the item's faces cannot be judged, else whether the faces of every object it governs are a feature of
+    size (a round face of one object does not make a plane of another one a feature)."""
+    by = _item_descs_by_object(item)
+    if not by:
+        return None
+    return all(_is_fos(d) for d in by.values())
 
 
 def _tolerance_datums(item):
@@ -666,32 +744,28 @@ def _c_datum_needed(item, doc):
 
 
 def _c_material_needs_fos(item, doc):
-    if item.TypeId == "Part::PmiTolerance":
-        mats = [m for m in item.Modifiers if m in ("MAXIMUM_MATERIAL_REQUIREMENT", "LEAST_MATERIAL_REQUIREMENT")]
-        if mats:
-            descs = [_desc(f) for f in _item_faces(item)]
-            if descs and _is_fos(descs) is False:
-                return "a material-condition modifier needs a feature of size, and the governed faces are not one"
-    if item.TypeId == "Part::PmiDatum":
-        mats = [m for m in item.Modifiers if m in ("MAXIMUM_MATERIAL_REQUIREMENT", "LEAST_MATERIAL_REQUIREMENT")]
-        if mats:
-            descs = [_desc(f) for f in _item_faces(item)]
-            if descs and _is_fos(descs) is False:
-                return "a material-condition modifier on a datum needs a datum feature of size, and these faces are not one"
+    mats = [m for m in item.Modifiers if m in ("MAXIMUM_MATERIAL_REQUIREMENT", "LEAST_MATERIAL_REQUIREMENT")]
+    if item.TypeId == "Part::PmiTolerance" and mats and _fos_verdict(item) is False:
+        return "a material-condition modifier needs a feature of size, and the governed faces are not one"
+    if item.TypeId == "Part::PmiDatum" and mats and _fos_verdict(item) is False:
+        return "a material-condition modifier on a datum needs a datum feature of size, and these faces are not one"
 
 
 def _c_diameter_zone(item, doc):
     if item.TypeId != "Part::PmiTolerance" or item.ZoneShape not in ("Diameter", "SphericalDiameter"):
         return None
-    descs = [_desc(f) for f in _item_faces(item)]
-    if not descs:
+    by = _item_descs_by_object(item)
+    if not by:
         return None
-    if item.ZoneShape == "SphericalDiameter":
-        ok = any(d[0] == "sphere" for d in descs)
-    else:
-        ok = any(d[0] in ("cylinder", "cone", "sphere") for d in descs)
-    if not ok:
-        return "a %s zone needs a round feature among the governed faces, and there is none" % item.ZoneShape
+    want = ("sphere",) if item.ZoneShape == "SphericalDiameter" else ROUND
+    # the governed faces of each object are the round feature itself (with planes square to its axis, the floor of a
+    # counterbore); a round face beside a flat one that is not part of it, or on another object, does not count
+    for ds in by.values():
+        rounds = [d for d in ds if d[0] in want]
+        rest = [d for d in ds if d[0] not in want]
+        axes = [d[2] for d in rounds if d[0] in ("cylinder", "cone")]
+        if not rounds or any(d[0] != "plane" or not _plane_in_round_feature(d, rest, axes) for d in rest):
+            return "a %s zone belongs to a round feature, and the governed faces are not all part of one" % item.ZoneShape
 
 
 def _c_value_positive(item, doc):
@@ -740,37 +814,34 @@ def _c_letter_exists(item, doc):
 
 
 def _c_nominal_agrees(item, doc):
-    if item.TypeId != "Part::PmiDimension" or item.Value == 0 or not len(item.References):
+    if item.TypeId != "Part::PmiDimension" or not item.HasValue or item.Value == 0 or not len(item.References):
         return None
     t = item.PmiType
-    try:
-        if t in ("Size_Diameter", "Size_Radius", "Size_Thickness"):
-            pairs = [(o, list(s)) for o, s in item.References]
-            d = deriveSize(pairs, t)
-            if d is None:
-                return None
-            expect = d[1]
-        elif t in ("Location_LinearDistance", "Location_None", "Location_CurvedDistance"):
-            f1, f2 = _side_faces(item)
-            if not f1 or not f2:
-                return None
-            expect = _distance_faces(f1, f2)
-        elif t in ("Location_Angular", "Size_Angular"):
-            f1, f2 = _side_faces(item)
-            if not f1 or not f2:
-                return None
-            a = _angle_faces(f1, f2)
-            if a is None:
-                return None
-            ok = _close(item.Value, a, 1e-6) or _close(item.Value, 180.0 - a, 1e-6)
-            return None if ok else "the stated angle %s differs from the measured %s" % (_fmt(item.Value), _fmt(a))
-        else:
+    if t in ("Size_Diameter", "Size_Radius", "Size_Thickness"):
+        pairs = [(o, list(s)) for o, s in item.References]
+        d = deriveSize(pairs, t)
+        if d is None:
             return None
-    except Exception:
+        expect = d[1]
+    elif t in ("Location_LinearDistance", "Location_None", "Location_CurvedDistance"):
+        f1, f2 = _side_faces(item)
+        if not f1 or not f2:
+            return None
+        expect = _distance_faces(f1, f2)
+    elif t in ("Location_Angular", "Size_Angular"):
+        f1, f2 = _side_faces(item)
+        if not f1 or not f2:
+            return None
+        a = _angle_faces(f1, f2)
+        if a is None:
+            return None
+        ok = _close(item.Value, a, NOMINAL_REL) or _close(item.Value, 180.0 - a, NOMINAL_REL)
+        return None if ok else "the stated angle %s differs from the measured %s" % (_fmt(item.Value), _fmt(a))
+    else:
         return None
     if expect is None:
         return None
-    if not _close(item.Value, expect, 1e-6):
+    if not _close(item.Value, expect, NOMINAL_REL):
         return "the stated nominal %s differs from the measured %s" % (_fmt(item.Value), _fmt(expect))
 
 
@@ -852,8 +923,8 @@ def ruleHits(item):
     for r in loadRules():
         try:
             msg = _CHECKS[r["id"]](item, doc)
-        except Exception as e:  # a check that cannot judge stays silent; checkPmi never raises
-            msg = None
+        except Exception as e:  # a check that fails is reported, never silent; checkPmi never raises
+            msg = "the rule check could not run (%s: %s)" % (type(e).__name__, e)
         if msg:
             hits.append((r["id"], msg))
     return hits

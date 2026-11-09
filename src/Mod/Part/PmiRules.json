@@ -86,8 +86,8 @@
           "clause": "2.1.1"
         },
         {
-          "standard": "ISO 1101:2017",
-          "clause": "ISO 286-1:2010 4.1"
+          "standard": "ISO 286-1:2010",
+          "clause": "4.1"
         }
       ]
     },
@@ -146,8 +146,8 @@
           "clause": "2.1.1"
         },
         {
-          "standard": "ISO 1101:2017",
-          "clause": "ISO 14405-1:2016 3.1"
+          "standard": "ISO 14405-1:2016",
+          "clause": "3.1"
         }
       ]
     },
@@ -206,8 +206,8 @@
           "clause": "7.5"
         },
         {
-          "standard": "ISO 1101:2017",
-          "clause": "ISO 10578:2022 4"
+          "standard": "ISO 10578:1992",
+          "clause": "4"
         }
       ]
     }
