@@ -254,7 +254,7 @@ class Manager: public QObject, public Base::Observer<const char*>
 {
 public:
     Manager()
-        : QObject(qApp)
+        : QObject(nullptr)
     {
         prefs = App::GetApplication().GetParameterGroupByPath("User parameter:BaseApp/Preferences/Mod/Part/Pmi");
         prefs->Attach(this);
@@ -290,10 +290,10 @@ public:
 
     static Manager& instance()
     {
-        static QPointer<Manager> m;
-        if (!m) {
-            m = new Manager;
-        }
+        // Never destroyed: a QObject child of qApp was deleted at exit after the parameter manager and the application
+        // were gone, and its destructor (detaching the preference observer, disconnecting the signal) crashed on exit
+        // (suites.py: signal 11 with 0 tests reported). The viewers it watches are gone by then.
+        static Manager* m = new Manager;
         return *m;
     }
 

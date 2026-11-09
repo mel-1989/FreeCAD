@@ -223,25 +223,88 @@ def nominal_layout(test):
     return wrapper
 
 
-def fix_viewport(width=1280, height=800):
-    """Give the 3D view the size the screen layout is judged at (the offscreen platform opens a small window)"""
-    from PySide import QtCore
+def pick_proxy_quad_now(path):
+    """The pick quad as it is drawn at the current camera: in global coordinates, with the shift the screen layout (slice
+    3b-iii) gave the label for this camera (pick_proxy_quad is the nominal quad of check 21, in the item's own coordinates)"""
+    search = coin.SoSearchAction()
+    search.setType(coin.SoCoordinate3.getClassTypeId())
+    search.setInterest(coin.SoSearchAction.ALL)
+    search.apply(path.getTail())
+    paths = search.getPaths()
+    if paths.getLength() < 2:
+        return None
+    node = paths[1].getTail()
+    if node.point.getNum() < 4:
+        return None
+    full = path.copy()
+    full.append(paths[1])
+    act = coin.SoGetMatrixAction(coin.SbViewportRegion())
+    act.apply(full)
+    mat = act.getMatrix()
+    return [App.Vector(*mat.multVecMatrix(coin.SbVec3f(*node.point[i].getValue())).getValue()) for i in range(4)]
 
-    mw = Gui.getMainWindow()
-    mw.showNormal()
-    for _ in range(4):
-        QtWidgets.QApplication.processEvents()
-        views = [v for v in mw.findChildren(QtWidgets.QWidget) if v.metaObject().className() == "Gui::View3DInventorViewer" and v.isVisible()]
-        if not views:
-            return
-        view = views[0]
-        dx, dy = mw.width() - view.width(), mw.height() - view.height()
-        if (view.width(), view.height()) == (width, height):
-            break
-        mw.resize(width + dx, height + dy)
-        for _ in range(10):
-            QtWidgets.QApplication.processEvents()
-            time.sleep(0.02)
+
+PMI_LAYOUT_PREF = "User parameter:BaseApp/Preferences/Mod/Part/Pmi"
+
+
+def nominal_layout(test):
+    """Run a test with the per-camera screen layout of the fallback labels off: it checks where the labels are laid out in
+    3D (checks 21 and 2b), not where the declutter of one camera moves them (slice 3b-iii)"""
+
+    def wrapper(self, *a, **k):
+        grp = App.ParamGet(PMI_LAYOUT_PREF)
+        before = grp.GetBool("ScreenLayout", True)
+        grp.SetBool("ScreenLayout", False)
+        try:
+            return test(self, *a, **k)
+        finally:
+            grp.SetBool("ScreenLayout", before)
+
+    wrapper.__name__ = test.__name__
+    wrapper.__doc__ = test.__doc__
+    return wrapper
+
+
+def pick_proxy_quad_now(path):
+    """The pick quad as it is drawn at the current camera: in global coordinates, with the shift the screen layout (slice
+    3b-iii) gave the label for this camera (pick_proxy_quad is the nominal quad of check 21, in the item's own coordinates)"""
+    search = coin.SoSearchAction()
+    search.setType(coin.SoCoordinate3.getClassTypeId())
+    search.setInterest(coin.SoSearchAction.ALL)
+    search.apply(path.getTail())
+    paths = search.getPaths()
+    if paths.getLength() < 2:
+        return None
+    node = paths[1].getTail()
+    if node.point.getNum() < 4:
+        return None
+    full = path.copy()
+    full.append(paths[1])
+    act = coin.SoGetMatrixAction(coin.SbViewportRegion())
+    act.apply(full)
+    mat = act.getMatrix()
+    return [App.Vector(*mat.multVecMatrix(coin.SbVec3f(*node.point[i].getValue())).getValue()) for i in range(4)]
+
+
+PMI_LAYOUT_PREF = "User parameter:BaseApp/Preferences/Mod/Part/Pmi"
+
+
+def nominal_layout(test):
+    """Run a test with the per-camera screen layout of the fallback labels off: it checks where the labels are laid out in
+    3D (checks 21 and 2b), not where the declutter of one camera moves them (slice 3b-iii)"""
+
+    def wrapper(self, *a, **k):
+        grp = App.ParamGet(PMI_LAYOUT_PREF)
+        before = grp.GetBool("ScreenLayout", True)
+        grp.SetBool("ScreenLayout", False)
+        try:
+            return test(self, *a, **k)
+        finally:
+            grp.SetBool("ScreenLayout", before)
+
+    wrapper.__name__ = test.__name__
+    wrapper.__doc__ = test.__doc__
+    return wrapper
 
 
 def model_diagonal(doc):
@@ -1231,7 +1294,6 @@ class TestPmiDisplayCorpus(unittest.TestCase):
                 self.skipTest("corpus file missing: " + stem)
             doc = self._open(path)
             try:
-                fix_viewport()
                 paths = drawn_paths(doc)
                 fb = sorted(n for n, p in paths.items() if label_text(p))
                 quads = {n: pick_proxy_quad(paths[n]) for n in fb}
