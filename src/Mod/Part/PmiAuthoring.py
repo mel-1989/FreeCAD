@@ -569,9 +569,6 @@ def addTolerance(
             feat = _feature_of(doc, letter)
             if feat is not None and feat is not use:
                 use.References = [(o, list(s)) for o, s in _ref_pairs(feat)]
-                use.Unattached = False
-            else:
-                use.Unattached = True
             use.Label = "Datum %s" % letter
             grp.addObject(use)
             uses.append(use)
@@ -641,16 +638,16 @@ def _side_faces(item):
 
 
 def _is_fos(descs):
-    """Feature of size: faces of one cylinder or one sphere, or exactly two parallel planes."""
+    """Could these faces carry a feature of size?  True when they include a cylinder, cone or sphere (a hole, a boss, a
+    pattern of them, with their chamfers) or two distinct parallel planes (a slot, a width); a single plane or planes
+    without a parallel partner are not."""
     if not descs:
         return None
-    if _cylinder_of(descs) is not None:
+    if any(d[0] in ("cylinder", "cone", "sphere") for d in descs):
         return True
-    if all(d[0] == "sphere" for d in descs):
-        return all(_close(d[2], descs[0][2]) and (d[1] - descs[0][1]).Length < 1e-7 for d in descs)
     g = _plane_groups(descs)
     if g is not None:
-        return len(g) == 2 and _parallel(g[0][0][2], g[1][0][2])
+        return any(_parallel(a[0][2], b[0][2]) for i, a in enumerate(g) for b in g[i + 1:])
     return False
 
 
@@ -690,16 +687,19 @@ def _c_diameter_zone(item, doc):
     if not descs:
         return None
     if item.ZoneShape == "SphericalDiameter":
-        ok = all(d[0] == "sphere" for d in descs)
+        ok = any(d[0] == "sphere" for d in descs)
     else:
-        ok = all(d[0] in ("cylinder", "cone", "sphere") for d in descs)
+        ok = any(d[0] in ("cylinder", "cone", "sphere") for d in descs)
     if not ok:
-        return "a %s zone needs a cylindrical (or spherical) feature, and the governed faces are not" % item.ZoneShape
+        return "a %s zone needs a round feature among the governed faces, and there is none" % item.ZoneShape
 
 
 def _c_value_positive(item, doc):
-    if item.TypeId == "Part::PmiTolerance" and not item.Value > 0:
-        return "the tolerance value is %s and must be greater than zero" % _fmt(item.Value)
+    if item.TypeId != "Part::PmiTolerance":
+        return None
+    zero_ok = any(m in ("MAXIMUM_MATERIAL_REQUIREMENT", "LEAST_MATERIAL_REQUIREMENT") for m in item.Modifiers)
+    if item.Value < 0 or (item.Value == 0 and not zero_ok):
+        return "the tolerance value is %s and must be greater than zero (zero is allowed only at a material-condition modifier)" % _fmt(item.Value)
 
 
 def _c_bounds_ordered(item, doc):
@@ -727,10 +727,12 @@ def _c_letter_repeat(item, doc):
 
 def _c_letter_exists(item, doc):
     if item.TypeId == "Part::PmiTolerance":
+        # a letter is defined by a datum feature (a datum with faces), by datum targets, or by a datum the importer could not
+        # attach to the geometry (an edge-governed datum: it exists in the file, the check cannot judge it)
         have = {
             o.Letter
             for o in doc.Objects
-            if o.TypeId == "Part::PmiDatum" and not o.IsTarget and len(o.References)
+            if o.TypeId == "Part::PmiDatum" and (o.IsTarget or len(o.References) or o.Unattached)
         }
         miss = [r[:1] for r in item.DatumReferences if r[:1] not in have]
         if miss:
@@ -791,16 +793,26 @@ def _angle_faces(f1, f2):
     return min(a, 180.0 - a)
 
 
+def _compartments(item):
+    return [d.Position for d in _tolerance_datums(item)]
+
+
 def _c_compartment_order(item, doc):
     if item.TypeId == "Part::PmiTolerance":
-        for i, d in enumerate(_tolerance_datums(item), start=1):
-            if d.Position != i:
-                return "datum %s sits in compartment %d but is recorded as position %d" % (d.Letter, i, d.Position)
+        pos = _compartments(item)
+        # the primary datum is compartment 1 and compartments follow one another; datums of a common datum share one
+        prev = 0
+        for d, p in zip(_tolerance_datums(item), pos):
+            if p not in (prev, prev + 1) or (prev == 0 and p != 1):
+                return "datum %s is recorded in compartment %d after compartment %d; compartments run 1, 2, 3 in order of precedence" % (d.Letter, p, prev)
+            prev = p
 
 
 def _c_max_compartments(item, doc):
-    if item.TypeId == "Part::PmiTolerance" and len(item.DatumReferences) > MAX_COMPARTMENTS:
-        return "a frame holds at most %d datum compartments, this one has %d" % (MAX_COMPARTMENTS, len(item.DatumReferences))
+    if item.TypeId == "Part::PmiTolerance":
+        n = len(set(_compartments(item))) if len(item.Datums) else len(item.DatumReferences)
+        if n > MAX_COMPARTMENTS:
+            return "a frame holds at most %d datum compartments, this one has %d" % (MAX_COMPARTMENTS, n)
 
 
 def _c_round_form(item, doc):

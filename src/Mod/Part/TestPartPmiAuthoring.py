@@ -377,8 +377,12 @@ def _(t):
         PA.addDatum(letter, (t.box, [face]))
     bad = PA.addTolerance("Position", 0.1, (t.cyl, ["Face1"]), datums=["A", "B", "C"])
     ok = PA.addTolerance("Position", 0.1, (t.cyl, ["Face1"]), datums=["A", "B", "C"])
+    fourth = t.doc.addObject("Part::PmiDatum", "PmiDatum")
+    fourth.Letter, fourth.Position = "D", 4
+    bad.Datums = list(bad.Datums) + [fourth]
     bad.DatumReferences = ["A", "B", "C", "D"]
     return bad, ok
+
 
 
 @scenario("round-form")
@@ -436,6 +440,19 @@ class TestPmiRules(PmiAuthoringBase):
         t.Value = 0.1
         self.assertEqual(PA.checkPmi(self.doc), [])
         self.assertEqual(list(t.RuleWarnings), [])
+
+    def test_zero_at_material_condition_and_common_datums_are_legal(self):
+        # found on the NIST models: a zero position tolerance at MMC, and two datums sharing a compartment (a common datum)
+        PA.addDatum("A", (self.box, ["Face5"]))
+        PA.addDatum("B", (self.box, ["Face1"]))
+        zero = PA.addTolerance("Position", 0.0, (self.cyl, ["Face1"]), modifiers=["MAXIMUM_MATERIAL_REQUIREMENT"])
+        self.assertNotIn("value-positive", self.rules_of(zero))
+        self.assertIn("value-positive", self.rules_of(PA.addTolerance("Position", -0.1, (self.cyl, ["Face1"]), modifiers=["MAXIMUM_MATERIAL_REQUIREMENT"])))
+        t = PA.addTolerance("CircularRunout", 0.1, (self.cyl, ["Face1"]), datums=["A", "B"])
+        t.Datums[1].Position = 1
+        self.assertEqual(self.rules_of(t), [])
+        t.Datums[1].Position = 3
+        self.assertIn("compartment-order", self.rules_of(t))
 
     def test_nominal_follows_the_geometry(self):
         d = PA.addSizeDimension((self.cyl, ["Face1"]))
@@ -625,3 +642,128 @@ class TestPmiAuthoringExport(PmiAuthoringBase):
         self.assertEqual(text.count("DATUM_SYSTEM("), 1)
         tols = self._of(back, "Part::PmiTolerance")
         self.assertEqual(sorted(tuple(t.DatumReferences) for t in tols), [("A",), ("A",)])
+
+
+# ----------------------------------------------------------------------------------------------------------
+# check 35: PMI on a parametric body survives edits (G01 element map)
+# ----------------------------------------------------------------------------------------------------------
+
+
+class TestPmiAuthoringPartDesign(unittest.TestCase):
+    def setUp(self):
+        import Sketcher
+
+        self.Sketcher = Sketcher
+        self.doc = App.newDocument("PmiPD")
+        doc = self.doc
+        body = self.body = doc.addObject("PartDesign::Body", "Body")
+        xy = [o for o in body.Origin.OutList if o.Role == "XY_Plane"][0]
+        sk = body.newObject("Sketcher::SketchObject", "Sketch")
+        sk.AttachmentSupport = [(xy, "")]
+        sk.MapMode = "FlatFace"
+        pts = [App.Vector(0, 0, 0), App.Vector(60, 0, 0), App.Vector(60, 40, 0), App.Vector(0, 40, 0)]
+        for i in range(4):
+            sk.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 4]))
+        self.pad = body.newObject("PartDesign::Pad", "Pad")
+        self.pad.Profile = sk
+        self.pad.Length = 20
+        doc.recompute()
+        self.sk2 = body.newObject("Sketcher::SketchObject", "Sketch2")
+        self.sk2.AttachmentSupport = [(xy, "")]
+        self.sk2.MapMode = "FlatFace"
+        self.sk2.AttachmentOffset = App.Placement(App.Vector(0, 0, 20), App.Rotation())
+        self.sk2.addGeometry(Part.Circle(App.Vector(30, 20, 0), App.Vector(0, 0, 1), 4.0))
+        self.sk2.addConstraint(Sketcher.Constraint("Radius", 0, 4.0))
+        self.pocket = body.newObject("PartDesign::Pocket", "Pocket")
+        self.pocket.Profile = self.sk2
+        self.pocket.Type = 1
+        doc.recompute()
+        cyl = self._hole_face()
+        bottom = [
+            "Face%d" % i
+            for i, f in enumerate(body.Shape.Faces, 1)
+            if f.Surface.TypeId == "Part::GeomPlane" and abs(f.CenterOfMass.z) < 1e-9
+        ][0]
+        PA.addDatum("A", (body, [bottom]))
+        self.size = PA.addSizeDimension((body, [cyl]))
+        self.pos = PA.addTolerance("Position", 0.2, (body, [cyl]), datums=["A"], zone_shape="Diameter")
+        self.size_name, self.pos_name = self.size.Name, self.pos.Name
+        self.assertAlmostEqual(self.size.Value, 8.0, places=9)
+
+    def tearDown(self):
+        App.closeDocument(self.doc.Name)
+
+    def _hole_face(self, body=None):
+        body = body or self.body
+        hits = [
+            "Face%d" % i
+            for i, f in enumerate(body.Shape.Faces, 1)
+            if f.Surface.TypeId == "Part::GeomCylinder"
+            and abs(f.Surface.Radius - self.radius) < 1e-9
+            and abs(f.Surface.Center.x - 30) < 1e-9
+            and abs(f.Surface.Center.y - 20) < 1e-9
+        ]
+        self.assertEqual(len(hits), 1)
+        return hits[0]
+
+    radius = 4.0
+
+    def _assert_same_faces(self, doc, label):
+        for name in (self.size_name, self.pos_name):
+            item = doc.getObject(name)
+            (obj, subs), = [(o, list(s)) for o, s in item.References]
+            self.assertEqual(len(subs), 1, label)
+            f = obj.Shape.getElement(subs[0])
+            self.assertEqual(f.Surface.TypeId, "Part::GeomCylinder", "%s: %s retargeted" % (label, name))
+            self.assertAlmostEqual(f.Surface.Radius, self.radius, places=9)
+            self.assertAlmostEqual(f.Surface.Center.x, 30, places=9)
+            self.assertAlmostEqual(f.Surface.Center.y, 20, places=9)
+        datum_use = doc.getObject(self.pos_name).Datums[0]
+        (obj, subs), = [(o, list(s)) for o, s in datum_use.References]
+        f = obj.Shape.getElement(subs[0])
+        self.assertEqual(f.Surface.TypeId, "Part::GeomPlane", label)
+        self.assertAlmostEqual(f.CenterOfMass.z, 0.0, places=9)
+
+    def test_edits_and_reopen(self):
+        self._assert_same_faces(self.doc, "initial")
+        self.assertEqual(PA.checkPmi(self.doc), [])
+        # 1. the pad gets longer
+        self.pad.Length = 30
+        self.doc.recompute()
+        self._assert_same_faces(self.doc, "pad length")
+        self.assertEqual(PA.checkPmi(self.doc), [])
+        # 2. a feature inserted before the hole renumbers the faces
+        before = self.size.References[0][1][0]
+        edge = [i + 1 for i, e in enumerate(self.pad.Shape.Edges) if abs(e.CenterOfMass.z - 30) < 1e-9][0]
+        ch = self.doc.addObject("PartDesign::Chamfer", "Chamfer")
+        ch.Base = (self.pad, ["Edge%d" % edge])
+        ch.Size = 2.0
+        self.body.insertObject(ch, self.pad, True)
+        self.doc.recompute()
+        self.assertTrue(ch.isValid() and self.pocket.isValid())
+        self.assertEqual(self.body.Group.index(ch) < self.body.Group.index(self.pocket), True)
+        self._assert_same_faces(self.doc, "inserted feature")
+        self.assertEqual(PA.checkPmi(self.doc), [])
+        # 3. save and reopen
+        path = os.path.join(tempfile.mkdtemp(), "pd.FCStd")
+        self.doc.saveAs(path)
+        name = self.doc.Name
+        App.closeDocument(name)
+        self.doc = App.openDocument(path)
+        self._assert_same_faces(self.doc, "reopen")
+        self.assertEqual(PA.checkPmi(self.doc), [])
+        self.doc.getObject("Pad").Length = 35
+        self.doc.recompute()
+        self._assert_same_faces(self.doc, "edit after reopen")
+        os.remove(path)
+        os.rmdir(os.path.dirname(path))
+
+    def test_hole_diameter_change_trips_the_nominal_rule(self):
+        self.assertEqual(PA.checkPmi(self.doc), [])
+        self.sk2.setDatum(0, App.Units.Quantity("5 mm"))
+        self.doc.recompute()
+        self.radius = 5.0
+        got = PA.checkPmi(self.doc)
+        self.assertEqual([(n, r) for n, r, _ in got], [(self.size_name, "nominal-agrees")])
+        self.assertEqual(list(self.pos.RuleWarnings), [])
+        self._assert_same_faces(self.doc, "diameter change")
