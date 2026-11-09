@@ -432,6 +432,75 @@ def groupOf(view):
     return None
 
 
+SETTLE_TIMEOUT = 120.0  # seconds a GUI session waits for the views' hidden-line removal before giving up (raises)
+
+
+def _page_views(page):
+    out = []
+    for o in page.Views:
+        if o.TypeId == "TechDraw::DrawProjGroup":
+            out.extend(o.Views)
+        elif o.isDerivedFrom("TechDraw::DrawViewPart"):
+            out.append(o)
+    return out
+
+
+def settle(page, timeout=None):
+    """With the GUI up TechDraw runs hidden-line removal in a thread and the views have no geometry until it has finished and
+    its result has been taken over; nothing in the Python API says when.  Pump the event loop until every view of the page
+    has edges and their count has not changed for a while; raise when that takes longer than ``timeout`` seconds.  Headless
+    (FreeCADCmd) the removal is synchronous and this returns at once."""
+    if not App.GuiUp:
+        return
+    import time
+
+    from PySide import QtCore
+
+    views = _page_views(page)
+    t0 = time.time()
+    limit = SETTLE_TIMEOUT if timeout is None else timeout
+    last, stable = None, 0
+    while True:
+        loop = QtCore.QEventLoop()
+        QtCore.QTimer.singleShot(40, loop.quit)
+        loop.exec_()
+        sig = tuple((len(v.getVisibleEdges(True)), len(v.getHiddenEdges(True))) for v in views)
+        full = all(vis > 0 for vis, _ in sig)
+        stable = stable + 1 if (sig == last and full) else 0
+        last = sig
+        if stable >= 8:  # 8 polls of 40 ms with the same edges
+            return
+        if time.time() - t0 > limit:
+            raise RuntimeError("PmiDrawing: the views of %s did not finish their hidden-line removal in %.0f s" % (page.Name, limit))
+
+
+def page_of(obj):
+    for o in obj.InList:
+        if o.TypeId == "TechDraw::DrawPage":
+            return o
+    return None
+
+
+def _occluder_objects(objs):
+    """The objects with a shape among objs and their leaves (a container is looked through)."""
+    out, seen = [], set()
+
+    def add(o):
+        if o.Name in seen:
+            return
+        seen.add(o.Name)
+        sh = getattr(o, "Shape", None)
+        if sh is not None and not sh.isNull() and sh.Faces:
+            out.append(o)
+        else:
+            for c in o.OutList:
+                add(c)
+
+    for o in objs:
+        add(o)
+    return out
+
+
 def _occluders(objs):
     """The solids (global) that can stand between a point and the viewer: those of the objects, or of their leaves."""
     out, seen = [], set()
@@ -513,8 +582,36 @@ class _View:
 
     def center(self):
         if self._center is None:
-            self._center = self.view.projectPoint(self.view.getGeometricCenter())
+            c3 = self.view.getGeometricCenter()
+            if App.GuiUp:
+                c3 = self._saved_centroid() or c3
+            self._center = self.view.projectPoint(c3)
         return self._center
+
+    def _saved_centroid(self):
+        """The centre TechDraw centred the edges on.  getGeometricCenter() measures the source shape, and in the GUI that shape
+        carries the 3D view's triangulation, which makes its box a little smaller than the geometry-only copy the views are
+        centred on.  Rebuilt here from a geometry-only copy of the sources, boxed the way TechDraw boxes it (in the view's frame,
+        optimal box)."""
+        try:
+            g = groupOf(self.view)
+            srcs = list((g or self.view).Source)
+            shapes = []
+            for o in _occluder_objects(srcs):
+                sh = _global_shape(o).copy()
+                if not sh.isNull():
+                    shapes.append(sh)
+            if not shapes:
+                return None
+            comp = Part.makeCompound(shapes)
+            m = App.Placement(App.Vector(), App.Rotation(self.x, self.y, self.d, "ZXY"))
+            local = comp.copy()
+            local.transformShape(m.inverse().toMatrix())
+            bb = local.optimalBoundingBox(True, False)
+            c = App.Vector((bb.XMin + bb.XMax) / 2, (bb.YMin + bb.YMax) / 2, (bb.ZMin + bb.ZMax) / 2)
+            return m.multVec(c)
+        except Exception:
+            return None
 
     def u(self, p):
         """Unscaled view coordinates of a model point (the view centre is the origin)."""
@@ -556,8 +653,11 @@ class _View:
         q = _inside_point(face, edge, p, delta) if face is not None else p
         return not _behind_material(occ, q, self.d)
 
-    def onVisibleEdge(self, p, tol=ANCHOR_TOL):
-        """Is the projection of model point p on a visible edge of the view?"""
+    def onVisibleEdge(self, p, tol=None):
+        """Is the projection of model point p on a visible edge of the view? With the GUI up TechDraw edges are centred on the
+        centroid saved when the views were computed (see center())."""
+        if tol is None:
+            tol = ANCHOR_TOL
         s = self.scale
         u = self.u(p)
         px, py = u.x * s, u.y * s
@@ -685,6 +785,7 @@ class _Projector:
                     self.group = o
                     break
         if self.group is not None:
+            settle(self.page)
             self._collect_views()
 
     def _ensure_group(self):
@@ -705,6 +806,7 @@ class _Projector:
                     it.Direction = rot.multVec(App.Vector(0, -1, 0))
                     it.XDirection = rot.multVec(App.Vector(1, 0, 0))
                 self.doc.recompute()
+                settle(self.page)
             self._collect_views()
 
     def _collect_views(self):
@@ -722,12 +824,15 @@ class _Projector:
             if n not in have:
                 self.group.addProjection(n)
                 self.doc.recompute()  # a projection is added to a group that has been recomputed
+                settle(self.page)
         self.doc.recompute()
+        settle(self.page)
         self._collect_views()
         return True
 
     # ---- driver
     def run(self, items):
+        settle(self.page)
         report = {}
         done = set()
         for item in items:
@@ -1156,6 +1261,7 @@ def project(page, source, items=None, view=None):
         items = semanticItems(doc)
     doc.openTransaction("PMI onto TechDraw views")
     try:
+        _remove_orphans(page)
         report = _Projector(page, sources, view).run(list(items))
     except Exception:
         doc.abortTransaction()
@@ -1203,6 +1309,38 @@ def _all_pmi_objects(page):
     return [o for o in doc.Objects if "PmiSource" in o.PropertiesList and "PmiRole" in o.PropertiesList and o.PmiRole in ("dimension", "frame", "datum", "leader")]
 
 
+def _orphans(page, objs):
+    """Drawing objects whose view is gone: the view was deleted (the links are then empty) or taken off the page.  An
+    annotation whose leader is an orphan is one too."""
+    alive = {v.Name for v in _page_views(page)}
+    out = []
+    for o in objs:
+        if o.PmiRole == "dimension":
+            r2 = o.References2D
+            if not len(r2) or r2[0][0] is None or r2[0][0].Name not in alive:
+                out.append(o)
+        elif o.PmiRole == "leader":
+            if o.LeaderParent is None or o.LeaderParent.Name not in alive:
+                out.append(o)
+        elif o.AnnoParent is None or o.AnnoParent.LeaderParent is None or o.AnnoParent.LeaderParent.Name not in alive:
+            out.append(o)
+    return out
+
+
+def _remove_orphans(page):
+    doc = page.Document
+    objs = _all_pmi_objects(page)
+    names = [o.Name for o in _orphans(page, objs)]
+    # the leader of an orphaned annotation and the annotation of an orphaned leader go with it
+    for o in objs:
+        if o.PmiRole in ("frame", "datum") and o.AnnoParent is not None and o.AnnoParent.Name in names and o.Name not in names:
+            names.append(o.Name)
+    for n in names:
+        if doc.getObject(n) is not None:
+            doc.removeObject(n)
+    return names
+
+
 def refresh(page):
     """Bring the drawing objects up to date with their items: tolerances of dimensions, frame texts, datum letters; remove
     the objects whose item is gone.  One undo transaction; only properties that differ are written."""
@@ -1210,7 +1348,8 @@ def refresh(page):
     objs = _all_pmi_objects(page)
     doc.openTransaction("PMI refresh")
     try:
-        changed = False
+        changed = bool(_remove_orphans(page))
+        objs = _all_pmi_objects(page)
         dead = []
         for o in objs:
             if o.PmiSource is None:
@@ -1260,6 +1399,7 @@ def refresh(page):
                 removed = True
         if changed or removed:
             doc.recompute()
+            settle(page)
     except Exception:
         doc.abortTransaction()
         raise
@@ -1299,6 +1439,7 @@ def _refresh_leader(ld, item, geo):
                     if n not in have:
                         g.addProjection(n)
                         g.Document.recompute()
+                        settle(page_of(g))
                         have = {i.Type: i for i in g.Views}
                     if have[n] is v:
                         continue

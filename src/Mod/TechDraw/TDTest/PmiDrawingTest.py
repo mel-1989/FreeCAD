@@ -820,3 +820,47 @@ class PmiDrawingTest(unittest.TestCase):
             self.assertNotEqual(rep[item.Name][0], "not projected", item.Name)
             self.assertAlmostEqual(abs(self.doc.getObject(rep[item.Name][0][0]).getRawValue()), value, places=9)
         self.assertEqual(wrongMeasurements(self.page), [])
+
+    def test_refresh_prunes_objects_of_a_deleted_view_and_project_makes_no_duplicates(self):
+        def drop(g):
+            # a view deleted in the GUI; in a script DrawViewPart's removal raises an upstream NameError, so take it off the page
+            self.page.removeView(g)
+            self.assertNotIn(g.Name, [v.Name for v in self.page.Views])
+
+        def single(name):
+            g = self.doc.addObject("TechDraw::DrawViewPart", name)
+            self.page.addView(g)
+            g.Source = [self.box]
+            g.Direction = App.Vector(0, -1, 0)
+            g.XDirection = App.Vector(1, 0, 0)
+            self.doc.recompute()
+            return g
+
+        PA.addDatum("A", self.face(-Y, 0))
+        w = PA.addSizeDimension([self.face(-X, 0), self.face(X, 30)])
+        t = PA.addTolerance("Flatness", 0.05, self.face(-Y, 0))
+        g1 = single("ViewOne")
+        PD.project(self.page, self.box, view=g1)
+        self.assertGreaterEqual(len(pairs(self.page)), 5)
+        drop(g1)
+        PD.refresh(self.page)
+        self.assertEqual(pairs(self.page), [])
+        self.assertEqual([o for o in self.doc.Objects if "PmiRole" in o.PropertiesList and o.PmiRole in ("dimension", "frame", "datum", "leader")], [])
+        g2 = single("ViewTwo")
+        PD.project(self.page, self.box, view=g2)
+        n = len(self.doc.Objects)
+        PD.project(self.page, self.box, view=g2)
+        self.assertEqual(len(self.doc.Objects), n)
+        by_item = {}
+        for o, i in pairs(self.page):
+            by_item.setdefault((i.Name, o.PmiRole), []).append(o.Name)
+        self.assertTrue(all(len(v) == 1 for v in by_item.values()), by_item)
+        # without a refresh in between, project itself drops the orphans before it makes new objects
+        drop(g2)
+        g3 = single("ViewThree")
+        rep = PD.project(self.page, self.box, view=g3)
+        self.assertTrue(all(v[1] == "ViewThree" for v in rep.values() if v[0] != "not projected"), rep)
+        by_item = {}
+        for o, i in pairs(self.page):
+            by_item.setdefault((i.Name, o.PmiRole), []).append(o.Name)
+        self.assertTrue(all(len(v) == 1 for v in by_item.values()), by_item)
