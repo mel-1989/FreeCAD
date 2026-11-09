@@ -80,6 +80,7 @@
 #include <App/GeoFeature.h>
 #include <App/GroupExtension.h>
 #include <Base/Console.h>
+#include <Base/Interpreter.h>
 #include <Gui/Application.h>
 #include <Gui/Document.h>
 #include <Gui/Selection/Selection.h>
@@ -1258,4 +1259,29 @@ void ViewProviderPmiGroup::finishRestoring()
 {
     Gui::ViewProviderDocumentObjectGroup::finishRestoring();
     refreshChildren(false);
+}
+
+PROPERTY_SOURCE(PartGui::ViewProviderPmiView, Gui::ViewProviderDocumentObject)
+
+ViewProviderPmiView::ViewProviderPmiView() = default;
+
+ViewProviderPmiView::~ViewProviderPmiView() = default;
+
+bool ViewProviderPmiView::doubleClicked()
+{
+    // the behaviour lives in PmiAuthoringGui (one place for the command and the double click)
+    auto* obj = getObject();
+    if (!obj || !obj->getDocument()) {
+        return false;
+    }
+    try {
+        std::string cmd = "import FreeCAD as App\nimport PmiAuthoringGui\nPmiAuthoringGui.activateView(App.getDocument(\"" + std::string(obj->getDocument()->getName())
+            + "\").getObject(\"" + std::string(obj->getNameInDocument()) + "\"))";
+        Base::Interpreter().runString(cmd.c_str());
+    }
+    catch (const Base::Exception& e) {
+        Base::Console().error("PMI view: {}\n", e.what());
+        return false;
+    }
+    return true;
 }

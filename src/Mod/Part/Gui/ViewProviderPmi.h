@@ -189,4 +189,24 @@ private:
     void refreshChildren(bool full);
 };
 
+/// A saved PMI view in the tree: a double click activates it (PmiAuthoringGui.activateView sets the camera and shows exactly its items)
+class PartGuiExport ViewProviderPmiView: public Gui::ViewProviderDocumentObject
+{
+    PROPERTY_HEADER_WITH_OVERRIDE(PartGui::ViewProviderPmiView);
+
+public:
+    ViewProviderPmiView();
+    ~ViewProviderPmiView() override;
+
+    bool doubleClicked() override;
+    std::vector<std::string> getDisplayModes() const override
+    {
+        return {};
+    }
+    bool canDragObjects() const override
+    {
+        return false;
+    }
+};
+
 }  // namespace PartGui

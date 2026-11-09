@@ -57,6 +57,9 @@ struct ImportExport StepPmiReport
     int unattachedDatums {0};  // datum items that attach to no face of the document
     int edgesByGeometry {0};   // edge links found by curve type, length and centre of mass, not by shape identity
     int datumsFromStep {0};    // datum items whose faces were completed from the STEP datum feature
+    int views {0};             // saved views imported as Part::PmiView (one per XCAF view label)
+    int viewLabels {0};        // XCAF view labels the reader made
+    std::vector<std::string> viewNotes;  // per view: name, items shown, projection (for the oracle comparison)
     int kernelLoss {0};        // items with a KernelLoss entry (the kernel lost or altered something the file states)
     std::vector<std::string> kernelLossItems;
     std::vector<std::string> unattachedItems;

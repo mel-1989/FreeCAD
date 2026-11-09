@@ -106,6 +106,14 @@
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_GeomTolerance.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <XCAFDoc_View.hxx>
+#include <XCAFDoc_ViewTool.hxx>
+#include <XCAFView_Object.hxx>
+#include <XCAFView_ProjectionType.hxx>
+#include <gp_Quaternion.hxx>
+#include <gp_Mat.hxx>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 #include <XCAFDoc_ShapeMapTool.hxx>
 #include <XSControl_TransferReader.hxx>
 
@@ -2017,6 +2025,9 @@ void stashStepPmiFaceIds(const Handle(XSControl_WorkSession)& ws, const Handle(T
 namespace
 {
 
+/// TDF entry of an XCAF dimension, tolerance, datum or annotation label -> the item made from it in this pass
+std::map<std::string, App::DocumentObject*> gLabelItems;
+
 Part::PmiDatum* makeDatum(
     App::Document* doc,
     const TDF_Label& dl,
@@ -2032,6 +2043,7 @@ Part::PmiDatum* makeDatum(
     Handle(XCAFDimTolObjects_DatumObject) o = attr->GetObject();
     auto* item = doc->addObject<Part::PmiDatum>("PmiDatum");
     created.push_back(item);
+    gLabelItems[entryOf(dl)] = item;
     Raw raw;
     Flags fl;
     std::string letter = hstr(attr->GetIdentification());
@@ -2189,10 +2201,153 @@ Part::PmiDatum* makeDatum(
 
 }  // namespace
 
+namespace
+{
+
+/// An Inventor camera string from an XCAF view (CAMERA_MODEL_D3). Inventor looks along -Z with +Y up, so the camera
+/// orientation maps (0,0,-1) to the view direction and (0,1,0) to the up direction. OCCT hands over the view direction and
+/// the up direction in the model's coordinates, but the projection point in the camera's own coordinates (it reads the view
+/// volume's point, (0,0,0) for a parallel view), so the eye cannot be placed from it: a parallel view puts the eye on the
+/// line back from the middle of the model along the view direction, far enough out to see all of it (a parallel view has no
+/// eye position of its own, ISO 10303-105 view_volume), a central one the same line at the view plane distance. \a diag and
+/// \a centre are the model's bounding box; the window sizes are the view window of the file (height in model units for a
+/// parallel view, the view plane distance for a central one)
+std::string cameraOfView(const Handle(XCAFView_Object)& v, double diag, const gp_Pnt& centre)
+{
+    gp_Dir dir = v->ViewDirection();
+    gp_Dir up = v->UpDirection();
+    gp_Vec xv = gp_Vec(dir).Crossed(gp_Vec(up));  // camera x axis = up x z, z = -dir
+    if (xv.Magnitude() < 1e-9) {
+        xv = gp_Vec(dir).Crossed(gp_Vec(0, 0, 1));
+        if (xv.Magnitude() < 1e-9) {
+            xv = gp_Vec(1, 0, 0);
+        }
+    }
+    xv.Normalize();
+    gp_Vec zc = -gp_Vec(dir);
+    gp_Vec yc = zc.Crossed(xv);
+    gp_Mat m(xv.X(), yc.X(), zc.X(), xv.Y(), yc.Y(), zc.Y(), xv.Z(), yc.Z(), zc.Z());
+    gp_Quaternion q;
+    q.SetMatrix(m);
+    gp_Vec axis(0, 0, 1);
+    double angle = 0.0;
+    q.GetVectorAndAngle(axis, angle);
+    const bool ortho = v->Type() != XCAFView_ProjectionType_Central;
+    double height = v->WindowVerticalSize();
+    if (height <= 0.0) {
+        height = diag > 0 ? diag : 1.0;
+    }
+    double back = 1.5 * diag;
+    if (!ortho && v->ZoomFactor() > 0.0) {
+        back = std::max(back, v->ZoomFactor());
+    }
+    gp_Pnt p(centre.X() - dir.X() * back, centre.Y() - dir.Y() * back, centre.Z() - dir.Z() * back);
+    double farD = back + 2.0 * diag;
+    double nearD = std::max(1e-3 * diag, ortho ? 0.0 : 0.01 * back);
+    std::ostringstream o;
+    o.precision(17);
+    o << "#Inventor V2.1 ascii\n\n\n" << (ortho ? "OrthographicCamera" : "PerspectiveCamera") << " {\n"
+      << "  viewportMapping ADJUST_CAMERA\n"
+      << "  position " << p.X() << " " << p.Y() << " " << p.Z() << "\n"
+      << "  orientation " << axis.X() << " " << axis.Y() << " " << axis.Z() << " " << angle << "\n"
+      << "  nearDistance " << nearD << "\n"
+      << "  farDistance " << farD << "\n"
+      << "  aspectRatio 1\n"
+      << "  focalDistance " << back << "\n";
+    if (ortho) {
+        o << "  height " << height << "\n";
+    }
+    else {
+        o << "  heightAngle " << 2.0 * std::atan(0.5 * height / back) << "\n";
+    }
+    o << "}\n";
+    return o.str();
+}
+
+/// One Part::PmiView per XCAF view label (SetViewMode on the reader): its camera, and the PMI items its annotations
+/// map to through gLabelItems. A tolerance brings its datum uses along (they are drawn with it). CAx-IF recommended
+/// practice for PMI, saved views; ASME Y14.41, model views
+void importSavedViews(const Handle(TDocStd_Document)& hDoc, App::Document* doc, std::vector<App::DocumentObject*>& created)
+{
+    if (!XCAFDoc_DocumentTool::CheckViewTool(hDoc->Main())) {
+        return;
+    }
+    Handle(XCAFDoc_ViewTool) vt = XCAFDoc_DocumentTool::ViewTool(hDoc->Main());
+    NCollection_Sequence<TDF_Label> labels;
+    vt->GetViewLabels(labels);
+    gReport.viewLabels = labels.Length();
+    double diag = 1.0;
+    gp_Pnt centre(0, 0, 0);
+    {
+        Bnd_Box box;
+        for (auto* o : doc->getObjects()) {
+            if (auto* f = dynamic_cast<Part::Feature*>(o)) {
+                const TopoDS_Shape& sh = f->Shape.getValue();
+                if (!sh.IsNull()) {
+                    BRepBndLib::Add(sh, box);
+                }
+            }
+        }
+        if (!box.IsVoid()) {
+            diag = std::sqrt(box.SquareExtent());
+            double x0, y0, z0, x1, y1, z1;
+            box.Get(x0, y0, z0, x1, y1, z1);
+            centre = gp_Pnt(0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.5 * (z0 + z1));
+        }
+    }
+    for (int i = 1; i <= labels.Length(); ++i) {
+        Handle(XCAFDoc_View) attr;
+        if (!labels.Value(i).FindAttribute(XCAFDoc_View::GetID(), attr)) {
+            continue;
+        }
+        Handle(XCAFView_Object) vo = attr->GetObject();
+        if (vo.IsNull()) {
+            continue;
+        }
+        std::vector<App::DocumentObject*> shown;
+        auto add = [&](App::DocumentObject* o) {
+            if (o && std::find(shown.begin(), shown.end(), o) == shown.end()) {
+                shown.push_back(o);
+            }
+        };
+        NCollection_Sequence<TDF_Label> refs, anns;
+        vt->GetRefGDTLabel(labels.Value(i), refs);
+        vt->GetRefAnnotationLabel(labels.Value(i), anns);
+        for (const auto* seq : {&refs, &anns}) {
+            for (int k = 1; k <= seq->Length(); ++k) {
+                auto it = gLabelItems.find(entryOf(seq->Value(k)));
+                if (it == gLabelItems.end()) {
+                    continue;
+                }
+                add(it->second);
+                if (auto* tol = dynamic_cast<Part::PmiTolerance*>(it->second)) {
+                    for (auto* d : tol->Datums.getValues()) {
+                        add(d);
+                    }
+                }
+            }
+        }
+        auto* view = doc->addObject<Part::PmiView>("PmiView");
+        created.push_back(view);
+        std::string name = vo->Name().IsNull() ? std::string() : hstr(vo->Name());
+        view->Label.setValue(name.empty() ? "View " + std::to_string(i) : name);
+        view->Camera.setValue(cameraOfView(vo, diag, centre));
+        view->Items.setValues(shown);
+        ++gReport.views;
+        gReport.viewNotes.push_back(
+            entryOf(labels.Value(i)) + "|" + name + "|items=" + std::to_string(shown.size()) + "|gdt=" + std::to_string(refs.Length())
+            + "|ann=" + std::to_string(anns.Length()) + "|type=" + std::to_string(static_cast<int>(vo->Type()))
+        );
+    }
+}
+
+}  // namespace
+
 void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
 {
     gReport = StepPmiReport();
     testForceUnknown("reset");
+    gLabelItems.clear();
     std::vector<App::DocumentObject*> created;
     std::string groupName;
     // if the pass stops midway nothing of it stays in the document: the objects made so far are removed again
@@ -2255,6 +2410,7 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
                 ++gReport.graphicOnly;  // graphic-only presentation: counted, kept as an annotation, not a semantic item
                 auto* ann = doc->addObject<Part::PmiAnnotation>("PmiAnnotation");
                 created.push_back(ann);
+                gLabelItems[entryOf(dl)] = ann;
                 Raw araw;
                 ann->PmiType.setValue(type);
                 ann->SemanticName.setValue(hstr(o->GetSemanticName()));
@@ -2296,6 +2452,7 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
             }
             auto* item = doc->addObject<Part::PmiDimension>("PmiDimension");
             created.push_back(item);
+            gLabelItems[entryOf(dl)] = item;
             Raw raw;
             item->PmiType.setValue(type);
             item->SemanticName.setValue(hstr(o->GetSemanticName()));
@@ -2481,6 +2638,7 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
             }
             auto* item = doc->addObject<Part::PmiTolerance>("PmiTolerance");
             created.push_back(item);
+            gLabelItems[entryOf(tl)] = item;
             Raw raw;
             item->PmiType.setValue(type);
             item->SemanticName.setValue(hstr(o->GetSemanticName()));
@@ -2635,6 +2793,7 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
         if (pmiSwitch() == "fail") {
             throw Base::RuntimeError("FC_STEP_PMI=fail: test of the rollback");
         }
+        importSavedViews(hDoc, doc, created);
         auto* group = doc->addObject<Part::PmiGroup>("PMI");
         groupName = group->getNameInDocument();
         group->Label.setValue("PMI");
@@ -3019,7 +3178,8 @@ void setPresentation(
 
 /// The nominal written for a dimension that states no value (HasValue false): OCCT writes a nominal for every dimension, so the
 /// item gets this marker and the repair pass takes the nominal out of the file again (see dropValuelessNominals).
-constexpr double kNoValueMarker = 1.2345678901234e-123;
+/// The marker is chosen again for every export so that no real value of the document equals it (chooseNoValueMarker).
+static double gNoValueMarker = 1.2345678901234e-123;
 
 Handle(XCAFDimTolObjects_DimensionObject) buildDimension(
     ExportCtx& cx,
@@ -3042,7 +3202,7 @@ Handle(XCAFDimTolObjects_DimensionObject) buildDimension(
     // SetValue resets the values array and with it the bounds, so the value comes first; an item with no stated value
     // (HasValue false, never with bounds) gets the marker nominal, which the repair pass removes from the file again
     const bool valueless = !item->HasValue.getValue() && !item->HasBounds.getValue();
-    o->SetValue(valueless ? kNoValueMarker : item->Value.getValue() * k);
+    o->SetValue(valueless ? gNoValueMarker : item->Value.getValue() * k);
     if (item->HasBounds.getValue()) {
         if (item->BoundsKind.getStrValue() == "range") {
             o->SetUpperBound(item->UpperBound.getValue() * k);
@@ -3413,7 +3573,7 @@ static int dropValuelessNominals(std::string& text)
             continue;
         }
         const double v = std::strtod(vm[1].str().c_str(), nullptr);
-        if (std::fabs(v - kNoValueMarker) <= 1e-9 * kNoValueMarker) {
+        if (std::fabs(v - gNoValueMarker) <= 1e-9 * gNoValueMarker) {
             measures.push_back((*it)[1].str());
         }
     }
@@ -3832,6 +3992,24 @@ int exportStepPmi(
             return 0;
         }
         gExport.ran = true;
+        // a value an author gave that equals the marker would be taken for "no value" by the repair pass: move the marker off every value
+        {
+            double m = 1.2345678901234e-123;
+            auto near = [&](double v) { return std::fabs(v - m) <= 1e-6 * m; };
+            for (bool again = true; again;) {
+                again = false;
+                for (auto* it : items) {
+                    const double k = isAngular(it->PmiType.getStrValue()) ? std::acos(-1.0) / 180.0 : 1.0;
+                    if (near(it->Value.getValue() * k) || near(it->Value.getValue()) || near(it->UpperBound.getValue() * k)
+                        || near(it->LowerBound.getValue() * k) || near(-it->LowerBound.getValue() * k)) {
+                        m *= 1.37;
+                        again = true;
+                        break;
+                    }
+                }
+            }
+            gNoValueMarker = m;
+        }
         // PMI goes out under an AP242 schema only (ISO 10303-242 is the first protocol with semantic PMI; AP203 and AP214
         // have none); the saved schema stays, run 070
         std::string scheme = Part::Interface::preferredStepScheme();

@@ -150,6 +150,15 @@ private:
         d.setItem("ran", Py::Boolean(r.ran));
         d.setItem("dimensions", Py::Long(r.dimensions));
         d.setItem("graphic_only", Py::Long(r.graphicOnly));
+        d.setItem("views", Py::Long(r.views));
+        d.setItem("view_labels", Py::Long(r.viewLabels));
+        {
+            Py::List vn;
+            for (const auto& n : r.viewNotes) {
+                vn.append(Py::String(n));
+            }
+            d.setItem("view_notes", vn);
+        }
         d.setItem("tolerances", Py::Long(r.tolerances));
         d.setItem("datums", Py::Long(r.datums));
         d.setItem("unmapped", Py::Long(r.unmapped));

@@ -26,6 +26,7 @@ set(Part_Scripts
 if(BUILD_GUI)
     list (APPEND Part_Scripts
           InitGui.py
+          PmiAuthoringGui.py
           TestPartGui.py
           TestPartPmiGui.py
           TestPartPreview.py

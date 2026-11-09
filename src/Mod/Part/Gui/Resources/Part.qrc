@@ -83,6 +83,9 @@
         <file>icons/Part_PointLinkArray.svg</file>
         <file>icons/Part_PolarLinkArray.svg</file>
         <file>icons/Part_SectionCut.svg</file>
+        <file>icons/Part_PmiAuthor.svg</file>
+        <file>icons/Part_PmiSaveView.svg</file>
+        <file>icons/Part_PmiActivateView.svg</file>
         <file>icons/PartWorkbench.svg</file>
         <file>icons/preferences-part_design.svg</file>
         <file>icons/Part_Detached.svg</file>

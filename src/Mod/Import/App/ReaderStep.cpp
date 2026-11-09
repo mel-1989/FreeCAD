@@ -56,6 +56,9 @@ void ReaderStep::read(Handle(TDocStd_Document) hDoc, const Message_ProgressRange
     aReader.SetNameMode(true);
     aReader.SetLayerMode(true);
     aReader.SetSHUOMode(true);
+    // saved views (CAMERA_MODEL_D3 and the annotations each shows) are read into the XCAF view table; the PMI pass turns them
+    // into Part::PmiView objects (CAx-IF recommended practice for PMI, saved views)
+    aReader.SetViewMode(stepPmiEnabled());
 #if OCC_VERSION_HEX < 0x070800
     if (aReader.ReadFile(name8bit.c_str()) != IFSelect_RetDone) {
 #else

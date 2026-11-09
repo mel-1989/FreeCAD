@@ -478,6 +478,7 @@ PyMOD_INIT_FUNC(Part)
     Part::PmiTolerance          ::init();
     Part::PmiDatum              ::init();
     Part::PmiAnnotation         ::init();
+    Part::PmiView               ::init();
     Part::PmiGroup              ::init();
     Part::Feature               ::init();
     Part::FeatureExt            ::init();
