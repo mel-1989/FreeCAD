@@ -232,6 +232,8 @@ SET(PartGui_SRCS
     ViewProviderPmi.h
     ViewProviderPmiLayout.cpp
     ViewProviderPmiLayout.h
+    ViewProviderPmiScreenLayout.cpp
+    ViewProviderPmiScreenLayout.h
     ViewProviderExtrusion.cpp
     ViewProviderExtrusion.h
     ViewProviderScale.cpp

@@ -181,6 +181,132 @@ def pick_proxy_quad(path):
     return [App.Vector(*node.point[i].getValue()) for i in range(4)]
 
 
+def pick_proxy_quad_now(path):
+    """The pick quad as it is drawn at the current camera: in global coordinates, with the shift the screen layout (slice
+    3b-iii) gave the label for this camera (pick_proxy_quad is the nominal quad of check 21, in the item's own coordinates)"""
+    search = coin.SoSearchAction()
+    search.setType(coin.SoCoordinate3.getClassTypeId())
+    search.setInterest(coin.SoSearchAction.ALL)
+    search.apply(path.getTail())
+    paths = search.getPaths()
+    if paths.getLength() < 2:
+        return None
+    node = paths[1].getTail()
+    if node.point.getNum() < 4:
+        return None
+    full = path.copy()
+    full.append(paths[1])
+    act = coin.SoGetMatrixAction(coin.SbViewportRegion())
+    act.apply(full)
+    mat = act.getMatrix()
+    return [App.Vector(*mat.multVecMatrix(coin.SbVec3f(*node.point[i].getValue())).getValue()) for i in range(4)]
+
+
+PMI_LAYOUT_PREF = "User parameter:BaseApp/Preferences/Mod/Part/Pmi"
+
+
+def nominal_layout(test):
+    """Run a test with the per-camera screen layout of the fallback labels off: it checks where the labels are laid out in
+    3D (checks 21 and 2b), not where the declutter of one camera moves them (slice 3b-iii)"""
+
+    def wrapper(self, *a, **k):
+        grp = App.ParamGet(PMI_LAYOUT_PREF)
+        before = grp.GetBool("ScreenLayout", True)
+        grp.SetBool("ScreenLayout", False)
+        try:
+            return test(self, *a, **k)
+        finally:
+            grp.SetBool("ScreenLayout", before)
+
+    wrapper.__name__ = test.__name__
+    wrapper.__doc__ = test.__doc__
+    return wrapper
+
+
+def pick_proxy_quad_now(path):
+    """The pick quad as it is drawn at the current camera: in global coordinates, with the shift the screen layout (slice
+    3b-iii) gave the label for this camera (pick_proxy_quad is the nominal quad of check 21, in the item's own coordinates)"""
+    search = coin.SoSearchAction()
+    search.setType(coin.SoCoordinate3.getClassTypeId())
+    search.setInterest(coin.SoSearchAction.ALL)
+    search.apply(path.getTail())
+    paths = search.getPaths()
+    if paths.getLength() < 2:
+        return None
+    node = paths[1].getTail()
+    if node.point.getNum() < 4:
+        return None
+    full = path.copy()
+    full.append(paths[1])
+    act = coin.SoGetMatrixAction(coin.SbViewportRegion())
+    act.apply(full)
+    mat = act.getMatrix()
+    return [App.Vector(*mat.multVecMatrix(coin.SbVec3f(*node.point[i].getValue())).getValue()) for i in range(4)]
+
+
+PMI_LAYOUT_PREF = "User parameter:BaseApp/Preferences/Mod/Part/Pmi"
+
+
+def nominal_layout(test):
+    """Run a test with the per-camera screen layout of the fallback labels off: it checks where the labels are laid out in
+    3D (checks 21 and 2b), not where the declutter of one camera moves them (slice 3b-iii)"""
+
+    def wrapper(self, *a, **k):
+        grp = App.ParamGet(PMI_LAYOUT_PREF)
+        before = grp.GetBool("ScreenLayout", True)
+        grp.SetBool("ScreenLayout", False)
+        try:
+            return test(self, *a, **k)
+        finally:
+            grp.SetBool("ScreenLayout", before)
+
+    wrapper.__name__ = test.__name__
+    wrapper.__doc__ = test.__doc__
+    return wrapper
+
+
+def pick_proxy_quad_now(path):
+    """The pick quad as it is drawn at the current camera: in global coordinates, with the shift the screen layout (slice
+    3b-iii) gave the label for this camera (pick_proxy_quad is the nominal quad of check 21, in the item's own coordinates)"""
+    search = coin.SoSearchAction()
+    search.setType(coin.SoCoordinate3.getClassTypeId())
+    search.setInterest(coin.SoSearchAction.ALL)
+    search.apply(path.getTail())
+    paths = search.getPaths()
+    if paths.getLength() < 2:
+        return None
+    node = paths[1].getTail()
+    if node.point.getNum() < 4:
+        return None
+    full = path.copy()
+    full.append(paths[1])
+    act = coin.SoGetMatrixAction(coin.SbViewportRegion())
+    act.apply(full)
+    mat = act.getMatrix()
+    return [App.Vector(*mat.multVecMatrix(coin.SbVec3f(*node.point[i].getValue())).getValue()) for i in range(4)]
+
+
+PMI_LAYOUT_PREF = "User parameter:BaseApp/Preferences/Mod/Part/Pmi"
+
+
+def nominal_layout(test):
+    """Run a test with the per-camera screen layout of the fallback labels off: it checks where the labels are laid out in
+    3D (checks 21 and 2b), not where the declutter of one camera moves them (slice 3b-iii)"""
+
+    def wrapper(self, *a, **k):
+        grp = App.ParamGet(PMI_LAYOUT_PREF)
+        before = grp.GetBool("ScreenLayout", True)
+        grp.SetBool("ScreenLayout", False)
+        try:
+            return test(self, *a, **k)
+        finally:
+            grp.SetBool("ScreenLayout", before)
+
+    wrapper.__name__ = test.__name__
+    wrapper.__doc__ = test.__doc__
+    return wrapper
+
+
 def model_diagonal(doc):
     diag = 0.0
     box = None
@@ -439,6 +565,7 @@ class TestPmiDisplaySynthetic(unittest.TestCase):
         d = doc.getObject("Dim")
         self.assertEqual(d.ReferencePlacement.Base, d.References[0][0].Placement.Base)
 
+    @nominal_layout
     def test_old_document_with_a_body_at_a_non_identity_placement_draws_in_place(self):
         # check 23 repair: ReferencePlacement missing from the file (not just identity) is set to the body's current
         # global placement on restore, so the drawing does not move
@@ -780,6 +907,28 @@ class TestPmiFallbackSynthetic(unittest.TestCase):
         self.assertEqual(label_text(drawn_paths(self.doc)["DatumC"]), "[D]")
         self.assertEqual(label_text(drawn_paths(self.doc)["DatumC2"]), "[C]")
 
+    def test_deleting_a_drawn_label_in_a_transaction_with_a_view_open_and_undoing_it(self):
+        # slice 3b-iii repair: the screen layout holds the item's provider; a delete inside a transaction (Std_Delete) leaves
+        # the object on the undo stack with no name, and must neither crash nor leave its label in the layout
+        self.doc.recompute()
+        Gui.updateGui()
+        name = "TolFb"
+        self.assertIn(name, drawn_paths(self.doc))
+        self.doc.openTransaction("del")
+        self.doc.removeObject(name)
+        self.doc.commitTransaction()
+        Gui.updateGui()
+        self.assertNotIn(name, drawn_paths(self.doc))
+        self.doc.undo()
+        Gui.updateGui()
+        self.assertIn(name, drawn_paths(self.doc))
+        self.doc.redo()
+        Gui.updateGui()
+        self.assertNotIn(name, drawn_paths(self.doc))
+        self.doc.undo()
+        Gui.updateGui()
+        self.assertIn(name, drawn_paths(self.doc))
+
     def test_a_reference_to_a_missing_face_draws_nothing(self):
         d = self.doc.addObject("Part::PmiDimension", "Ghost")
         d.PmiType = "Size_Linear"
@@ -915,7 +1064,14 @@ def aim_at(doc, name):
         c = (quad[0] + quad[2]) * 0.5
         normal = (quad[1] - quad[0]).cross(quad[3] - quad[0])
         normal.normalize()
-        return aim_at_point(doc, name, c, normal)
+        x, y = aim_at_point(doc, name, c, normal)
+        # the screen layout (slice 3b-iii) shifts a label for each camera: click the centre of its quad at this camera
+        now = pick_proxy_quad_now(drawn_paths(doc)[name])
+        if now is not None:
+            c2 = (now[0] + now[2]) * 0.5
+            x, y = Gui.getDocument(doc.Name).ActiveView.getPointOnScreen(c2.x, c2.y, c2.z)
+            x, y = int(x), int(y)
+        return x, y
     a, b = geometry_segment(path)
     return aim_at_point(doc, name, (a + b) * 0.5, presentation_normal(a, b, None))
 
@@ -925,12 +1081,12 @@ def covered_by_other(doc, name, x, y):
     near the camera (two labels on one face share a place, so a click there is ambiguous by construction)"""
     view = Gui.getDocument(doc.Name).ActiveView
     eye = App.Vector(*view.getCameraNode().position.getValue().getValue())
-    mine = pick_proxy_quad(drawn_paths(doc)[name])
+    mine = pick_proxy_quad_now(drawn_paths(doc)[name])
     if mine is None:
         return False
     mine_dist = (eye - (mine[0] + mine[2]) * 0.5).Length
     for other, path in drawn_paths(doc).items():
-        quad = pick_proxy_quad(path)
+        quad = pick_proxy_quad_now(path)
         if other == name or quad is None:
             continue
         if (eye - (quad[0] + quad[2]) * 0.5).Length > mine_dist + 1e-3 * model_diagonal(doc):
@@ -1026,6 +1182,7 @@ class TestPmiDisplayCorpus(unittest.TestCase):
                 finally:
                     App.closeDocument(doc.Name)
 
+    @nominal_layout
     def test_fallback_layout_counts_text_and_position_on_every_file(self):
         # check 21: items without a Presentation draw a label at their faces; check 17's count plus these, plus the
         # unattached items that draw nothing, is every semantic item (datums per letter)
@@ -1247,6 +1404,7 @@ class TestPmiDisplayCorpus(unittest.TestCase):
                     Gui.Selection.clearSelection()
                     App.closeDocument(doc.Name)
 
+    @nominal_layout
     def test_follow_group_visibility_and_save_reopen(self):
         for path in CORPUS_FILES:
             stem = os.path.basename(path)

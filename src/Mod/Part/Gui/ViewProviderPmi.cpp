@@ -70,6 +70,7 @@
 #include <Inventor/nodes/SoIndexedLineSet.h>
 #include <Inventor/nodes/SoLightModel.h>
 #include <Inventor/nodes/SoPickStyle.h>
+#include <Inventor/nodes/SoTranslation.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <Inventor/nodes/SoShapeHints.h>
 #include <Inventor/nodes/SoTransform.h>
@@ -94,6 +95,7 @@
 #include "ViewProviderExt.h"
 #include "ViewProviderPmi.h"
 #include "ViewProviderPmiLayout.h"
+#include "ViewProviderPmiScreenLayout.h"
 
 using namespace PartGui;
 
@@ -481,15 +483,20 @@ void ViewProviderPmiItem::attach(App::DocumentObject* obj)
     hints->vertexOrdering = SoShapeHints::UNKNOWN_ORDERING;
     hints->shapeType = SoShapeHints::UNKNOWN_SHAPE_TYPE;
     drawRoot->addChild(hints);
+    // the label proper sits in labelRoot behind a translation: the per-camera declutter (ViewProviderPmiScreenLayout.cpp)
+    // writes its shift there, so the drawing, the pick quad and every ray pick see the shifted label
+    labelRoot = new SoSeparator;
+    offsetT = new SoTranslation;
+    labelRoot->addChild(offsetT);
     coords = new SoCoordinate3;
-    drawRoot->addChild(coords);
+    labelRoot->addChild(coords);
     lines = new SoIndexedLineSet;
-    drawRoot->addChild(lines);
+    labelRoot->addChild(lines);
     faces = new SoIndexedFaceSet;
-    drawRoot->addChild(faces);
+    labelRoot->addChild(faces);
     info = new SoInfo;  // the text of a fallback label; empty for presentation items
     info->string.setValue("");
-    drawRoot->addChild(info);
+    labelRoot->addChild(info);
     // lines are hard to hit: an invisible quad over the drawing (Coin still picks invisible shapes) makes the whole
     // label or annotation one click target
     auto* proxy = new SoSeparator;
@@ -500,7 +507,20 @@ void ViewProviderPmiItem::attach(App::DocumentObject* obj)
     proxy->addChild(proxyCoords);
     proxyFaces = new SoIndexedFaceSet;
     proxy->addChild(proxyFaces);
-    drawRoot->addChild(proxy);
+    labelRoot->addChild(proxy);
+    drawRoot->addChild(labelRoot);
+    // the leader of a displaced label (ASME Y14.41 leader practice): from the label's frame to the governed faces; it is
+    // not pickable, so it never takes a click from the label or from the model
+    leaderRoot = new SoSeparator;
+    leaderRoot->setName(SbName((std::string("Leader_") + obj->getNameInDocument()).c_str()));
+    auto* leaderPick = new SoPickStyle;
+    leaderPick->style = SoPickStyle::UNPICKABLE;
+    leaderRoot->addChild(leaderPick);
+    leaderCoords = new SoCoordinate3;
+    leaderRoot->addChild(leaderCoords);
+    leaderLines = new SoIndexedLineSet;
+    leaderRoot->addChild(leaderLines);
+    drawRoot->addChild(leaderRoot);
 
     addDisplayMaskMode(modeRoot, "Pmi");
     setDisplayMaskMode("Pmi");
@@ -945,6 +965,16 @@ bool ViewProviderPmiItem::buildFallback(std::vector<SbVec3f>& pts, std::vector<i
         )));
     }
     setPickProxy(quad);
+    if (quad.size() == 4) {
+        for (size_t i = 0; i < 4; ++i) {
+            baseQuad[i] = quad[i];
+        }
+        FallbackAnchor fa;
+        if (computeAnchor(fa)) {
+            baseAnchor = toSb(fa.centre);
+        }
+        haveBaseQuad = true;
+    }
     if (auto* feat = dynamic_cast<Part::Feature*>(governedObject())) {
         laidOutShape = feat->Shape.getShape().getShape();  // what the label was laid out on
     }
@@ -996,6 +1026,8 @@ void ViewProviderPmiItem::rebuildGeometry()
         return;
     }
     stale = false;
+    haveBaseQuad = false;
+    setScreenOffset(SbVec3f(0, 0, 0));  // a rebuilt drawing is at its nominal place until the screen layout runs again
     auto* item = getObject<Part::PmiItem>();
     std::vector<SbVec3f> pts;
     std::vector<int32_t> lineIdx, faceIdx;
@@ -1047,6 +1079,80 @@ void ViewProviderPmiItem::rebuildGeometry()
         modeRoot->addChild(drawRoot);
         drawing = true;
     }
+    if (mode == PmiDrawMode::Fallback) {
+        PmiScreenLayout::markDirty(item->getDocument());
+    }
+}
+
+bool ViewProviderPmiItem::screenData(ScreenData& out) const
+{
+    if (!attached || !drawing || mode != PmiDrawMode::Fallback || !haveBaseQuad) {
+        return false;
+    }
+    for (int i = 0; i < 4; ++i) {
+        out.quad[i] = baseQuad[i];
+    }
+    out.anchor = baseAnchor;
+    SbMatrix m;
+    m.setTransform(transform->translation.getValue(), transform->rotation.getValue(), SbVec3f(1, 1, 1));
+    out.toWorld = m;
+    out.toLocal = m.inverse();
+    return true;
+}
+
+/// Write the shift of the label (in the governed object's coordinates) into the scene graph: the label's translation,
+/// and, for a displaced label, the leader from the nearest point of its frame to the governed faces
+void ViewProviderPmiItem::setScreenOffset(const SbVec3f& shift, bool leader)
+{
+    if (!attached) {
+        return;
+    }
+    if (offsetT->translation.getValue() != shift) {
+        offsetT->translation.setValue(shift);
+    }
+    if (!leader || !haveBaseQuad) {
+        if (leaderLines->coordIndex.getNum() != 0) {
+            leaderLines->coordIndex.setNum(0);
+            leaderCoords->point.setNum(0);
+        }
+        return;
+    }
+    // candidates on the frame: corners and edge midpoints; the leader meets the frame at the one nearest the anchor
+    SbVec3f best = baseQuad[0] + shift;
+    float bestD = 1e30f;
+    for (int i = 0; i < 4; ++i) {
+        const SbVec3f corner = baseQuad[i] + shift;
+        const SbVec3f mid = (baseQuad[i] + baseQuad[(i + 1) % 4]) * 0.5f + shift;
+        for (const SbVec3f& c : {corner, mid}) {
+            const float d = (c - baseAnchor).sqrLength();
+            if (d < bestD) {
+                bestD = d;
+                best = c;
+            }
+        }
+    }
+    leaderCoords->point.set1Value(0, baseAnchor);
+    leaderCoords->point.set1Value(1, best);
+    leaderCoords->point.setNum(2);
+    const int32_t idx[3] = {0, 1, -1};
+    leaderLines->coordIndex.setValues(0, 3, idx);
+}
+
+std::vector<ViewProviderPmiItem*> ViewProviderPmiItem::fallbackProviders(const App::Document* doc)
+{
+    std::vector<ViewProviderPmiItem*> out;
+    for (auto* vp : aliveProviders()) {
+        // an object deleted inside a transaction waits on the undo stack with no name in its document: it takes no part
+        auto* item = vp->attached ? vp->getObject<Part::PmiItem>() : nullptr;
+        if (item && item->getNameInDocument() && !item->isRemoving() && item->getDocument() == doc
+            && vp->mode == PmiDrawMode::Fallback && vp->drawing && vp->haveBaseQuad) {
+            out.push_back(vp);
+        }
+    }
+    std::sort(out.begin(), out.end(), [](ViewProviderPmiItem* a, ViewProviderPmiItem* b) {
+        return std::string(a->getObject()->getNameInDocument()) < b->getObject()->getNameInDocument();
+    });
+    return out;
 }
 
 void ViewProviderPmiItem::updateTransform()
