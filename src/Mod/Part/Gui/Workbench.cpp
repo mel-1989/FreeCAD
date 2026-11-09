@@ -155,6 +155,11 @@ Gui::MenuItem* Workbench::setupMenuBar() const
           << "Separator"
           << "Part_CheckGeometry"
           << "Part_Defeaturing"
+          << "Separator"
+          << "Part_PmiAuthor"
+          << "Part_PmiSaveView"
+          << "Part_PmiActivateView"
+          << "Separator"
           << "Materials_InspectAppearance"
           << "Materials_InspectMaterial";
 

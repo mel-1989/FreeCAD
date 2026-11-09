@@ -172,6 +172,27 @@ public:
     PmiAnnotation();
 };
 
+/// A saved PMI view: a camera and the set of PMI items that are shown with it. Not a PmiItem (it is not exported as a
+/// dimension, tolerance or datum, and AP242 export has no view mode in OCCT 8.0.1, so views are document-only on export).
+/// Source of the vocabulary: the CAx-IF recommended practice for PMI (saved views, CAMERA_MODEL_D3 with the annotations
+/// it shows) and ASME Y14.41 (model views and the annotation sets they present)
+class PartExport PmiView: public App::DocumentObject
+{
+    PROPERTY_HEADER_WITH_OVERRIDE(Part::PmiView);
+
+public:
+    PmiView();
+    /// The Inventor camera string that Gui ActiveView.getCamera() returns and setCamera() accepts
+    App::PropertyString Camera;
+    /// The PMI items this view shows (every other PMI item is hidden when the view is activated)
+    App::PropertyLinkList Items;
+
+    const char* getViewProviderName() const override
+    {
+        return "PartGui::ViewProviderPmiView";
+    }
+};
+
 /// The group that holds all PMI items of one import
 class PartExport PmiGroup: public App::DocumentObjectGroup
 {

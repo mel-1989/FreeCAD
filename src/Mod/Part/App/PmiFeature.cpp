@@ -117,4 +117,12 @@ PROPERTY_SOURCE(Part::PmiAnnotation, Part::PmiItem)
 
 PmiAnnotation::PmiAnnotation() = default;
 
+PROPERTY_SOURCE(Part::PmiView, App::DocumentObject)
+
+PmiView::PmiView()
+{
+    ADD_PROPERTY_TYPE(Camera, (""), "PMI", App::Prop_None, "Inventor camera string of the view");
+    ADD_PROPERTY_TYPE(Items, (nullptr), "PMI", App::Prop_None, "PMI items shown when the view is activated");
+}
+
 PROPERTY_SOURCE(Part::PmiGroup, App::DocumentObjectGroup)

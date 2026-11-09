@@ -18,6 +18,8 @@ import time
 import unittest
 import zipfile
 
+from PySide import QtWidgets
+
 import FreeCAD as App
 import FreeCADGui as Gui
 import Import
@@ -92,7 +94,7 @@ def count_vertices(path):
 
 
 def semantic_items(doc):
-    return [o for o in doc.Objects if o.TypeId.startswith("Part::Pmi") and o.TypeId != "Part::PmiGroup"]
+    return [o for o in doc.Objects if o.TypeId.startswith("Part::Pmi") and o.TypeId not in ("Part::PmiGroup", "Part::PmiView")]
 
 
 def expected_presented(doc):
@@ -1325,6 +1327,627 @@ class TestPmiDisplayCorpus(unittest.TestCase):
         hidden = sorted(res["hidden"])[1]
         print("PMI_OPEN_TIME items=%d file=%s on=%.3fs hidden=%.3fs ratio=%.3f drawn_separators_on=%d" % (sizes[biggest], os.path.basename(biggest), on, hidden, on / hidden, res["nodes"]))
         self.assertLessEqual(on / hidden, 1.5)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# G12 slice 3b-i: the authoring task panel (checks 40, 42), PMI views (check 44)
+import PmiAuthoring as PA
+import PmiAuthoringGui as PG
+
+
+def _face_named(obj, pred):
+    return ["Face%d" % i for i, f in enumerate(obj.Shape.Faces, 1) if pred(f)]
+
+
+class _PanelCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="pmipanel")
+        self.doc = App.newDocument("PanelDoc")
+        self.box = self.doc.addObject("Part::Box", "Box")
+        self.box.Length, self.box.Width, self.box.Height = 20, 30, 40
+        self.cyl = self.doc.addObject("Part::Cylinder", "Cyl")
+        self.cyl.Radius, self.cyl.Height = 5, 10
+        self.cyl.Placement.Base = App.Vector(100, 0, 0)
+        self.doc.recompute()
+        Gui.updateGui()
+        self.panel = None
+
+    def tearDown(self):
+        if self.panel is not None:
+            self.panel._release()
+        Gui.Control.closeDialog()
+        Gui.Selection.clearSelection()
+        for name in list(App.listDocuments()):
+            App.closeDocument(name)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def open_panel(self):
+        if self.panel is not None:
+            self.panel._release()
+        Gui.Control.closeDialog()
+        self.panel = PG.PmiAuthorPanel(self.doc)
+        Gui.Control.showDialog(self.panel)
+        return self.panel
+
+    def planes(self, obj, axis):
+        """Faces of a box perpendicular to axis ('x', 'y' or 'z'), lowest coordinate first"""
+        i = "xyz".index(axis)
+        fs = _face_named(obj, lambda f: f.Surface.TypeId == "Part::GeomPlane" and abs(abs(f.normalAt(0, 0)[i]) - 1) < 1e-9)
+        return sorted(fs, key=lambda n: obj.Shape.getElement(n).CenterOfMass[i])
+
+    def lateral(self, obj):
+        return _face_named(obj, lambda f: f.Surface.TypeId == "Part::GeomCylinder")
+
+    def pmi(self, typeid):
+        return [o for o in self.doc.Objects if o.TypeId == typeid]
+
+
+class TestPmiAuthorPanel(_PanelCase):
+    def test_the_panel_has_ok_and_cancel_buttons(self):
+        p = self.open_panel()
+        btns = p.getStandardButtons()
+        self.assertTrue(btns & QtWidgets.QDialogButtonBox.Ok)
+        self.assertTrue(btns & QtWidgets.QDialogButtonBox.Cancel)
+
+    def test_kind_chooser_lists_the_five_kinds(self):
+        p = self.open_panel()
+        self.assertEqual([p.kind.itemData(i) for i in range(p.kind.count())], ["size", "location", "angular", "datum", "tolerance"])
+
+    def test_each_kind_calls_its_function_once_and_lands_in_the_group(self):
+        p = self.open_panel()
+        # size: one cylinder face, nominal from the face
+        p.setKind("size")
+        p.addFaces(0, [(self.cyl, self.lateral(self.cyl)[0])])
+        self.assertTrue(p.accept())
+        size = self.pmi("Part::PmiDimension")[-1]
+        self.assertEqual(size.PmiType, "Size_Diameter")
+        self.assertAlmostEqual(size.Value, 10.0, places=9)
+        self.assertEqual([(o.Name, list(s)) for o, s in size.References], [("Cyl", self.lateral(self.cyl))])
+        # location: two parallel planes, nominal given
+        p = self.open_panel()
+        p.setKind("location")
+        x0, x1 = self.planes(self.box, "x")
+        p.addFaces(0, [(self.box, x0)])
+        p.addFaces(1, [(self.box, x1)])
+        p.nominal.setText("20")
+        self.assertTrue(p.accept())
+        loc = self.pmi("Part::PmiDimension")[-1]
+        self.assertEqual(loc.PmiType, "Location_LinearDistance")
+        self.assertAlmostEqual(loc.Value, 20.0, places=9)
+        self.assertEqual(sorted(loc.SecondSide), ["Box.%s" % x1])
+        # angular: two perpendicular planes
+        p = self.open_panel()
+        p.setKind("angular")
+        y0 = self.planes(self.box, "y")[0]
+        p.addFaces(0, [(self.box, x0)])
+        p.addFaces(1, [(self.box, y0)])
+        self.assertTrue(p.accept())
+        ang = self.pmi("Part::PmiDimension")[-1]
+        self.assertEqual(ang.PmiType, "Location_Angular")
+        self.assertAlmostEqual(ang.Value, 90.0, places=9)
+        # datum
+        p = self.open_panel()
+        p.setKind("datum")
+        z0 = self.planes(self.box, "z")[0]
+        p.addFaces(0, [(self.box, z0)])
+        p.datum_letter.setText("A")
+        self.assertTrue(p.accept())
+        dat = self.pmi("Part::PmiDatum")[-1]
+        self.assertEqual(dat.Letter, "A")
+        self.assertEqual(list(dat.References[0][1]), [z0])
+        # tolerance with three compartments
+        PA.addDatum("B", (self.box, x0))
+        PA.addDatum("C", (self.box, y0))
+        p = self.open_panel()
+        p.setKind("tolerance")
+        p.addFaces(0, [(self.cyl, self.lateral(self.cyl)[0])])
+        p.tol_type.setCurrentIndex(PA.TOL_TYPES.index("Position"))
+        p.tol_value.setText("0.25")
+        p.zone_shape.setCurrentIndex(1)
+        p.material.setCurrentIndex(1)
+        for le, t in zip(p.comp_letter, "ABC"):
+            le.setText(t)
+        p.comp_mat[1].setCurrentIndex(1)
+        self.assertTrue(p.accept())
+        tol = self.pmi("Part::PmiTolerance")[-1]
+        self.assertEqual((tol.PmiType, tol.ZoneShape, list(tol.Modifiers)), ("Position", "Diameter", ["MAXIMUM_MATERIAL_REQUIREMENT"]))
+        self.assertAlmostEqual(tol.Value, 0.25, places=9)
+        self.assertEqual(list(tol.DatumReferences), ["A", "B(MAXIMUM_MATERIAL_REQUIREMENT)", "C"])
+        self.assertEqual([d.Position for d in tol.Datums], [1, 2, 3])
+        for o in (size, loc, ang, dat, tol):
+            self.assertIn(o, self.pmi("Part::PmiGroup")[0].Group)
+            self.assertFalse(o.Unattached)
+
+    def test_accept_is_one_transaction_and_undo_removes_the_item_and_its_datum_uses(self):
+        PA.addDatum("A", (self.box, self.planes(self.box, "z")[0]))
+        before = {o.Name for o in self.doc.Objects}
+        p = self.open_panel()
+        p.setKind("tolerance")
+        p.addFaces(0, [(self.box, self.planes(self.box, "x")[1])])
+        p.tol_type.setCurrentIndex(PA.TOL_TYPES.index("Perpendicularity"))
+        p.tol_value.setText("0.1")
+        p.comp_letter[0].setText("A")
+        self.assertTrue(p.accept())
+        added = {o.Name for o in self.doc.Objects} - before
+        self.assertEqual(len(added), 2)  # the frame and its datum use: exactly one call
+        self.doc.undo()
+        self.assertEqual({o.Name for o in self.doc.Objects}, before)
+        self.doc.redo()
+        self.assertEqual({o.Name for o in self.doc.Objects} - before, added)
+
+    def test_accept_makes_one_undo_step(self):
+        PA.addDatum("A", (self.box, self.planes(self.box, "z")[0]))
+        steps = self.doc.UndoCount
+        p = self.open_panel()
+        p.setKind("tolerance")
+        p.addFaces(0, [(self.box, self.planes(self.box, "x")[1])])
+        p.tol_value.setText("0.1")
+        p.comp_letter[0].setText("A")
+        p.tol_type.setCurrentIndex(PA.TOL_TYPES.index("Perpendicularity"))
+        self.assertTrue(p.accept())
+        self.assertEqual(self.doc.UndoCount, steps + 1)
+
+    def test_cancel_creates_nothing_and_leaves_no_open_transaction(self):
+        names = {o.Name for o in self.doc.Objects}
+        steps = self.doc.UndoCount
+        p = self.open_panel()
+        p.setKind("datum")
+        p.addFaces(0, [(self.box, self.planes(self.box, "z")[0])])
+        p.datum_letter.setText("A")
+        self.assertTrue(p.reject())
+        self.assertEqual({o.Name for o in self.doc.Objects}, names)
+        self.assertEqual(self.doc.UndoCount, steps)
+        self.assertFalse(self.doc.HasPendingTransaction)
+
+    def test_a_refused_accept_creates_nothing_and_keeps_the_panel_open(self):
+        names = {o.Name for o in self.doc.Objects}
+        p = self.open_panel()
+        p.setKind("size")
+        p.addFaces(0, [(self.box, self.planes(self.box, "z")[0])])
+        p.nominal.setText("abc")
+        self.assertFalse(p.accept())
+        self.assertEqual({o.Name for o in self.doc.Objects}, names)
+        self.assertNotEqual(p.status.text(), "")
+        self.assertTrue(p.alive)
+
+    def test_selected_faces_fill_the_active_list(self):
+        p = self.open_panel()
+        p.setKind("location")
+        x0, x1 = self.planes(self.box, "x")
+        Gui.Selection.addSelection(self.doc.Name, "Box", x0)
+        p.setActiveSet(1)
+        Gui.Selection.addSelection(self.doc.Name, "Box", x1)
+        self.assertEqual([(o.Name, s) for o, s in p.faces[0]], [("Box", x0)])
+        self.assertEqual([(o.Name, s) for o, s in p.faces[1]], [("Box", x1)])
+        self.assertEqual(p.set1.list.count(), 1)
+
+    def test_an_edge_pick_is_refused_with_a_message(self):
+        p = self.open_panel()
+        Gui.Selection.addSelection(self.doc.Name, "Box", "Edge1")
+        self.assertEqual(p.faces[0], [])
+        self.assertNotEqual(p.status.text(), "")
+
+    def _rule_ids(self, text):
+        return sorted(l.split(":")[0] for l in text.splitlines() if l)
+
+    def test_warnings_show_before_accept_and_match_the_made_item(self):
+        PA.addDatum("A", (self.box, self.planes(self.box, "z")[0]))
+        cases = []
+        # a flatness tolerance given a datum
+        p = self.open_panel()
+        p.setKind("tolerance")
+        p.addFaces(0, [(self.box, self.planes(self.box, "x")[1])])
+        p.tol_type.setCurrentIndex(PA.TOL_TYPES.index("Flatness"))
+        p.tol_value.setText("0.1")
+        p.comp_letter[0].setText("A")
+        self.assertIn("form-no-datum", p.warn_label.text())
+        self.assertIn("Flatness is a form tolerance and takes no datum reference", p.warn_label.text())
+        shown = self._rule_ids(p.warn_label.text())
+        self.assertTrue(p.accept())
+        cases.append((shown, list(self.pmi("Part::PmiTolerance")[-1].RuleWarnings)))
+        # a diameter zone on two planes
+        p = self.open_panel()
+        p.setKind("tolerance")
+        p.addFaces(0, [(self.box, n) for n in self.planes(self.box, "x")])
+        p.tol_type.setCurrentIndex(PA.TOL_TYPES.index("Position"))
+        p.tol_value.setText("0.1")
+        p.zone_shape.setCurrentIndex(1)
+        self.assertIn("diameter-zone-feature", p.warn_label.text())
+        shown = self._rule_ids(p.warn_label.text())
+        self.assertTrue(p.accept())
+        cases.append((shown, list(self.pmi("Part::PmiTolerance")[-1].RuleWarnings)))
+        # a datum letter I
+        p = self.open_panel()
+        p.setKind("datum")
+        p.addFaces(0, [(self.box, self.planes(self.box, "y")[0])])
+        p.datum_letter.setText("I")
+        self.assertIn("letters-excluded", p.warn_label.text())
+        shown = self._rule_ids(p.warn_label.text())
+        self.assertTrue(p.accept())
+        cases.append((shown, list(self.pmi("Part::PmiDatum")[-1].RuleWarnings)))
+        for shown, made in cases:
+            self.assertEqual(shown, sorted(w.split(":")[0] for w in made))
+            self.assertTrue(shown)
+
+    def test_warnings_change_live_with_the_fields(self):
+        p = self.open_panel()
+        p.setKind("datum")
+        p.addFaces(0, [(self.box, self.planes(self.box, "y")[0])])
+        p.datum_letter.setText("I")
+        self.assertIn("letters-excluded", p.warn_label.text())
+        p.datum_letter.setText("B")
+        self.assertEqual(p.warn_label.text(), "")
+
+    def test_the_label_of_a_duplicate_frame_text_has_no_freecad_suffix(self):
+        for _ in range(2):
+            PA.addTolerance("Flatness", 0.1, (self.box, self.planes(self.box, "x")[0]))
+        labels = [o.Label for o in self.pmi("Part::PmiTolerance")]
+        self.assertEqual(len(set(labels)), 2)
+        for l in labels:
+            self.assertNotRegex(l, r"\d{3}$")
+        self.assertTrue(labels[1].endswith("(2)"))
+        PA.addDatum("A", (self.box, self.planes(self.box, "z")[0]))
+        for _ in range(2):
+            PA.addTolerance("Parallelism", 0.1, (self.box, self.planes(self.box, "z")[1]), datums=["A"])
+        for o in self.pmi("Part::PmiDatum"):
+            self.assertNotRegex(o.Label, r"\d{3}$")
+
+
+class TestPmiAuthorPanelPartDesign(unittest.TestCase):
+    def setUp(self):
+        import Sketcher
+
+        self.doc = App.newDocument("PanelPD")
+        doc = self.doc
+        body = self.body = doc.addObject("PartDesign::Body", "Body")
+        xy = [o for o in body.Origin.OutList if o.Role == "XY_Plane"][0]
+        sk = body.newObject("Sketcher::SketchObject", "Sketch")
+        sk.AttachmentSupport = [(xy, "")]
+        sk.MapMode = "FlatFace"
+        pts = [App.Vector(0, 0, 0), App.Vector(60, 0, 0), App.Vector(60, 40, 0), App.Vector(0, 40, 0)]
+        for i in range(4):
+            sk.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 4]))
+        self.pad = body.newObject("PartDesign::Pad", "Pad")
+        self.pad.Profile = sk
+        self.pad.Length = 20
+        doc.recompute()
+        sk2 = body.newObject("Sketcher::SketchObject", "Sketch2")
+        sk2.AttachmentSupport = [(xy, "")]
+        sk2.MapMode = "FlatFace"
+        sk2.AttachmentOffset = App.Placement(App.Vector(0, 0, 20), App.Rotation())
+        sk2.addGeometry(Part.Circle(App.Vector(30, 20, 0), App.Vector(0, 0, 1), 4.0))
+        sk2.addConstraint(Sketcher.Constraint("Radius", 0, 4.0))
+        self.pocket = body.newObject("PartDesign::Pocket", "Pocket")
+        self.pocket.Profile = sk2
+        self.pocket.Type = 1
+        doc.recompute()
+        Gui.updateGui()
+
+    def tearDown(self):
+        Gui.Control.closeDialog()
+        Gui.Selection.clearSelection()
+        for name in list(App.listDocuments()):
+            App.closeDocument(name)
+
+    def _hole(self, shape):
+        return [i for i, f in enumerate(shape.Faces, 1) if f.Surface.TypeId == "Part::GeomCylinder" and abs(f.Surface.Radius - 4.0) < 1e-9]
+
+    def test_a_pick_of_a_tip_feature_face_resolves_to_the_body_shape(self):
+        (n,) = self._hole(self.pocket.Shape)
+        picked = self.pocket.Shape.Faces[n - 1]
+        pr = PG.resolvePick(self.body, "Pocket.Face%d" % n)
+        self.assertIsNotNone(pr)
+        obj, name = pr
+        self.assertEqual(obj.Name, "Body")  # the shape PmiAuthoring reads is the body's
+        self.assertTrue(PG._same_face(obj.Shape.getElement(name), picked))
+        self.assertEqual(obj.Shape.getElement(name).Surface.TypeId, "Part::GeomCylinder")
+
+    def test_pad_face_picked_through_the_body_resolves_to_the_same_geometry(self):
+        for i, f in enumerate(self.pad.Shape.Faces, 1):
+            pr = PG.resolvePick(self.body, "Pad.Face%d" % i)
+            if f.Surface.TypeId == "Part::GeomPlane" and abs(f.CenterOfMass.z - 20) < 1e-9:
+                self.assertIsNone(pr)  # the pocket cut the top face: no face of the body has that geometry any more
+            elif pr is not None:
+                self.assertEqual(pr[0].Name, "Body")
+                self.assertTrue(PG._same_face(pr[0].Shape.getElement(pr[1]), f))
+
+    def test_a_click_on_the_body_fills_the_panel_with_the_body_face(self):
+        p = PG.PmiAuthorPanel(self.doc)
+        Gui.Control.showDialog(p)
+        (n,) = self._hole(self.body.Shape)
+        Gui.Selection.addSelection(self.doc.Name, "Body", "Pocket.Face%d" % n)
+        self.assertEqual([(o.Name, s) for o, s in p.faces[0]], [("Body", "Face%d" % n)])
+        p.setKind("size")
+        self.assertTrue(p.accept())
+        size = [o for o in self.doc.Objects if o.TypeId == "Part::PmiDimension"][0]
+        self.assertAlmostEqual(size.Value, 8.0, places=9)
+        self.assertEqual(list(size.References[0][1]), ["Face%d" % n])
+
+
+def _camera_state(view):
+    cam = view.getCameraNode()
+    pos = tuple(cam.position.getValue().getValue())
+    q = tuple(cam.orientation.getValue().getValue())
+    if q[3] < 0:
+        q = tuple(-x for x in q)
+    h = cam.height.getValue() if cam.isOfType(coin.SoOrthographicCamera.getClassTypeId()) else cam.focalDistance.getValue()
+    return pos, q, h
+
+
+def _same_camera(a, b, tol=1e-4):
+    return (
+        all(abs(x - y) <= tol for x, y in zip(a[0], b[0]))
+        and all(abs(x - y) <= tol for x, y in zip(a[1], b[1]))
+        and abs(a[2] - b[2]) <= tol
+    )
+
+
+def expected_shown(doc, view):
+    """Names of the items visible after activation: the view's items, and every use of a datum letter the view has"""
+    keys = {PG._datum_key(o) for o in view.Items if o.TypeId == "Part::PmiDatum"}
+    names = {o.Name for o in view.Items}
+    names |= {o.Name for o in semantic_items(doc) if o.TypeId == "Part::PmiDatum" and PG._datum_key(o) in keys}
+    return names
+
+
+def expected_visible(doc, view):
+    """The PMI_* separators a view shows: one per drawn item among its items (a datum letter counts once per body, and shows
+    when any of its uses is in the view)"""
+    keys = {PG._datum_key(o) for o in view.Items if o.TypeId == "Part::PmiDatum"}
+    names = set()
+    for o in semantic_items(doc):
+        if o.Name in {i.Name for i in view.Items} or (o.TypeId == "Part::PmiDatum" and PG._datum_key(o) in keys):
+            names.add(o.Name)
+    drawn = set(drawn_paths(doc))
+    return len(names & drawn)
+
+
+class TestPmiAuthorPanelStaleAndForeign(_PanelCase):
+    """Run 080 repair: a picked object deleted while the panel is open, and a face from another document."""
+
+    def test_a_picked_object_deleted_while_the_panel_is_open_is_dropped_with_a_message(self):
+        p = self.open_panel()
+        p.setKind("size")
+        p.addFaces(0, [(self.cyl, self.lateral(self.cyl)[0])])
+        self.assertEqual(len(p.faces[0]), 1)
+        self.doc.removeObject(self.cyl.Name)
+        p.refresh()  # must not raise
+        self.assertEqual(p.faces[0], [])
+        self.assertIn("deleted", p.status.text())
+        # accept after a deletion refuses (the list changed), raises nothing, and makes nothing
+        p.addFaces(0, [(self.box, self.planes(self.box, "x")[0])])
+        cyl2 = self.doc.addObject("Part::Cylinder", "Cyl2")
+        self.doc.recompute()
+        p.addFaces(1, [(cyl2, self.lateral(cyl2)[0])])
+        self.doc.removeObject(cyl2.Name)
+        self.assertFalse(p.accept())
+        self.assertEqual(self.pmi("Part::PmiDimension"), [])
+        self.assertEqual(p.faces[1], [])
+
+    def test_a_face_of_another_document_is_refused_with_a_message(self):
+        other = App.newDocument("OtherDoc")
+        ob = other.addObject("Part::Box", "OBox")
+        other.recompute()
+        p = self.open_panel()
+        p.setKind("size")
+        x0 = self.planes(ob, "x")[0]
+        p.addFaces(0, [(ob, x0)])
+        self.assertEqual(p.faces[0], [])
+        self.assertIn("another document", p.status.text())
+        p.onPick("OtherDoc", "OBox", x0)
+        self.assertEqual(p.faces[0], [])
+        self.assertEqual(self.pmi("Part::PmiDimension"), [])
+        self.assertEqual([o for o in other.Objects if o.isDerivedFrom("Part::PmiItem")], [])
+        p.addFaces(0, [(self.cyl, self.lateral(self.cyl)[0])])  # a face of its own document still goes in
+        self.assertEqual(len(p.faces[0]), 1)
+
+
+class TestPmiViews(_PanelCase):
+    def setUp(self):
+        super().setUp()
+        x0, x1 = self.planes(self.box, "x")
+        y0 = self.planes(self.box, "y")[0]
+        z0, z1 = self.planes(self.box, "z")
+        self.d_a = PA.addDatum("A", (self.box, z0))
+        self.size = PA.addSizeDimension((self.cyl, self.lateral(self.cyl)[0]))
+        self.loc = PA.addLocationDimension((self.box, x0), (self.box, x1))
+        self.tol = PA.addTolerance("Parallelism", 0.1, (self.box, z1), datums=["A"])
+        self.flat = PA.addTolerance("Flatness", 0.05, (self.box, y0))
+        self.doc.recompute()
+        Gui.updateGui()
+        self.view = Gui.getDocument(self.doc.Name).ActiveView
+
+    def show_only(self, names):
+        for o in semantic_items(self.doc):
+            o.ViewObject.Visibility = o.Name in names
+        Gui.updateGui()
+
+    def aim(self, direction, height=120):
+        cam = self.view.getCameraNode()
+        cam.position.setValue(coin.SbVec3f(*(App.Vector(*direction) * 200)))
+        cam.pointAt(coin.SbVec3f(0, 0, 0), coin.SbVec3f(0, 0, 1))
+        if cam.isOfType(coin.SoOrthographicCamera.getClassTypeId()):
+            cam.height.setValue(height)
+        Gui.updateGui()
+
+    def test_save_records_the_camera_and_the_visible_items_and_is_one_undo_step(self):
+        self.show_only({self.size.Name, self.flat.Name})
+        self.aim((1, 0.4, 0.3), 77)
+        cam = _camera_state(self.view)
+        steps = self.doc.UndoCount
+        v = PG.saveView(self.doc, "Side")
+        self.assertEqual(v.TypeId, "Part::PmiView")
+        self.assertEqual(self.doc.UndoCount, steps + 1)
+        self.assertEqual(sorted(o.Name for o in v.Items), sorted([self.size.Name, self.flat.Name]))
+        self.assertIn(v, self.pmi("Part::PmiGroup")[0].Group)
+        self.assertEqual(v.Label, "Side")
+        self.doc.undo()
+        self.assertEqual(self.pmi("Part::PmiView"), [])
+        self.doc.redo()
+        self.assertEqual(len(self.pmi("Part::PmiView")), 1)
+        del cam
+
+    def test_saving_a_view_in_a_document_without_pmi_makes_the_group_inside_the_transaction(self):
+        doc = App.newDocument("NoPmi")
+        doc.addObject("Part::Box", "B")
+        doc.recompute()
+        Gui.updateGui()
+        self.assertEqual([o for o in doc.Objects if o.TypeId == "Part::PmiGroup"], [])
+        steps = doc.UndoCount
+        v = PG.saveView(doc, "First")
+        self.assertEqual(doc.UndoCount, steps + 1)
+        self.assertEqual(len([o for o in doc.Objects if o.TypeId == "Part::PmiGroup"]), 1)
+        self.assertIn(v, [o for o in doc.Objects if o.TypeId == "Part::PmiGroup"][0].Group)
+        doc.undo()  # one undo takes the view and the group it made
+        self.assertEqual([o for o in doc.Objects if o.TypeId in ("Part::PmiView", "Part::PmiGroup")], [])
+        doc.redo()
+        self.assertEqual(len([o for o in doc.Objects if o.TypeId == "Part::PmiView"]), 1)
+
+    def test_activating_a_view_restores_its_camera_and_shows_exactly_its_items(self):
+        self.show_only({self.size.Name, self.flat.Name})
+        self.aim((1, 0.4, 0.3), 77)
+        cam_a = _camera_state(self.view)
+        a = PG.saveView(self.doc, "A")
+        self.show_only({self.loc.Name, self.tol.Name})
+        self.aim((-0.3, -1, 0.5), 140)
+        cam_b = _camera_state(self.view)
+        b = PG.saveView(self.doc, "B")
+        self.assertFalse(_same_camera(cam_a, cam_b))
+        for view_obj, cam in ((a, cam_a), (b, cam_b), (a, cam_a)):
+            PG.activateView(view_obj)
+            self.assertTrue(_same_camera(_camera_state(self.view), cam), view_obj.Label)
+            vis = visible_names(self.doc)
+            self.assertEqual(len(vis), expected_visible(self.doc, view_obj), view_obj.Label)
+            shown = {o.Name for o in semantic_items(self.doc) if o.ViewObject.Visibility}
+            self.assertEqual(shown, expected_shown(self.doc, view_obj), view_obj.Label)
+
+    def test_a_view_with_a_datum_shows_its_separator_once(self):
+        self.show_only({self.tol.Name} | {d.Name for d in self.tol.Datums} | {self.d_a.Name})
+        v = PG.saveView(self.doc, "WithDatum")
+        self.show_only(set())
+        self.assertEqual(visible_names(self.doc), [])
+        PG.activateView(v)
+        vis = visible_names(self.doc)
+        self.assertEqual(len([n for n in vis if self.doc.getObject(n).TypeId == "Part::PmiDatum"]), 1)
+
+    def test_a_view_with_one_use_of_a_letter_shows_the_letter_whichever_use_draws(self):
+        uses = [d for d in self.pmi("Part::PmiDatum") if d.Letter == "A"]
+        self.assertGreaterEqual(len(uses), 2)
+        for use in uses:
+            self.show_only({use.Name})
+            v = PG.saveView(self.doc, "Only " + use.Name)
+            self.assertEqual([o.Name for o in v.Items], [use.Name])
+            self.show_only(set())
+            PG.activateView(v)
+            vis = visible_names(self.doc)
+            self.assertEqual(len(vis), 1, use.Name)
+            self.assertEqual(self.doc.getObject(vis[0]).Letter, "A")
+
+    def test_double_click_activates_the_view(self):
+        self.show_only({self.size.Name})
+        self.aim((0.2, 1, 0.4), 99)
+        cam = _camera_state(self.view)
+        v = PG.saveView(self.doc, "DC")
+        self.show_only({self.loc.Name})
+        self.aim((1, 1, 1), 150)
+        vp = Gui.getDocument(self.doc.Name).getObject(v.Name)
+        self.assertTrue(vp.doubleClicked())
+        self.assertTrue(_same_camera(_camera_state(self.view), cam))
+        self.assertEqual({o.Name for o in semantic_items(self.doc) if o.ViewObject.Visibility}, {self.size.Name})
+
+    def test_views_survive_save_and_reopen(self):
+        self.show_only({self.size.Name})
+        self.aim((1, 0.4, 0.3), 77)
+        cam_a = _camera_state(self.view)
+        PG.saveView(self.doc, "A")
+        self.show_only({self.loc.Name, self.flat.Name})
+        self.aim((-0.3, -1, 0.5), 140)
+        cam_b = _camera_state(self.view)
+        PG.saveView(self.doc, "B")
+        path = os.path.join(self.tmp, "views.FCStd")
+        self.doc.saveAs(path)
+        App.closeDocument(self.doc.Name)
+        doc = App.openDocument(path)
+        Gui.updateGui()
+        views = {o.Label: o for o in doc.Objects if o.TypeId == "Part::PmiView"}
+        self.assertEqual(sorted(views), ["A", "B"])
+        self.assertEqual(sorted(o.Label.split(" ")[0] for o in views["A"].Items), ["Size_Diameter"])
+        self.assertEqual(len(views["B"].Items), 2)
+        view = Gui.getDocument(doc.Name).ActiveView
+        for key, cam in (("A", cam_a), ("B", cam_b)):
+            PG.activateView(views[key])
+            self.assertTrue(_same_camera(_camera_state(view), cam), key)
+            self.assertEqual(len(visible_names(doc)), expected_visible(doc, views[key]))
+        self.doc = doc
+
+    def test_activating_a_view_leaves_other_objects_alone(self):
+        self.show_only({self.size.Name})
+        v = PG.saveView(self.doc, "A")
+        before = {o.Name: o.ViewObject.Visibility for o in self.doc.Objects if o.isDerivedFrom("Part::Feature")}
+        PG.activateView(v)
+        after = {o.Name: o.ViewObject.Visibility for o in self.doc.Objects if o.isDerivedFrom("Part::Feature")}
+        self.assertEqual(before, after)
+
+    def test_a_hidden_group_is_shown_by_activation(self):
+        self.show_only({self.size.Name})
+        v = PG.saveView(self.doc, "A")
+        grp = self.pmi("Part::PmiGroup")[0]
+        grp.ViewObject.Visibility = False
+        Gui.updateGui()
+        self.assertEqual(visible_names(self.doc), [])
+        PG.activateView(v)
+        self.assertEqual(len(visible_names(self.doc)), expected_visible(self.doc, v))
+        self.assertGreater(len(visible_names(self.doc)), 0)
+
+
+@unittest.skipUnless(CORPUS_FILES, "the NIST PMI corpus is not present (it is never committed)")
+class TestPmiViewsCorpus(unittest.TestCase):
+    def tearDown(self):
+        Gui.Selection.clearSelection()
+        for name in list(App.listDocuments()):
+            App.closeDocument(name)
+
+    def _open(self, stem):
+        Import.open(os.path.join(CORPUS, stem + ".stp"))
+        doc = App.ActiveDocument
+        Gui.updateGui()
+        return doc
+
+    def test_activating_each_imported_view_of_ftc_06_changes_the_camera_and_the_visible_count(self):
+        doc = self._open("nist_ftc_06_asme1_ap242-e2")
+        view = Gui.getDocument(doc.Name).ActiveView
+        views = [o for o in doc.Objects if o.TypeId == "Part::PmiView"]
+        self.assertEqual(len(views), 3)
+        cams, counts = [], []
+        for v in views:
+            PG.activateView(v)
+            cams.append(_camera_state(view))
+            counts.append(len(visible_names(doc)))
+            self.assertEqual(counts[-1], expected_visible(doc, v), v.Label)
+            self.assertTrue(set(visible_names(doc)) <= {o.Name for o in semantic_items(doc)})
+        self.assertEqual(len({c[1] for c in cams}), 3)  # three different orientations
+        self.assertGreaterEqual(len(set(counts)), 2)
+
+    def test_two_views_on_ctc_01_restore_their_own_state_in_turn(self):
+        doc = self._open("nist_ctc_01_asme1_ap242-e1")
+        gview = Gui.getDocument(doc.Name).ActiveView
+        items = semantic_items(doc)
+        half = {o.Name for o in items[::2]}
+        rest = {o.Name for o in items[1::2]}
+        states = []
+        for names, direction in ((half, (1, 1, 1)), (rest, (-1, 0.3, 0.5))):
+            for o in items:
+                o.ViewObject.Visibility = o.Name in names
+            cam = gview.getCameraNode()
+            cam.position.setValue(coin.SbVec3f(*(App.Vector(*direction) * 300)))
+            cam.pointAt(coin.SbVec3f(0, 0, 0), coin.SbVec3f(0, 0, 1))
+            Gui.updateGui()
+            v = PG.saveView(doc)
+            states.append((v, _camera_state(gview), len(visible_names(doc))))
+        for v, cam, n in (states[0], states[1], states[0]):
+            PG.activateView(v)
+            self.assertTrue(_same_camera(_camera_state(gview), cam), v.Label)
+            self.assertEqual(len(visible_names(doc)), expected_visible(doc, v), v.Label)
 
 
 if __name__ == "__main__":

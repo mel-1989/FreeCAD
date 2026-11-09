@@ -335,7 +335,17 @@ def _set_refs(item, pairs, second=None):
 
 
 def _label(item, text):
-    item.Label = text
+    """The tree label of an authored item: the frame text and the faces it governs. Two frames with the same text on the
+    same faces get an explicit " (2)", never the "001" that FreeCAD appends to a duplicate label (the user sees that suffix
+    as part of the frame text)."""
+    names = _names(_merge(_ref_pairs(item))) if len(item.References) else []
+    full = text + (" [" + ", ".join(names) + "]" if names else "")
+    taken = {o.Label for o in item.Document.Objects if o is not item}
+    label, n = full, 1
+    while label in taken:
+        n += 1
+        label = "%s (%d)" % (full, n)
+    item.Label = label
 
 
 def _fmt(x):
@@ -603,13 +613,14 @@ def addTolerance(
             feat = _feature_of(doc, letter)
             if feat is not None and feat is not use:
                 use.References = [(o, list(s)) for o, s in _ref_pairs(feat)]
-            use.Label = "Datum %s" % letter
             grp.addObject(use)
             uses.append(use)
             refs.append(letter + ("(" + ",".join(mods) + ")" if mods else ""))
         item.Datums = uses
         item.DatumReferences = refs
         _label(item, "%s %s%s" % (tol_type, _fmt(v), "".join(" | " + r for r in refs)))
+        for use in uses:
+            _label(use, "Datum %s in %s" % (use.Letter, item.Label))
         grp.addObject(item)
         doc.recompute()
         for u in uses:

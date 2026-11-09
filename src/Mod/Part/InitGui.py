@@ -59,6 +59,11 @@ class PartWorkbench(Gui.Workbench):
             )
 
         try:
+            import PmiAuthoringGui  # noqa: F401  (registers Part_PmiAuthor, Part_PmiSaveView, Part_PmiActivateView)
+        except ImportError as err:
+            App.Console.PrintError("'PmiAuthoringGui' cannot be loaded. " "{err}\n".format(err=str(err)))
+
+        try:
             bop = __import__("BOPTools")
             bop.importAll()
             bop.addCommands()

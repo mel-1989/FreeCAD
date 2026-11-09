@@ -193,6 +193,7 @@ PyMOD_INIT_FUNC(PartGui)
     PartGui::ViewProviderImport                     ::init();
     PartGui::ViewProviderPmiItem                    ::init();
     PartGui::ViewProviderPmiGroup                   ::init();
+    PartGui::ViewProviderPmiView                    ::init();
     PartGui::ViewProviderCurveNet                   ::init();
     PartGui::ViewProviderExtrusion                  ::init();
     PartGui::ViewProviderScale                      ::init();
