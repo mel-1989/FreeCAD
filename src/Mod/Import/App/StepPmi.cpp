@@ -116,6 +116,25 @@
 #include <Bnd_Box.hxx>
 #include <XCAFDoc_ShapeMapTool.hxx>
 #include <XSControl_TransferReader.hxx>
+#include <NCollection_HArray1.hxx>
+#include <StepAP242_DraughtingModelItemAssociation.hxx>
+#include <StepDimTol_GeometricTolerance.hxx>
+#include <StepGeom_Axis2Placement.hxx>
+#include <StepGeom_Axis2Placement3d.hxx>
+#include <StepGeom_CartesianPoint.hxx>
+#include <StepGeom_Direction.hxx>
+#include <StepGeom_GeometricRepresentationContextAndGlobalUnitAssignedContext.hxx>
+#include <StepGeom_GeomRepContextAndGlobUnitAssCtxAndGlobUncertaintyAssCtx.hxx>
+#include <StepRepr_GlobalUnitAssignedContext.hxx>
+#include <StepRepr_Representation.hxx>
+#include <StepVisual_AnnotationPlane.hxx>
+#include <StepVisual_AnnotationPlaneElement.hxx>
+#include <StepVisual_CameraModelD3.hxx>
+#include <StepVisual_CentralOrParallel.hxx>
+#include <StepVisual_DraughtingCallout.hxx>
+#include <StepVisual_DraughtingCalloutElement.hxx>
+#include <StepVisual_PlanarBox.hxx>
+#include <StepVisual_ViewVolume.hxx>
 
 #include <App/Document.h>
 #include <App/DocumentObject.h>
@@ -615,6 +634,15 @@ struct DimEntity
     std::vector<std::string> fits;
 };
 
+struct TolEntity
+{
+    int ident {0};
+    int model {0};  // index in the STEP model
+    std::set<int> faces;
+    bool valueKnown {false};
+    double value {0};  // magnitude in mm
+};
+
 struct DatumFaces
 {
     std::set<int> ids;       // faces of the datum feature that the kernel produced
@@ -717,7 +745,8 @@ public:
             kDimLoc = 16,
             kDcr = 32,
             kPmt = 64,
-            kDatumEnt = 128
+            kDatumEnt = 128,
+            kTol = 256
         };
         std::unordered_map<const Standard_Type*, unsigned> kindOfType;
         std::vector<unsigned> kinds(static_cast<size_t>(n) + 1, 0);
@@ -735,6 +764,7 @@ public:
                 k |= e->IsKind(STANDARD_TYPE(StepShape_DimensionalCharacteristicRepresentation)) ? kDcr : 0;
                 k |= e->IsKind(STANDARD_TYPE(StepShape_PlusMinusTolerance)) ? kPmt : 0;
                 k |= e->IsKind(STANDARD_TYPE(StepDimTol_Datum)) ? kDatumEnt : 0;
+                k |= e->IsKind(STANDARD_TYPE(StepDimTol_GeometricTolerance)) ? kTol : 0;
                 it = kindOfType.emplace(t, k).first;
             }
             kinds[static_cast<size_t>(i)] = it->second;
@@ -811,6 +841,32 @@ public:
             at[ent.get()] = dims.size();
             dims.push_back(e);
         }
+        // geometric tolerances: the faces of the aspect each tolerances and its magnitude (to tie a label to its entity)
+        for (int i = 1; i <= n; ++i) {
+            if (!(kinds[static_cast<size_t>(i)] & kTol)) {
+                continue;
+            }
+            Handle(StepDimTol_GeometricTolerance) t = Handle(StepDimTol_GeometricTolerance)::DownCast(model->Value(i));
+            if (t.IsNull()) {
+                continue;
+            }
+            TolEntity te;
+            te.ident = static_cast<int>(model->IdentLabel(t));
+            te.model = i;
+            StatedValue sv = statedOf(Handle(StepBasic_MeasureWithUnit)::DownCast(t->Magnitude()), "");
+            te.valueKnown = sv.ok;
+            te.value = sv.conv;
+            std::set<const Standard_Transient*> seen;
+            const Standard_Transient* tsa = t->TolerancedShapeAspect().Value().get();
+            if (auto sz = dynamic_cast<const StepShape_DimensionalSize*>(tsa)) {
+                tsa = sz->AppliesTo().get();
+            }
+            if (tsa) {
+                closure(tsa, te.faces, seen);
+            }
+            te.faces = onlyMapped(te.faces);
+            tols.push_back(te);
+        }
         auto entityOf = [&](const Handle(Standard_Transient)& d) -> DimEntity* {
             if (d.IsNull()) {
                 return nullptr;
@@ -866,6 +922,7 @@ public:
     }
 
     std::vector<DimEntity> dims;
+    std::vector<TolEntity> tols;
     std::map<std::string, DatumFaces> datums;
 
 private:
@@ -1656,6 +1713,13 @@ CommonResult resolveCommon(
         r.extra = it->second.extra;
         raw["step.face_ids.first"] = idsText(it->second.first);
         raw["step.face_ids.second"] = idsText(it->second.second);
+        auto oe = it->second.extra.find("step.view_entity");
+        if (oe != it->second.extra.end()) {
+            // the entity this label was made from, by the file's entity order (see stashStepPmiFaceIds), and the cameras
+            // of the views that show it
+            raw["step.view_entity"] = "#" + oe->second;
+            raw["step.views"] = it->second.extra.at("step.views");
+        }
     }
     raw["xcaf.label"] = entryOf(label);
     raw["xcaf.shapes.first"] = std::to_string(f.Length());
@@ -1875,6 +1939,257 @@ std::string datumLetter(const TDF_Label& dl)
 
 }  // namespace
 
+namespace
+{
+
+// ---------------------------------------------------------------------------------------------
+// Saved views as the file states them (CAx-IF Recommended Practices for the Representation and Presentation of PMI,
+// AP242, saved views): a view is a DRAUGHTING_MODEL (a representation) that lists a CAMERA_MODEL_D3 and the
+// DRAUGHTING_CALLOUTs / ANNOTATION_PLANEs it shows. A callout is the presentation of a dimension, tolerance or datum
+// through a DRAUGHTING_MODEL_ITEM_ASSOCIATION whose definition is the shape aspect (or the dimension or tolerance itself)
+// the callout presents. XCAF's view label (GetRefGDTLabel) only knows the callouts it could tie to a presentation-only
+// label, so the semantic items of a view are worked out here from the entities and kept on the stash labels
+// ---------------------------------------------------------------------------------------------
+
+struct CameraRec
+{
+    int ident {0};
+    std::string name;
+    bool ortho {true};
+    gp_Pnt loc;                 // view reference point, model coordinates, mm
+    gp_Vec zax, xax;            // camera axes in model coordinates
+    double winW {0}, winH {0};  // view window, mm
+    double winX {0}, winY {0}, winZ {0};  // placement of the window (its lower left corner) in the camera system, mm
+    double planeDist {0};       // view plane distance, mm
+    gp_Pnt proj;                // projection point in the camera system, mm
+    bool hasWindow {false};
+    bool hasLoc {false};
+    std::set<int> shown;        // entity numbers of the items the view lists, with the callouts of its annotation planes
+    std::set<int> anchors;      // definitions of the associations whose identified item is shown
+};
+
+struct ViewSemantics
+{
+    std::vector<CameraRec> cams;
+    std::vector<int> dimEnts, tolEnts;  // dimension and tolerance entities (model index), file order
+    std::map<int, std::set<int>> viewsOf;  // dimension or tolerance entity number -> cameras whose view shows it
+};
+
+/// Millimetres in one unit of the file's length unit (the context of the representation, else the first context of the
+/// file that states one)
+double fileLengthMm(const Handle(StepData_StepModel)& model, const Handle(StepRepr_Representation)& rep)
+{
+    auto fromUnits = [&](const Handle(NCollection_HArray1<Handle(StepBasic_NamedUnit)>)& units, double& out) {
+        if (units.IsNull()) {
+            return false;
+        }
+        for (int k = units->Lower(); k <= units->Upper(); ++k) {
+            Handle(StepBasic_NamedUnit) nu = units->Value(k);
+            if (nu.IsNull() || std::string(nu->DynamicType()->Name()).find("Length") == std::string::npos) {
+                continue;
+            }
+            bool angle = false, known = false;
+            std::string nm;
+            double si = siOfUnit(nu, angle, known, nm);
+            if (known && !angle) {
+                out = si * 1000.0;
+                return true;
+            }
+        }
+        return false;
+    };
+    auto fromContext = [&](const Handle(Standard_Transient)& ctx, double& out) {
+        if (auto c1 = Handle(StepGeom_GeometricRepresentationContextAndGlobalUnitAssignedContext)::DownCast(ctx)) {
+            return fromUnits(c1->Units(), out);
+        }
+        if (auto c2 = Handle(StepRepr_GlobalUnitAssignedContext)::DownCast(ctx)) {
+            return fromUnits(c2->Units(), out);
+        }
+        if (auto c3 = Handle(StepGeom_GeomRepContextAndGlobUnitAssCtxAndGlobUncertaintyAssCtx)::DownCast(ctx)) {
+            return fromUnits(c3->Units(), out);
+        }
+        return false;
+    };
+    double f = 1.0;
+    if (!rep.IsNull() && fromContext(rep->ContextOfItems(), f)) {
+        return f;
+    }
+    for (int i = 1; i <= model->NbEntities(); ++i) {
+        if (fromContext(model->Value(i), f)) {
+            return f;
+        }
+    }
+    return 1.0;
+}
+
+gp_Vec dirOf(const Handle(StepGeom_Direction)& d, const gp_Vec& dflt)
+{
+    if (d.IsNull() || d->NbDirectionRatios() < 3) {
+        return dflt;
+    }
+    gp_Vec v(d->DirectionRatiosValue(1), d->DirectionRatiosValue(2), d->DirectionRatiosValue(3));
+    return v.Magnitude() > 1e-12 ? v.Normalized() : dflt;
+}
+
+ViewSemantics scanViewSemantics(const Handle(StepData_StepModel)& model)
+{
+    ViewSemantics out;
+    auto idOf = [&](const Handle(Standard_Transient)& e) { return e.IsNull() ? 0 : static_cast<int>(model->IdentLabel(e)); };
+    // an item, and what it holds: an annotation plane the callouts of its elements, a callout its contents
+    std::function<void(const Handle(Standard_Transient)&, std::set<int>&, int)> expand;
+    expand = [&](const Handle(Standard_Transient)& e, std::set<int>& into, int depth) {
+        if (e.IsNull() || depth > 4) {
+            return;
+        }
+        int id = idOf(e);
+        if (id != 0) {
+            into.insert(id);
+        }
+        if (auto plane = Handle(StepVisual_AnnotationPlane)::DownCast(e)) {
+            auto els = plane->Elements();
+            if (!els.IsNull()) {
+                for (int k = els->Lower(); k <= els->Upper(); ++k) {
+                    expand(els->Value(k).Value(), into, depth + 1);
+                }
+            }
+        }
+        else if (auto call = Handle(StepVisual_DraughtingCallout)::DownCast(e)) {
+            auto cs = call->Contents();
+            if (!cs.IsNull()) {
+                for (int k = cs->Lower(); k <= cs->Upper(); ++k) {
+                    expand(cs->Value(k).Value(), into, depth + 1);
+                }
+            }
+        }
+    };
+    for (int i = 1; i <= model->NbEntities(); ++i) {
+        Handle(StepRepr_Representation) rep = Handle(StepRepr_Representation)::DownCast(model->Value(i));
+        if (rep.IsNull() || rep->Items().IsNull()) {
+            continue;
+        }
+        Handle(StepVisual_CameraModelD3) cam;
+        for (int k = rep->Items()->Lower(); k <= rep->Items()->Upper(); ++k) {
+            if (auto c = Handle(StepVisual_CameraModelD3)::DownCast(rep->Items()->Value(k))) {
+                cam = c;
+                break;
+            }
+        }
+        if (cam.IsNull()) {
+            continue;
+        }
+        CameraRec r;
+        r.ident = idOf(cam);
+        r.name = hstr(cam->Name());
+        const double f = fileLengthMm(model, rep);
+        Handle(StepGeom_Axis2Placement3d) ax = cam->ViewReferenceSystem();
+        if (!ax.IsNull() && !ax->Location().IsNull() && ax->Location()->NbCoordinates() >= 3) {
+            const auto& c = ax->Location()->Coordinates();
+            r.loc = gp_Pnt(c[0] * f, c[1] * f, c[2] * f);
+            r.hasLoc = true;
+            r.zax = dirOf(ax->Axis(), gp_Vec(0, 0, 1));
+            gp_Vec x = dirOf(ax->RefDirection(), gp_Vec(1, 0, 0));
+            x = x - r.zax * x.Dot(r.zax);
+            r.xax = x.Magnitude() > 1e-9 ? x.Normalized() : gp_Vec(1, 0, 0);
+        }
+        Handle(StepVisual_ViewVolume) vv = cam->PerspectiveOfVolume();
+        if (!vv.IsNull()) {
+            r.ortho = vv->ProjectionType() != StepVisual_copCentral;
+            r.planeDist = vv->ViewPlaneDistance() * f;
+            if (!vv->ProjectionPoint().IsNull() && vv->ProjectionPoint()->NbCoordinates() >= 3) {
+                const auto& c = vv->ProjectionPoint()->Coordinates();
+                r.proj = gp_Pnt(c[0] * f, c[1] * f, c[2] * f);
+            }
+            Handle(StepVisual_PlanarBox) box = vv->ViewWindow();
+            if (!box.IsNull()) {
+                r.winW = box->SizeInX() * f;
+                r.winH = box->SizeInY() * f;
+                r.hasWindow = r.winW > 0 && r.winH > 0;
+                Handle(StepGeom_Axis2Placement3d) wp = box->Placement().Axis2Placement3d();
+                if (!wp.IsNull() && !wp->Location().IsNull() && wp->Location()->NbCoordinates() >= 3) {
+                    r.winX = wp->Location()->Coordinates()[0] * f;
+                    r.winY = wp->Location()->Coordinates()[1] * f;
+                    r.winZ = wp->Location()->Coordinates()[2] * f;
+                }
+            }
+        }
+        for (int k = rep->Items()->Lower(); k <= rep->Items()->Upper(); ++k) {
+            expand(rep->Items()->Value(k), r.shown, 0);
+        }
+        out.cams.push_back(r);
+    }
+    if (out.cams.empty()) {
+        return out;
+    }
+    // associations: a definition is shown by a view when an item the association identifies is
+    for (int i = 1; i <= model->NbEntities(); ++i) {
+        auto a = Handle(StepAP242_DraughtingModelItemAssociation)::DownCast(model->Value(i));
+        if (a.IsNull() || a->IdentifiedItem().IsNull()) {
+            continue;
+        }
+        const int def = idOf(a->Definition().Value());
+        if (def == 0) {
+            continue;
+        }
+        auto items = a->IdentifiedItem();
+        for (auto& c : out.cams) {
+            for (int k = items->Lower(); k <= items->Upper(); ++k) {
+                if (c.shown.count(idOf(items->Value(k)))) {
+                    c.anchors.insert(def);
+                    break;
+                }
+            }
+        }
+    }
+    // dimensions and tolerances in file order (the order XCAF's labels are made in), each with the definitions that stand
+    // for it: itself and the shape aspects it applies to
+    for (int i = 1; i <= model->NbEntities(); ++i) {
+        Handle(Standard_Transient) e = model->Value(i);
+        std::set<int> anchors {idOf(e)};
+        bool dim = false, tol = false;
+        if (auto s = Handle(StepShape_DimensionalSize)::DownCast(e)) {
+            dim = true;
+            anchors.insert(idOf(s->AppliesTo()));
+        }
+        else if (auto l = Handle(StepShape_DimensionalLocation)::DownCast(e)) {
+            dim = true;
+            anchors.insert(idOf(l->RelatingShapeAspect()));
+            anchors.insert(idOf(l->RelatedShapeAspect()));
+        }
+        else if (auto t = Handle(StepDimTol_GeometricTolerance)::DownCast(e)) {
+            tol = true;
+            anchors.insert(idOf(t->TolerancedShapeAspect().Value()));
+        }
+        if (!dim && !tol) {
+            continue;
+        }
+        (dim ? out.dimEnts : out.tolEnts).push_back(i);
+        for (auto& c : out.cams) {
+            for (int a : anchors) {
+                if (a != 0 && c.anchors.count(a)) {
+                    out.viewsOf[i].insert(c.ident);
+                    break;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+std::string numText(double v)
+{
+    std::ostringstream o;
+    o.precision(17);
+    o << v;
+    return o.str();
+}
+
+std::string vecText(double x, double y, double z)
+{
+    return numText(x) + " " + numText(y) + " " + numText(z);
+}
+
+}  // namespace
+
 bool stepPmiEnabled()
 {
     return pmiSwitch() != "0";
@@ -1936,6 +2251,133 @@ void stashStepPmiFaceIds(const Handle(XSControl_WorkSession)& ws, const Handle(T
             }
             return s;
         };
+        // saved views: which dimensions and tolerances each view shows. XCAF's labels are made in the file's entity order
+        // (presentation-only dimension labels aside, and a tolerance entity may make no label), so the semantic labels
+        // are laid along the entities in order: dimensions one to one (the counts must agree), tolerances by their value
+        // (an entity whose value is not the next label's makes no label). The import checks the values again on its items
+        ViewSemantics vs = scanViewSemantics(model);
+        std::vector<int> dimEnt(static_cast<size_t>(dims.Length()) + 1, 0), tolEnt(static_cast<size_t>(tols.Length()) + 1, 0);
+        std::string viewMapNote;
+        if (!vs.cams.empty()) {
+            std::vector<int> semDims;
+            for (int i = 1; i <= dims.Length(); ++i) {
+                Handle(XCAFDoc_Dimension) attr;
+                if (dims.Value(i).FindAttribute(XCAFDoc_Dimension::GetID(), attr) && !attr->GetObject().IsNull()) {
+                    bool known = true;
+                    std::string type = dimTypeName(attr->GetObject()->GetType(), known);
+                    if (type != "DimensionPresentation" && type != "CommonLabel") {
+                        semDims.push_back(i);
+                    }
+                }
+            }
+            {
+                // an entity whose stated values are not the next label's makes no label (the reader leaves some out)
+                std::map<int, const DimEntity*> byIdent;
+                for (const auto& d : scan.dims) {
+                    byIdent[d.ident] = &d;
+                }
+                size_t e = 0;
+                int bound = 0;
+                for (int i : semDims) {
+                    Handle(XCAFDoc_Dimension) attr;
+                    dims.Value(i).FindAttribute(XCAFDoc_Dimension::GetID(), attr);
+                    Handle(XCAFDimTolObjects_DimensionObject) o = attr->GetObject();
+                    auto stated = [](const DimEntity& de, double v) {
+                        for (const auto& sv : de.items) {
+                            if (sv.ok && same(sv.conv, v)) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+                    while (e < vs.dimEnts.size()) {
+                        const int ident = static_cast<int>(model->IdentLabel(model->Value(vs.dimEnts[e])));
+                        auto de = byIdent.find(ident);
+                        bool fits = true;
+                        if (de != byIdent.end()) {
+                            fits = de->second->items.empty()
+                                ? (o->GetValue() == 0.0 && !o->IsDimWithRange() && !o->IsDimWithPlusMinusTolerance())
+                                : (stated(*de->second, o->GetValue())
+                                   || (o->IsDimWithRange() && stated(*de->second, o->GetLowerBound())
+                                       && stated(*de->second, o->GetUpperBound())));
+                        }
+                        ++e;
+                        if (fits) {
+                            dimEnt[static_cast<size_t>(i)] = vs.dimEnts[e - 1];
+                            ++bound;
+                            break;
+                        }
+                    }
+                }
+                if (bound != static_cast<int>(semDims.size())) {
+                    viewMapNote = "dimensions " + std::to_string(bound) + " of " + std::to_string(semDims.size())
+                        + " labels found their entity";
+                    std::fill(dimEnt.begin(), dimEnt.end(), 0);
+                }
+            }
+            // tolerances: the entity with the label's magnitude and the faces its aspect covers (the first not yet taken)
+            std::vector<bool> taken(scan.tols.size(), false);
+            int bound = 0, labels = 0;
+            for (int i = 1; i <= tols.Length(); ++i) {
+                Handle(XCAFDoc_GeomTolerance) attr;
+                if (!tols.Value(i).FindAttribute(XCAFDoc_GeomTolerance::GetID(), attr) || attr->GetObject().IsNull()) {
+                    continue;
+                }
+                ++labels;
+                const double want = attr->GetObject()->GetValue();
+                NCollection_Sequence<TDF_Label> f, sec;
+                XCAFDoc_DimTolTool::GetRefShapeLabel(tols.Value(i), f, sec);
+                std::set<int> ids = idsOf(f);
+                std::set<int> ids2 = idsOf(sec);
+                ids.insert(ids2.begin(), ids2.end());
+                int byValue = -1;
+                int byFaces = -1;
+                for (size_t k = 0; k < scan.tols.size(); ++k) {
+                    const TolEntity& te = scan.tols[k];
+                    if (taken[k] || (te.valueKnown && std::fabs(te.value - want) > 1e-6 * std::max(1.0, std::fabs(want)))) {
+                        continue;
+                    }
+                    if (byValue < 0) {
+                        byValue = static_cast<int>(k);
+                    }
+                    if (te.faces == ids) {
+                        byFaces = static_cast<int>(k);
+                        break;
+                    }
+                }
+                // faces decide; with no faces on either side the value alone has to
+                int pick = byFaces;
+                if (pick < 0 && byValue >= 0 && (ids.empty() || scan.tols[static_cast<size_t>(byValue)].faces.empty())) {
+                    pick = byValue;
+                }
+                if (pick >= 0) {
+                    taken[static_cast<size_t>(pick)] = true;
+                    tolEnt[static_cast<size_t>(i)] = scan.tols[static_cast<size_t>(pick)].model;
+                    ++bound;
+                }
+            }
+            if (bound != labels) {
+                viewMapNote += std::string(viewMapNote.empty() ? "" : ", ") + "tolerances " + std::to_string(bound) + " of "
+                    + std::to_string(labels) + " labels found their entity";
+                std::fill(tolEnt.begin(), tolEnt.end(), 0);
+            }
+        }
+        const bool viewMap = viewMapNote.empty() && !vs.cams.empty();
+        auto viewExtra = [&](const std::vector<int>& ents, int i, std::map<std::string, std::string>& extra) {
+            const int ent = ents[static_cast<size_t>(i)];
+            if (!viewMap || ent == 0) {
+                return;
+            }
+            extra["step.view_entity"] = std::to_string(static_cast<int>(model->IdentLabel(model->Value(ent))));
+            std::string cams;
+            auto it = vs.viewsOf.find(ent);
+            if (it != vs.viewsOf.end()) {
+                for (int c : it->second) {
+                    cams += (cams.empty() ? "" : ",") + std::to_string(c);
+                }
+            }
+            extra["step.views"] = cams;
+        };
         TDF_Label root = stashRoot(hDoc->Main(), true);
         TDF_Label faceRoot = hDoc->Main().Root().FindChild(kFaceTag, true);
         auto keepFace = [&](int id) {
@@ -1992,10 +2434,37 @@ void stashStepPmiFaceIds(const Handle(XSControl_WorkSession)& ws, const Handle(T
                     extra["step.stated"] = "1";
                 }
             }
+            viewExtra(dimEnt, i, extra);
             put(dims.Value(i), extra);
         }
         for (int i = 1; i <= tols.Length(); ++i) {
-            put(tols.Value(i), {});
+            std::map<std::string, std::string> extra;
+            viewExtra(tolEnt, i, extra);
+            put(tols.Value(i), extra);
+        }
+        // the cameras of the file, and whether the labels could be tied to entities
+        auto putView = [&](const std::string& key, const std::map<std::string, std::string>& extra) {
+            TDF_Label slot = TDF_TagSource::NewChild(root);
+            TDataStd_Comment::Set(slot, TCollection_ExtendedString(key.c_str()));
+            Handle(TDataStd_NamedData) nd = TDataStd_NamedData::Set(slot);
+            for (const auto& kv : extra) {
+                nd->SetString(TCollection_ExtendedString(kv.first.c_str()), TCollection_ExtendedString(kv.second.c_str()));
+            }
+        };
+        if (!vs.cams.empty()) {
+            putView("viewmap", {{"step.viewmap", viewMap ? "ok" : viewMapNote}});
+            for (const auto& c : vs.cams) {
+                std::map<std::string, std::string> ex;
+                ex["step.cam_name"] = c.name;
+                ex["step.cam_ortho"] = c.ortho ? "1" : "0";
+                ex["step.cam_loc"] = c.hasLoc ? vecText(c.loc.X(), c.loc.Y(), c.loc.Z()) : "";
+                ex["step.cam_z"] = vecText(c.zax.X(), c.zax.Y(), c.zax.Z());
+                ex["step.cam_x"] = vecText(c.xax.X(), c.xax.Y(), c.xax.Z());
+                ex["step.cam_win"] = c.hasWindow ? vecText(c.winW, c.winH, c.winZ) + " " + numText(c.winX) + " " + numText(c.winY) : "";
+                ex["step.cam_plane"] = numText(c.planeDist);
+                ex["step.cam_proj"] = vecText(c.proj.X(), c.proj.Y(), c.proj.Z());
+                putView("view:" + std::to_string(c.ident), ex);
+            }
         }
         for (int i = 1; i <= datums.Length(); ++i) {
             std::map<std::string, std::string> extra;
@@ -2204,15 +2673,93 @@ Part::PmiDatum* makeDatum(
 namespace
 {
 
+/// A CAMERA_MODEL_D3 as the stash holds it (see scanViewSemantics)
+struct StashCam
+{
+    int ident {0};
+    std::string name;
+    bool ortho {true};
+    bool hasLoc {false};
+    gp_Pnt loc;
+    gp_Vec z, x;
+    bool hasWin {false};
+    double w {0}, h {0}, wx {0}, wy {0}, wz {0};
+    double plane {0};
+    gp_Pnt proj;
+    bool used {false};
+};
+
+std::vector<double> numbersOf(const std::string& t)
+{
+    std::vector<double> v;
+    std::istringstream in(t);
+    double d;
+    while (in >> d) {
+        v.push_back(d);
+    }
+    return v;
+}
+
+std::vector<StashCam> camerasOfStash(const std::map<std::string, StashedIds>& stash)
+{
+    std::vector<StashCam> out;
+    for (const auto& kv : stash) {
+        if (kv.first.rfind("view:", 0) != 0) {
+            continue;
+        }
+        auto get = [&](const char* k) {
+            auto it = kv.second.extra.find(k);
+            return it == kv.second.extra.end() ? std::string() : it->second;
+        };
+        StashCam c;
+        c.ident = std::atoi(kv.first.c_str() + 5);
+        c.name = get("step.cam_name");
+        c.ortho = get("step.cam_ortho") != "0";
+        auto loc = numbersOf(get("step.cam_loc"));
+        if (loc.size() == 3) {
+            c.hasLoc = true;
+            c.loc = gp_Pnt(loc[0], loc[1], loc[2]);
+        }
+        auto z = numbersOf(get("step.cam_z"));
+        auto x = numbersOf(get("step.cam_x"));
+        if (z.size() == 3 && x.size() == 3) {
+            c.z = gp_Vec(z[0], z[1], z[2]);
+            c.x = gp_Vec(x[0], x[1], x[2]);
+        }
+        else {
+            c.hasLoc = false;
+        }
+        auto win = numbersOf(get("step.cam_win"));
+        if (win.size() == 5) {
+            c.hasWin = true;
+            c.w = win[0];
+            c.h = win[1];
+            c.wz = win[2];
+            c.wx = win[3];
+            c.wy = win[4];
+        }
+        auto pl = numbersOf(get("step.cam_plane"));
+        c.plane = pl.empty() ? 0.0 : pl[0];
+        auto pr = numbersOf(get("step.cam_proj"));
+        if (pr.size() == 3) {
+            c.proj = gp_Pnt(pr[0], pr[1], pr[2]);
+        }
+        out.push_back(c);
+    }
+    std::sort(out.begin(), out.end(), [](const StashCam& a, const StashCam& b) { return a.ident < b.ident; });
+    return out;
+}
+
 /// An Inventor camera string from an XCAF view (CAMERA_MODEL_D3). Inventor looks along -Z with +Y up, so the camera
 /// orientation maps (0,0,-1) to the view direction and (0,1,0) to the up direction. OCCT hands over the view direction and
-/// the up direction in the model's coordinates, but the projection point in the camera's own coordinates (it reads the view
-/// volume's point, (0,0,0) for a parallel view), so the eye cannot be placed from it: a parallel view puts the eye on the
-/// line back from the middle of the model along the view direction, far enough out to see all of it (a parallel view has no
-/// eye position of its own, ISO 10303-105 view_volume), a central one the same line at the view plane distance. \a diag and
-/// \a centre are the model's bounding box; the window sizes are the view window of the file (height in model units for a
-/// parallel view, the view plane distance for a central one)
-std::string cameraOfView(const Handle(XCAFView_Object)& v, double diag, const gp_Pnt& centre)
+/// the up direction in the model's coordinates, but not the position (it reads the view volume's point, (0,0,0) for a
+/// parallel view, and the window size without the file's length unit), so the position and the window come from the
+/// CAMERA_MODEL_D3 entity itself (\a cam, read from the STEP model in mm): the view reference point is what the view looks
+/// at, shifted by the placement of the view window, and the window is the height of the view (a parallel view has no eye
+/// position of its own, ISO 10303-105 view_volume: the eye is put on the line back from that point along the view
+/// direction, far enough out to see all of the model). Without the entity (\a cam null) the middle of the model is looked
+/// at and the window is the XCAF window size. \a diag and \a centre are the model's bounding box
+std::string cameraOfView(const Handle(XCAFView_Object)& v, const StashCam* cam, double diag, const gp_Pnt& centre)
 {
     gp_Dir dir = v->ViewDirection();
     gp_Dir up = v->UpDirection();
@@ -2232,17 +2779,34 @@ std::string cameraOfView(const Handle(XCAFView_Object)& v, double diag, const gp
     gp_Vec axis(0, 0, 1);
     double angle = 0.0;
     q.GetVectorAndAngle(axis, angle);
-    const bool ortho = v->Type() != XCAFView_ProjectionType_Central;
+    const bool ortho = cam ? cam->ortho : v->Type() != XCAFView_ProjectionType_Central;
+    gp_Pnt look = centre;
     double height = v->WindowVerticalSize();
+    if (cam) {
+        if (cam->hasLoc) {
+            // the view reference point is where the camera sits; the view window is a rectangle in the view plane, its lower
+            // left corner placed in the camera's own system (x = the reference direction, z = the axis, which is the way
+            // the view looks), so the middle of the view is the window's centre
+            const gp_Vec zf = cam->z.Normalized();
+            const gp_Vec xf = cam->x.Normalized();
+            const gp_Vec yf = zf.Crossed(xf);
+            const double wz = cam->wz != 0.0 ? cam->wz : cam->plane;
+            look = cam->loc.Translated(zf * wz + xf * (cam->wx + 0.5 * cam->w) + yf * (cam->wy + 0.5 * cam->h));
+        }
+        if (cam->hasWin) {
+            height = std::max(cam->h, cam->w / 1.6);
+        }
+    }
     if (height <= 0.0) {
         height = diag > 0 ? diag : 1.0;
     }
-    double back = 1.5 * diag;
-    if (!ortho && v->ZoomFactor() > 0.0) {
-        back = std::max(back, v->ZoomFactor());
+    const double off = look.Distance(centre);
+    double back = 1.5 * diag + off;
+    if (!ortho && cam && cam->plane > 0.0) {
+        back = std::max(back, cam->plane);
     }
-    gp_Pnt p(centre.X() - dir.X() * back, centre.Y() - dir.Y() * back, centre.Z() - dir.Z() * back);
-    double farD = back + 2.0 * diag;
+    gp_Pnt p(look.X() - dir.X() * back, look.Y() - dir.Y() * back, look.Z() - dir.Z() * back);
+    double farD = back + 2.0 * diag + off;
     double nearD = std::max(1e-3 * diag, ortho ? 0.0 : 0.01 * back);
     std::ostringstream o;
     o.precision(17);
@@ -2264,10 +2828,17 @@ std::string cameraOfView(const Handle(XCAFView_Object)& v, double diag, const gp
     return o.str();
 }
 
-/// One Part::PmiView per XCAF view label (SetViewMode on the reader): its camera, and the PMI items its annotations
-/// map to through gLabelItems. A tolerance brings its datum uses along (they are drawn with it). CAx-IF recommended
-/// practice for PMI, saved views; ASME Y14.41, model views
-void importSavedViews(const Handle(TDocStd_Document)& hDoc, App::Document* doc, std::vector<App::DocumentObject*>& created)
+/// One Part::PmiView per XCAF view label (SetViewMode on the reader): its camera, and the PMI items it shows: the items
+/// XCAF's annotations map to through gLabelItems, and the dimensions and tolerances whose callouts the view lists (worked
+/// out from the entities, see scanViewSemantics: XCAF's GetRefGDTLabel gives only the graphic annotations). A tolerance
+/// brings its datum uses along (they are drawn with it). CAx-IF recommended practice for PMI, saved views; ASME Y14.41,
+/// model views
+void importSavedViews(
+    const Handle(TDocStd_Document)& hDoc,
+    App::Document* doc,
+    const std::map<std::string, StashedIds>& stash,
+    std::vector<App::DocumentObject*>& created
+)
 {
     if (!XCAFDoc_DocumentTool::CheckViewTool(hDoc->Main())) {
         return;
@@ -2295,6 +2866,18 @@ void importSavedViews(const Handle(TDocStd_Document)& hDoc, App::Document* doc, 
             centre = gp_Pnt(0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.5 * (z0 + z1));
         }
     }
+    std::vector<StashCam> cams = camerasOfStash(stash);
+    bool mapOk = false;
+    {
+        auto it = stash.find("viewmap");
+        if (it != stash.end()) {
+            auto m = it->second.extra.find("step.viewmap");
+            mapOk = m != it->second.extra.end() && m->second == "ok";
+            if (!mapOk && m != it->second.extra.end()) {
+                warn("STEP PMI: saved views show only the annotations XCAF ties to them: the dimensions and tolerances could not be tied to the file's entities (" + m->second + ")");
+            }
+        }
+    }
     for (int i = 1; i <= labels.Length(); ++i) {
         Handle(XCAFDoc_View) attr;
         if (!labels.Value(i).FindAttribute(XCAFDoc_View::GetID(), attr)) {
@@ -2304,10 +2887,29 @@ void importSavedViews(const Handle(TDocStd_Document)& hDoc, App::Document* doc, 
         if (vo.IsNull()) {
             continue;
         }
+        std::string name = vo->Name().IsNull() ? std::string() : hstr(vo->Name());
+        // the camera entity of this view: same name, looking along the same line, the first not yet taken
+        StashCam* cam = nullptr;
+        for (auto& c : cams) {
+            if (!c.used && c.name == name && c.z.Magnitude() > 0.5
+                && std::fabs(gp_Vec(vo->ViewDirection()).Dot(c.z)) > 0.999) {
+                cam = &c;
+                cam->used = true;
+                break;
+            }
+        }
         std::vector<App::DocumentObject*> shown;
         auto add = [&](App::DocumentObject* o) {
             if (o && std::find(shown.begin(), shown.end(), o) == shown.end()) {
                 shown.push_back(o);
+            }
+        };
+        auto addWithDatums = [&](App::DocumentObject* o) {
+            add(o);
+            if (auto* tol = dynamic_cast<Part::PmiTolerance*>(o)) {
+                for (auto* d : tol->Datums.getValues()) {
+                    add(d);
+                }
             }
         };
         NCollection_Sequence<TDF_Label> refs, anns;
@@ -2316,27 +2918,46 @@ void importSavedViews(const Handle(TDocStd_Document)& hDoc, App::Document* doc, 
         for (const auto* seq : {&refs, &anns}) {
             for (int k = 1; k <= seq->Length(); ++k) {
                 auto it = gLabelItems.find(entryOf(seq->Value(k)));
-                if (it == gLabelItems.end()) {
+                if (it != gLabelItems.end()) {
+                    addWithDatums(it->second);
+                }
+            }
+        }
+        int semantic = 0;
+        if (cam && mapOk) {
+            // entries are in label order (the key is the label's TDF entry), the items in the order of the file
+            std::vector<std::pair<int, App::DocumentObject*>> found;
+            for (const auto& kv : stash) {
+                auto vw = kv.second.extra.find("step.views");
+                auto en = kv.second.extra.find("step.view_entity");
+                if (vw == kv.second.extra.end() || en == kv.second.extra.end()) {
                     continue;
                 }
-                add(it->second);
-                if (auto* tol = dynamic_cast<Part::PmiTolerance*>(it->second)) {
-                    for (auto* d : tol->Datums.getValues()) {
-                        add(d);
-                    }
+                bool in = false;
+                for (int c : idsFromText(vw->second)) {
+                    in = in || c == cam->ident;
                 }
+                auto item = gLabelItems.find(kv.first);
+                if (in && item != gLabelItems.end()) {
+                    found.emplace_back(std::atoi(en->second.c_str()), item->second);
+                }
+            }
+            std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            for (const auto& f : found) {
+                ++semantic;
+                addWithDatums(f.second);
             }
         }
         auto* view = doc->addObject<Part::PmiView>("PmiView");
         created.push_back(view);
-        std::string name = vo->Name().IsNull() ? std::string() : hstr(vo->Name());
         view->Label.setValue(name.empty() ? "View " + std::to_string(i) : name);
-        view->Camera.setValue(cameraOfView(vo, diag, centre));
+        view->Camera.setValue(cameraOfView(vo, cam, diag, centre));
         view->Items.setValues(shown);
         ++gReport.views;
         gReport.viewNotes.push_back(
             entryOf(labels.Value(i)) + "|" + name + "|items=" + std::to_string(shown.size()) + "|gdt=" + std::to_string(refs.Length())
             + "|ann=" + std::to_string(anns.Length()) + "|type=" + std::to_string(static_cast<int>(vo->Type()))
+            + "|sem=" + std::to_string(semantic) + "|cam=" + (cam ? std::to_string(cam->ident) : std::string("none"))
         );
     }
 }
@@ -2793,7 +3414,7 @@ void importStepPmi(const Handle(TDocStd_Document)& hDoc, App::Document* doc)
         if (pmiSwitch() == "fail") {
             throw Base::RuntimeError("FC_STEP_PMI=fail: test of the rollback");
         }
-        importSavedViews(hDoc, doc, created);
+        importSavedViews(hDoc, doc, stash, created);
         auto* group = doc->addObject<Part::PmiGroup>("PMI");
         groupName = group->getNameInDocument();
         group->Label.setValue("PMI");

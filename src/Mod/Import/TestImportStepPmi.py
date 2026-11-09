@@ -1077,7 +1077,66 @@ class TestImportStepPmiViews(unittest.TestCase):
             self.assertIn(v, grp.Group)
             self.assertGreater(len(v.Items), 0)
             self.assertTrue({o.Name for o in v.Items} <= items)
-        self.assertEqual(sorted(len(v.Items) for v in views), [6, 6, 11])
+        self.assertEqual(sorted(len(v.Items) for v in views), [32, 36, 53])
+
+    def _view(self, doc, name):
+        return [o for o in doc.Objects if o.TypeId == "Part::PmiView" and o.Label == name][0]
+
+    def test_a_view_holds_the_dimensions_and_tolerances_its_callouts_present(self):
+        # the callouts a view lists (DRAUGHTING_CALLOUT, through ANNOTATION_PLANE) present dimensions and tolerances through
+        # DRAUGHTING_MODEL_ITEM_ASSOCIATION (CAx-IF PMI recommended practice, saved views): XCAF's own view label only gives the
+        # graphic annotations. Per view: (dimensions, tolerances) of the file's Part 21 text (pmi_expect.py, run 080), less the
+        # entity of ftc_06 the kernel makes no label for (#348, a profile of surface in MBD_A)
+        doc, _ = self._open("nist_ftc_06_asme1_ap242-e2")
+        want = {"MBD_A": (10, 10), "MBD_B": (0, 9), "MBD_C": (4, 8)}
+        for name, (nd, nt) in want.items():
+            v = self._view(doc, name)
+            self.assertEqual(len([o for o in v.Items if o.TypeId == "Part::PmiDimension"]), nd, name)
+            self.assertEqual(len([o for o in v.Items if o.TypeId == "Part::PmiTolerance"]), nt, name)
+        # a dimension or tolerance is in a view by the entity it was made from: no item is in a view its entity is not in
+        ents = {}
+        for v in (self._view(doc, n) for n in want):
+            for o in v.Items:
+                e = o.RawAttributes.get("step.view_entity") if o.TypeId in ("Part::PmiDimension", "Part::PmiTolerance") else None
+                if e:
+                    ents.setdefault(e, set()).add(v.Label)
+        self.assertTrue(all(vs <= set(want) for vs in ents.values()))
+
+    def test_every_tolerance_in_a_view_brings_its_datum_uses_along(self):
+        for stem, view in (("nist_ctc_01_asme1_ap242-e1", "MBD_0"), ("nist_ftc_06_asme1_ap242-e2", "MBD_A")):
+            doc, _ = self._open(stem)
+            v = self._view(doc, view)
+            held = {o.Name for o in v.Items}
+            tols = [o for o in v.Items if o.TypeId == "Part::PmiTolerance"]
+            self.assertGreater(len(tols), 0)
+            n = 0
+            for t in tols:
+                for d in t.Datums:
+                    n += 1
+                    self.assertIn(d.Name, held, "%s: %s has its datum use %s out of the view" % (view, t.Label, d.Label))
+            self.assertGreater(n, 0)
+            App.closeDocument(doc.Name)
+
+    def test_the_view_window_is_in_mm_and_the_camera_is_where_the_file_puts_it(self):
+        # ctc_05 is in inches: PLANAR_BOX 20.3814 x 20.3814 and 17.4987 x 17.4987 inch are 517.69 and 444.47 mm. The view looks at
+        # the middle of its window, which lies the view plane distance in front of the camera of the file, not at the middle of the model
+        doc, _ = self._open("nist_ctc_05_asme1_ap242-e1")
+        for name, mm in (("MBD_A", 20.3814 * 25.4), ("MBD_B", 17.4987 * 25.4)):
+            v = self._view(doc, name)
+            h = float(re.search(r"\n\s*height (\S+)", v.Camera).group(1))
+            self.assertAlmostEqual(h / mm, 1.0, delta=0.05, msg=name)
+        doc, _ = self._open("nist_ftc_06_asme1_ap242-e2")
+        v = self._view(doc, "MBD_A")
+        pos = App.Vector(*(float(x) for x in re.search(r"position (\S+) (\S+) (\S+)", v.Camera).groups()))
+        m = re.search(r"orientation (\S+) (\S+) (\S+) (\S+)", v.Camera)
+        rot = App.Rotation(App.Vector(*(float(x) for x in m.groups()[:3])), math.degrees(float(m.group(4))))
+        look = rot.multVec(App.Vector(0, 0, -1))
+        # the file's camera is at (779.86, 681.71, -616.47) and its view plane 1104.23 in front; the eye is on that line
+        eye = App.Vector(779.861938476563, 681.706726074219, -616.473510742188)
+        centre = eye + look * 1104.23413085938
+        d = (centre - pos)
+        self.assertLess((d - look * d.dot(look)).Length, 1e-3)  # the middle of the window is on the line of sight
+        self.assertAlmostEqual(float(re.search(r"\n\s*height (\S+)", v.Camera).group(1)), 530.206285269942, places=6)
 
     def test_the_camera_looks_along_the_z_axis_of_the_files_view_reference_system(self):
         doc, path = self._open("nist_ftc_06_asme1_ap242-e2")
