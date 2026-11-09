@@ -344,5 +344,51 @@ class TestRejectAcrossDocuments(unittest.TestCase):
         self.assertTrue(t.reject()["equal"])
 
 
+class TestXLinkPathThroughSymlink(unittest.TestCase):
+    """An XLink saved by a document opened through a symlinked folder keeps a
+    relative path that resolves from that folder. FreeCAD keyed links on
+    absolute paths but took the owner's folder canonical, so on macOS (where
+    the temporary folder sits under /var -> /private/var) the stored path
+    mixed the two, a snapshot reopened the linked file as a second document
+    and reject left the link broken (run 083)."""
+
+    def setUp(self):
+        self.real = os.path.realpath(tempfile.mkdtemp(prefix="f3sl"))
+        self.via = os.path.join(os.path.realpath(tempfile.mkdtemp(prefix="f3sv")), "via")
+        os.symlink(self.real, self.via)
+        self.src, self.asm = db.build_xlink_pair(self.via)
+
+    def tearDown(self):
+        db.close(self.asm, self.src)
+        shutil.rmtree(os.path.dirname(self.via), ignore_errors=True)
+        shutil.rmtree(self.real, ignore_errors=True)
+
+    def test_saved_xlink_path_is_relative_to_the_folder_as_opened(self):
+        import re
+        import zipfile
+        self.assertTrue(self.asm.FileName.startswith(self.via))
+        with zipfile.ZipFile(self.asm.FileName) as z:
+            files = re.findall(r'<XLink file="([^"]+)"', z.read("Document.xml").decode())
+        self.assertEqual(files, ["f3x_src.FCStd"])
+
+    def test_trimmed_turn_rejects_from_the_snapshot_through_the_symlink(self):
+        self.src.clearUndos()
+        self.asm.clearUndos()
+        store = SnapshotStore(os.path.join(self.via, "snaps"))
+        with AgentTurn(self.asm, label="sl", verify=False, store=store, use_guard=False) as t:
+            for i in range(25):
+                self.src.openTransaction(f"s{i}")
+                self.src.SrcBox.Length = 21 + i
+                self.src.commitTransaction()
+                self.asm.openTransaction(f"a{i}")
+                self.asm.LinkBox.Placement.Base = App.Vector(i + 1, 0, 0)
+                self.asm.commitTransaction()
+        open_before = sorted(App.listDocuments())
+        res = t.reject()
+        self.assertEqual(res["methods"], {self.asm.Name: "snapshot", self.src.Name: "snapshot"})
+        self.assertTrue(res["equal"], res["differences"])
+        self.assertEqual(sorted(App.listDocuments()), open_before)
+        self.assertEqual(self.asm.LinkBox.LinkedObject, self.src.SrcBox)
+
 if __name__ == "__main__":
     unittest.main()

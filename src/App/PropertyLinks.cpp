@@ -5043,7 +5043,11 @@ public:
         }
 
         QFileInfo docFileInfo{QString::fromUtf8(docPath)};
-        QDir docDir(docFileInfo.canonicalPath());
+        // Absolute, not canonical: the target path and the _DocInfoMap lookup
+        // are absolute, so a canonical owner directory mixes the two whenever
+        // a symlink is on the path (macOS /var -> /private/var) and the stored
+        // relative path then resolves somewhere else.
+        QDir docDir(docFileInfo.absolutePath());
         if (!absolute) {
             path = QDir::cleanPath(docDir.absoluteFilePath(path));
             if (fullPath) {
