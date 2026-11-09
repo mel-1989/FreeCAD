@@ -27,6 +27,7 @@
 // symbol sources): a label at the centre of the governed faces, offset along the first face's outward normal.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <set>
@@ -806,7 +807,7 @@ bool ViewProviderPmiItem::baseFrame(LabelFrame& f, double diag)
         extentCache = {true, text, hw + 0.3, hh + 0.3};  // the pick quad is a little larger than the label
     }
     const gp_Dir normal = a.normal;
-    f.h = 0.025 * diag;  // digit height of the label
+    f.h = 0.035 * diag;  // digit height of the label
     const gp_Vec up0 = std::fabs(normal.Z()) < 0.9 ? gp_Vec(0, 0, 1) : gp_Vec(0, 1, 0);
     f.right = gp_Dir(up0.Crossed(gp_Vec(normal)));  // right x up = normal: the label faces outward
     f.up = gp_Dir(gp_Vec(normal).Crossed(gp_Vec(f.right)));
@@ -825,79 +826,222 @@ bool ViewProviderPmiItem::baseFrame(LabelFrame& f, double diag)
 namespace
 {
 
-/// Whether two label frames cover each other: coplanar and their rectangles intersect (separating axes in the plane)
-bool framesOverlap(const ViewProviderPmiItem::LabelFrame& a, const ViewProviderPmiItem::LabelFrame& b, double diag)
+using LabelFrame = ViewProviderPmiItem::LabelFrame;
+
+struct Vec2
 {
-    if (std::fabs(a.normal.Dot(b.normal)) < 0.999) {
-        return false;
-    }
-    const gp_Vec d(a.anchor, b.anchor);
-    if (std::fabs(d.Dot(gp_Vec(a.normal))) > 1e-3 * diag) {
-        return false;
-    }
-    const gp_Dir axes[4] = {a.right, a.up, b.right, b.up};
-    for (const gp_Dir& ax : axes) {
-        const double ra = a.h * (a.hw * std::fabs(ax.Dot(a.right)) + a.hh * std::fabs(ax.Dot(a.up)));
-        const double rb = b.h * (b.hw * std::fabs(ax.Dot(b.right)) + b.hh * std::fabs(ax.Dot(b.up)));
-        if (std::fabs(d.Dot(gp_Vec(ax))) >= ra + rb - 1e-6) {
-            return false;
+    double x, y;
+};
+
+/// Whether two convex polygons (up to four corners, possibly degenerate to a segment) overlap with positive area
+/// (separating axes from the edges of both)
+bool convexOverlap(const std::vector<Vec2>& a, const std::vector<Vec2>& b)
+{
+    for (const std::vector<Vec2>* poly : {&a, &b}) {
+        const size_t n = poly->size();
+        for (size_t i = 0; i < n; ++i) {
+            const Vec2 p = (*poly)[i], q = (*poly)[(i + 1) % n];
+            double ax = -(q.y - p.y), ay = q.x - p.x;
+            const double len = std::hypot(ax, ay);
+            if (len < 1e-12) {
+                continue;
+            }
+            ax /= len;
+            ay /= len;
+            double amin = 1e300, amax = -1e300, bmin = 1e300, bmax = -1e300;
+            for (const Vec2& v : a) {
+                const double s = ax * v.x + ay * v.y;
+                amin = std::min(amin, s);
+                amax = std::max(amax, s);
+            }
+            for (const Vec2& v : b) {
+                const double s = ax * v.x + ay * v.y;
+                bmin = std::min(bmin, s);
+                bmax = std::max(bmax, s);
+            }
+            if (amax <= bmin + 1e-9 || bmax <= amin + 1e-9) {
+                return false;
+            }
         }
     }
     return true;
 }
 
+/// The four corners of a label's pick rectangle (grown by the margin) relative to a point, as vectors
+std::array<gp_Vec, 4> frameCorners(const LabelFrame& f, const gp_Pnt& origin, double margin)
+{
+    std::array<gp_Vec, 4> out;
+    const double hw = f.hw * f.h + margin, hh = f.hh * f.h + margin;
+    int i = 0;
+    for (const auto& [sx, sy] : {std::pair<int, int> {-1, -1}, {1, -1}, {1, 1}, {-1, 1}}) {
+        out[i++] = gp_Vec(
+            f.anchor.X() - origin.X() + sx * hw * f.right.X() + sy * hh * f.up.X(),
+            f.anchor.Y() - origin.Y() + sx * hw * f.right.Y() + sy * hh * f.up.Y(),
+            f.anchor.Z() - origin.Z() + sx * hw * f.right.Z() + sy * hh * f.up.Z()
+        );
+    }
+    return out;
+}
+
+/// Whether the two labels' rectangles (A grown by a gap of a fifth of a digit height) overlap as seen along a direction
+bool coverAlong(const LabelFrame& a, const LabelFrame& b, const gp_Dir& d)
+{
+    // seen along d, labels whose circumscribed circles are apart (across d) cannot meet, whatever their depth
+    const gp_Vec between(a.anchor, b.anchor);
+    const gp_Vec across = between - gp_Vec(d) * between.Dot(gp_Vec(d));
+    if (across.Magnitude() > a.h * std::hypot(a.hw, a.hh) + 0.2 * a.h + b.h * std::hypot(b.hw, b.hh)) {
+        return false;
+    }
+    const gp_Dir e1 = std::fabs(d.Z()) < 0.9 ? gp_Dir(gp_Vec(0, 0, 1).Crossed(gp_Vec(d))) : gp_Dir(gp_Vec(0, 1, 0).Crossed(gp_Vec(d)));
+    const gp_Dir e2 = gp_Dir(gp_Vec(d).Crossed(gp_Vec(e1)));
+    std::vector<Vec2> pa, pb;
+    for (const gp_Vec& v : frameCorners(a, a.anchor, 0.2 * a.h)) {
+        pa.push_back({v.Dot(gp_Vec(e1)), v.Dot(gp_Vec(e2))});
+    }
+    for (const gp_Vec& v : frameCorners(b, a.anchor, 0.0)) {
+        pb.push_back({v.Dot(gp_Vec(e1)), v.Dot(gp_Vec(e2))});
+    }
+    return convexOverlap(pa, pb);
+}
+
+/// Whether two labels would cover each other for a reader looking at either one from its front or from 30 degrees to
+/// the left or right of its normal (the way a model is turned to read a face), or along the default isometric direction
+/// of the application (a camera at +x, -y, +z of the model, in the governed object's own axes). A layout cannot know the
+/// camera, so it protects the views a label is read from and the one a model opens in
+bool framesCover(const LabelFrame& a, const LabelFrame& b)
+{
+    static const gp_Dir iso(1, -1, 1);
+    constexpr double tilt = 30.0 * M_PI / 180.0;
+    for (const LabelFrame* f : {&a, &b}) {
+        const gp_Vec n(f->normal), r(f->right);
+        const gp_Vec dirs[3] = {n, n * std::cos(tilt) + r * std::sin(tilt), n * std::cos(tilt) - r * std::sin(tilt)};
+        for (const gp_Vec& d : dirs) {
+            if (coverAlong(a, b, gp_Dir(d))) {
+                return true;
+            }
+        }
+    }
+    return coverAlong(a, b, iso);
+}
+
+/// The grid cells a label may be moved to, nearest first: (i, j) is i pitches along the reading direction and j pitches
+/// up. Up is preferred to down and the reading direction to the opposite one, so a stack of labels on one face grows
+/// upward as it did in slice 2
+const std::vector<std::pair<int, int>>& candidateCells()
+{
+    static const std::vector<std::pair<int, int>> cells = []() {
+        constexpr int radius = 24;
+        std::vector<std::pair<int, int>> v;
+        for (int i = -radius; i <= radius; ++i) {
+            for (int j = -radius; j <= radius; ++j) {
+                v.emplace_back(i, j);
+            }
+        }
+        auto cost = [](const std::pair<int, int>& c) {
+            return 2.0 * c.first * c.first + (c.second >= 0 ? 1.0 : 2.0) * c.second * c.second + (c.first < 0 ? 0.01 : 0.0);
+        };
+        std::stable_sort(v.begin(), v.end(), [&](const auto& x, const auto& y) { return cost(x) < cost(y); });
+        return v;
+    }();
+    return cells;
+}
+
+/// One governed object's laid-out fallback labels, kept until something they depend on changes so that the whole object
+/// is laid out once per change and not once per item
+struct LayoutEntry
+{
+    std::string signature;
+    std::map<std::string, LabelFrame> frames;
+};
+
+std::map<const App::DocumentObject*, LayoutEntry>& layoutCache()
+{
+    static std::map<const App::DocumentObject*, LayoutEntry> cache;
+    return cache;
+}
+
 }  // namespace
 
-/// Labels that would cover one another are stacked: by object name, the first sits at its anchor and each next one is
-/// moved up its reading direction by whole pitches (3 digit heights: a frame is 2.2 tall, the rest is a gap) until it
-/// covers none of the labels already placed on the same object
+/// Fallback labels are laid out per governed object in object-name order. The first sits at its anchor (check 21). Each
+/// next one stays at its anchor unless it would cover a label already placed, for a reader looking along the normal of
+/// either label; then it moves, in whole pitches (3 digit heights), along its reading direction and up, to the nearest
+/// free cell. Source: our own design; the CAx-IF recommended practice for PMI presentation asks only that annotations
+/// stay legible and do not overlap, and gives no layout algorithm
 bool ViewProviderPmiItem::finalFrame(LabelFrame& mine, double diag)
 {
     auto* item = getObject<Part::PmiItem>();
     App::DocumentObject* gov = governedObject();
     std::vector<ViewProviderPmiItem*> peers;
     for (auto* vp : aliveProviders()) {
-        auto* other = vp == this ? nullptr : vp->getObject<Part::PmiItem>();
+        auto* other = vp->getObject<Part::PmiItem>();
         if (other && vp->governedObject() == gov && other->getDocument() == item->getDocument()
-            && std::string(other->getNameInDocument()) < item->getNameInDocument() && vp->drawMode() == PmiDrawMode::Fallback) {
+            && vp->drawMode() == PmiDrawMode::Fallback) {
             peers.push_back(vp);
         }
     }
     std::sort(peers.begin(), peers.end(), [](ViewProviderPmiItem* x, ViewProviderPmiItem* y) {
         return std::string(x->getObject()->getNameInDocument()) < y->getObject()->getNameInDocument();
     });
-    std::vector<LabelFrame> placed;
-    auto place = [&](LabelFrame& f) {
-        const gp_Pnt base = f.anchor;
-        for (int k = 0; k < 400; ++k) {
-            f.anchor = gp_Pnt(
-                base.X() + f.up.X() * 3.0 * f.h * k,
-                base.Y() + f.up.Y() * 3.0 * f.h * k,
-                base.Z() + f.up.Z() * 3.0 * f.h * k
-            );
-            bool clash = false;
-            for (const LabelFrame& p : placed) {
-                if (framesOverlap(f, p, diag)) {
-                    clash = true;
+    // what the layout depends on: the shape, the model diagonal and, per label, its name, references and text
+    std::string signature;
+    if (auto* feat = dynamic_cast<Part::Feature*>(gov)) {
+        signature += std::to_string(reinterpret_cast<uintptr_t>(feat->Shape.getShape().getShape().TShape().get())) + ";";
+        for (auto* vp : peers) {
+            auto* it = vp->getObject<Part::PmiItem>();
+            signature += it->getNameInDocument();
+            signature += '|';
+            for (const std::string& sub : it->References.getSubValues(feat)) {
+                signature += sub + ",";
+            }
+            signature += '|' + PmiLayout::labelText(it) + ";";
+        }
+    }
+    signature += std::to_string(diag);
+    LayoutEntry& entry = layoutCache()[gov];
+    if (entry.signature != signature) {
+        entry.signature = signature;
+        entry.frames.clear();
+        std::vector<LabelFrame> placed;
+        for (auto* vp : peers) {
+            LabelFrame f;
+            if (!vp->baseFrame(f, diag)) {
+                continue;
+            }
+            const gp_Pnt base = f.anchor;
+            const double pitch = 3.0 * f.h;
+            LabelFrame best = f;
+            bool found = false;
+            for (const auto& [ci, cj] : candidateCells()) {
+                f.anchor = gp_Pnt(
+                    base.X() + f.right.X() * pitch * ci + f.up.X() * pitch * cj,
+                    base.Y() + f.right.Y() * pitch * ci + f.up.Y() * pitch * cj,
+                    base.Z() + f.right.Z() * pitch * ci + f.up.Z() * pitch * cj
+                );
+                bool clash = false;
+                for (const LabelFrame& p : placed) {
+                    if (framesCover(f, p)) {
+                        clash = true;
+                        break;
+                    }
+                }
+                if (!clash) {
+                    best = f;
+                    found = true;
                     break;
                 }
             }
-            if (!clash) {
-                break;
+            if (!found) {
+                best.anchor = base;  // no free cell within reach: stay at the anchor
             }
-        }
-        placed.push_back(f);
-    };
-    for (auto* vp : peers) {
-        LabelFrame f;
-        if (vp->baseFrame(f, diag)) {
-            place(f);
+            placed.push_back(best);
+            entry.frames[vp->getObject()->getNameInDocument()] = best;
         }
     }
-    if (!baseFrame(mine, diag)) {
+    auto it = entry.frames.find(item->getNameInDocument());
+    if (it == entry.frames.end()) {
         return false;
     }
-    place(mine);
+    mine = it->second;
     return true;
 }
 

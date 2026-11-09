@@ -676,7 +676,10 @@ class TestPmiFallbackSynthetic(unittest.TestCase):
             anchor, n = face_anchor(self.doc, item, diag)
             box = bbox_of(paths[item.Name])
             centre = App.Vector((box[0] + box[3]) / 2, (box[1] + box[4]) / 2, (box[2] + box[5]) / 2)
-            self.assertLess((centre - anchor).Length, 0.01, item.Name)
+            if key == "datumfb":  # DatumC sorts first on its object: it keeps the anchor; the others may have moved to clear it
+                self.assertLess((centre - anchor).Length, 0.01, item.Name)
+            else:
+                self.assertIsNotNone(displaced_in_plane(self.doc, centre, anchor, n, diag), item.Name)
             # the label lies in the plane through the anchor perpendicular to the normal
             for corner in pick_proxy_quad(paths[item.Name]):
                 self.assertAlmostEqual((corner - anchor).dot(n), 0.0, delta=1e-3, msg=item.Name)
@@ -710,7 +713,7 @@ class TestPmiFallbackSynthetic(unittest.TestCase):
         self.assertEqual(label_text(names["DatumC2"]), "")
 
     def test_labels_on_one_face_are_stacked_and_all_pick(self):
-        # TolFb sits on Face3 of Other; two more items on the same face stack above it, by object name
+        # TolFb sits on Face3 of Other; two more items on the same face stack with it, by object name
         other = self.s["other"]
         extra = []
         for nm in ("ZStackA", "ZStackB"):
@@ -729,16 +732,16 @@ class TestPmiFallbackSynthetic(unittest.TestCase):
         for i in range(3):
             for j in range(i + 1, 3):
                 self.assertFalse(quads_overlap(quads[i], quads[j]), (names[i], names[j]))
-        # the first by name (TolFb sorts before ZStack*) keeps the anchor of check 21
-        anchor, n = face_anchor(self.doc, self.s["tolfb"], model_diagonal(self.doc))
-        box = bbox_of(paths["TolFb"])
-        centre = App.Vector((box[0] + box[3]) / 2, (box[1] + box[4]) / 2, (box[2] + box[5]) / 2)
-        self.assertLess((centre - anchor).Length, 0.01)
-        # the next ones are higher along the label's up direction (z here), one pitch (3 digit heights) apiece
-        zs = [(quads[i][0].z + quads[i][2].z) / 2 for i in range(3)]
-        h = 0.025 * model_diagonal(self.doc)
-        self.assertAlmostEqual(zs[1] - zs[0], 3 * h, delta=1e-3)
-        self.assertAlmostEqual(zs[2] - zs[1], 3 * h, delta=1e-3)
+        # the labels of other planes on the object (DatumC sorts first and keeps its anchor) may have taken the place of TolFb:
+        # every label sits at its anchor moved in its plane by whole pitches, and none covers another in the view along the
+        # normal of either
+        diag = model_diagonal(self.doc)
+        for nm in names:
+            item = self.doc.getObject(nm)
+            anchor, n = face_anchor(self.doc, item, diag)
+            q = pick_proxy_quad(paths[nm])
+            centre = (q[0] + q[2]) * 0.5
+            self.assertIsNotNone(displaced_in_plane(self.doc, centre, anchor, n, diag), nm)
         self.assertEqual(pick_items(self.doc, names), [])
 
     def test_a_dimension_with_no_stated_value_draws_a_question_mark(self):
@@ -807,20 +810,30 @@ class TestPmiFallbackSynthetic(unittest.TestCase):
         self.assertEqual(pick_items(self.doc, ["DimFb", "TolFb", "DatumC", "Tol"]), [])
 
 
-def displaced_by_whole_pitches(doc, centre, anchor, n, diag):
-    """Whether the label centre is the anchor of check 21 moved up the label's reading direction by k whole pitches (3
-    digit heights, k >= 0): the stacking rule. Returns k, or None when it is somewhere else"""
+DIGIT_FRAC = 0.035  # digit height of a fallback label in model diagonals (ViewProviderPmiItem::baseFrame)
+
+
+def displaced_in_plane(doc, centre, anchor, n, diag):
+    """Whether the label centre is the anchor of check 21 moved within the label's plane by whole pitches (3 digit heights)
+    along its reading direction (i) and up (j): the layout rule of slice 3b-ii. Returns (i, j), or None when it is somewhere
+    else (including off the plane)"""
     up0 = App.Vector(0, 0, 1) if abs(n.z) < 0.9 else App.Vector(0, 1, 0)
     right = up0.cross(n)
     right.normalize()
     up = n.cross(right)
     d = centre - anchor
-    pitch = 3 * 0.025 * diag
-    k = round(d.dot(up) / pitch)
-    resid = d - up * (k * pitch)
-    if k < 0 or resid.Length > 0.005 * diag:
+    pitch = 3 * DIGIT_FRAC * diag
+    i, j = round(d.dot(right) / pitch), round(d.dot(up) / pitch)
+    resid = d - right * (i * pitch) - up * (j * pitch)
+    if resid.Length > 0.005 * diag + 0.005 * d.Length:  # the model diagonal of the test and the layout's differ a little
         return None
-    return k
+    return i, j
+
+
+def displaced_by_whole_pitches(doc, centre, anchor, n, diag):
+    """Slice 2b's rule, kept for the first label of an object: the number of pitches up, or None when displaced otherwise"""
+    moved = displaced_in_plane(doc, centre, anchor, n, diag)
+    return moved[1] if moved is not None and moved[0] == 0 and moved[1] >= 0 else None
 
 
 def quads_overlap(q1, q2, eps=1e-6):
@@ -864,7 +877,7 @@ def geometry_segment(path):
     return segs[0] if segs else None
 
 
-PICK_EYE_DIAG = 0.15  # the camera hangs this far (in model diagonals) outside the clicked point: only what is close can cover it
+PICK_EYE_DIAG = 0.5  # the camera hangs this far (in model diagonals) outside the clicked point: only what is close can cover it
 
 
 def aim_at_point(doc, name, c, normal):
@@ -1033,6 +1046,7 @@ class TestPmiDisplayCorpus(unittest.TestCase):
         anchors_checked = 0
         stacked = 0
         anchors_off = []
+        disps = []
         for path in CORPUS_FILES:
             stem = os.path.basename(path)
             with self.subTest(file=stem):
@@ -1055,7 +1069,8 @@ class TestPmiDisplayCorpus(unittest.TestCase):
                     skipped = {k for k in skipped if not (isinstance(k, tuple) and k in pres_keys)}
                     self.assertEqual(len(presented) + len(fallback) + len(skipped), semantic_count(doc))
                     diag = model_diagonal(doc)
-                    for n in fallback:
+                    firsts = {}
+                    for n in sorted(fallback):
                         item = doc.getObject(n)
                         box = bbox_of(paths[n])
                         self.assertIsNotNone(box, n)
@@ -1066,11 +1081,17 @@ class TestPmiDisplayCorpus(unittest.TestCase):
                         if got is not None:
                             anchors_checked += 1
                             centre = App.Vector((box[0] + box[3]) / 2, (box[1] + box[4]) / 2, (box[2] + box[5]) / 2)
-                            k = displaced_by_whole_pitches(doc, centre, got[0], got[1], diag)
+                            disps.append((centre - got[0]).Length / diag)
+                            k = displaced_in_plane(doc, centre, got[0], got[1], diag)
                             if k is None:
                                 anchors_off.append((stem, n, round((centre - got[0]).Length, 3), round(diag, 1)))
-                            elif k:
+                            elif k != (0, 0):
                                 stacked += 1
+                            if k is not None and item.References[0][0].Name not in firsts:
+                                firsts[item.References[0][0].Name] = (n, k)  # fallback is sorted by name: the first of the object
+                    # the lowest-named label of every governed object keeps the anchor of check 21
+                    for obj_name, (n, k) in firsts.items():
+                        self.assertEqual(k, (0, 0), (stem, obj_name, n))
                     table[stem] = dict(
                         presentation=len(presented), fallback=len(fallback), unattached_skipped=len(skipped),
                         drawn=len(paths), semantic=semantic_count(doc), annotations=sum(1 for o in semantic_items(doc) if o.TypeId == "Part::PmiAnnotation"),
@@ -1082,7 +1103,7 @@ class TestPmiDisplayCorpus(unittest.TestCase):
             import json
 
             with open(out, "w") as f:
-                json.dump(dict(table=table, anchors_checked=anchors_checked, anchors_off=anchors_off, stacked=stacked), f, indent=1)
+                json.dump(dict(table=table, anchors_checked=anchors_checked, anchors_off=anchors_off, stacked=stacked, displacement_in_diagonals=sorted(disps)), f, indent=1)
         self.assertEqual(anchors_off, [], "fallback labels not at their expected anchor, of %d checked" % anchors_checked)
 
     def test_pick_in_the_view(self):
@@ -1156,7 +1177,35 @@ class TestPmiDisplayCorpus(unittest.TestCase):
             self.assertEqual(r["overlaps"], [], stem)
             # every fallback item can be selected by clicking it; where a label of another plane lies over the centre, an
             # inset point of the item (or a farther camera) picks it
-            self.assertLessEqual(len(r["never"]), 0.2 * r["fallback"], stem)
+            self.assertLessEqual(len(r["never"]), 0.05 * r["fallback"], stem)  # check 51: at most 5% reachable only from the tree
+
+    def test_a_shape_edit_relays_out_the_labels_within_a_fifth_of_a_second(self):
+        # check 54: replacing the governed shape re-lays out every fallback label once; the median of 5 edits takes at most
+        # 0.2 s and the drawn count is unchanged
+        import statistics
+        import time
+
+        for stem in ("nist_ftc_06_asme1_ap242-e2", "nist_stc_10_asme1_ap242-e2"):
+            path = os.path.join(CORPUS, stem + ".stp")
+            if not os.path.exists(path):
+                self.skipTest("corpus file missing: " + stem)
+            doc = self._open(path)
+            try:
+                body = [o for o in doc.Objects if hasattr(o, "Shape") and not o.TypeId.startswith("Part::Pmi") and not o.Shape.isNull() and o.Shape.Solids][0]
+                before = len(drawn_paths(doc))
+                times = []
+                for _ in range(5):
+                    m = App.Matrix()
+                    m.scale(1.01, 1.01, 1.01)
+                    shape = body.Shape.copy().transformGeometry(m)  # building the edit is not what is timed
+                    t0 = time.time()
+                    body.Shape = shape
+                    Gui.updateGui()
+                    times.append(time.time() - t0)
+                self.assertEqual(len(drawn_paths(doc)), before, stem)
+                self.assertLessEqual(statistics.median(times), 0.2, (stem, times))
+            finally:
+                App.closeDocument(doc.Name)
 
     def test_presentation_items_pick_at_a_point_on_their_own_geometry(self):
         stem = "nist_stc_06_asme1_ap242-e3"
