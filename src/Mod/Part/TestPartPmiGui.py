@@ -1774,6 +1774,19 @@ class TestPmiViews(_PanelCase):
         vis = visible_names(self.doc)
         self.assertEqual(len([n for n in vis if self.doc.getObject(n).TypeId == "Part::PmiDatum"]), 1)
 
+    def test_a_view_with_one_use_of_a_letter_shows_the_letter_whichever_use_draws(self):
+        uses = [d for d in self.pmi("Part::PmiDatum") if d.Letter == "A"]
+        self.assertGreaterEqual(len(uses), 2)
+        for use in uses:
+            self.show_only({use.Name})
+            v = PG.saveView(self.doc, "Only " + use.Name)
+            self.assertEqual([o.Name for o in v.Items], [use.Name])
+            self.show_only(set())
+            PG.activateView(v)
+            vis = visible_names(self.doc)
+            self.assertEqual(len(vis), 1, use.Name)
+            self.assertEqual(self.doc.getObject(vis[0]).Letter, "A")
+
     def test_double_click_activates_the_view(self):
         self.show_only({self.size.Name})
         self.aim((0.2, 1, 0.4), 99)
