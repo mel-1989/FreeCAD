@@ -28,6 +28,7 @@
 // (a leader joins a note to the feature it refers to).
 
 #include <algorithm>
+#include <string>
 #include <array>
 #include <cmath>
 #include <map>
@@ -179,12 +180,12 @@ void solve(std::vector<Entry>& es, double bound)
             return c;
         };
         const double start = std::hypot(e.centre.x - e.anchor.x, e.centre.y - e.anchor.y);
-        const double radius = std::max(bound, start);  // a label already farther than the bound than its nominal place stays
+        const double radius = bound;  // the bound is absolute: a label whose nominal place is farther is pulled inside it
         double bestDx = 0, bestDy = 0, bestCost = 1e30, bestDist = 0;
         bool found = false;
         {
             const Box b0 = boxOf(e.poly);
-            if (!e.movable || !clashes(e.poly, b0)) {
+            if (!e.movable || (start <= radius && !clashes(e.poly, b0))) {
                 bestDx = bestDy = 0;
                 found = true;
             }
@@ -204,7 +205,7 @@ void solve(std::vector<Entry>& es, double bound)
                 const double a = base + (k % 2 ? 1 : -1) * (2 * pi * j / sectors);
                 dirs.push_back({a, a});
             }
-            for (double r = step; r <= 2 * radius + 1e-9 && !found; r += step) {
+            for (double r = (start > radius ? start - radius : 0.0) + step; r <= start + radius + step && !found; r += step) {
                 for (const auto& d : dirs) {
                     const double dx = r * std::cos(d.second), dy = r * std::sin(d.second);
                     if (std::hypot(e.centre.x + dx - e.anchor.x, e.centre.y + dy - e.anchor.y) > radius) {
@@ -249,12 +250,14 @@ struct Tracked
     bool recheck {false};
 };
 
-class Manager: public QObject
+class Manager: public QObject, public Base::Observer<const char*>
 {
 public:
     Manager()
         : QObject(qApp)
     {
+        prefs = App::GetApplication().GetParameterGroupByPath("User parameter:BaseApp/Preferences/Mod/Part/Pmi");
+        prefs->Attach(this);
         if (Gui::Application::Instance) {
             // a 3D view opened after its document's labels were drawn
             activate = Gui::Application::Instance->signalActivateView.connect([this](const Gui::MDIView* view) {
@@ -267,8 +270,19 @@ public:
         }
     }
 
+    void OnChange(Base::Subject<const char*>&, const char* reason) override
+    {
+        if (reason && std::string(reason) == "ScreenLayout") {
+            for (auto& [v, t] : tracked) {
+                t.dirty = true;
+                layout(t);
+            }
+        }
+    }
+
     ~Manager() override
     {
+        prefs->Detach(this);
         for (auto& [v, t] : tracked) {
             release(t);
         }
@@ -345,6 +359,7 @@ private:
     std::set<const App::Document*> pendingDocs;
     bool timerArmed {false};
     bool solving {false};
+    ParameterGrp::handle prefs;
     fastsignals::scoped_connection activate;
 
     static const App::Document* docOf(const Tracked& t)

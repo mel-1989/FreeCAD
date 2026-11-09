@@ -843,6 +843,28 @@ class TestPmiFallbackSynthetic(unittest.TestCase):
         self.assertEqual(label_text(drawn_paths(self.doc)["DatumC"]), "[D]")
         self.assertEqual(label_text(drawn_paths(self.doc)["DatumC2"]), "[C]")
 
+    def test_deleting_a_drawn_label_in_a_transaction_with_a_view_open_and_undoing_it(self):
+        # slice 3b-iii repair: the screen layout holds the item's provider; a delete inside a transaction (Std_Delete) leaves
+        # the object on the undo stack with no name, and must neither crash nor leave its label in the layout
+        self.doc.recompute()
+        Gui.updateGui()
+        name = "TolFb"
+        self.assertIn(name, drawn_paths(self.doc))
+        self.doc.openTransaction("del")
+        self.doc.removeObject(name)
+        self.doc.commitTransaction()
+        Gui.updateGui()
+        self.assertNotIn(name, drawn_paths(self.doc))
+        self.doc.undo()
+        Gui.updateGui()
+        self.assertIn(name, drawn_paths(self.doc))
+        self.doc.redo()
+        Gui.updateGui()
+        self.assertNotIn(name, drawn_paths(self.doc))
+        self.doc.undo()
+        Gui.updateGui()
+        self.assertIn(name, drawn_paths(self.doc))
+
     def test_a_reference_to_a_missing_face_draws_nothing(self):
         d = self.doc.addObject("Part::PmiDimension", "Ghost")
         d.PmiType = "Size_Linear"

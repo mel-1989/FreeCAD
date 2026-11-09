@@ -1142,8 +1142,10 @@ std::vector<ViewProviderPmiItem*> ViewProviderPmiItem::fallbackProviders(const A
 {
     std::vector<ViewProviderPmiItem*> out;
     for (auto* vp : aliveProviders()) {
-        auto* item = vp->getObject<Part::PmiItem>();
-        if (item && item->getDocument() == doc && vp->mode == PmiDrawMode::Fallback && vp->drawing && vp->haveBaseQuad) {
+        // an object deleted inside a transaction waits on the undo stack with no name in its document: it takes no part
+        auto* item = vp->attached ? vp->getObject<Part::PmiItem>() : nullptr;
+        if (item && item->getNameInDocument() && !item->isRemoving() && item->getDocument() == doc
+            && vp->mode == PmiDrawMode::Fallback && vp->drawing && vp->haveBaseQuad) {
             out.push_back(vp);
         }
     }
