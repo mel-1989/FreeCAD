@@ -233,6 +233,23 @@ class TestPmiAuthoringDerivation(unittest.TestCase):
             ang = PA.addAngularDimension((w, on_x), (w, slant))
             self.assertLess(abs(ang.Value - deg), 1e-9 * deg, deg)
 
+    def test_distance_between_skew_parallel_planes_is_normal_to_them(self):
+        # opposite faces of a parallelogram prism: the distance of the face centres (20) is not the distance of the planes
+        doc = self._doc("Skew")
+        w = _prism(doc, "P", [(0, 0, 0), (20, 0, 0), (35, 30, 0), (15, 30, 0)])
+        n = (30.0, -15.0)
+        want = abs(20.0 * n[0]) / math.hypot(*n)
+        sides = [
+            "Face%d" % i
+            for i, f in enumerate(w.Shape.Faces, start=1)
+            if f.Surface.TypeId == "Part::GeomPlane" and abs(f.normalAt(0, 0).z) < 1e-9 and abs(f.normalAt(0, 0).x * 15 + f.normalAt(0, 0).y * 30) < 1e-9 * 40
+        ]
+        self.assertEqual(len(sides), 2)
+        loc = PA.addLocationDimension((w, [sides[0]]), (w, [sides[1]]))
+        self.assertLess(abs(loc.Value - want), 1e-9 * want)
+        th = PA.addSizeDimension((w, sides))
+        self.assertLess(abs(th.Value - want), 1e-9 * want)
+
     def test_not_derivable_raises_and_creates_nothing(self):
         doc = self._doc("NoDerive")
         box = doc.addObject("Part::Box", "B")
@@ -475,6 +492,37 @@ class TestPmiRules(PmiAuthoringBase):
         self.assertEqual([(o.Name, list(s)) for o, s in again.References], [("Box", ["Face6"])])
         os.remove(path)
         os.rmdir(os.path.dirname(path))
+
+    def test_document_saved_before_the_new_properties_opens(self):
+        # compat: strip RuleWarnings and SecondSide from the saved document as a build without them would have written it
+        import re
+        import zipfile
+
+        PA.addLocationDimension((self.box, ["Face1"]), (self.box, ["Face2"]))
+        PA.addTolerance("Flatness", 0.0, (self.box, ["Face6"]))
+        d = tempfile.mkdtemp()
+        full, old = os.path.join(d, "new.FCStd"), os.path.join(d, "old.FCStd")
+        self.doc.saveAs(full)
+        with zipfile.ZipFile(full) as zin, zipfile.ZipFile(old, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == "Document.xml":
+                    text = data.decode("utf-8")
+                    text, n = re.subn(r'<Property name="(RuleWarnings|SecondSide)".*?</Property>\s*', "", text, flags=re.S)
+                    self.assertGreaterEqual(n, 2)
+                    data = text.encode("utf-8")
+                zout.writestr(item, data)
+        App.closeDocument(self.doc.Name)
+        self.doc = App.openDocument(old)
+        items = [o for o in self.doc.Objects if o.TypeId in ("Part::PmiDimension", "Part::PmiTolerance")]
+        self.assertEqual(len(items), 2)
+        for o in items:
+            self.assertEqual((list(o.RuleWarnings), list(o.SecondSide)), ([], []))
+            self.assertNotIn("Invalid", o.State)
+        self.assertEqual([r for _, r, _ in PA.checkPmi(self.doc)], ["value-positive"])
+        for f in os.listdir(d):
+            os.remove(os.path.join(d, f))
+        os.rmdir(d)
 
     def test_new_properties_default_empty(self):
         t = PA.addTolerance("Flatness", 0.1, (self.box, ["Face6"]))
