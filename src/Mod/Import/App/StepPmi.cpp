@@ -3396,12 +3396,23 @@ static int mergeIdenticalDatumSystems(std::string& text)
 /// NIST files write a size or location with no stated value. Returns the number of dimensions treated.
 static int dropValuelessNominals(std::string& text)
 {
-    static const std::regex measure(
-        R"(\n(#\d+)\s*=\s*\(\s*[A-Z_]+_MEASURE_WITH_UNIT\(\)\s*MEASURE_REPRESENTATION_ITEM\(\)\s*MEASURE_WITH_UNIT\(\s*[A-Z_]+\(\s*([-+0-9.eE]+)\s*\)[^;]*'nominal value'\s*\)\s*\)\s*;)"
-    );
+    // Complex measure instances list their partial entities in alphabetical order, so a length nominal reads
+    // LENGTH_MEASURE_WITH_UNIT() MEASURE_REPRESENTATION_ITEM() MEASURE_WITH_UNIT(...) and an angle nominal
+    // MEASURE_REPRESENTATION_ITEM() MEASURE_WITH_UNIT(...) PLANE_ANGLE_MEASURE_WITH_UNIT(): match any order
+    static const std::regex measure(R"(\n(#\d+)\s*=\s*\(([^;]*)\)\s*;)");
+    static const std::regex value(R"(MEASURE_WITH_UNIT\(\s*[A-Z_]+\(\s*([-+0-9.eE]+)\s*\))");
     std::vector<std::string> measures;
     for (std::sregex_iterator it(text.begin(), text.end(), measure), end; it != end; ++it) {
-        const double v = std::strtod((*it)[2].str().c_str(), nullptr);
+        const std::string body = (*it)[2].str();
+        if (body.find("MEASURE_REPRESENTATION_ITEM") == std::string::npos
+            || body.find("'nominal value'") == std::string::npos) {
+            continue;
+        }
+        std::smatch vm;
+        if (!std::regex_search(body, vm, value)) {
+            continue;
+        }
+        const double v = std::strtod(vm[1].str().c_str(), nullptr);
         if (std::fabs(v - kNoValueMarker) <= 1e-9 * kNoValueMarker) {
             measures.push_back((*it)[1].str());
         }

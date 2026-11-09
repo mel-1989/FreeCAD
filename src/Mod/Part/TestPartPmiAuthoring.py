@@ -758,6 +758,19 @@ class TestPmiAuthoringExport(PmiAuthoringBase):
         self.assertEqual([round(d.Value, 6) for d in dims if d not in none], [100.0])
         self.assertEqual(len(re.findall(r"NOMINAL", open(path, encoding="latin-1").read().upper())), 1)
 
+    def test_location_and_angle_with_no_stated_value_leave_no_marker(self):
+        # angle nominals list their partial entities in another order than lengths (run 079, second verifier)
+        PA.addLocationDimension((self.box, ["Face1"]), (self.box, ["Face2"]), derive=False)
+        PA.addAngularDimension((self.box, ["Face1"]), (self.box, ["Face3"]), derive=False)
+        PA.addAngularDimension((self.box, ["Face1"]), (self.box, ["Face5"]), 90.0)
+        back, path = self._round_trip()
+        text = open(path, encoding="latin-1").read().upper()
+        self.assertNotIn("E-123", text)
+        self.assertEqual(len(re.findall(r"NOMINAL", text)), 1)
+        dims = self._of(back, "Part::PmiDimension")
+        self.assertEqual(len(dims), 3)
+        self.assertEqual(sorted(round(d.Value, 6) for d in dims), [0.0, 0.0, 90.0])
+
     def test_range_nominal_is_written_as_given(self):
         # OCCT's writer states the middle of the limits as the nominal; the file must carry the nominal the item holds
         PA.addSizeDimension((self.cyl, ["Face1"]), limits=(10.1, 9.8))
