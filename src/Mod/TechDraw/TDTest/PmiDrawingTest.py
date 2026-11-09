@@ -177,7 +177,7 @@ def anchorMisses(page, vis_tol=1e-3):
             if Part.Vertex(p).distToShape(edge)[0] > 1e-7:
                 bad.append((ld.Name, "point off the edge"))
                 continue
-            group = view.getParentGroup()
+            group = PD.groupOf(view)
             scale = float((group or view).Scale)
             centre = view.projectPoint(view.getGeometricCenter())
             u = view.projectPoint(p) - centre
@@ -188,9 +188,33 @@ def anchorMisses(page, vis_tol=1e-3):
             v = Part.Vertex(App.Vector(u.x * scale, u.y * scale, 0))
             if not any(v.distToShape(e)[0] <= vis_tol for e in view.getVisibleEdges(True)):
                 bad.append((ld.Name, "not on a visible edge"))
+            elif material_in_front(view, p, item):
+                bad.append((ld.Name, "behind material"))
         except Exception as e:
             bad.append((ld.Name, "exception %s" % e))
     return bad
+
+
+def material_in_front(view, p, item=None):
+    """Does the straight line from model point p towards the viewer run through the inside of a source solid?  (Its common
+    part with each solid, judged by its middle; a line along a face counts as inside.)"""
+    d = App.Vector(view.Direction)
+    d.normalize()
+    for src in (PD.groupOf(view) or view).Source:
+        leaves = [src] if getattr(src, "Shape", None) is not None and not src.Shape.isNull() and src.Shape.Faces else [o for o in src.OutListRecursive if getattr(o, "Shape", None) is not None and not o.Shape.isNull() and o.Shape.Faces and not o.OutList]
+        for o in leaves:
+            sh = o.Shape.copy()
+            sh.Placement = o.getGlobalPlacement()
+            for sol in sh.Solids:
+                seg = Part.makeLine(p + d * 1e-6, p + d * (2 * sol.BoundBox.DiagonalLength + 1))
+                try:
+                    common = sol.common(seg)
+                except Exception:
+                    continue
+                for e in common.Edges:
+                    if e.Length > 1e-5 and sol.isInside(e.valueAt((e.FirstParameter + e.LastParameter) / 2), 1e-7, False):
+                        return True
+    return False
 
 
 def objectsSnapshot(page):
@@ -247,6 +271,21 @@ def planar_face(obj, normal, coord):
 
 def cyl_face(obj):
     out = ["Face%d" % i for i, f in enumerate(obj.Shape.Faces, 1) if f.Surface.TypeId == "Part::GeomCylinder"]
+    assert len(out) == 1, out
+    return out[0]
+
+
+def planar_face_any(obj, axis, low):
+    """The face of an axis-aligned (local frame) box at the low or high end of the local axis 0, 1 or 2."""
+    out = []
+    for i, f in enumerate(obj.Shape.Faces, 1):
+        bb = f.BoundBox
+        c = obj.Placement.inverse().multVec(f.CenterOfMass)
+        ext = (obj.Length.Value, obj.Width.Value, obj.Height.Value)[axis]
+        if abs(c[axis] - (0.0 if low else ext)) < 1e-9 and f.Surface.TypeId == "Part::GeomPlane":
+            n = obj.Placement.Rotation.inverted().multVec(f.normalAt(*[(a + b2) / 2 for a, b2 in zip(f.ParameterRange[::2], f.ParameterRange[1::2])]))
+            if abs(abs(n[axis]) - 1) < 1e-9:
+                out.append("Face%d" % i)
     assert len(out) == 1, out
     return out[0]
 
@@ -310,10 +349,8 @@ class PmiDrawingTest(unittest.TestCase):
         self.assertTrue(d.References3D[0][1][0].startswith("Edge"))
 
     def test_x_axis_cylinder_goes_to_the_right_view(self):
-        c = self.doc.addObject("Part::Cylinder", "CylX")
-        c.Radius, c.Height = 3, 12
-        c.Placement = App.Placement(App.Vector(0, 50, 0), App.Rotation(App.Vector(0, 1, 0), 90))
-        self.doc.recompute()
+        c = self.doc.addObject("Part::Feature", "CylX")
+        c.Shape = Part.makeCylinder(3, 12, App.Vector(0, 50, 0), App.Vector(1, 0, 0))  # axis along x in the shape itself
         dia = PA.addSizeDimension([(c, [cyl_face(c)])])
         page = make_page(self.doc)
         rep = PD.project(page, c)
@@ -426,21 +463,19 @@ class PmiDrawingTest(unittest.TestCase):
         self.assertEqual(got["e"].OverTolerance.Value, 0.0)
         self.assertEqual(toleranceMismatches(self.page), [])
 
-    def test_basic_dimension_is_boxed(self):
-        # a located feature a position frame controls: the 30 mm located by a basic dimension
+    def test_no_dimension_is_marked_basic(self):
+        # the PMI model has no basic flag: a located dimension that a position frame shares a face with may be a reference
+        # dimension, so TheoreticalExact is never set from the model
         loc = PA.addLocationDimension(self.face(-X, 0), self.face(X, 30))
         PA.addTolerance("Position", 0.2, self.face(X, 30), zone_shape="Diameter")
-        plain = PA.addLocationDimension(self.face(-Y, 0), self.face(Y, 20))
         toleranced = PA.addLocationDimension(self.face(-Z, 0), self.face(Z, 10), plus_minus=(0.1, -0.1))
         rep = self.project(self.box)
         (b,), _ = self.drawing(rep, loc)
-        (p,), _ = self.drawing(rep, plain)
         (t,), _ = self.drawing(rep, toleranced)
-        self.assertTrue(b.TheoreticalExact)
-        self.assertFalse(p.TheoreticalExact)
+        self.assertFalse(b.TheoreticalExact)
         self.assertFalse(t.TheoreticalExact)
         self.assertAlmostEqual(t.OverTolerance.Value, 0.1, places=12)
-        self.assertEqual(toleranceMismatches(self.page, basic=lambda i: i.Name == loc.Name), [])
+        self.assertEqual(toleranceMismatches(self.page), [])
 
     # ---- 61: frames and datum symbols
     def test_frames_read_back_as_their_items(self):
@@ -717,3 +752,71 @@ class PmiDrawingTest(unittest.TestCase):
             PD.fontAvailable = real
         self.assertIn("position", text)
         self.assertTrue(tuples_equal(PD.parseFrame(text), item_tuple(t)))
+
+    # ---- repair round
+    def test_anchor_is_never_behind_material(self):
+        def fc(n):
+            return (self.box, [planar_face(self.box, n, self.box.Shape.BoundBox.getPoint(0).dot(n) if False else (30 if n == X else 20 if n == Y else 10 if n == Z else 0))])
+        PA.addDatum("A", self.face(Y, 20))  # the rear face: its edges project onto the front face's edges in Front
+        PA.addDatum("B", self.face(-Y, 0))
+        rep = self.project(self.box)
+        a = [i for i in self.items() if i.TypeId == "Part::PmiDatum" and i.Letter == "A"][0]
+        self.assertNotEqual(rep[a.Name][1], "Front")
+        self.assertEqual(rep[[i for i in self.items() if i.Letter == "B"][0].Name][1], "Front")
+        self.assertEqual(anchorMisses(self.page), [])
+
+    def test_item_subsets_do_not_duplicate_datum_symbols_or_groups(self):
+        PA.addDatum("A", self.face(-Z, 0))
+        d2 = PA.addDatum("A", self.face(-Z, 0))
+        s = PA.addSizeDimension([self.face(-X, 0), self.face(X, 30)])
+        d1 = [i for i in self.items() if i.TypeId == "Part::PmiDatum"][0]
+        self.project(self.box, items=[s, d2])
+        n1 = len(self.doc.Objects)
+        self.project(self.box, items=[s, d2])
+        self.assertEqual(len(self.doc.Objects), n1)
+        rep = self.project(self.box)  # the other use of A joins the symbol on the page
+        syms = [o for o, _ in pairs(self.page) if o.PmiRole == "datum"]
+        self.assertEqual(len(syms), 1)
+        self.assertEqual(sorted(u.Name for u in syms[0].PmiUses), sorted([d1.Name, d2.Name]))
+        self.assertEqual(rep[d1.Name], rep[d2.Name])
+        n2 = len(self.doc.Objects)
+        self.project(self.box)
+        self.assertEqual(len(self.doc.Objects), n2)
+
+    def test_a_smaller_source_reuses_the_group(self):
+        c = PA.addSizeDimension([(self.cyl, [cyl_face(self.cyl)])])
+        w = PA.addSizeDimension([self.face(-X, 0), self.face(X, 30)])
+        self.project([self.box, self.cyl], items=[c])
+        groups = lambda: [o for o in self.page.Views if o.TypeId == "TechDraw::DrawProjGroup"]
+        self.assertEqual(len(groups()), 1)
+        self.project([self.box], items=[w])  # needs a view: the existing group shows the box too
+        self.assertEqual(len(groups()), 1)
+        self.project([self.box], items=[w])  # nothing new: no group, no object
+        self.assertEqual(len(groups()), 1)
+        page2 = make_page(self.doc)
+        PD.project(page2, [self.box], items=[])
+        self.assertEqual([o for o in page2.Views if o.TypeId == "TechDraw::DrawProjGroup"], [])
+
+    def test_stated_supplement_of_an_angle_is_not_projected_because_techdraw_measures_the_acute_one(self):
+        tri = prism(self.doc, "Tri2", [(0, 0, 0), (30, 0, 0), (0, 40, 0)], 10)
+        leg = face_named(tri, lambda fc: fc.Surface.TypeId == "Part::GeomPlane" and abs(fc.CenterOfMass.y) < 1e-9 and abs(fc.CenterOfMass.z - 5) < 1e-9)[0]
+        hyp = face_named(tri, lambda fc: fc.Surface.TypeId == "Part::GeomPlane" and abs(fc.CenterOfMass.x - 15) < 1e-9 and abs(fc.CenterOfMass.y - 20) < 1e-9)[0]
+        acute = math.degrees(math.atan2(40, 30))
+        ang = PA.addAngularDimension((tri, [leg]), (tri, [hyp]), 180.0 - acute)
+        rep = PD.project(self.page, tri)
+        self.assertEqual(rep[ang.Name], ("not projected", "geometry"))  # the measure, not the pre-check, decides: never a wrong value
+        self.assertEqual(wrongMeasurements(self.page), [])
+
+    def test_a_rotated_body_is_projected_along_its_own_axes(self):
+        b = self.doc.addObject("Part::Box", "Turned")
+        b.Length, b.Width, b.Height = 30, 20, 10
+        b.Placement = App.Placement(App.Vector(5, 5, 0), App.Rotation(App.Vector(0, 0, 1), 30))
+        self.doc.recompute()
+        w = PA.addSizeDimension([(b, [planar_face_any(b, 0, True)]), (b, [planar_face_any(b, 0, False)])])
+        d = PA.addSizeDimension([(b, [planar_face_any(b, 1, True)]), (b, [planar_face_any(b, 1, False)])])
+        h = PA.addSizeDimension([(b, [planar_face_any(b, 2, True)]), (b, [planar_face_any(b, 2, False)])])
+        rep = PD.project(self.page, b)
+        for item, value in ((w, 30.0), (d, 20.0), (h, 10.0)):
+            self.assertNotEqual(rep[item.Name][0], "not projected", item.Name)
+            self.assertAlmostEqual(abs(self.doc.getObject(rep[item.Name][0][0]).getRawValue()), value, places=9)
+        self.assertEqual(wrongMeasurements(self.page), [])

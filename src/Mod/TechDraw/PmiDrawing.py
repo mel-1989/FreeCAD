@@ -43,8 +43,6 @@ REASONS = ("unattached", "geometry", "no view")
 NOMINAL_REL = 1e-6
 ANCHOR_TOL = 1e-3  # a point lies on a visible edge of a view when it is this near one (view space, page millimetres)
 FONT_FAMILY = "Y14.5-FreeCAD"
-# tolerance types whose frame is positioned or oriented by basic dimensions (ASME Y14.5-2018, 4.2 basic dimension; ISO 1101:2017, 3.4 TED)
-BASIC_TYPES = ("Position", "ProfileOfLine", "ProfileOfSurface", "Angularity")
 PITCH = 9.0  # page millimetres between stacked annotations
 MARGIN = 10.0  # page millimetres between a view's frame and its annotations
 
@@ -239,31 +237,12 @@ def nominalOf(item):
     return item.Value
 
 
-def isBasic(item):
-    """A dimension that locates or orients a feature a position, profile or angularity frame controls, and states no
-    tolerance of its own: ASME Y14.5-2018 4.2 calls the theoretically exact value that positions such a feature basic.
-    The PMI model has no basic flag, so the rule reads the model: a located dimension with a value, no bounds and no fit
-    class that shares a governed face with a Position, ProfileOfLine, ProfileOfSurface or Angularity item."""
-    if item.TypeId != "Part::PmiDimension" or not (item.PmiType.startswith("Location_") or item.PmiType == "Size_Angular"):
-        return False
-    if nominalOf(item) is None or item.HasBounds or item.ToleranceClass:
-        return False
-    mine = {(o.Name, s) for o, subs in item.References for s in subs}
-    if not mine:
-        return False
-    for t in item.Document.Objects:
-        if t.TypeId == "Part::PmiTolerance" and t.PmiType in BASIC_TYPES:
-            if mine & {(o.Name, s) for o, subs in t.References for s in subs}:
-                return True
-    return False
-
-
 def expectedTolerances(item):
     """What ruling 5 derives from an item: dict with exact, equal, arbitrary, over, under, spec."""
     e = {"exact": False, "equal": True, "arbitrary": False, "over": 0.0, "under": 0.0, "spec": ""}
-    if isBasic(item):
-        e["exact"] = True
-        return e
+    # TheoreticalExact (a basic dimension) is never set from the PMI model: it carries no basic flag, and what looked like a
+    # basic dimension (a dimension no frame refers to) can be a reference dimension (the STEP "dimensional note" text that
+    # says so is lost by OCCT's reader).  The mapping below stays for a future explicit item property.
     kind = item.BoundsKind
     if item.HasBounds and kind == "plus_minus":
         up, lo = item.UpperBound, item.LowerBound
@@ -445,6 +424,75 @@ def _plane_sides(geo, pairs):
     return n0, p0, refs
 
 
+def groupOf(view):
+    """The projection group a view belongs to, or None."""
+    for o in view.InList:
+        if o.TypeId == "TechDraw::DrawProjGroup":
+            return o
+    return None
+
+
+def _occluders(objs):
+    """The solids (global) that can stand between a point and the viewer: those of the objects, or of their leaves."""
+    out, seen = [], set()
+
+    def add(o):
+        if o.Name in seen:
+            return
+        seen.add(o.Name)
+        sh = getattr(o, "Shape", None)
+        if sh is not None and not sh.isNull() and sh.Faces:
+            out.extend(_global_shape(o).Solids)
+        else:
+            for c in o.OutList:
+                add(c)
+
+    for o in objs:
+        add(o)
+    return out
+
+
+def _behind_material(solids, p, d):
+    """Does the ray from p towards the viewer (direction d) run through the inside of a solid?  The part of the ray the solid
+    shares with it is taken, and judged by its middle."""
+    for sol in solids:
+        bb = sol.BoundBox
+        if not bb.intersect(p, d):
+            continue
+        seg = Part.makeLine(p + d * 1e-8, p + d * (2.0 * bb.DiagonalLength + 1.0))
+        try:
+            common = sol.common(seg)
+        except Exception:
+            continue
+        for e in common.Edges:
+            if e.Length > 1e-5 and sol.isInside(e.valueAt((e.FirstParameter + e.LastParameter) / 2), 1e-7, False):
+                return True
+    return False
+
+
+def _inside_point(face, edge, p, delta):
+    """A point a little inside the face from p, a point of the face's edge, and a hair off its outward side: the visibility
+    ray starts there, so a point on a silhouette or on the junction of two faces is judged by the face it belongs to."""
+    try:
+        u, v = face.Surface.parameter(p)
+        n = face.normalAt(u, v)
+        t = edge.tangentAt(edge.Curve.parameter(p))
+    except Exception:
+        return p
+    inward = n.cross(t)
+    if inward.Length < 1e-12:
+        return p
+    inward.normalize()
+    for sign in (1.0, -1.0):
+        q = p + inward * (sign * delta)
+        try:
+            if face.isInside(q, 1e-9, True):
+                return q + n * (0.1 * delta)
+        except Exception:
+            return p
+    return p
+
+
 class _View:
     """One TechDraw view with the numbers the projection needs."""
 
@@ -497,6 +545,17 @@ class _View:
                 )
         return self._bbox
 
+    def seen(self, p, occ, face=None, edge=None):
+        """Is model point p on a visible edge of the view and in front of all material?  The ray towards the viewer starts a
+        little inside the face the edge belongs to."""
+        if not self.onVisibleEdge(p):
+            return False
+        if not occ:
+            return True
+        delta = 1e-5 * max(sol.BoundBox.DiagonalLength for sol in occ)
+        q = _inside_point(face, edge, p, delta) if face is not None else p
+        return not _behind_material(occ, q, self.d)
+
     def onVisibleEdge(self, p, tol=ANCHOR_TOL):
         """Is the projection of model point p on a visible edge of the view?"""
         s = self.scale
@@ -522,7 +581,7 @@ def anchorEnd(leader):
 
 def _leader_scale(leader):
     v = leader.LeaderParent
-    g = v.getParentGroup() if hasattr(v, "getParentGroup") else None
+    g = groupOf(v)
     for cand in ([g] if g is not None else []) + [v]:
         if cand is not None and hasattr(cand, "Scale"):
             return float(cand.Scale)
@@ -563,18 +622,18 @@ def _edges_of(refs):
     for o, sub, sh in refs:
         if sh.ShapeType == "Face":
             for e in sh.Edges:
-                yield o, e
+                yield o, e, sh
         elif sh.ShapeType == "Edge":
-            yield o, sh
+            yield o, sh, None
 
 
 COARSE = (0.5, 0.25, 0.75)
 FINE = tuple(k / 20.0 for k in range(1, 20))  # tried only for an item the coarse samples found nowhere
 
 
-def _find_anchor(geo, vw, refs, params=COARSE):
+def _find_anchor(geo, vw, refs, params=COARSE, occ=None):
     """First (obj, edge name, point) on an edge of a governed element whose projection lies on a visible edge of vw."""
-    for o, e in _edges_of(refs):
+    for o, e, f in _edges_of(refs):
         if e.Length < 1e-9:
             continue
         a, b = e.FirstParameter, e.LastParameter
@@ -583,7 +642,7 @@ def _find_anchor(geo, vw, refs, params=COARSE):
                 p = e.valueAt(a + t * (b - a))
             except Exception:
                 continue
-            if vw.onVisibleEdge(p):
+            if vw.seen(p, occ, f, e):
                 name = geo.name_of(o, e)
                 if name:
                     return o, name, p
@@ -603,25 +662,34 @@ class _Projector:
         self.all_added = False
         self.stack = {}
         self.datums = {}  # (body name, letter) -> (names, view label) or reason
+        self.occ = _occluders(sources)
         self.existing = {}
         for obj, item in itemsOn(page):
             self.existing.setdefault(item.Name, []).append(obj)
+            if obj.PmiRole == "datum" and "PmiKey" in obj.PropertiesList:
+                body, _, letter = obj.PmiKey.partition("|")
+                self.datums[(body, letter)] = ([obj.Name, obj.AnnoParent.Name], self._view_of(obj))
         self._init_views()
 
     # ---- views
     def _init_views(self):
         if self.fixed_view is not None:
             v = self.fixed_view
-            src = v.getParentGroup() if hasattr(v, "getParentGroup") and v.getParentGroup() is not None else v
+            src = groupOf(v) or v
             self.views = [_View(v, v.Type if hasattr(v, "Type") and v.Type in VIEW_ORDER else v.Label, src)]
             self.all_added = True
             return
         for o in self.page.Views:
             if o.TypeId == "TechDraw::DrawProjGroup" and "PmiRole" in o.PropertiesList and o.PmiRole == "view":
-                if {s.Name for s in o.Source} == {s.Name for s in self.sources}:
+                if {s.Name for s in self.sources} <= {s.Name for s in o.Source}:
                     self.group = o
                     break
-        if self.group is None:
+        if self.group is not None:
+            self._collect_views()
+
+    def _ensure_group(self):
+        """Make the projection group when the first item needs a view (nothing is made for items already on the page)."""
+        if self.group is None and self.fixed_view is None:
             g = self.doc.addObject("TechDraw::DrawProjGroup", "PmiProjGroup")
             self.page.addView(g)
             g.Source = list(self.sources)
@@ -629,10 +697,15 @@ class _Projector:
             _dyn(g, "App::PropertyString", "PmiRole", "view")
             g.PmiRole = "view"
             self.group = g
+            rot = self.sources[0].getGlobalPlacement().Rotation if hasattr(self.sources[0], "getGlobalPlacement") else App.Rotation()
             for n in VIEW_ORDER[:3]:
-                g.addProjection(n)
+                it = g.addProjection(n)
+                if n == "Front" and not rot.isSame(App.Rotation(), 1e-12):
+                    # the views follow the body's own axes (the other projections are derived from the Front one)
+                    it.Direction = rot.multVec(App.Vector(0, -1, 0))
+                    it.XDirection = rot.multVec(App.Vector(1, 0, 0))
                 self.doc.recompute()
-        self._collect_views()
+            self._collect_views()
 
     def _collect_views(self):
         have = {}
@@ -704,7 +777,7 @@ class _Projector:
         the coarse ones found nothing in any of the six views."""
         for params in (COARSE, FINE):
             for vw in self._views_lazily():
-                a = _find_anchor(self.geo, vw, refs, params)
+                a = _find_anchor(self.geo, vw, refs, params, self.occ)
                 if a:
                     return vw, a
         return None, None
@@ -774,6 +847,7 @@ class _Projector:
         return (NOT_PROJECTED, "no view")
 
     def _views_lazily(self):
+        self._ensure_group()
         first = list(self.views[:3]) if self.group is not None else list(self.views)
         for vw in first:
             yield vw
@@ -1102,8 +1176,11 @@ def _fill_datum_uses(page, items, report):
             by_anno.setdefault(res[0][0], []).append(item)
     for name, uses in by_anno.items():
         an = page.Document.getObject(name)
-        if an is not None and "PmiUses" in an.PropertiesList and not len(an.PmiUses):
-            an.PmiUses = uses
+        if an is not None and "PmiUses" in an.PropertiesList:
+            have = list(an.PmiUses)
+            new = [u for u in uses if u not in have]
+            if new:
+                an.PmiUses = have + new
 
 
 def itemsOn(page):
@@ -1190,24 +1267,51 @@ def refresh(page):
 
 
 def _refresh_leader(ld, item, geo):
-    """Keep a leader on its anchor: the view centre and scale may have moved, and an edge may have been renumbered."""
+    """Keep a leader on its anchor: the view centre and scale may have moved, an edge may have been renumbered, and an edit may
+    have hidden the anchor, in which case it moves to another point or another view of the group."""
     v = ld.LeaderParent
     if v is None:
         return False
-    g = v.getParentGroup()
-    vw = _View(v, v.Label, g if g is not None else v)
+    g = groupOf(v)
+    vw = _View(v, v.Type if g is not None else v.Label, g if g is not None else v)
     changed = False
     p = ld.PmiAnchor
     refs = geo.refs([(o, list(s)) for o, s in item.References]) if len(item.References) else None
     if refs:
+        src = g.Source if g is not None else v.Source
+        occ = _occluders(src)
         vert = Part.Vertex(p)
         found = None
-        for o, e in _edges_of(refs):
+        for o, e, f in _edges_of(refs):
             if e.Length > 1e-9 and vert.distToShape(e)[0] <= 1e-7:
-                found = (o, geo.name_of(o, e))
+                if vw.seen(p, occ, f, e):
+                    found = (o, geo.name_of(o, e))
                 break
         if found is None:
-            a = _find_anchor(geo, vw, refs)
+            a = None
+            for params in (COARSE, FINE):
+                a = _find_anchor(geo, vw, refs, params, occ)
+                if a:
+                    break
+            if a is None and g is not None:
+                for n in VIEW_ORDER:  # another view of the group, adding the ones the group lacks
+                    have = {i.Type: i for i in g.Views}
+                    if n not in have:
+                        g.addProjection(n)
+                        g.Document.recompute()
+                        have = {i.Type: i for i in g.Views}
+                    if have[n] is v:
+                        continue
+                    other = _View(have[n], n, g)
+                    for params in (COARSE, FINE):
+                        a = _find_anchor(geo, other, refs, params, occ)
+                        if a:
+                            break
+                    if a:
+                        ld.LeaderParent = have[n]
+                        vw = other
+                        changed = True
+                        break
             if a is not None:
                 found = (a[0], a[1])
                 p = a[2]
