@@ -236,6 +236,7 @@ class PmiAuthorPanel:
         self.doc = doc or App.ActiveDocument
         self.active = 0
         self.alive = True
+        self._note = ""  # said by the next refresh, ahead of what the fields still lack
         self.faces = [[], []]
         self.form = QtWidgets.QWidget()
         self.form.setWindowTitle(translate("Part_PmiAuthor", "Author PMI"))
@@ -427,8 +428,34 @@ class PmiAuthorPanel:
     def _set(self, index):
         return (self.set1, self.set2)[index]
 
+    def _stale(self, pr):
+        """True when the object of a picked face has been deleted from its document since it was picked."""
+        try:
+            obj = pr[0]
+            return obj.Document is None or obj.Document.getObject(obj.Name) is None
+        except Exception:  # a deleted object raises ReferenceError on any access
+            return True
+
+    def _dropStale(self):
+        """Forget the faces whose object was deleted while the panel was open (say so); True when any went."""
+        dropped = 0
+        for i in (0, 1):
+            keep = [pr for pr in self.faces[i] if not self._stale(pr)]
+            dropped += len(self.faces[i]) - len(keep)
+            self.faces[i][:] = keep
+            self._set(i).faces = self.faces[i]
+            self._set(i).refill()
+        if dropped:
+            self._note = translate("Part_PmiAuthor", "A picked object was deleted: its face was dropped from the list.")
+        return bool(dropped)
+
     def addFaces(self, index, faces):
         for pr in faces:
+            if self._stale(pr):
+                continue
+            if pr[0].Document != self.doc:
+                self._note = translate("Part_PmiAuthor", "That face is in another document ('%s'); PMI is made in '%s'.") % (pr[0].Document.Name, self.doc.Name)
+                continue
             if pr not in self.faces[index]:
                 self.faces[index].append(pr)
         self._set(index).faces = self.faces[index]
@@ -448,6 +475,9 @@ class PmiAuthorPanel:
         doc = App.getDocument(docname)
         obj = doc.getObject(objname) if doc else None
         if obj is None:
+            return
+        if doc != self.doc:
+            self._say(translate("Part_PmiAuthor", "That face is in another document ('%s'); PMI is made in '%s'.") % (doc.Name, self.doc.Name))
             return
         pr = resolvePick(obj, sub)
         if pr is None:
@@ -613,12 +643,15 @@ class PmiAuthorPanel:
     def refresh(self, *_a):
         if not self.alive:
             return
+        self._dropStale()
+        msg = ""
         try:
             hits = PA.ruleHits(self.draft())
-            self._say("")
         except ValueError as e:
             hits = []
-            self._say(str(e))
+            msg = str(e)
+        note, self._note = self._note, ""
+        self._say((note + " " + msg).strip())
         self.warn_label.setText("\n".join("%s: %s" % h for h in hits))
         self.warn_label.setVisible(bool(hits))
 
@@ -630,6 +663,8 @@ class PmiAuthorPanel:
         return True
 
     def accept(self):
+        if self._dropStale():
+            return False  # the face list changed under the fields: look at it again before making anything
         try:
             fn, args, kw = self.collect()
             item = getattr(PA, fn)(*args, **kw)
@@ -704,14 +739,14 @@ def saveView(doc=None, name=None):
         raise RuntimeError("there is no 3D view to take a camera from")
     camera = view.getCamera()
     items = [o for o in _pmi_items(doc) if _item_visible(o)]
-    grp = PA._group(doc)
-    gvo = getattr(grp, "ViewObject", None)
-    if gvo is not None and not gvo.Visibility:
-        items = []  # the whole group is hidden: nothing is shown
     if doc.UndoMode == 0:
         doc.UndoMode = 1
     doc.openTransaction("Save PMI view")
     try:
+        grp = PA._group(doc)  # made inside the transaction when the document has no PMI yet: undo removes it with the view
+        gvo = getattr(grp, "ViewObject", None)
+        if gvo is not None and not gvo.Visibility:
+            items = []  # the whole group is hidden: nothing is shown
         obj = doc.addObject("Part::PmiView", "PmiView")
         n = len([o for o in doc.Objects if o.TypeId == "Part::PmiView"])
         obj.Label = name or "View %d" % n

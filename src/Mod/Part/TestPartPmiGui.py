@@ -1702,6 +1702,46 @@ def expected_visible(doc, view):
     return len(names & drawn)
 
 
+class TestPmiAuthorPanelStaleAndForeign(_PanelCase):
+    """Run 080 repair: a picked object deleted while the panel is open, and a face from another document."""
+
+    def test_a_picked_object_deleted_while_the_panel_is_open_is_dropped_with_a_message(self):
+        p = self.open_panel()
+        p.setKind("size")
+        p.addFaces(0, [(self.cyl, self.lateral(self.cyl)[0])])
+        self.assertEqual(len(p.faces[0]), 1)
+        self.doc.removeObject(self.cyl.Name)
+        p.refresh()  # must not raise
+        self.assertEqual(p.faces[0], [])
+        self.assertIn("deleted", p.status.text())
+        # accept after a deletion refuses (the list changed), raises nothing, and makes nothing
+        p.addFaces(0, [(self.box, self.planes(self.box, "x")[0])])
+        cyl2 = self.doc.addObject("Part::Cylinder", "Cyl2")
+        self.doc.recompute()
+        p.addFaces(1, [(cyl2, self.lateral(cyl2)[0])])
+        self.doc.removeObject(cyl2.Name)
+        self.assertFalse(p.accept())
+        self.assertEqual(self.pmi("Part::PmiDimension"), [])
+        self.assertEqual(p.faces[1], [])
+
+    def test_a_face_of_another_document_is_refused_with_a_message(self):
+        other = App.newDocument("OtherDoc")
+        ob = other.addObject("Part::Box", "OBox")
+        other.recompute()
+        p = self.open_panel()
+        p.setKind("size")
+        x0 = self.planes(ob, "x")[0]
+        p.addFaces(0, [(ob, x0)])
+        self.assertEqual(p.faces[0], [])
+        self.assertIn("another document", p.status.text())
+        p.onPick("OtherDoc", "OBox", x0)
+        self.assertEqual(p.faces[0], [])
+        self.assertEqual(self.pmi("Part::PmiDimension"), [])
+        self.assertEqual([o for o in other.Objects if o.isDerivedFrom("Part::PmiItem")], [])
+        p.addFaces(0, [(self.cyl, self.lateral(self.cyl)[0])])  # a face of its own document still goes in
+        self.assertEqual(len(p.faces[0]), 1)
+
+
 class TestPmiViews(_PanelCase):
     def setUp(self):
         super().setUp()
@@ -1746,6 +1786,22 @@ class TestPmiViews(_PanelCase):
         self.doc.redo()
         self.assertEqual(len(self.pmi("Part::PmiView")), 1)
         del cam
+
+    def test_saving_a_view_in_a_document_without_pmi_makes_the_group_inside_the_transaction(self):
+        doc = App.newDocument("NoPmi")
+        doc.addObject("Part::Box", "B")
+        doc.recompute()
+        Gui.updateGui()
+        self.assertEqual([o for o in doc.Objects if o.TypeId == "Part::PmiGroup"], [])
+        steps = doc.UndoCount
+        v = PG.saveView(doc, "First")
+        self.assertEqual(doc.UndoCount, steps + 1)
+        self.assertEqual(len([o for o in doc.Objects if o.TypeId == "Part::PmiGroup"]), 1)
+        self.assertIn(v, [o for o in doc.Objects if o.TypeId == "Part::PmiGroup"][0].Group)
+        doc.undo()  # one undo takes the view and the group it made
+        self.assertEqual([o for o in doc.Objects if o.TypeId in ("Part::PmiView", "Part::PmiGroup")], [])
+        doc.redo()
+        self.assertEqual(len([o for o in doc.Objects if o.TypeId == "Part::PmiView"]), 1)
 
     def test_activating_a_view_restores_its_camera_and_shows_exactly_its_items(self):
         self.show_only({self.size.Name, self.flat.Name})
