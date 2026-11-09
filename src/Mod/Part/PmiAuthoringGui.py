@@ -293,6 +293,11 @@ class PmiAuthorPanel:
         self.nominal_label = QtWidgets.QLabel(translate("Part_PmiAuthor", "Nominal (mm or degrees)"))
         self.nominal_label.setBuddy(self.nominal)
         f.addRow(self.nominal_label, self.nominal)
+        self.no_value = QtWidgets.QCheckBox(translate("Part_PmiAuthor", "State no value"))
+        self.no_value.setObjectName("noValue")
+        self.no_value.setToolTip(translate("Part_PmiAuthor", "Author a dimension whose value is left off (a basic dimension)"))
+        self.no_value.toggled.connect(self.refresh)
+        f.addRow(self.no_value)
         self.bounds = self._combo("bounds", "Bounds", BOUNDS_TEXT)
         bl = QtWidgets.QLabel(translate("Part_PmiAuthor", "Bounds"))
         bl.setBuddy(self.bounds)
@@ -480,16 +485,27 @@ class PmiAuthorPanel:
         if kind == "size":
             kw = self._bounds_args()
             val = _num(self.nominal.text(), "Nominal", required=False)
+            if self.no_value.isChecked():
+                kw["derive"] = False
+                val = None
             if self.size_type.currentData():
                 kw["pmi_type"] = self.size_type.currentData()
             return "addSizeDimension", ([(o, [s]) for o, s in f1], val), kw
         if kind == "location":
             kw = self._bounds_args()
-            return "addLocationDimension", ([(o, [s]) for o, s in f1], [(o, [s]) for o, s in f2], _num(self.nominal.text(), "Nominal", required=False)), kw
+            val = _num(self.nominal.text(), "Nominal", required=False)
+            if self.no_value.isChecked():
+                kw["derive"] = False
+                val = None
+            return "addLocationDimension", ([(o, [s]) for o, s in f1], [(o, [s]) for o, s in f2], val), kw
         if kind == "angular":
             kw = self._bounds_args()
             kw.pop("fit_class", None)
-            return "addAngularDimension", ([(o, [s]) for o, s in f1], [(o, [s]) for o, s in f2], _num(self.nominal.text(), "Nominal", required=False)), kw
+            val = _num(self.nominal.text(), "Nominal", required=False)
+            if self.no_value.isChecked():
+                kw["derive"] = False
+                val = None
+            return "addAngularDimension", ([(o, [s]) for o, s in f1], [(o, [s]) for o, s in f2], val), kw
         if kind == "datum":
             return "addDatum", (self.datum_letter.text().strip(), [(o, [s]) for o, s in f1]), {}
         datums = []
@@ -520,7 +536,12 @@ class PmiAuthorPanel:
                 value = args[1]
                 pmi_type = kw.get("pmi_type")
                 derive = True
-                if value is None:
+                if value is None and not kw.get("derive", True):
+                    v = None
+                    if pmi_type is None:
+                        d = PA.deriveSize(pairs)
+                        pmi_type = d[0] if d is not None else "Size_Diameter"
+                elif value is None:
                     d = PA.deriveSize(pairs, pmi_type)
                     if d is None:
                         raise ValueError("the nominal size cannot be derived from these faces: enter a nominal")
@@ -538,13 +559,14 @@ class PmiAuthorPanel:
                 return it
             p1, p2 = PA._as_pairs(args[0]), PA._as_pairs(args[1])
             value = args[2]
+            nov = value is None and not kw.get("derive", True)
             if kind == "location":
-                v = PA.deriveDistance(p1, p2) if value is None else PA._length(value)
+                v = None if nov else (PA.deriveDistance(p1, p2) if value is None else PA._length(value))
                 pmi_type, conv = "Location_LinearDistance", PA._length
             else:
-                v = PA.deriveAngle(p1, p2) if value is None else PA._angle(value)
+                v = None if nov else (PA.deriveAngle(p1, p2) if value is None else PA._angle(value))
                 pmi_type, conv = "Location_Angular", PA._angle
-            if v is None:
+            if v is None and not nov:
                 raise ValueError("the value cannot be derived from these faces: enter a nominal")
             bnds = PA._bounds(kw.get("plus_minus"), kw.get("limits"), kw.get("fit_class"), conv)
             it = _Draft(doc, "Part::PmiDimension")
@@ -602,7 +624,7 @@ class PmiAuthorPanel:
 
     # ---- task dialog protocol -------------------------------------------------------------------
     def getStandardButtons(self):
-        return int(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        return QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
 
     def isAllowedAlterDocument(self):
         return True
@@ -769,3 +791,28 @@ if App.GuiUp:
     Gui.addCommand("Part_PmiAuthor", _CommandAuthor())
     Gui.addCommand("Part_PmiSaveView", _CommandSaveView())
     Gui.addCommand("Part_PmiActivateView", _CommandActivateView())
+
+
+# ------------------------------------------------------------------------------------------------
+# fixtures for the GUI lint, theme check and scene renders (harness/gui): a throwaway document and a panel ready to apply
+# ------------------------------------------------------------------------------------------------
+
+
+def scene_doc(name="pmi_panel_scene"):
+    """A throwaway document with a box, so the panel has faces to name"""
+    import Part
+
+    doc = App.newDocument(name)
+    box = doc.addObject("Part::Feature", "Box")
+    box.Shape = Part.makeBox(20, 30, 40)
+    doc.recompute()
+    return doc
+
+
+def scene_panel(doc):
+    """The authoring panel on a datum with one face and the letter A: Return applies it, Escape cancels it"""
+    panel = PmiAuthorPanel(doc)
+    panel.setKind("datum")
+    panel.addFaces(0, [(doc.getObject("Box"), "Face1")])
+    panel.datum_letter.setText("A")
+    return panel

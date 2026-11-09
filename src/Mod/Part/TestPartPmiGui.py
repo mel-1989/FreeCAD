@@ -18,6 +18,8 @@ import time
 import unittest
 import zipfile
 
+from PySide import QtWidgets
+
 import FreeCAD as App
 import FreeCADGui as Gui
 import Import
@@ -1381,6 +1383,12 @@ class _PanelCase(unittest.TestCase):
 
 
 class TestPmiAuthorPanel(_PanelCase):
+    def test_the_panel_has_ok_and_cancel_buttons(self):
+        p = self.open_panel()
+        btns = p.getStandardButtons()
+        self.assertTrue(btns & QtWidgets.QDialogButtonBox.Ok)
+        self.assertTrue(btns & QtWidgets.QDialogButtonBox.Cancel)
+
     def test_kind_chooser_lists_the_five_kinds(self):
         p = self.open_panel()
         self.assertEqual([p.kind.itemData(i) for i in range(p.kind.count())], ["size", "location", "angular", "datum", "tolerance"])
@@ -1821,6 +1829,56 @@ class TestPmiViews(_PanelCase):
         PG.activateView(v)
         self.assertEqual(len(visible_names(self.doc)), expected_visible(self.doc, v))
         self.assertGreater(len(visible_names(self.doc)), 0)
+
+
+@unittest.skipUnless(CORPUS_FILES, "the NIST PMI corpus is not present (it is never committed)")
+class TestPmiViewsCorpus(unittest.TestCase):
+    def tearDown(self):
+        Gui.Selection.clearSelection()
+        for name in list(App.listDocuments()):
+            App.closeDocument(name)
+
+    def _open(self, stem):
+        Import.open(os.path.join(CORPUS, stem + ".stp"))
+        doc = App.ActiveDocument
+        Gui.updateGui()
+        return doc
+
+    def test_activating_each_imported_view_of_ftc_06_changes_the_camera_and_the_visible_count(self):
+        doc = self._open("nist_ftc_06_asme1_ap242-e2")
+        view = Gui.getDocument(doc.Name).ActiveView
+        views = [o for o in doc.Objects if o.TypeId == "Part::PmiView"]
+        self.assertEqual(len(views), 3)
+        cams, counts = [], []
+        for v in views:
+            PG.activateView(v)
+            cams.append(_camera_state(view))
+            counts.append(len(visible_names(doc)))
+            self.assertEqual(counts[-1], expected_visible(doc, v), v.Label)
+            self.assertTrue(set(visible_names(doc)) <= {o.Name for o in semantic_items(doc)})
+        self.assertEqual(len({c[1] for c in cams}), 3)  # three different orientations
+        self.assertGreaterEqual(len(set(counts)), 2)
+
+    def test_two_views_on_ctc_01_restore_their_own_state_in_turn(self):
+        doc = self._open("nist_ctc_01_asme1_ap242-e1")
+        gview = Gui.getDocument(doc.Name).ActiveView
+        items = semantic_items(doc)
+        half = {o.Name for o in items[::2]}
+        rest = {o.Name for o in items[1::2]}
+        states = []
+        for names, direction in ((half, (1, 1, 1)), (rest, (-1, 0.3, 0.5))):
+            for o in items:
+                o.ViewObject.Visibility = o.Name in names
+            cam = gview.getCameraNode()
+            cam.position.setValue(coin.SbVec3f(*(App.Vector(*direction) * 300)))
+            cam.pointAt(coin.SbVec3f(0, 0, 0), coin.SbVec3f(0, 0, 1))
+            Gui.updateGui()
+            v = PG.saveView(doc)
+            states.append((v, _camera_state(gview), len(visible_names(doc))))
+        for v, cam, n in (states[0], states[1], states[0]):
+            PG.activateView(v)
+            self.assertTrue(_same_camera(_camera_state(gview), cam), v.Label)
+            self.assertEqual(len(visible_names(doc)), expected_visible(doc, v), v.Label)
 
 
 if __name__ == "__main__":

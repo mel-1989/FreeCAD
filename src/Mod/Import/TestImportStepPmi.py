@@ -728,6 +728,46 @@ class TestExportStepPmi(unittest.TestCase):
             m = [b for b in self._of(back, "Part::PmiDimension") if b.PmiType == a.PmiType][0]
             self.assertEqual(self._face_area(a), self._face_area(m))
 
+    def test_a_value_equal_to_the_no_value_marker_is_written_as_a_value(self):
+        # run 079's LOW: OCCT writes a nominal for every dimension, so a dimension with no stated value is written with a marker
+        # nominal that the repair pass takes out again; an authored value equal to the marker was taken out with them
+        marker = 1.2345678901234e-123
+        size = [o for o in self._of(self.doc, "Part::PmiDimension") if o.PmiType == "Size_Diameter"][0]
+        size.Value = marker
+        size.HasBounds = False
+        loc = [o for o in self._of(self.doc, "Part::PmiDimension") if o.PmiType != "Size_Diameter"][0]
+        loc.HasValue = False
+        out = self._export(self.doc)
+        self.assertEqual(Import.lastStepPmiExportReport()["dimensions"], 2)
+        back = self._insert(out)
+        dims = self._of(back, "Part::PmiDimension")
+        self.assertEqual(len(dims), 2)
+        have = [d for d in dims if d.Value != 0.0]
+        self.assertEqual(len(have), 1)
+        self.assertAlmostEqual(have[0].Value / marker, 1.0, places=9)
+        valueless = [d for d in dims if d.Value == 0.0]
+        self.assertEqual(len(valueless), 1)  # the one with no stated value is still written with none
+
+    def test_pmi_views_do_not_change_the_written_file(self):
+        # saved views are document-only on export (OCCT 8.0.1's writer has no view mode)
+        def data(path):
+            t = self._text(path)
+            return t[t.index("DATA;"):]
+
+        before = data(self._export(self.doc, "before.stp"))
+        grp = self._of(self.doc, "Part::PmiGroup")[0]
+        items = [o for o in self.doc.Objects if o.isDerivedFrom("Part::PmiItem")]
+        for k in range(2):
+            v = self.doc.addObject("Part::PmiView", "PmiView")
+            v.Camera = "#Inventor V2.1 ascii\n\n\nOrthographicCamera {\n  position 0 0 10\n  height 30\n}\n"
+            v.Items = items[: k + 1]
+            grp.addObject(v)
+        self.doc.recompute()
+        after = data(self._export(self.doc, "after.stp"))
+        self.assertEqual(before, after)
+        self.assertEqual(Import.lastStepPmiExportReport()["dimensions"], 2)
+
+
     def test_second_round_trip_gives_the_same_items(self):
         back = self._insert(self._export(self.doc))
         back2 = self._insert(self._export(back, "out2.stp"))
@@ -984,3 +1024,110 @@ class TestExportStepPmi(unittest.TestCase):
         text = self._text(self._export(self.doc))
         self.assertIn("COMMON_DATUM_LIST((", text)
         self.assertNotIn("COMMON_DATUM_LIST(\n", text.replace("COMMON_DATUM_LIST(\n    (", "COMMON_DATUM_LIST("))
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# G12 slice 3b-i: saved views (CAMERA_MODEL_D3) imported as Part::PmiView. The NIST corpus is never committed: skipped when absent.
+import glob
+import re
+
+CORPUS = os.environ.get(
+    "PMI_CORPUS", os.path.expanduser("~/src/cad-fork/scratch/r068/corpus/nist/NIST-PMI-STEP-Files")
+)
+
+
+def _part21_cameras(path):
+    """name -> (z axis of the view reference system) of every CAMERA_MODEL_D3 of a file, read as text (no OCCT)"""
+    t = open(path, errors="ignore").read()
+    ents = {a: re.sub(r"\s+", " ", b) for a, b in re.findall(r"#(\d+)\s*=\s*(.*?);", t, re.S)}
+    out = []
+    for b in ents.values():
+        m = re.match(r"CAMERA_MODEL_D3\('([^']*)',#(\d+),#(\d+)\)", b)
+        if not m:
+            continue
+        refs = re.findall(r"#(\d+)", ents[m.group(2)])
+        z = tuple(float(x) for x in re.findall(r"[-0-9.]+(?:E[-+]?\d+)?", re.search(r"\((.*)\)", ents[refs[1]]).group(1)))
+        out.append((m.group(1), z))
+    return out
+
+
+@unittest.skipUnless(os.path.isdir(CORPUS), "the NIST PMI corpus is not present (it is never committed)")
+class TestImportStepPmiViews(unittest.TestCase):
+    def tearDown(self):
+        for name in list(App.listDocuments()):
+            App.closeDocument(name)
+
+    def _open(self, stem):
+        path = os.path.join(CORPUS, stem + ".stp")
+        doc = App.newDocument("Views")
+        Import.insert(path, doc.Name)
+        return doc, path
+
+    def test_ftc_06_has_one_view_per_camera_model_with_its_items(self):
+        doc, path = self._open("nist_ftc_06_asme1_ap242-e2")
+        views = [o for o in doc.Objects if o.TypeId == "Part::PmiView"]
+        cams = _part21_cameras(path)
+        self.assertEqual(len(cams), 3)
+        self.assertEqual(len(views), len(cams))
+        self.assertEqual(Import.lastStepPmiReport()["views"], 3)
+        self.assertEqual(sorted(v.Label for v in views), sorted(c[0] for c in cams))
+        grp = [o for o in doc.Objects if o.TypeId == "Part::PmiGroup"][0]
+        items = {o.Name for o in doc.Objects if o.isDerivedFrom("Part::PmiItem")}
+        for v in views:
+            self.assertIn(v, grp.Group)
+            self.assertGreater(len(v.Items), 0)
+            self.assertTrue({o.Name for o in v.Items} <= items)
+        self.assertEqual(sorted(len(v.Items) for v in views), [6, 6, 11])
+
+    def test_the_camera_looks_along_the_z_axis_of_the_files_view_reference_system(self):
+        doc, path = self._open("nist_ftc_06_asme1_ap242-e2")
+        for name, z in _part21_cameras(path):
+            v = [o for o in doc.Objects if o.TypeId == "Part::PmiView" and o.Label == name][0]
+            m = re.search(r"orientation (\S+) (\S+) (\S+) (\S+)", v.Camera)
+            rot = App.Rotation(App.Vector(*(float(x) for x in m.groups()[:3])), math.degrees(float(m.group(4))))
+            look = rot.multVec(App.Vector(0, 0, -1))  # Inventor looks along its -Z
+            for a, b in zip(look, z):
+                self.assertAlmostEqual(a, b, places=6, msg=name)
+            self.assertTrue(v.Camera.startswith("#Inventor V2.1 ascii"))
+            self.assertIn("OrthographicCamera", v.Camera)  # the file's view volume is parallel
+            h = float(re.search(r"height (\S+)", v.Camera).group(1))
+            self.assertGreater(h, 1.0)
+
+    def test_view_counts_equal_the_oracle_on_the_files_the_kernel_reads_views_of(self):
+        # OCCT 8.0.1 builds a view label only from some structures of CAMERA_MODEL_D3 (run 080 measured it per file)
+        expect = {"nist_ctc_01_asme1_ap242-e1": 1, "nist_ctc_02_asme1_ap242-e2": 3, "nist_ctc_03_asme1_ap242-e2": 1, "nist_ctc_05_asme1_ap242-e1": 2,
+                  "nist_stc_08_asme1_ap242-e3": 4}
+        for stem, n in expect.items():
+            doc, path = self._open(stem)
+            self.assertEqual(len([o for o in doc.Objects if o.TypeId == "Part::PmiView"]), n, stem)
+            self.assertEqual(len(_part21_cameras(path)), n, stem)
+            App.closeDocument(doc.Name)
+
+    def test_a_file_without_saved_views_makes_no_view(self):
+        d = tempfile.mkdtemp(prefix="g12views")
+        try:
+            src = _write_fixture(d)
+            doc = App.newDocument("NoViews")
+            Import.insert(src, doc.Name)
+            self.assertEqual([o for o in doc.Objects if o.TypeId == "Part::PmiView"], [])
+            self.assertEqual(Import.lastStepPmiReport()["views"], 0)
+        finally:
+            for f in os.listdir(d):
+                os.remove(os.path.join(d, f))
+            os.rmdir(d)
+
+    def test_views_survive_save_and_reopen(self):
+        doc, _ = self._open("nist_ftc_06_asme1_ap242-e2")
+        d = tempfile.mkdtemp(prefix="g12views")
+        try:
+            path = os.path.join(d, "v.FCStd")
+            before = sorted((v.Label, v.Camera, tuple(o.Name for o in v.Items)) for v in doc.Objects if v.TypeId == "Part::PmiView")
+            doc.saveAs(path)
+            App.closeDocument(doc.Name)
+            doc2 = App.openDocument(path)
+            after = sorted((v.Label, v.Camera, tuple(o.Name for o in v.Items)) for v in doc2.Objects if v.TypeId == "Part::PmiView")
+            self.assertEqual(before, after)
+        finally:
+            for f in os.listdir(d):
+                os.remove(os.path.join(d, f))
+            os.rmdir(d)
