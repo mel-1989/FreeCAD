@@ -502,6 +502,7 @@ class TestPmiDisplaySynthetic(unittest.TestCase):
         d = doc.getObject("Dim")
         self.assertEqual(d.ReferencePlacement.Base, d.References[0][0].Placement.Base)
 
+    @nominal_layout
     def test_old_document_with_a_body_at_a_non_identity_placement_draws_in_place(self):
         # check 23 repair: ReferencePlacement missing from the file (not just identity) is set to the body's current
         # global placement on restore, so the drawing does not move
