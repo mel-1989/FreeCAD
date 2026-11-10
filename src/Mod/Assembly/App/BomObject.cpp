@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <vector>
 
 #include <App/Application.h>
@@ -244,7 +245,12 @@ void BomObject::saveCustomColumnData()
 void BomObject::generateBOM()
 {
     saveCustomColumnData();
+    // clearAll() forgets the column widths; a user (or a drawing's parts list) that set them keeps them
+    std::map<int, int> widths = getColumnWidths();
     clearAll();
+    for (auto& [column, width] : widths) {
+        setColumnWidth(column, width);
+    }
     obj_list.clear();
     obj_mirrored_list.clear();
     size_t row = 0;
