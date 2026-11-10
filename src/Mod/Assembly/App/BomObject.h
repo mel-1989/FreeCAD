@@ -34,6 +34,7 @@
 namespace App
 {
 class DocumentObject;
+class Link;
 }
 
 namespace Assembly
@@ -73,12 +74,15 @@ public:
     }
 
     App::DocumentObjectExecReturn* execute() override;
+    short mustExecute() const override;
 
     void generateBOM();
     void addObjectToBom(App::DocumentObject* obj, size_t row, std::string index, bool isMirrored = false);
     void addObjectChildrenToBom(std::vector<App::DocumentObject*> objs, size_t& row, std::string index);
     void saveCustomColumnData();
-    bool isObjMirrored(App::DocumentObject* obj);
+    bool isObjMirrored(App::DocumentObject* obj) const;
+    static int linkInstanceCount(App::Link* link);
+    static App::DocumentObject* linkTarget(App::Link* link);
 
     AssemblyObject* getAssembly() const;
 
@@ -96,7 +100,13 @@ public:
     std::vector<bool> obj_mirrored_list;
 
 private:
-    std::string getBomPropertyValue(App::DocumentObject* obj, const std::string& baseName);
+    std::string getBomPropertyValue(App::DocumentObject* obj, const std::string& baseName, bool quiet = false) const;
+    std::vector<App::DocumentObject*> bomRoots() const;
+    void hashChildren(const std::vector<App::DocumentObject*>& objs, std::size_t& seed, int depth) const;
+    std::size_t componentSignature() const;
+
+    mutable std::size_t lastSignature = 0;
+    mutable bool hasSignature = false;
 
     std::string mirroredSuffix;
 };
