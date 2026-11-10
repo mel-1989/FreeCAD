@@ -245,11 +245,15 @@ void BomObject::saveCustomColumnData()
 void BomObject::generateBOM()
 {
     saveCustomColumnData();
-    // clearAll() forgets the column widths; a user (or a drawing's parts list) that set them keeps them
+    // clearAll() forgets the column widths and row heights; a user (or a drawing's parts list) that set them keeps them
     std::map<int, int> widths = getColumnWidths();
+    std::map<int, int> heights = getRowHeights();
     clearAll();
     for (auto& [column, width] : widths) {
         setColumnWidth(column, width);
+    }
+    for (auto& [rowIndex, height] : heights) {
+        setRowHeight(rowIndex, height);
     }
     obj_list.clear();
     obj_mirrored_list.clear();

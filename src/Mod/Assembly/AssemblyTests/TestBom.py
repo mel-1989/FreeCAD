@@ -104,13 +104,15 @@ class TestBom(unittest.TestCase):
         self.assertFalse("Touched" in bom.State)
         self.assertEqual(bom.MustExecute, 0)
 
-    def test_column_widths_survive_regeneration(self):
+    def test_column_widths_and_row_heights_survive_regeneration(self):
         self._scene()
         bom = self.doc.getObject("BOM")
         self.doc.recompute()
         bom.setColumnWidth("A", 40)
         bom.setColumnWidth("B", 200)
+        bom.setRowHeight("2", 17)
         bom.touch()
         self.doc.recompute()
         self.assertEqual((bom.getColumnWidth("A"), bom.getColumnWidth("B")), (40, 200))
+        self.assertEqual(bom.getRowHeight("2"), 17)
 
