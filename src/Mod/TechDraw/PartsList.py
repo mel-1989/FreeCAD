@@ -20,7 +20,7 @@ Rows come from the assembly's ``Assembly::BomObject`` (found, or created with th
 One helper object, ``PartsListFit`` (a Python feature), sits between them in the dependency graph.  After the BOM has been
 regenerated it fits the column widths to the widest text of each column (font metrics of the bundled osifont), counts the
 rows for the view's ``CellEnd`` and computes the view's position so the table keeps its bottom right corner above the title
-block; the view reads all three through expressions.  A plain ``doc.recompute()`` is therefore enough after a component is
+block, stacked above any parts list made earlier on the same page; the view reads all three through expressions.  A plain ``doc.recompute()`` is therefore enough after a component is
 added, removed or relabelled or a configuration is activated.  To move the table, clear the expressions on ``X`` and ``Y``.
 """
 
@@ -38,6 +38,7 @@ PAD_RIGHT_PX = 6.0
 ROW_PX = 22  # row height in symbol units (5.8 mm); the view puts the baseline 7.5 units above the cell bottom
 MIN_COL_PX = 24
 MARGIN_MM = 5.0  # between the table and the frame, and between the table and the title block
+GAP_MM = 3.0  # between two parts lists stacked on one page
 FIT_SLACK = 1.04  # fontTools advances against the renderer's shaping
 FALLBACK_ADVANCE = 0.55  # em, for a glyph the font lacks
 
@@ -232,6 +233,9 @@ class PartsListFit:
         add("App::PropertyFloatList", "TitleBlock", "PartsList", "Title block: x0, y0, x1, y1 in mm, empty when none")
         add("App::PropertyLength", "CenterX", "PartsList", "Centre of the drawn table, page x")
         add("App::PropertyLength", "CenterY", "PartsList", "Centre of the drawn table, page y")
+        add("App::PropertyLinkList", "Below", "PartsList", "Parts lists made earlier on the same page: this one stacks above them")
+        add("App::PropertyString", "PageName", "PartsList", "Name of the page; its template is read again on every run")
+        add("App::PropertyLinkGlobal", "Template", "PartsList", "Template object of the page (an edit of it recomputes the table)")
         obj.setEditorMode("Source", 1)
 
     # FreeCAD restores the proxy by class, it needs no state
@@ -248,6 +252,7 @@ class PartsListFit:
         sheet = obj.Source
         if sheet is None:
             return
+        self._read_template(obj)
         table = read_table(sheet)
         ncols = len(table[0]) if table else 0
         widths = []
@@ -261,10 +266,38 @@ class PartsListFit:
         obj.CellEnd = "%s%d" % (_letter(max(ncols, 1) - 1), max(len(table), 1))
         obj.Width, obj.Height = width_mm, height_mm
         # the corner depends on the width of the columns, which decides whether they reach over the title block
-        right, bottom = anchor(list(obj.Area), list(obj.TitleBlock), width_mm)
+        area = list(obj.Area)
+        right, bottom = anchor(area, list(obj.TitleBlock), width_mm)
+        # a second table stands above the earlier ones, so two assemblies' lists on one page never overlap
+        for prev in obj.Below:
+            if prev is not None and prev is not obj:
+                bottom = max(bottom, float(prev.Bottom) + float(prev.Height) + GAP_MM)
         obj.Right, obj.Bottom = right, bottom
         obj.CenterX = right - width_mm / 2.0
         obj.CenterY = bottom + height_mm / 2.0
+        top, room = bottom + height_mm, area[3] - MARGIN_MM
+        if top > room + 1e-6 and getattr(self, "_warned", None) != (len(table), round(top, 1)):
+            self._warned = (len(table), round(top, 1))
+            App.Console.PrintWarning(
+                "PartsList: %s (%d rows, %.0f mm) does not fit the drawing area: it runs %.0f mm past the top of the sheet area; "
+                "use a larger sheet, fewer rows, or clear the X and Y expressions of the view and place it by hand\n"
+                % (obj.Label, len(table), height_mm, top - room)
+            )
+
+    @staticmethod
+    def _read_template(obj):
+        """Read the drawing area and title block of the page again: its template may have changed since the last run."""
+        page = obj.Document.getObject(obj.PageName) if obj.PageName else None
+        if page is None:
+            return
+        if obj.Template != page.Template:
+            obj.Template = page.Template
+        area, title = page_areas(page)
+        area, title = list(area), (list(title) if title else [])
+        if list(obj.Area) != area:
+            obj.Area = area
+        if list(obj.TitleBlock) != title:
+            obj.TitleBlock = title
 
     @staticmethod
     def _apply(sheet, widths, nrows):
@@ -322,6 +355,9 @@ def make(page, assembly, columns=None):
         area, title = page_areas(page)
         fit.Area = list(area)
         fit.TitleBlock = list(title) if title else []
+        fit.PageName = page.Name
+        fit.Template = page.Template
+        fit.Below = [f for f in (fit_of(v) for v in views_on(page)) if f is not None]
         view = doc.addObject("TechDraw::DrawViewSpreadsheet", "PartsList")
         view.Label = "Parts list"
         page.addView(view)

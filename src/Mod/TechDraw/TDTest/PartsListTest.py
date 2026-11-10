@@ -273,3 +273,103 @@ class PartsListTest(unittest.TestCase):
         self.assertEqual(view.Source, bom)
         self.assertEqual(list(bom.columnsNames), ["Index", "Name", "Quantity", ".Label"])
         self.assertEqual(view.CellEnd, "D4")
+
+    # ---- several parts lists on a page, a changed template, a table too tall for the sheet
+
+    def second_assembly(self):
+        """A second assembly in the same document (the case builder numbers its objects afresh)."""
+        before = {o.Name for o in self.doc.Objects}
+        b = C.build_case(self.doc, "sub_assembly_child")
+        self.doc.recompute()
+        self.assertTrue(any(o.Name not in before and o.TypeId == "Assembly::AssemblyObject" for o in self.doc.Objects))
+        return b
+
+    def assembly_of(self, view):
+        return view.Source.getParentGeoFeatureGroup().getParentGeoFeatureGroup() or view.Source.getParentGeoFeatureGroup()
+
+    def assertNoOverlap(self, boxes):
+        for i, a in enumerate(boxes):
+            for b in boxes[i + 1:]:
+                apart = a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1]
+                self.assertTrue(apart, "tables overlap: %s and %s" % (a, b))
+
+    def test_two_parts_lists_stack_above_each_other(self):
+        b1 = self.case("three_configs")
+        page = self.page(ISO_A3)
+        v1 = PL.make(page, b1.asm)
+        b2 = self.second_assembly()
+        self.assertNotEqual(b1.asm.Name, b2.asm.Name)
+        v2 = PL.make(page, b2.asm)
+        self.doc.recompute()
+        self.assertNotEqual(v1.Name, v2.Name)
+        self.assertGreater(len(sheet_rows(v2.Source)), 1)
+        area, title = PL.page_areas(page)
+        box1, box2 = table_box(v1), table_box(v2)
+        self.assertNoOverlap([box1, box2])
+        self.assertGreaterEqual(box2[1], box1[3] + PL.GAP_MM - 1.0)  # the later table stands above the earlier one
+        self.assertGreaterEqual(box1[1], title[3] + PL.MARGIN_MM - 1.0)  # both clear of the title block
+        for bx in (box1, box2):
+            self.assertTrue(bx[0] >= area[0] and bx[2] <= area[2] and bx[3] <= area[3])
+
+    def test_stacked_tables_stay_apart_when_the_lower_one_grows(self):
+        b1 = self.case("three_configs")
+        page = self.page(ISO_A3)
+        v1 = PL.make(page, b1.asm)
+        v2 = PL.make(page, self.second_assembly().asm)
+        self.doc.recompute()
+        h_before = table_box(v1)[3] - table_box(v1)[1]
+        for i in range(3):
+            src = self.doc.addObject("Part::Box", "GrowSrc%d" % i)
+            lk = b1.asm.newObject("App::Link", "Grow%d" % i)
+            lk.LinkedObject = src
+        self.doc.recompute()
+        box1, box2 = table_box(v1), table_box(v2)
+        self.assertGreater(box1[3] - box1[1], h_before + 3 * PL.ROW_PX * PL.PX_MM - 1.0)  # the lower table grew
+        self.assertNoOverlap([box1, box2])
+        self.assertGreaterEqual(box2[1], box1[3] + PL.GAP_MM - 1.0)
+
+    def test_template_change_is_picked_up_on_the_next_recompute(self):
+        b = self.case("three_configs")
+        page = self.page()  # blank default template: no title block
+        view = PL.make(page, b.asm)
+        self.doc.recompute()
+        self.assertAlmostEqual(table_box(view)[1], PL.MARGIN_MM, delta=1.0)
+        page.Template.Template = os.path.join(App.getResourceDir(), "Mod", "TechDraw", "Templates", ISO_A3)
+        self.doc.recompute()
+        area, title = PL.page_areas(page)
+        self.assertIsNotNone(title)
+        x0, y0, x1, y1 = table_box(view)
+        self.assertGreaterEqual(y0, title[3] + PL.MARGIN_MM - 1.0)
+        self.assertAlmostEqual(x1, area[2] - PL.MARGIN_MM, delta=1.0)
+
+    def test_table_taller_than_the_drawing_area_warns(self):
+        b = self.case("sub_assembly_child")
+        for i in range(40):
+            src = self.doc.addObject("Part::Box", "TallSrc%d" % i)
+            lk = b.asm.newObject("App::Link", "Tall%d" % i)
+            lk.LinkedObject = src
+        self.doc.recompute()
+        page = self.page()
+        seen = []
+        real = App.Console.PrintWarning
+        App.Console.PrintWarning = lambda msg: seen.append(msg)
+        try:
+            view = PL.make(page, b.asm)
+            self.doc.recompute()
+        finally:
+            App.Console.PrintWarning = real
+        area, _ = PL.page_areas(page)
+        self.assertGreater(table_box(view)[3], area[3] - PL.MARGIN_MM)  # it really is too tall
+        self.assertTrue(any("PartsList" in m and "does not fit" in m for m in seen), seen)
+
+    def test_a_table_that_fits_does_not_warn(self):
+        b = self.case("three_configs")
+        seen = []
+        real = App.Console.PrintWarning
+        App.Console.PrintWarning = lambda msg: seen.append(msg)
+        try:
+            PL.make(self.page(ISO_A3), b.asm)
+            self.doc.recompute()
+        finally:
+            App.Console.PrintWarning = real
+        self.assertFalse([m for m in seen if "PartsList" in m], seen)

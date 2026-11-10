@@ -459,6 +459,17 @@ def _m_hide_only():
     return dict(_remove_from_group=remove)
 
 
+def _m_no_feature_refresh():
+    """Keep the BOM touch of _refresh_consumers, drop the half that re-points the assembly features."""
+    def only_bom(assembly):
+        for c in AC._containers(assembly):
+            for g in c.Group:
+                if g.TypeId == "Assembly::BomGroup":
+                    for b in g.Group:
+                        b.touch()
+    return dict(_refresh_consumers=only_bom)
+
+
 def _m_grounded_kept():
     real = AC._touches
     return dict(_touches=lambda reach, toks: real(reach, toks) and not (len(reach) == 1))
@@ -623,6 +634,7 @@ MUTANTS = {
     "copy_validates_live_group": _m_validate_against_live_group,
     "solve_joints_of_suppressed_kept": _m_no_joint_suppress,
     "suppress_by_hiding_only": _m_hide_only,
+    "features_not_refreshed": _m_no_feature_refresh,
     "grounded_joint_of_suppressed_kept": _m_grounded_kept,
     "restore_by_matcher_backwards": _m_backwards,
     "unmatched_reference_picked": _m_unmatched_picked,
@@ -991,9 +1003,38 @@ def lost_feature_proxy_problems():
     return problems
 
 
+def feature_refresh_on_delete_problems():
+    """Deleting the active configuration re-points the assembly features at once, before any recompute: the
+    restored component is back among their Dependencies and the cached cut data is dropped (the BOM half of
+    the consumer refresh is covered by the BOM rows of every case)."""
+    import AssemblyFeature as AF
+    doc, asm = _fresh("RepFeatRefresh")
+    problems = []
+    try:
+        C.rig_feature(C.Built(doc, asm))
+        doc.recompute()
+        AC.create(asm, "S", suppress=["LA"])
+        AC.activate(asm, "S")
+        cut = doc.Cut1
+        if doc.LA in list(cut.Dependencies):
+            problems.append("the feature still depends on the suppressed component")
+        AF.affected(cut)
+        if cut.Proxy.results is None:
+            problems.append("the probe could not fill the feature's cut data")
+        doc.removeObject(AC.active(asm).Name)
+        if doc.LA not in list(cut.Dependencies):
+            problems.append("the restored component is missing from the feature's Dependencies right after the delete")
+        if cut.Proxy.results is not None:
+            problems.append("the feature kept stale cut data after the delete")
+    finally:
+        App.closeDocument(doc.Name)
+    return problems
+
+
 REPAIR_PROBES = (delete_active_problems, deleted_object_problems, user_edit_kept_problems,
                  remap_edit_drift_problems, lost_proxy_problems, copy_active_problems, visibility_problems,
-                 expression_after_problems, stale_active_problems, lost_feature_proxy_problems)
+                 expression_after_problems, stale_active_problems, lost_feature_proxy_problems,
+                 feature_refresh_on_delete_problems)
 
 
 def save_reopen_problems(name):
