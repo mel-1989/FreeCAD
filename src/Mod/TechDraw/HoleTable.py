@@ -236,6 +236,23 @@ def _radii(h):
 # ------------------------------------------------------------------------------------------------
 
 
+_GC = {}
+
+
+def gc_of(view):
+    """``view.getGeometricCenter()`` (a quarter of a second on a big part), cached on what it depends on."""
+    try:
+        key = (view.Document.Uid, view.Name, float(view.Scale), tuple(view.Direction), tuple((o.Shape.hashCode(), str(o.Placement)) for o in view.Source))
+    except Exception:
+        return view.getGeometricCenter()
+    hit = _GC.get(key)
+    if hit is None:
+        if len(_GC) > 64:
+            _GC.clear()
+        hit = _GC[key] = view.getGeometricCenter()
+    return hit
+
+
 def _edge_factor(view, box):
     """How much ``getVisibleEdges(True)`` is multiplied by: 1 or the view's Scale.
 
@@ -246,7 +263,7 @@ def _edge_factor(view, box):
     if abs(S - 1.0) < 1e-9 or box is None:
         return 1.0
     try:
-        gc = view.getGeometricCenter()
+        gc = gc_of(view)
         pts = []
         for sh in source_shapes(view):
             bb = sh.BoundBox
@@ -393,7 +410,7 @@ def listed_holes(view, edges, origin=None):
     """-> list of dicts (pos, size, bore, tip candidates ...) for the holes ``view`` shows end-on, unsorted and untagged."""
     d = Vector(view.Direction)
     d.normalize()
-    gc = view.getGeometricCenter()
+    gc = gc_of(view)
     rot = float(view.Rotation.Value) if hasattr(view.Rotation, "Value") else float(view.Rotation)
     threads = _threads(view.Document)
     found = []
@@ -808,7 +825,7 @@ class HoleTableDriver:
         holes = listed_holes(view, edges)
         S = float(view.Scale)
         if obj.HasOrigin:
-            o = view.projectPoint(Vector(obj.Origin) - view.getGeometricCenter())
+            o = view.projectPoint(Vector(obj.Origin) - gc_of(view))
             org = (o.x, o.y)
         else:
             org = (edges.box[0], edges.box[1])
