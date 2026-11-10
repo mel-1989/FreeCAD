@@ -52,7 +52,7 @@ PIN_TOL = 1e-6
 # TechDraw draws a RichAnno's frame with its top left this far from the leader's origin (page mm, y up), measured in run 084
 ANNO_OFFSET = {"frame": (1.38, -1.38), "datum": (-0.2, 0.0)}
 FRAME_H, DATUM_H = 9.4, 8.6
-FRAME_SLACK, DATUM_SLACK = 3.6, 1.3  # how much narrower than the estimate the drawn box may be
+FRAME_SLACK, DATUM_SLACK = 1.0, 1.3  # how much narrower than the estimate the drawn box may be
 DATUM_W = 6.4
 DIM_LINE_OFFSET = 3.75  # the dimension line of a distance sits this far below (X) or beside (Y) the text centre
 TEXT_K, TEXT_PAD = 6.4, 0.6  # dimension text width per em of osifont advance, and padding
@@ -845,7 +845,7 @@ class _Layout:
         may be narrower than the estimate: its left edge and its top and bottom are exact)."""
         x0, y0, x1, y1 = box
         slack = FRAME_SLACK if a.kind == "frame" else DATUM_SLACK
-        inset = max(0.3, slack - 0.9) if a.kind == "frame" else 0.3
+        inset = slack + 0.7 if a.kind == "frame" else 1.2  # a leader starts this far inside the estimated right edge
         cx = min(max(A[0], x0), x1)
         cy = min(max(A[1], y0), y1)
         # nearest side
