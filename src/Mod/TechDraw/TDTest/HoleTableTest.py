@@ -1168,3 +1168,22 @@ class HoleTableTest(unittest.TestCase):
         self.assertEqual(plans[0], plans[1])
         self.assertEqual(plans[0], plans[2])
         self.assertEqual(HT.tag_conflicts(items, plans[0], self.AREA, obs, 20.0), [])
+
+    def test_a_cavity_a_fraction_of_a_millimetre_short_of_the_missing_surface_does_not_explain_it(self):
+        # LOW-2: the explanation tolerance is 1e-4 mm.  A Ø10 hole is cut by a Ø6 neighbour (the lens is explained) and by a small notch 0.24 mm
+        # beyond the neighbour's wall (not explained), so the Ø10 stays out and is named; a tolerance of 1 mm would list it.
+        cuts = [self.bore(5, 20, 20), self.bore(3, 27, 20), Part.makeBox(0.3, 0.3, 40, V(24.4, 22.0, -5))]
+        obj, page, view = self.plate_with(cuts, 50.0, 40.0)
+        tbl = HT.make(page, view)
+        self.assertEqual(table_rows(tbl), [["A1", "27", "20", D + "6 THRU"]])
+        self.assertIn(D + "10", HT.warning_of(tbl))
+
+    def test_a_hole_with_under_half_its_rim_visible_is_not_dropped_silently(self):
+        # HIGH-1: a Ø4 through hole beside a Ø10 one, centres 4.2 apart: the large hole takes more than half of the small one's rim
+        obj, page, view = self.plate_with([self.bore(2, 19.2, 15), self.bore(5, 15, 15)], 40.0, 30.0)
+        tbl = HT.make(page, view)
+        w = HT.warning_of(tbl)
+        rows = table_rows(tbl)
+        self.assertTrue(any(r[3] == D + "10 THRU" for r in rows))
+        self.assertFalse(any(r[3] == D + "4 THRU" for r in rows))
+        self.assertIn(D + "4 hole at X 19.2 Y 15 is not listed", w)

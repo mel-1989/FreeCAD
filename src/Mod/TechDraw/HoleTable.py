@@ -623,7 +623,7 @@ def source_shapes(view):
     return out
 
 
-def listed_holes(view, edges, origin=None):
+def listed_holes(view, edges, origin=None, dropped=None):
     """-> list of dicts (pos, size, bore, tip candidates ...) for the holes ``view`` shows end-on, unsorted and untagged."""
     d = Vector(view.Direction)
     d.normalize()
@@ -636,13 +636,18 @@ def listed_holes(view, edges, origin=None):
             for h in find_holes(solid, d):
                 pc = view.projectPoint(h["c0"] - gc)
                 pcr = _rot((pc.x, pc.y), rot)
-                seen = False
+                seen, part = False, 0.0
                 for r in _radii(h):
                     cover, _ = edges.rim(pcr[0], pcr[1], r)
+                    part = max(part, cover)
                     if cover >= 0.5 - 1e-9:
                         seen = True
                         break
                 if not seen:
+                    if dropped is not None and part > 1e-6:  # some rim shows but under half of it: never dropped silently
+                        open_ends(h)
+                        if h["top_open"]:
+                            dropped.append((pc.x, pc.y, size_text(h, None), 2 * min(x["r"] for x in h["segs"] if x["kind"] == "cyl")))
                     continue
                 open_ends(h)
                 if not h["top_open"]:
@@ -1564,7 +1569,8 @@ class HoleTableDriver:
         if not edges.edges or edges.box is None:
             return
         obj.Signature = edges.signature()
-        holes = listed_holes(view, edges)
+        gone = []
+        holes = listed_holes(view, edges, dropped=gone)
         S = float(view.Scale)
         if obj.HasOrigin:
             o = view.projectPoint(Vector(obj.Origin) - gc_of(view))
@@ -1592,6 +1598,8 @@ class HoleTableDriver:
         self._layout_tags(obj, ordered, mine, view, page, edges, boxes)
         # ruling 49: a row whose hole has a wall that was left out (cut by a neighbour, or broken out of the part) says so
         short = ["%s may be shown short: a %s segment touching it or cut into it was left out" % (h["tag"], " and ".join("Ø" + fmt(x) for x in h["left"])) for h in ordered if h.get("left")]
+        for gx, gy, gtext, gd in gone:  # a hole found in the model whose rim shows less than half: not listed, and said so
+            short.append("a %s hole at X %s Y %s is not listed because less than half of its rim is visible" % ("Ø" + fmt(gd), fmt(gx - org[0]), fmt(gy - org[1])))
         if short:
             note = "HoleTable: " + "; ".join(short)
             App.Console.PrintWarning(note + "\n")
