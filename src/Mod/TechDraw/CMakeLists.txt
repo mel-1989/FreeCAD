@@ -17,6 +17,7 @@ set(TechDraw_Scripts
     PmiDrawing.py
     PartsList.py
     HoleTable.py
+    RevisionTable.py
 )
 
 if(BUILD_GUI)
@@ -201,6 +202,7 @@ SET(TDTest_SRCS
     TDTest/PmiDrawingTest.py
     TDTest/PartsListTest.py
     TDTest/HoleTableTest.py
+    TDTest/RevisionTableTest.py
     TDTest/PmiDrawingGuiTest.py
 )
 

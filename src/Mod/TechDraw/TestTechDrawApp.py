@@ -35,4 +35,5 @@ from TDTest.PythonFeatureTest import PythonFeatureTest  # noqa: F401
 from TDTest.PmiDrawingTest import PmiDrawingTest  # noqa: F401
 from TDTest.PartsListTest import PartsListTest  # noqa: F401
 from TDTest.HoleTableTest import HoleTableTest  # noqa: F401
+from TDTest.RevisionTableTest import RevisionTableTest  # noqa: F401
 
