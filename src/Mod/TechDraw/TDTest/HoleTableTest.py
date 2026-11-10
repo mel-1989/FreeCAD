@@ -1075,3 +1075,115 @@ class HoleTableTest(unittest.TestCase):
         above = (tip[0] + 5.0, tip[1] + 19.0)  # above: the anchor, 1.15 mm higher, is the far one
         self.assertAlmostEqual(HT.tag_reach(above, tip), math.hypot(5.0, 19.0 + 1.15), places=9)
         self.assertEqual(HT.tag_conflicts([item], [(above, tip)], self.AREA, [], 20.0), ["A1 more than 20 mm from its hole"])
+
+    # ---- run 091: the detector repair (rulings 48 and 49, checks 56 to 58) ----
+
+    def plate_with(self, cuts, w=60.0, h=40.0, t=20.0):
+        shape = Part.makeBox(w, h, t)
+        for c in cuts:
+            shape = shape.cut(c)
+        return self.solid_page(shape)
+
+    @staticmethod
+    def bore(r, x, y, z0=-5.0, length=40.0):
+        return Part.makeCylinder(r, length, V(x, y, z0))
+
+    def test_a_counterbore_that_cuts_a_neighbouring_through_hole_leaves_both_listed(self):
+        # run 090 f02: the neighbour's counterbore takes part of the through hole's wall (area cover 0.94) and the hole is still a hole
+        cuts = [self.bore(2.5, 20, 16), self.bore(3, 15, 11, 11.0, 30.0), self.bore(6, 15, 11, 16.0, 10.0)]
+        obj, page, view = self.plate_with(cuts, 40.0, 40.0)
+        tbl = HT.make(page, view)
+        self.assertEqual(table_rows(tbl), [["A1", "20", "16", D + "5 THRU"], ["B1", "15", "11", D + "6 DEPTH 9, CBORE " + D + "12 DEPTH 4"]])
+        self.assertNotIn("short", HT.warning_of(tbl))
+        self.assertEqual(len(HT.tags_of(tbl)), 2)
+
+    def test_two_overlapping_through_holes_are_both_listed(self):
+        # centres 0.7 of the sum of the radii apart: each wall is a quarter gone, taken by the other
+        obj, page, view = self.plate_with([self.bore(3, 20, 20), self.bore(3, 24.2, 20)])
+        tbl = HT.make(page, view)
+        self.assertEqual(table_rows(tbl), [["A1", "20", "20", D + "6 THRU"], ["A2", "24.2", "20", D + "6 THRU"]])
+        self.assertNotIn("short", HT.warning_of(tbl))
+
+    def test_a_slot_a_keyhole_and_a_filleted_pocket_list_only_the_round_hole(self):
+        # no threshold separates these from holes (covers 0.5, 0.25 and 0.87); only the missing surface does, and it is not in another cavity
+        slot = Part.makeBox(10, 6, 40, V(70, 7, -5)).fuse(self.bore(3, 70, 10)).fuse(self.bore(3, 80, 10))
+        key = self.bore(5, 30, 38).fuse(Part.makeBox(30, 4, 40, V(30, 36, -5))).fuse(self.bore(2, 60, 38))
+        blank = Part.makeBox(24, 16, 40, V(70, 25, -5))
+        pocket = blank.makeFillet(3.0, [e for e in blank.Edges if abs(e.Vertexes[0].Z - e.Vertexes[1].Z) > 1])
+        cuts = [slot, key, pocket, self.bore(2, 15, 15)]
+        obj, page, view = self.plate_with(cuts, 100.0, 60.0)
+        tbl = HT.make(page, view)
+        self.assertEqual(table_rows(tbl), [["A1", "15", "15", D + "4 THRU"]])
+        self.assertNotIn("short", HT.warning_of(tbl))  # a left-out segment that touches no listed hole adds no warning
+
+    def test_a_wall_left_out_is_named_in_the_warning(self):
+        # ruling 49: a counterbore that breaks out of the plate's edge is not a full segment; the through hole under it is listed without it, and says so
+        cuts = [self.bore(3, 5, 20), self.bore(7, 5, 20, 17.0, 10.0)]
+        obj, page, view = self.plate_with(cuts)
+        tbl = HT.make(page, view)
+        self.assertEqual(table_rows(tbl), [["A1", "5", "20", D + "6 THRU"]])
+        w = HT.warning_of(tbl)
+        self.assertIn("A1 may be shown short", w)
+        self.assertIn(D + "14", w)
+
+    def keyhole_beside_a_hole(self):
+        cuts = [self.bore(2, 50, 25), self.bore(5, 56, 25), Part.makeBox(18, 4, 40, V(56, 23, -5)), self.bore(2, 74, 25)]
+        return self.plate_with(cuts, 80.0, 50.0)
+
+    def test_a_cavity_that_is_still_no_hole_is_named_and_the_tag_keeps_off_its_centre(self):
+        # a keyhole's round end (cover 0.77) cuts into the Ø4 hole: the hole is listed, the end stays out; its arc is long enough that a tag over its centre is a fault
+        obj, page, view = self.keyhole_beside_a_hole()
+        tbl = HT.make(page, view)
+        self.assertEqual(table_rows(tbl), [["A1", "50", "25", D + "4 THRU"]])
+        w = HT.warning_of(tbl)
+        self.assertIn("A1 may be shown short", w)
+        self.assertIn(D + "10", w)
+        bb = obj.Shape.BoundBox
+        S = float(view.Scale)
+        cx, cy = view.X.Value + (56.0 - 0.5 * (bb.XMin + bb.XMax)) * S, view.Y.Value + (25.0 - 0.5 * (bb.YMin + bb.YMax)) * S
+        t = HT.tags_of(tbl)[0]
+        b = self.tag_box(t)
+        self.assertFalse(b[0] - 0.05 < cx < b[2] + 0.05 and b[1] - 0.05 < cy < b[3] + 0.05, "the tag lies over the keyhole's centre")
+
+    def forced_repair(self):
+        items = self.dense_grid_items(7.0)
+        tables = [("hole table", (25.0, 141.7, 108.9, 188.8)), ("hole table", (110.9, 141.7, 194.7, 188.8)), ("hole table", (152.1, 93.2, 236.0, 140.3)), ("hole table", (152.1, 62.1, 236.0, 91.7))]
+        obs = [self.TITLE] + tables
+        for it in items:
+            others = [i2["c"] for i2 in items if i2 is not it]
+            it["tips"] = [q for q in it["tips"] if all(math.hypot(q[0] - c[0], q[1] - c[1]) > it["R"] + 0.02 for c in others)] or it["tips"]
+        start, _ = HT._plan_once(items, self.AREA, obs, (100.0, 105.0), 20.0, HT.ATTEMPTS[0], set(), {"View"})
+        return items, obs, start
+
+    def test_the_repair_walks_clear_what_the_tabu_pass_cannot_and_do_not_depend_on_chance(self):
+        # 7 mm pitch with the tables in place: the first fit leaves 18 faults, the tabu pass alone 8, the walks from keyed starts 0
+        import random
+
+        items, obs, start = self.forced_repair()
+        self.assertGreater(len(HT.tag_conflicts(items, start, self.AREA, obs, 20.0)), 8)
+        plans = []
+        for seed in (1, 2, 3):
+            random.seed(seed)  # anything drawn from `random` would make these differ
+            plans.append(HT.repair(items, start, self.AREA, obs, (100.0, 105.0), 20.0))
+        self.assertEqual(plans[0], plans[1])
+        self.assertEqual(plans[0], plans[2])
+        self.assertEqual(HT.tag_conflicts(items, plans[0], self.AREA, obs, 20.0), [])
+
+    def test_a_cavity_a_fraction_of_a_millimetre_short_of_the_missing_surface_does_not_explain_it(self):
+        # LOW-2: the explanation tolerance is 1e-4 mm.  A Ø10 hole is cut by a Ø6 neighbour (the lens is explained) and by a small notch 0.24 mm
+        # beyond the neighbour's wall (not explained), so the Ø10 stays out and is named; a tolerance of 1 mm would list it.
+        cuts = [self.bore(5, 20, 20), self.bore(3, 27, 20), Part.makeBox(0.3, 0.3, 40, V(24.4, 22.0, -5))]
+        obj, page, view = self.plate_with(cuts, 50.0, 40.0)
+        tbl = HT.make(page, view)
+        self.assertEqual(table_rows(tbl), [["A1", "27", "20", D + "6 THRU"]])
+        self.assertIn(D + "10", HT.warning_of(tbl))
+
+    def test_a_hole_with_under_half_its_rim_visible_is_not_dropped_silently(self):
+        # HIGH-1: a Ø4 through hole beside a Ø10 one, centres 4.2 apart: the large hole takes more than half of the small one's rim
+        obj, page, view = self.plate_with([self.bore(2, 19.2, 15), self.bore(5, 15, 15)], 40.0, 30.0)
+        tbl = HT.make(page, view)
+        w = HT.warning_of(tbl)
+        rows = table_rows(tbl)
+        self.assertTrue(any(r[3] == D + "10 THRU" for r in rows))
+        self.assertFalse(any(r[3] == D + "4 THRU" for r in rows))
+        self.assertIn(D + "4 hole at X 19.2 Y 15 is not listed", w)
