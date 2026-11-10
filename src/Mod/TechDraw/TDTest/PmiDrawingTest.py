@@ -821,6 +821,36 @@ class PmiDrawingTest(unittest.TestCase):
             self.assertAlmostEqual(abs(self.doc.getObject(rep[item.Name][0][0]).getRawValue()), value, places=9)
         self.assertEqual(wrongMeasurements(self.page), [])
 
+    def test_clear_lets_the_projection_group_be_removed(self):
+        PA.addDatum("A", self.face(-Z, 0))
+        PA.addSizeDimension([self.face(-X, 0), self.face(X, 30)])
+        PA.addTolerance("Flatness", 0.05, self.face(Z, 10))
+        PD.project(self.page, [self.box, self.cyl])
+        group = [v for v in self.page.Views if v.TypeId == "TechDraw::DrawProjGroup"][0]
+        pmi = lambda: [o for o in self.doc.Objects if "PmiRole" in o.PropertiesList and o.PmiRole in ("dimension", "frame", "datum", "leader")]  # noqa: E731
+        members = {v.Name for v in group.Views}
+        self.assertTrue(any(o.PmiRole == "leader" and o.LeaderParent.Name in members for o in pmi()))  # the leaders hang from the group's views
+        # clear on one view removes only that view's objects
+        some = [o for o in pmi() if o.PmiRole == "leader"][0].LeaderParent
+        before = len(pmi())
+        PD.clear(self.page, some)
+        self.assertLess(len(pmi()), before)
+        self.assertEqual([o.Name for o in pmi() if o.PmiRole == "leader" and o.LeaderParent.Name == some.Name], [])
+        # clear on the page removes the rest, the views stay
+        PD.clear(self.page)
+        self.assertEqual(pmi(), [])
+        self.assertEqual(self.doc.getObject(group.Name), group)
+        self.assertEqual({v.Name for v in group.Views}, members)
+        # nothing hangs from the group's views now, so it can be removed
+        for v in list(group.Views):
+            self.assertEqual([o for o in v.InList if o.TypeId in ("TechDraw::DrawLeaderLine", "TechDraw::DrawRichAnno", "TechDraw::DrawViewDimension")], [], v.Name)
+        gname = group.Name
+        self.doc.removeObject(gname)
+        self.assertIsNone(self.doc.getObject(gname))
+        # the items survive, and project can rebuild
+        PD.project(self.page, [self.box, self.cyl])
+        self.assertTrue(pmi())
+
     def test_refresh_prunes_objects_of_a_deleted_view_and_project_makes_no_duplicates(self):
         def drop(g):
             # a view deleted in the GUI; in a script DrawViewPart's removal raises an upstream NameError, so take it off the page

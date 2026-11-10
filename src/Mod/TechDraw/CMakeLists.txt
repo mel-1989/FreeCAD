@@ -200,6 +200,7 @@ SET(TDTest_SRCS
     TDTest/TechDrawTestUtilities.py
     TDTest/PmiDrawingTest.py
     TDTest/DrawingLayoutTest.py
+    TDTest/PmiDrawingGuiTest.py
 )
 
 SET(TDTestFile_SRCS
