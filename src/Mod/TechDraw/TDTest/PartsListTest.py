@@ -206,9 +206,31 @@ class PartsListTest(unittest.TestCase):
         self.doc.recompute()
         x0, y0, x1, y1 = table_box(view)
         W, H = page.Template.Width.Value, page.Template.Height.Value
-        self.assertAlmostEqual(x1, W - PL.MARGIN_MM, delta=1.0)
-        self.assertAlmostEqual(y0, PL.MARGIN_MM, delta=1.0)
-        self.assertTrue(x0 > 0 and y1 < H)
+        area, title = PL.page_areas(page)
+        self.assertEqual(area, (10.0, 10.0, W - 10.0, H - 10.0))
+        self.assertIsNone(title)
+        self.assertAlmostEqual(x1, W - 10.0 - PL.MARGIN_MM, delta=1.0)
+        self.assertAlmostEqual(y0, 10.0 + PL.MARGIN_MM, delta=1.0)
+        self.assertTrue(x0 > 10 and y1 < H - 10)
+
+    def test_r5_no_frame_templates_inset_the_page_by_10_mm(self):
+        for tpl in (
+            os.path.join("ASME", "ANSIA_Landscape.svg"),
+            os.path.join("ISO", "A4_Landscape_TD.svg"),
+            "Default_Template_A4_Landscape.svg",
+            os.path.join("ISO", "A4_Landscape_blank.svg"),
+        ):
+            page = self.page(tpl)
+            W, H = page.Template.Width.Value, page.Template.Height.Value
+            area, title = PL.page_areas(page)
+            self.assertEqual((tuple(round(v, 6) for v in area), title), ((10.0, 10.0, round(W - 10.0, 6), round(H - 10.0, 6)), None), tpl)
+            self.doc.removeObject(page.Name)
+
+    def test_r5_framed_template_is_unchanged_by_the_inset(self):
+        page = self.page(ISO_A3)
+        area, title = PL.page_areas(page)
+        self.assertIsNotNone(title)
+        self.assertEqual(round(area[0]), 20)  # the ISO 5457 frame, not the 10 mm inset
 
     def test_corner_above_the_title_block(self):
         b = self.case("three_configs")
@@ -333,7 +355,7 @@ class PartsListTest(unittest.TestCase):
         page = self.page()  # blank default template: no title block
         view = PL.make(page, b.asm)
         self.doc.recompute()
-        self.assertAlmostEqual(table_box(view)[1], PL.MARGIN_MM, delta=1.0)
+        self.assertAlmostEqual(table_box(view)[1], PL.NO_FRAME_INSET_MM + PL.MARGIN_MM, delta=1.0)
         page.Template.Template = os.path.join(App.getResourceDir(), "Mod", "TechDraw", "Templates", ISO_A3)
         self.doc.recompute()
         area, title = PL.page_areas(page)
@@ -459,3 +481,57 @@ class PartsListTest(unittest.TestCase):
         self.assertLess(table_box(v3)[1], high - 1.0)
         self.assertAlmostEqual(box3[1], box1[3] + PL.GAP_MM, delta=1.0)
         self.assertEqual(self.untouched(), [])
+
+    # ---- 2a repair R4 (run 087 LOW): a deleted and restored table finds its helper again
+
+    def helpers(self):
+        return [o.Name for o in self.doc.Objects if o.TypeId == "App::FeaturePython" and o.Name.startswith("PartsListFit")]
+
+    def delete_and_undo(self, page, view):
+        self.doc.openTransaction("delete table")
+        page.removeView(view)
+        self.doc.removeObject(view.Name)
+        self.doc.commitTransaction()
+        self.doc.undo()
+        self.doc.recompute()
+        return self.doc.getObject(view.Name)
+
+    def test_r4_helper_found_after_delete_and_undo(self):
+        b = self.case("three_configs")
+        page = self.page(ISO_A3)
+        view = PL.make(page, b.asm)
+        self.doc.recompute()
+        name = PL.fit_of(view).Name
+        back = self.delete_and_undo(page, view)
+        self.assertIsNotNone(back)
+        self.assertIsNotNone(PL.fit_of(back))
+        self.assertEqual(PL.fit_of(back).Name, name)
+        PL.refresh(page)
+        self.assertEqual(self.helpers(), [name])  # no second helper
+        self.assertEqual(len(PL.views_on(page)), 1)
+        self.assertTable(back, sheet_rows(back.Source))
+        self.assertEqual(self.untouched(), [])
+
+    def test_r4_orphaned_helper_is_cleaned_by_refresh(self):
+        b = self.case("three_configs")
+        page = self.page(ISO_A3)
+        view = PL.make(page, b.asm)
+        self.doc.recompute()
+        old = PL.fit_of(view)
+        # a document damaged by the old bug: the view uses a newer helper, the old one stays with the same ViewName
+        twin = self.doc.addObject("App::FeaturePython", "PartsListFit001")
+        PL.PartsListFit(twin)
+        twin.Source = view.Source
+        twin.PageName, twin.ViewName = page.Name, view.Name
+        view.setExpression("CellEnd", "PartsListFit001.CellEnd")
+        view.setExpression("X", "PartsListFit001.CenterX")
+        view.setExpression("Y", "PartsListFit001.CenterY")
+        self.doc.recompute()
+        self.assertEqual(sorted(self.helpers()), sorted([old.Name, "PartsListFit001"]))
+        PL.refresh(page)
+        self.assertEqual(len(self.helpers()), 1)
+        self.assertEqual(len(PL.views_on(page)), 1)
+        self.assertEqual(PL.fit_of(view).Name, self.helpers()[0])
+        self.assertTable(view, sheet_rows(view.Source))
+        area, _ = PL.page_areas(page)
+        self.assertAlmostEqual(table_box(view)[2], area[2] - PL.MARGIN_MM, delta=1.0)
