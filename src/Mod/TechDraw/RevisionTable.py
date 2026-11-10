@@ -235,8 +235,7 @@ def default_vault():
 
     G03 has no default vault of its own: the PDM workbench keeps the connection in the ``PDM`` parameter group
     (``PDMGui.state.current_vault()``, which also works headless once ``state.connect`` has saved it).  Resolution order:
-    the environment (``PDM_WORKDIR`` = a working copy of the vault, ``PDM_USER`` = the user), that saved connection, then a bare
-    ``Vault`` whose ``history`` has been stood in.
+    the environment (``PDM_WORKDIR`` = a working copy of the vault, ``PDM_USER`` = the user), then that saved connection.
     """
     wd, user = os.environ.get("PDM_WORKDIR"), os.environ.get("PDM_USER")
     if wd and user:
@@ -249,21 +248,9 @@ def default_vault():
         v = state.current_vault()
     except Exception:
         v = None
-    if v is not None:
-        return v
-    from PDM import vault as V
-
-    class _Unconnected:
-        """No connection anywhere: call ``Vault.history`` on a bare instance (works when history is stood in, e.g. by a test)."""
-
-        @staticmethod
-        def history(name):
-            try:
-                return V.Vault.__new__(V.Vault).history(name)
-            except AttributeError:
-                raise ValueError("from_pdm: no vault given, PDM_WORKDIR/PDM_USER are not set and the PDM workbench is not connected to one")
-
-    return _Unconnected()
+    if v is None:
+        raise ValueError("from_pdm: no vault given, PDM_WORKDIR/PDM_USER are not set and the PDM workbench is not connected to one")
+    return v
 
 
 def from_pdm(page, name, vault=None):
