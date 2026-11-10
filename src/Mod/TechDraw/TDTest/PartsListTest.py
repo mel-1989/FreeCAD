@@ -171,7 +171,7 @@ class PartsListTest(unittest.TestCase):
         self.doc.recompute()
         sheet = view.Source
         for c, col in enumerate("ABC"):
-            need = max(PL.text_width_px(row[c]) for row in cells(view)) + PL.PAD_LEFT_PX + PL.PAD_RIGHT_PX
+            need = max(PL.text_width_px(row[c]) for row in cells(view)) + 6.0 + 6.0  # the view's own 6 units each side
             w = sheet.getColumnWidth(col)
             self.assertGreaterEqual(w, need, "column %s is narrower than its text" % col)
             self.assertLessEqual(w, need * 1.15 + 6, "column %s is far wider than its text" % col)
@@ -189,7 +189,7 @@ class PartsListTest(unittest.TestCase):
         self.assertGreater(view.Source.getColumnWidth("B"), w0)
         self.assertGreaterEqual(
             view.Source.getColumnWidth("B"),
-            PL.text_width_px("Cube with a much longer label than before") + PL.PAD_LEFT_PX + PL.PAD_RIGHT_PX,
+            PL.text_width_px("Cube with a much longer label than before") + 12.0,
         )
 
     def test_text_is_at_least_2_5_mm(self):
