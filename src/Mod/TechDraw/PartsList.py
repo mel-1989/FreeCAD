@@ -348,12 +348,42 @@ class PartsListFit:
 # ------------------------------------------------------------------------------------------------
 
 
+def _is_fit(o):
+    return o.TypeId == "App::FeaturePython" and isinstance(getattr(o, "Proxy", None), PartsListFit)
+
+
 def fit_of(view):
-    """The PartsListFit object that feeds a parts-list view, or None."""
+    """The PartsListFit object that feeds a parts-list view, or None.
+
+    Found by the view's own expressions (``CellEnd``, ``X``, ``Y`` name the helper), then by the helper's ``ViewName``, then by
+    ``OutList``: after a delete and an undo the view's ``OutList`` no longer lists the helper though the expressions still name it.
+    """
+    doc = view.Document
+    named = set()
+    for prop, expr in getattr(view, "ExpressionEngine", None) or ():
+        m = re.match(r"\s*(\w+)\.", expr)
+        if m:
+            named.add(m.group(1))
+    for n in sorted(named):
+        o = doc.getObject(n)
+        if o is not None and _is_fit(o):
+            return o
+    for o in doc.Objects:
+        if _is_fit(o) and o.ViewName == view.Name:
+            return o
     for o in view.OutList:
-        if o.TypeId == "App::FeaturePython" and isinstance(getattr(o, "Proxy", None), PartsListFit):
+        if _is_fit(o):
             return o
     return None
+
+
+def _drop_orphans(page):
+    """Remove helpers of this page that no parts-list view uses (left by a delete and an undo of the table)."""
+    doc = page.Document
+    used = {fit_of(v).Name for v in page.Views if v.TypeId == "TechDraw::DrawViewSpreadsheet" and fit_of(v) is not None}
+    for o in list(doc.Objects):
+        if _is_fit(o) and o.PageName == page.Name and o.Name not in used:
+            doc.removeObject(o.Name)
 
 
 def is_parts_view(v):
@@ -451,6 +481,7 @@ def refresh(page):
     A plain ``doc.recompute()`` already follows an assembly edit; this is for forcing a regeneration or repairing damage.
     """
     doc = page.Document
+    _drop_orphans(page)
     for v in views_on(page):
         asm = assembly_of(v)
         if asm is not None:

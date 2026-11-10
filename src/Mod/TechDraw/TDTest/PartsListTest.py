@@ -459,3 +459,57 @@ class PartsListTest(unittest.TestCase):
         self.assertLess(table_box(v3)[1], high - 1.0)
         self.assertAlmostEqual(box3[1], box1[3] + PL.GAP_MM, delta=1.0)
         self.assertEqual(self.untouched(), [])
+
+    # ---- 2a repair R4 (run 087 LOW): a deleted and restored table finds its helper again
+
+    def helpers(self):
+        return [o.Name for o in self.doc.Objects if o.TypeId == "App::FeaturePython" and o.Name.startswith("PartsListFit")]
+
+    def delete_and_undo(self, page, view):
+        self.doc.openTransaction("delete table")
+        page.removeView(view)
+        self.doc.removeObject(view.Name)
+        self.doc.commitTransaction()
+        self.doc.undo()
+        self.doc.recompute()
+        return self.doc.getObject(view.Name)
+
+    def test_r4_helper_found_after_delete_and_undo(self):
+        b = self.case("three_configs")
+        page = self.page(ISO_A3)
+        view = PL.make(page, b.asm)
+        self.doc.recompute()
+        name = PL.fit_of(view).Name
+        back = self.delete_and_undo(page, view)
+        self.assertIsNotNone(back)
+        self.assertIsNotNone(PL.fit_of(back))
+        self.assertEqual(PL.fit_of(back).Name, name)
+        PL.refresh(page)
+        self.assertEqual(self.helpers(), [name])  # no second helper
+        self.assertEqual(len(PL.views_on(page)), 1)
+        self.assertTable(back, sheet_rows(back.Source))
+        self.assertEqual(self.untouched(), [])
+
+    def test_r4_orphaned_helper_is_cleaned_by_refresh(self):
+        b = self.case("three_configs")
+        page = self.page(ISO_A3)
+        view = PL.make(page, b.asm)
+        self.doc.recompute()
+        old = PL.fit_of(view)
+        # a document damaged by the old bug: the view uses a newer helper, the old one stays with the same ViewName
+        twin = self.doc.addObject("App::FeaturePython", "PartsListFit001")
+        PL.PartsListFit(twin)
+        twin.Source = view.Source
+        twin.PageName, twin.ViewName = page.Name, view.Name
+        view.setExpression("CellEnd", "PartsListFit001.CellEnd")
+        view.setExpression("X", "PartsListFit001.CenterX")
+        view.setExpression("Y", "PartsListFit001.CenterY")
+        self.doc.recompute()
+        self.assertEqual(sorted(self.helpers()), sorted([old.Name, "PartsListFit001"]))
+        PL.refresh(page)
+        self.assertEqual(len(self.helpers()), 1)
+        self.assertEqual(len(PL.views_on(page)), 1)
+        self.assertEqual(PL.fit_of(view).Name, self.helpers()[0])
+        self.assertTable(view, sheet_rows(view.Source))
+        area, _ = PL.page_areas(page)
+        self.assertAlmostEqual(table_box(view)[2], area[2] - PL.MARGIN_MM, delta=1.0)
