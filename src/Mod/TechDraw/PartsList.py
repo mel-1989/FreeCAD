@@ -459,3 +459,10 @@ def refresh(page):
         if v.Source is not None:
             v.Source.touch()
     doc.recompute()
+
+
+def balloon(page, view, partslist=None):
+    """Balloons tied to the rows of the page's parts list; see ``Balloons.balloon``."""
+    import Balloons
+
+    return Balloons.balloon(page, view, partslist)
