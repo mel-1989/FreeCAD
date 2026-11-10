@@ -235,6 +235,8 @@ class PartsListFit:
         add("App::PropertyLength", "CenterY", "PartsList", "Centre of the drawn table, page y")
         add("App::PropertyLinkList", "Below", "PartsList", "Parts lists made earlier on the same page: this one stacks above them")
         add("App::PropertyString", "PageName", "PartsList", "Name of the page; its template is read again on every run")
+        add("App::PropertyString", "ViewName", "PartsList", "Name of the table view this helper feeds")
+        add("App::PropertyString", "Signature", "PartsList", "Template and stack this helper last ran against")
         add("App::PropertyLinkGlobal", "Template", "PartsList", "Template object of the page (an edit of it recomputes the table)")
         obj.setEditorMode("Source", 1)
 
@@ -248,11 +250,35 @@ class PartsListFit:
     def onDocumentRestored(self, obj):
         obj.Proxy = self
 
+    @staticmethod
+    def _live_below(obj):
+        """The earlier parts lists whose table is still on the page: a deleted table leaves no gap in the stack."""
+        doc = obj.Document
+        page = doc.getObject(obj.PageName) if obj.PageName else None
+        out = []
+        for prev in obj.Below:
+            if prev is None or prev is obj:
+                continue
+            v = doc.getObject(prev.ViewName) if prev.ViewName else None
+            if v is not None and (page is None or v in page.Views):
+                out.append(prev)
+        return out
+
+    def _signature(self, obj):
+        page = obj.Document.getObject(obj.PageName) if obj.PageName else None
+        tpl = page.Template.Name if page is not None and page.Template is not None else ""
+        return tpl + "|" + ",".join(p.Name for p in self._live_below(obj))
+
+    def mustExecute(self, obj):
+        # a new page template (another object) or a table taken off the page does not touch this helper by itself
+        return 1 if obj.Source is not None and self._signature(obj) != obj.Signature else 0
+
     def execute(self, obj):
         sheet = obj.Source
         if sheet is None:
             return
         self._read_template(obj)
+        obj.Signature = self._signature(obj)
         table = read_table(sheet)
         ncols = len(table[0]) if table else 0
         widths = []
@@ -269,9 +295,8 @@ class PartsListFit:
         area = list(obj.Area)
         right, bottom = anchor(area, list(obj.TitleBlock), width_mm)
         # a second table stands above the earlier ones, so two assemblies' lists on one page never overlap
-        for prev in obj.Below:
-            if prev is not None and prev is not obj:
-                bottom = max(bottom, float(prev.Bottom) + float(prev.Height) + GAP_MM)
+        for prev in self._live_below(obj):
+            bottom = max(bottom, float(prev.Bottom) + float(prev.Height) + GAP_MM)
         obj.Right, obj.Bottom = right, bottom
         obj.CenterX = right - width_mm / 2.0
         obj.CenterY = bottom + height_mm / 2.0
@@ -331,44 +356,87 @@ def fit_of(view):
     return None
 
 
+def is_parts_view(v):
+    return v.TypeId == "TechDraw::DrawViewSpreadsheet" and (hasattr(v, "PartsListAssembly") or fit_of(v) is not None)
+
+
 def views_on(page):
-    return [v for v in page.Views if v.TypeId == "TechDraw::DrawViewSpreadsheet" and fit_of(v) is not None]
+    """The parts-list tables on ``page``, including a damaged one (its BOM or helper deleted)."""
+    return [v for v in page.Views if is_parts_view(v)]
+
+
+def assembly_of(view):
+    """The assembly a parts-list table was made for, or None when it is gone."""
+    name = getattr(view, "PartsListAssembly", "")
+    asm = view.Document.getObject(name) if name else None
+    if asm is None:
+        fit = fit_of(view)
+        src = fit.Source if fit is not None else None
+        asm = next((o for o in (src.InList if src is not None else []) if o.TypeId == "Assembly::AssemblyObject"), None)
+    return asm
+
+
+def _attach(doc, page, assembly, bom, view=None):
+    """Create the helper and the table view for ``bom``, or repair a damaged pair (a deleted BOM or helper) in place."""
+    fit = fit_of(view) if view is not None else None
+    if fit is None:
+        fit = doc.addObject("App::FeaturePython", "PartsListFit")
+        PartsListFit(fit)
+        fit.Label = "Parts list fit"
+    fit.Source = bom
+    area, title = page_areas(page)
+    fit.Area = list(area)
+    fit.TitleBlock = list(title) if title else []
+    fit.PageName = page.Name
+    fit.Template = page.Template
+    others = []
+    for v in views_on(page):
+        if v is view:
+            break
+        f = fit_of(v)
+        if f is not None:
+            others.append(f)
+    fit.Below = others
+    if view is None:
+        view = doc.addObject("TechDraw::DrawViewSpreadsheet", "PartsList")
+        view.Label = "Parts list"
+        page.addView(view)
+        view.addProperty("App::PropertyString", "PartsListAssembly", "PartsList", "Name of the assembly this table lists")
+        view.CellStart = "A1"
+        view.CellEnd = "C2"
+    view.PartsListAssembly = assembly.Name
+    fit.ViewName = view.Name
+    fit.Signature = ""
+    view.Source = bom
+    view.TextSize = TEXT_PX
+    for prop in ("CellEnd", "X", "Y"):
+        view.setExpression(prop, None)
+    view.setExpression("CellEnd", "%s.CellEnd" % fit.Name)
+    view.setExpression("X", "%s.CenterX" % fit.Name)
+    view.setExpression("Y", "%s.CenterY" % fit.Name)
+    bom.touch()
+    return view
 
 
 def make(page, assembly, columns=None):
     """Put the assembly's parts list on ``page`` and return the ``TechDraw::DrawViewSpreadsheet``.
 
-    One undo transaction.  Calling it again for the same assembly on the same page returns the view that is there.
+    One undo transaction.  Calling it again for the same assembly on the same page returns the view that is there; when its
+    BOM or helper has been deleted, the same view is rebuilt in place (no second table).
     """
     doc = page.Document
     doc.openTransaction("Parts list")
     try:
         bom = _bom(assembly, columns)
-        for v in views_on(page):
-            if v.Source == bom:
+        mine = [v for v in views_on(page) if getattr(v, "PartsListAssembly", None) == assembly.Name or assembly_of(v) is assembly]
+        view = None
+        for v in mine:
+            if v.Source == bom and fit_of(v) is not None and fit_of(v).Source == bom:
                 doc.commitTransaction()
                 return v
-        fit = doc.addObject("App::FeaturePython", "PartsListFit")
-        PartsListFit(fit)
-        fit.Label = "Parts list fit"
-        fit.Source = bom
-        area, title = page_areas(page)
-        fit.Area = list(area)
-        fit.TitleBlock = list(title) if title else []
-        fit.PageName = page.Name
-        fit.Template = page.Template
-        fit.Below = [f for f in (fit_of(v) for v in views_on(page)) if f is not None]
-        view = doc.addObject("TechDraw::DrawViewSpreadsheet", "PartsList")
-        view.Label = "Parts list"
-        page.addView(view)
-        view.Source = bom
-        view.TextSize = TEXT_PX
-        view.CellStart = "A1"
-        view.CellEnd = "C2"
-        view.setExpression("CellEnd", "%s.CellEnd" % fit.Name)
-        view.setExpression("X", "%s.CenterX" % fit.Name)
-        view.setExpression("Y", "%s.CenterY" % fit.Name)
-        bom.touch()
+            if view is None:
+                view = v
+        view = _attach(doc, page, assembly, bom, view)
         doc.recompute([view])
     except Exception:
         doc.abortTransaction()
@@ -378,8 +446,16 @@ def make(page, assembly, columns=None):
 
 
 def refresh(page):
-    """Regenerate every parts list on ``page`` now (a plain ``doc.recompute()`` already does so after an assembly edit)."""
+    """Regenerate every parts list on ``page`` now, rebuilding a table whose BOM or helper was deleted.
+
+    A plain ``doc.recompute()`` already follows an assembly edit; this is for forcing a regeneration or repairing damage.
+    """
     doc = page.Document
     for v in views_on(page):
-        v.Source.touch()
+        asm = assembly_of(v)
+        if asm is not None:
+            make(page, asm)
+    for v in views_on(page):
+        if v.Source is not None:
+            v.Source.touch()
     doc.recompute()
