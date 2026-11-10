@@ -98,7 +98,8 @@ def tag_letters(i):
 
 
 def _faces(solid):
-    for f in solid.Faces:
+    """Concave cylinder and cone faces of a solid: (index in ``solid.Faces``, face, surface, type id, unit axis, point on the axis)."""
+    for i, f in enumerate(solid.Faces):
         s = f.Surface
         tid = s.TypeId
         if tid not in ("Part::GeomCylinder", "Part::GeomCone"):
@@ -116,7 +117,104 @@ def _faces(solid):
         rad = rad - ax * rad.dot(ax)
         if n.dot(rad) >= 0:  # faces outward: a boss or shaft
             continue
-        yield f, s, tid, ax, c
+        yield i, f, s, tid, ax, c
+
+
+COVER_FULL = 0.95  # a segment whose faces cover more than this of its surface of revolution is a full segment
+EXPLAIN_AXIAL = 6  # ruling 48: samples along the segment's extent ...
+EXPLAIN_ANGLES = 36  # ... and around it (every 10 degrees); both fixed, so the answer is the same on every run
+EXPLAIN_TOL = 1e-4  # a sample is inside a cavity when its distance from the cavity's axis is within the cavity's radius plus this
+
+
+def _span(f, ax, c0):
+    """(smallest and largest position along ``ax`` measured from ``c0`` over the face's vertices, the distance from the axis at each)."""
+    pts = []
+    for v in f.Vertexes:
+        dv = v.Point - c0
+        t = dv.dot(ax)
+        pts.append((t, (dv - ax * t).Length))
+    return pts
+
+
+def _cavity(i, f, tid, s, ax, c):
+    """A concave face as a cavity: (face index, point on its axis, unit axis, axial extent, radius at each end of it)."""
+    pts = _span(f, ax, c)
+    if not pts:
+        return None
+    lo, hi = min(pts, key=lambda p: p[0]), max(pts, key=lambda p: p[0])
+    if tid == "Part::GeomCylinder":
+        r = float(s.Radius)
+        return (i, c, ax, lo[0], hi[0], r, r)
+    return (i, c, ax, lo[0], hi[0], lo[1], hi[1])
+
+
+def _inside(P, cav):
+    """Is ``P`` within the cavity: along its extent and no farther from its axis than its radius there (plus ``EXPLAIN_TOL``)?"""
+    _, c, ax, t0, t1, ra, rb = cav
+    dv = P - c
+    t = dv.dot(ax)
+    if t < t0 - EXPLAIN_TOL or t > t1 + EXPLAIN_TOL:
+        return False
+    rho = (dv - ax * t).Length
+    r = ra if t1 - t0 < 1e-9 else ra + (rb - ra) * (t - t0) / (t1 - t0)
+    return rho <= r + EXPLAIN_TOL
+
+
+def _explained(seg, a, c0, cavs):
+    """Ruling 48: -> (True when every sample of the segment's full surface of revolution that is on none of its faces lies inside
+    another cavity, the set of face indices of the cavities that hold such samples).
+
+    The samples are a fixed grid (``EXPLAIN_AXIAL`` x ``EXPLAIN_ANGLES``, offset half a step) over the segment's extent; ``cavs`` are
+    the cavities of the same solid with an axis parallel to the segment's, other than the segment's own faces.
+    """
+    t0, t1 = seg["t0"], seg["t1"]
+    ra, rb = (seg["r"], seg["r"]) if seg["kind"] == "cyl" else (seg["ra"], seg["rb"])
+    rmax = max(ra, rb)
+    near = []  # only a cavity whose circle can meet the segment's surface is worth testing
+    for cav in cavs:
+        _, cc, cax, k0, k1, qa, qb = cav
+        dv = cc - c0
+        dist = (dv - a * dv.dot(a)).Length
+        qmax = max(qa, qb)
+        if dist > rmax + qmax + EXPLAIN_TOL:
+            continue
+        t_lo, t_hi = dv.dot(a) + k0 * cax.dot(a), dv.dot(a) + k1 * cax.dot(a)
+        if max(t_lo, t_hi) < t0 - EXPLAIN_TOL or min(t_lo, t_hi) > t1 + EXPLAIN_TOL:
+            continue
+        near.append(cav)
+    if not near:
+        return False, set()
+    u = a.cross(Vector(1, 0, 0))
+    if u.Length < 0.1:
+        u = a.cross(Vector(0, 1, 0))
+    u.normalize()
+    w = a.cross(u)
+    ok, by = True, set()
+    surfaces = [(f, f.Surface) for f in seg["faces"]]
+    for k in range(EXPLAIN_AXIAL):
+        fr = (k + 0.5) / EXPLAIN_AXIAL
+        t = t0 + (t1 - t0) * fr
+        r = ra + (rb - ra) * fr if seg["kind"] == "cone" else ra
+        for m in range(EXPLAIN_ANGLES):
+            th = 2.0 * math.pi * (m + 0.5) / EXPLAIN_ANGLES
+            P = c0 + a * t + (u * math.cos(th) + w * math.sin(th)) * r
+            on = False
+            for f, sf in surfaces:
+                try:
+                    uu, vv = sf.parameter(P)
+                    if f.isPartOfDomain(uu, vv):
+                        on = True
+                        break
+                except Exception:
+                    pass
+            if on:
+                continue
+            hit = [cav[0] for cav in near if _inside(P, cav)]
+            if hit:
+                by.update(hit)
+            else:
+                ok = False
+    return ok, by
 
 
 def find_holes(solid, d):
@@ -124,11 +222,15 @@ def find_holes(solid, d):
 
     Keys: ``c0`` (point on the axis), ``a`` (unit axis, a . d >= 0), ``T0``/``T1`` (extent along a; the mouth is T1),
     ``segs`` (cylinders and cones, each ``kind, t0, t1, r`` / ``ra, rb``); only holes parallel to ``d`` are returned.  ``open_ends``
-    adds ``top_open`` and ``through``.
+    adds ``top_open`` and ``through``.  ``left`` lists the diameters of the segments that were left out and touch the hole end to
+    end or are cut into it (ruling 49).
+
+    A segment is full when its faces cover more than ``COVER_FULL`` of its surface of revolution, or, when they cover less, when
+    the rest of that surface lies inside another cavity of the solid with a parallel axis (ruling 48): a neighbour's counterbore
+    that cuts into a hole takes part of its wall away, and the hole is still the hole.  Slot ends, pocket corners and walls that
+    break out of the part are not explained and stay out.
     """
-    raw = []
-    for f, s, tid, ax, c in _faces(solid):
-        raw.append((f, tid, ax, c, s))
+    raw = [(f, tid, ax, c, s, i) for i, f, s, tid, ax, c in _faces(solid)]
     groups = []
     for item in raw:
         ax, c = item[2], item[3]
@@ -141,18 +243,17 @@ def find_holes(solid, d):
                 break
         else:
             groups.append([item])
-    holes = []
+    cavs = None  # every cavity of the solid parallel to d, built when a segment needs explaining
+    holes, outs = [], []
     for g in groups:
         a, c0 = Vector(g[0][2]), Vector(g[0][3])
         if a.dot(d) < 0:
             a = -a
+        if a.cross(d).Length > 1e-6:  # not parallel to the view direction: never listed
+            continue
         merged = {}
-        for f, tid, ax, c, s in g:
-            pts = []
-            for v in f.Vertexes:
-                dv = v.Point - c0
-                t = dv.dot(a)
-                pts.append((t, (dv - a * t).Length))
+        for f, tid, ax, c, s, fi in g:
+            pts = _span(f, a, c0)
             if not pts:
                 continue
             t0, t1 = min(p[0] for p in pts), max(p[0] for p in pts)
@@ -170,17 +271,32 @@ def find_holes(solid, d):
                 key = ("k", round(ra, 4), round(rb, 4), round(t0, 3), round(t1, 3))
             if key in merged:
                 merged[key]["cover"] += seg["cover"]
+                merged[key]["faces"].append(f)
+                merged[key]["fids"].add(fi)
             else:
+                seg["faces"], seg["fids"] = [f], {fi}
                 merged[key] = seg
-        segs = sorted((s for s in merged.values() if s["cover"] > 0.95), key=lambda s: (s["t0"], s["t1"]))
+        kept, left = [], []
+        for s in merged.values():
+            if s["cover"] > COVER_FULL:
+                kept.append(s)
+                continue
+            if cavs is None:
+                cavs = [x for x in (_cavity(fi, f, tid, s0, ax, c) for f, tid, ax, c, s0, fi in raw if ax.cross(d).Length <= 1e-6) if x]
+            ok, by = _explained(s, a, c0, [x for x in cavs if x[0] not in s["fids"]])
+            if ok:
+                s["explained"] = True
+                kept.append(s)
+            else:
+                s["by"] = by
+                left.append(s)
+        segs = sorted(kept, key=lambda s: (s["t0"], s["t1"]))
         run = []
 
         def flush(run):
             if not any(x["kind"] == "cyl" for x in run):
                 return
             T0, T1 = min(x["t0"] for x in run), max(x["t1"] for x in run)
-            if a.cross(d).Length > 1e-6:  # not parallel to the view direction: never listed
-                return
             holes.append(dict(c0=c0, a=a, T0=T0, T1=T1, segs=list(run), solid=solid))
 
         reach = None
@@ -192,6 +308,23 @@ def find_holes(solid, d):
             reach = s["t1"] if reach is None else max(reach, s["t1"])
         if run:
             flush(run)
+        for s in left:
+            s["axis"] = (a, c0)
+            outs.append(s)
+    # ruling 49: a left-out segment that touches a hole end to end, or has samples inside one of its cavities, is named with that hole
+    for h in holes:
+        fids = set()
+        for s in h["segs"]:
+            fids |= s["fids"]
+        diam = set()
+        for s in outs:
+            a2, c2 = s["axis"]
+            dc = c2 - h["c0"]
+            same_axis = abs(abs(a2.dot(h["a"])) - 1) < 1e-6 and (dc - h["a"] * dc.dot(h["a"])).Length < 1e-4
+            touches = same_axis and s["t1"] >= h["T0"] - 1e-3 and s["t0"] <= h["T1"] + 1e-3  # end to end, or along it
+            if touches or (s["by"] & fids):
+                diam.add(round(2 * (s["r"] if s["kind"] == "cyl" else max(s["ra"], s["rb"])), 6))
+        h["left"] = sorted(diam)
     return holes
 
 
@@ -1457,6 +1590,12 @@ class HoleTableDriver:
         mine = self._match_tags(obj, ordered, view, page)
         boxes = self._tables(obj, rows, page, edges)
         self._layout_tags(obj, ordered, mine, view, page, edges, boxes)
+        # ruling 49: a row whose hole has a wall that was left out (cut by a neighbour, or broken out of the part) says so
+        short = ["%s may be shown short: a %s segment touching it or cut into it was left out" % (h["tag"], " and ".join("Ø" + fmt(x) for x in h["left"])) for h in ordered if h.get("left")]
+        if short:
+            note = "HoleTable: " + "; ".join(short)
+            App.Console.PrintWarning(note + "\n")
+            obj.Warning = (obj.Warning + " | " if obj.Warning else "") + note
         obj.HoleCount = len(ordered)
 
     # -- tags -------------------------------------------------------------------------------------
