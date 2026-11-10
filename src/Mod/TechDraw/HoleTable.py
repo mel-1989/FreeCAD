@@ -35,15 +35,22 @@ from FreeCAD import Vector
 import PartsList as PL
 
 HEADER = ("TAG", "X", "Y", "SIZE")
-TEXT_MM = 7.0  # label size of a tag, page mm (used to estimate its box)
-TAG_PAD_MM = 1.0
-TAG_H_MM = 8.0
+TAG_H_MM = 13.0  # drawn height of a tag: the text's scene box plus 0.5 mm each side, measured in the GUI (105 tags, run 089)
+TAG_ANCHOR_MM = 1.15  # the tag's anchor (X, Y) lies this far above the centre of its box
+TAG_LEAD_MM = 1.5  # the leader starts this far beyond the side of the box that faces the tip
+TAG_PLAN_W_MM = 0.6  # extra width and height the placer keeps free around a tag beyond its measured size
+TAG_PLAN_H_MM = 0.8
+TAG_CLEAR_MM = 0.3  # clear space the placer keeps to every neighbour
 TIP_STEPS = 24  # rim points tried for an arrow tip
 TIP_TOL_MM = 0.02  # a rim point counts as on a visible arc within this
-GAP_MM = 2.0  # clear space kept between a table or tag and its neighbours
+TAG_ROOM_MM = 14.0  # room kept around the view for its tags when a table is placed beside it
+GAP_MM = 2.0  # clear space kept between a table and its neighbours
 NEAR_MM = 8.0  # holes closer than this on the page get the larger tag distance
-MAX_TAG_DIST = 18.0
-MAX_TAG_DIST_DENSE = 33.0
+MAX_TAG_DIST = 18.5  # the check is 20 mm between the tag's box centre and its arrow tip
+MAX_TAG_DIST_DENSE = 33.5  # 35 mm
+RING_MM = 1.5  # step of the rings the placer tries tag centres on
+RING_DIRS = 16
+ROUND_MM = 0.001  # inputs of the layout are rounded to this, so a GUI run and a headless run choose the same slots
 IDENTITY_MM = 0.5  # a tag stays tied to a hole that moved less than this
 MAX_BLOCKS = 10
 PLACED_X, PLACED_Y = "PlacedX", "PlacedY"
@@ -239,17 +246,52 @@ def _radii(h):
 _GC = {}
 
 
+def _plain_centre(view):
+    """The centre TechDraw centred the shape on when it projected it: the middle of the source shapes' bounding box in the view's frame.
+
+    ``view.getGeometricCenter()`` measures the shape again, and once the 3D view has meshed it the box includes the mesh deflection
+    (7 micrometres off on a plate with a tilted hole in the GUI), so a hole centre projected with it misses its rim circle.  The same
+    box is taken here on a copy that carries no mesh, whether the GUI is up or not.
+    """
+    z = Vector(view.Direction)
+    z.normalize()
+    x = Vector(view.XDirection)
+    x = x - z * x.dot(z)
+    x.normalize()
+    y = z.cross(x)
+    m = App.Matrix()
+    m.A11, m.A12, m.A13 = x.x, x.y, x.z
+    m.A21, m.A22, m.A23 = y.x, y.y, y.z
+    m.A31, m.A32, m.A33 = z.x, z.y, z.z
+    lo = hi = None
+    for sh in source_shapes(view):
+        c = sh.copy()
+        c.transformShape(m)
+        bb = c.optimalBoundingBox(True, False)
+        a, b = (bb.XMin, bb.YMin, bb.ZMin), (bb.XMax, bb.YMax, bb.ZMax)
+        lo = a if lo is None else tuple(min(i, j) for i, j in zip(lo, a))
+        hi = b if hi is None else tuple(max(i, j) for i, j in zip(hi, b))
+    if lo is None:
+        return view.getGeometricCenter()
+    cx, cy, cz = [0.5 * (i + j) for i, j in zip(lo, hi)]
+    return x * cx + y * cy + z * cz
+
+
 def gc_of(view):
-    """``view.getGeometricCenter()`` (a quarter of a second on a big part), cached on what it depends on."""
+    """The centre the view was centred on (see ``_plain_centre``), a quarter of a second on a big part, cached on what it depends on."""
     try:
-        key = (view.Document.Uid, view.Name, float(view.Scale), tuple(view.Direction), tuple((o.Shape.hashCode(), str(o.Placement)) for o in view.Source))
+        key = (view.Document.Uid, view.Name, tuple(view.Direction), tuple(view.XDirection), tuple((o.Shape.hashCode(), str(o.Placement)) for o in view.Source))
     except Exception:
         return view.getGeometricCenter()
     hit = _GC.get(key)
     if hit is None:
         if len(_GC) > 64:
             _GC.clear()
-        hit = _GC[key] = view.getGeometricCenter()
+        try:
+            hit = _plain_centre(view)
+        except Exception:
+            hit = view.getGeometricCenter()
+        _GC[key] = hit
     return hit
 
 
@@ -302,18 +344,42 @@ class Edges:
         self.k = _edge_factor(view, raw)
         k = self.k
         self.box = [v / k for v in raw] if raw else None
+        self.drawn_box = self.box
+        self.box0 = self.box
+        rot = _rotation(view)
+        if raw and rot:
+            # the lower left corner X and Y are measured from is the view's unrotated one (ruling 34): turn the edges back
+            lo = hi = None
+            for e in self.edges:
+                c = e.copy()
+                c.rotate(Vector(0, 0, 0), Vector(0, 0, 1), -rot)
+                bb = c.BoundBox
+                lo = [bb.XMin, bb.YMin] if lo is None else [min(lo[0], bb.XMin), min(lo[1], bb.YMin)]
+                hi = [bb.XMax, bb.YMax] if hi is None else [max(hi[0], bb.XMax), max(hi[1], bb.YMax)]
+            self.box0 = [lo[0] / k, lo[1] / k, hi[0] / k, hi[1] / k]
         self.circles = {}
         for e in self.edges:
             try:
                 c = e.Curve
+                r = None
                 if c.TypeId == "Part::GeomCircle":
-                    r = c.Radius / k
+                    r = c.Radius
+                elif c.TypeId == "Part::GeomEllipse" and c.MajorRadius - c.MinorRadius < 1e-4 * c.MajorRadius:
+                    # a hole a hair off the view direction (within ruling 23's 1e-6) comes back as an ellipse that is a circle to the eye
+                    r = 0.5 * (c.MajorRadius + c.MinorRadius)
+                if r is not None:
+                    r /= k
                     self.circles.setdefault(round(r, 2), []).append((c.Center.x / k, c.Center.y / k, r, e.Length / k, e))
             except Exception:
                 pass
 
     def signature(self):
-        return "%d:%.3f" % (len(self.edges), sum(e.Length for e in self.edges))
+        """What the edges are, down to where each one lies: a hole that moved changes it though the edge count and lengths do not."""
+        tot = 0
+        for e in self.edges:
+            bb = e.BoundBox
+            tot += hash((round(bb.XMin, 3), round(bb.YMin, 3), round(bb.XMax, 3), round(bb.YMax, 3), round(e.Length, 3)))
+        return "%d:%d" % (len(self.edges), tot % (1 << 61))
 
     def rim(self, cx, cy, radius):
         """-> (cover fraction of the circumference, [edges]) of visible arcs of that circle."""
@@ -329,7 +395,7 @@ class Edges:
 def _on_arc(e, pt, tol_mm, k=1.0):
     """True when the point (unscaled, on the circle) lies on the arc ``e`` (whose coordinates are ``k`` times larger)."""
     c = e.Curve
-    r = c.Radius
+    r = c.Radius if c.TypeId == "Part::GeomCircle" else c.MajorRadius
     pt = (pt[0] * k, pt[1] * k)
     tol_mm = tol_mm * k
     try:
@@ -387,6 +453,11 @@ def _thread_of(h, threads):
 # ------------------------------------------------------------------------------------------------
 
 
+def _rotation(view):
+    rot = view.Rotation
+    return float(rot.Value) if hasattr(rot, "Value") else float(rot)
+
+
 def _rot(p, deg):
     if not deg:
         return p
@@ -411,7 +482,7 @@ def listed_holes(view, edges, origin=None):
     d = Vector(view.Direction)
     d.normalize()
     gc = gc_of(view)
-    rot = float(view.Rotation.Value) if hasattr(view.Rotation, "Value") else float(view.Rotation)
+    rot = _rotation(view)
     threads = _threads(view.Document)
     found = []
     for shape in source_shapes(view):
@@ -443,7 +514,7 @@ def listed_holes(view, edges, origin=None):
 def tip_options(view, h, edges):
     """-> [(x, y)] points of the hole's outermost rim at the mouth, in the view's frame, that lie on a visible arc."""
     gc = h["gc"]
-    rot = float(view.Rotation.Value) if hasattr(view.Rotation, "Value") else float(view.Rotation)
+    rot = _rotation(view)
     R = mouth_radius(h)
     a = h["a"]
     u = a.cross(Vector(1, 0, 0))
@@ -500,8 +571,27 @@ def _seg_hits_box(p, q, b):
     return t0 + 1e-9 < t1 - 1e-9
 
 
+def r3(x):
+    """Round a layout input to 0.001 mm (the one place both the GUI and the headless run take their numbers through)."""
+    return round(float(x) / ROUND_MM) * ROUND_MM
+
+
 def tag_size(text):
-    return PL.text_width_px(text, TEXT_MM) + TAG_PAD_MM, TAG_H_MM
+    """-> (width, height) in page mm of the box a tag with this text draws, from the text alone.
+
+    Measured in the GUI (runs 088 and 089, 105 tags): the box is the text plus 1.0 mm and 13.0 mm tall; a digit is up to 3.4 mm wide
+    and a capital up to 5.0 mm (6.4 mm for M and W).  These are upper bounds, so a tag is never larger than planned.  No font is read.
+    """
+    return 1.0 + sum(3.4 if not c.isalpha() else 6.4 if c in "MW" else 5.0 for c in text), TAG_H_MM
+
+
+def tag_box(sv, t):
+    """Box (x0, y0, x1, y1) of the tag object ``t`` of view ``sv`` on the page, from its anchor and text."""
+    w, h = tag_size(t.Text)
+    S = float(sv.Scale)
+    cx = sv.X.Value + _num(t.X) * S
+    cy = sv.Y.Value + _num(t.Y) * S - TAG_ANCHOR_MM
+    return (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
 
 
 def view_box(view, edges=None):
@@ -544,10 +634,7 @@ def obstacles(page, skip=()):
         if v.TypeId == "TechDraw::DrawViewBalloon":
             sv = v.SourceView
             if sv is not None:
-                w, h = tag_size(v.Text)
-                S = float(sv.Scale)
-                cx, cy = sv.X.Value + v.X.Value * S, sv.Y.Value + v.Y.Value * S
-                tags_by_view.setdefault(sv.Name, []).append((cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2))
+                tags_by_view.setdefault(sv.Name, []).append(tag_box(sv, v))
     for v in page.Views:
         if v.Name in skip:
             continue
@@ -562,6 +649,109 @@ def obstacles(page, skip=()):
                     b = (min(b[0], t[0]), min(b[1], t[1]), max(b[2], t[2]), max(b[3], t[3]))
                 out.append((v.Label, b))
     return out
+
+
+def _angle_gap(a, b):
+    return abs(((a - b + math.pi) % (2 * math.pi)) - math.pi)
+
+
+def plan_tags(items, area, obs, view_centre, limit):
+    """Choose a tag position for every hole: -> ([(box centre, tip)] in input order, number that fell back to a poorer spot).
+
+    ``items`` are dicts with ``tag``, ``c`` (hole centre), ``R`` (rim radius), ``tips`` (rim points that lie on a visible arc) and,
+    for a tag the user moved, ``fixed`` (its box centre); all in page mm, rounded by the caller.  ``obs`` are the (name, box) the
+    tags must stay clear of, ``area`` the drawing area.  A first fit in rings around each hole, most crowded hole first: the nearest
+    free place where the tag lies in the area, clear of every obstacle and tag, covers no hole centre, is within ``limit`` of its
+    arrow tip, and whose leader crosses no other leader and runs through no other tag.  A tag may lie over its own view.
+    """
+    n = len(items)
+    cs = [it["c"] for it in items]
+    plan = [None] * n
+    boxes, legs = [], []
+
+    def geom(it, centre, tip):
+        w, h = tag_size(it["tag"])
+        cx, cy = centre
+        side = 1.0 if tip[0] > cx else -1.0
+        tail = (cx + side * (w / 2 + TAG_LEAD_MM), cy + TAG_ANCHOR_MM)
+        return (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2), tail
+
+    def best_tip(it, centre):
+        hc = it["c"]
+        want = math.atan2(centre[1] - hc[1], centre[0] - hc[0])
+        return min(it["tips"], key=lambda q: _angle_gap(math.atan2(q[1] - hc[1], q[0] - hc[0]), want))
+
+    free = []
+    for i, it in enumerate(items):
+        if "fixed" in it:
+            tip = best_tip(it, it["fixed"])
+            box, tail = geom(it, it["fixed"], tip)
+            boxes.append(box)
+            legs.append((tail, tip))
+            plan[i] = (it["fixed"], tip)
+        else:
+            free.append(i)
+    # the tips a tag may point at: nearer their own hole's centre than any other's
+    for i, it in enumerate(items):
+        others = [c for k, c in enumerate(cs) if k != i]
+        good = [q for q in it["tips"] if all(math.hypot(q[0] - c[0], q[1] - c[1]) > it["R"] + 0.02 for c in others)]
+        it["tips"] = good or it["tips"]
+    free.sort(key=lambda i: (-sum(1 for k, c in enumerate(cs) if k != i and math.hypot(cs[i][0] - c[0], cs[i][1] - c[1]) < 12.0), i))
+    vcx, vcy = view_centre
+    fallbacks = 0
+    mg = TAG_CLEAR_MM
+    for i in free:
+        it = items[i]
+        hc, R = it["c"], it["R"]
+        w, h = tag_size(it["tag"])
+        pw, ph = w + TAG_PLAN_W_MM, h + TAG_PLAN_H_MM
+        outward = math.atan2(hc[1] - vcy, hc[0] - vcx)
+        cands = []
+        for k in range(int((limit + R) / RING_MM) + 2):
+            rho = 2.0 + k * RING_MM
+            for j in range(RING_DIRS):
+                ang = outward + ((j + 1) // 2) * (2 * math.pi / RING_DIRS) * (1 if j % 2 else -1)
+                cands.append((rho + 1.5 * _angle_gap(ang, outward), rho, ang))
+        cands.sort()
+        done = None
+        for tier in (0, 1, 2):
+            for _, rho, ang in cands:
+                cx, cy = round(hc[0] + rho * math.cos(ang), 4), round(hc[1] + rho * math.sin(ang), 4)
+                box = (cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2)
+                if tier < 2 and (box[0] < area[0] + 0.05 or box[1] < area[1] + 0.05 or box[2] > area[2] - 0.05 or box[3] > area[3] - 0.05):
+                    continue
+                m = mg if tier == 0 else 0.0
+                if any(box[0] - m < c[0] < box[2] + m and box[1] - m < c[1] < box[3] + m for c in cs):
+                    continue
+                if any(overlap(box, b, m) for b in boxes) or (tier < 2 and any(overlap(box, b, m) for _, b in obs)):
+                    continue
+                tip = best_tip(it, (cx, cy))
+                if tier < 2 and math.hypot(cx - tip[0], cy - tip[1]) > limit - (mg if tier == 0 else 0.0):
+                    continue
+                _, tail = geom(it, (cx, cy), tip)
+                if tier == 0:
+                    if any(_seg_cross(tail, tip, a, b) for a, b in legs):
+                        continue
+                    if any(_seg_hits_box(tail, tip, (b[0] - 0.2, b[1] - 0.2, b[2] + 0.2, b[3] + 0.2)) for b in boxes):
+                        continue
+                    if any(_seg_hits_box(a, b, (box[0] - 0.2, box[1] - 0.2, box[2] + 0.2, box[3] + 0.2)) for a, b in legs):
+                        continue
+                done = ((cx, cy), tip, box, tail)
+                break
+            if done:
+                fallbacks += 1 if tier else 0
+                break
+        if done is None:  # nothing at all: stand it off to the side
+            fallbacks += 1
+            centre = (hc[0] + R + 30.0, hc[1])
+            tip = best_tip(it, centre)
+            real, tail = geom(it, centre, tip)
+            done = (centre, tip, real, tail)
+        centre, tip, real, tail = done
+        boxes.append(real)
+        legs.append((tail, tip))
+        plan[i] = (centre, tip)
+    return plan, fallbacks
 
 
 def find_slot(w, h, area, obs, pref, gap=GAP_MM):
@@ -828,7 +1018,7 @@ class HoleTableDriver:
             o = view.projectPoint(Vector(obj.Origin) - gc_of(view))
             org = (o.x, o.y)
         else:
-            org = (edges.box[0], edges.box[1])
+            org = (edges.box0[0], edges.box0[1])
         for h in holes:
             h["X"] = h["p"][0] - org[0]
             h["Y"] = h["p"][1] - org[1]
@@ -844,10 +1034,10 @@ class HoleTableDriver:
                 h["tag"] = "%s%d" % (L, n)
                 ordered.append(h)
         rows = [[h["tag"], fmt(h["X"]), fmt(h["Y"]), h["size"]] for h in ordered]
-        # tags first (they hug the view), then the table blocks in free space
+        # the tables first, in free space, then the tags around the holes with the tables as obstacles (ruling 40)
         mine = self._match_tags(obj, ordered, view, page)
-        self._layout_tags(obj, ordered, mine, view, page, edges)
-        self._tables(obj, rows, page)
+        boxes = self._tables(obj, rows, page, edges)
+        self._layout_tags(obj, ordered, mine, view, page, edges, boxes)
         obj.HoleCount = len(ordered)
 
     # -- tags -------------------------------------------------------------------------------------
@@ -899,145 +1089,74 @@ class HoleTableDriver:
     def _moved(t):
         return abs(_num(t.X) - t.PlacedX) > 1e-6 or abs(_num(t.Y) - t.PlacedY) > 1e-6
 
-    def _layout_tags(self, obj, holes, mine, view, page, edges):
+    def _layout_tags(self, obj, holes, mine, view, page, edges, blocks):
+        """Place the tags (the tables are already in place and are obstacles, with the title block and the other views)."""
         S = float(view.Scale)
-        vx, vy = view.X.Value, view.Y.Value
+        vx, vy = r3(view.X.Value), r3(view.Y.Value)
         area, title = PL.page_areas(page)
         names = {t.Name for t in self.tags(obj)} | {b.Name for b in self.blocks(obj)} | {view.Name}
-        obs = obstacles(page, skip=names)
-        centres = [(vx + h["p"][0] * S, vy + h["p"][1] * S) for h in holes]
-        dense = False
-        for i, c in enumerate(centres):
-            for j in range(i + 1, len(centres)):
-                if math.hypot(c[0] - centres[j][0], c[1] - centres[j][1]) < NEAR_MM:
-                    dense = True
-                    break
-            if dense:
-                break
-        limit = MAX_TAG_DIST_DENSE if dense else MAX_TAG_DIST
-        vcx = vx + 0.5 * (edges.box[0] + edges.box[2]) * S
-        vcy = vy + 0.5 * (edges.box[1] + edges.box[3]) * S
-        placed_boxes, placed_legs = [], []
-        plan = {}
-        fallbacks = 0
-        # user-moved tags stay where they are
+        obs = [(n, tuple(r3(v) for v in b)) for n, b in obstacles(page, skip=names)] + [("hole table", tuple(r3(v) for v in b)) for b in blocks]
+        area = tuple(r3(v) for v in area)
+        vb = edges.drawn_box
+        vcx, vcy = r3(vx + 0.5 * (vb[0] + vb[2]) * S), r3(vy + 0.5 * (vb[1] + vb[3]) * S)
+        items = []
         for h in holes:
             tips, R = tip_options(view, h, edges)
             h["tips"], h["R"] = tips, R
             t = h["tagobj"]
-            w, hh = tag_size(h["tag"])
-            h["w"], h["h"] = w, hh
-            if t.HoleSize and self._moved(t):
-                cx, cy = vx + _num(t.X) * S, vy + _num(t.Y) * S
-                tip = self._best_tip(h, (cx, cy), vx, vy, S)
-                plan[id(h)] = ((cx, cy), tip, True)
-                placed_boxes.append((cx - w / 2, cy - hh / 2, cx + w / 2, cy + hh / 2))
-                placed_legs.append(((vx + tip[0] * S, vy + tip[1] * S), (cx, cy)))
-        for h in holes:
-            if id(h) in plan:
-                continue
-            w, hh = h["w"], h["h"]
-            hc = (vx + h["p"][0] * S, vy + h["p"][1] * S)
-            Rp = h["R"] * S
-            best = None
-            rho0 = Rp + 0.5 * math.hypot(w, hh) + 0.5
-            outward = math.atan2(hc[1] - vcy, hc[0] - vcx)
-            cands = []
-            for k in range(0, 40):
-                rho = rho0 + k * 1.5
-                for j in range(16):
-                    ang = outward + (j // 2 + 1) * (math.pi / 8) * (1 if j % 2 == 0 else -1) if j else outward
-                    cands.append((rho + 0.4 * (abs(((ang - outward + math.pi) % (2 * math.pi)) - math.pi)), rho, ang))
-            cands.sort()
-            for _, rho, ang in cands:
-                cx, cy = hc[0] + rho * math.cos(ang), hc[1] + rho * math.sin(ang)
-                box = (cx - w / 2, cy - hh / 2, cx + w / 2, cy + hh / 2)
-                if box[0] < area[0] + 1 or box[1] < area[1] + 1 or box[2] > area[2] - 1 or box[3] > area[3] - 1:
-                    continue
-                tip = self._best_tip(h, (cx, cy), vx, vy, S)
-                tp = (vx + tip[0] * S, vy + tip[1] * S)
-                if math.hypot(tp[0] - cx, tp[1] - cy) > limit - 1.0:
-                    continue
-                if any(overlap(box, b, 0.5) for b in placed_boxes) or any(overlap(box, b, 0.5) for _, b in obs):
-                    continue
-                if any(box[0] - 0.5 < c[0] < box[2] + 0.5 and box[1] - 0.5 < c[1] < box[3] + 0.5 for c in centres):
-                    continue
-                if any(_seg_cross(tp, (cx, cy), a, b) for a, b in placed_legs):
-                    continue
-                if any(_seg_hits_box(tp, (cx, cy), b) for b in placed_boxes):
-                    continue
-                best = ((cx, cy), tip, False)
-                placed_boxes.append(box)
-                placed_legs.append((tp, (cx, cy)))
-                break
-            if best is None:
-                # nothing clean within the limit: take the nearest spot that at least covers no hole centre and no other tag
-                fallbacks += 1
-                best = self._fallback(h, hc, centres, placed_boxes, vx, vy, S)
-                placed_boxes.append((best[0][0] - w / 2, best[0][1] - hh / 2, best[0][0] + w / 2, best[0][1] + hh / 2))
-                placed_legs.append(((vx + best[1][0] * S, vy + best[1][1] * S), best[0]))
-            plan[id(h)] = best
+            hx, hy = h["pr"]
+            it = {
+                "tag": h["tag"],
+                "c": (r3(vx + hx * S), r3(vy + hy * S)),
+                "R": r3(R * S),
+                "tips": [(r3(vx + q[0] * S), r3(vy + q[1] * S)) for q in tips],
+            }
+            if t.HoleSize and self._moved(t):  # a tag the user moved stays where it is
+                cx, cy = r3(vx + _num(t.X) * S), r3(vy + _num(t.Y) * S - TAG_ANCHOR_MM)
+                it["fixed"] = (cx, cy)
+            items.append(it)
+        cs = [it["c"] for it in items]
+        dense = any(math.hypot(a[0] - b[0], a[1] - b[1]) < NEAR_MM for i, a in enumerate(cs) for b in cs[i + 1 :])
+        plan, fallbacks = plan_tags(items, area, obs, (vcx, vcy), MAX_TAG_DIST_DENSE if dense else MAX_TAG_DIST)
         obj.Violations = fallbacks
-        for h in holes:
+        for h, it, (centre, tip) in zip(holes, items, plan):
             t = h["tagobj"]
-            (cx, cy), tip, moved = plan[id(h)]
+            # the tip back into the view's frame (unscaled, relative to the view)
+            tx, ty = round((tip[0] - vx) / S, 4), round((tip[1] - vy) / S, 4)
             set_if(t, "Text", h["tag"])
-            set_if(t, "OriginX", float(tip[0]))
-            set_if(t, "OriginY", float(tip[1]))
+            set_if(t, "OriginX", float(tx))
+            set_if(t, "OriginY", float(ty))
             t.HoleSize = h["size"]
             t.HoleX, t.HoleY = float(h["p"][0]), float(h["p"][1])
-            if not moved:
-                px, py = float((cx - vx) / S), float((cy - vy) / S)
-                set_if(t, "X", px)
-                set_if(t, "Y", py)
-                set_if(t, PLACED_X, px)
-                set_if(t, PLACED_Y, py)
-
-    @staticmethod
-    def _best_tip(h, target, vx, vy, S):
-        """The rim point (view frame) that points most nearly at ``target`` (page mm)."""
-        hx, hy = h["pr"]
-        want = math.atan2(target[1] - (vy + hy * S), target[0] - (vx + hx * S))
-        best, bd = None, 9.0
-        for q in h["tips"]:
-            a = math.atan2(q[1] - hy, q[0] - hx)
-            dd = abs(((a - want + math.pi) % (2 * math.pi)) - math.pi)
-            if dd < bd:
-                best, bd = q, dd
-        return best
-
-    def _fallback(self, h, hc, centres, placed, vx, vy, S):
-        w, hh = h["w"], h["h"]
-        for k in range(1, 400):
-            rho = h["R"] * S + 0.5 * math.hypot(w, hh) + 0.5 * k
-            for j in range(24):
-                ang = 2 * math.pi * j / 24
-                cx, cy = hc[0] + rho * math.cos(ang), hc[1] + rho * math.sin(ang)
-                box = (cx - w / 2, cy - hh / 2, cx + w / 2, cy + hh / 2)
-                if any(overlap(box, b, 0.2) for b in placed):
-                    continue
-                if any(box[0] - 0.5 < c[0] < box[2] + 0.5 and box[1] - 0.5 < c[1] < box[3] + 0.5 for c in centres):
-                    continue
-                return ((cx, cy), self._best_tip(h, (cx, cy), vx, vy, S), False)
-        return ((hc[0] + 30.0, hc[1]), self._best_tip(h, (hc[0] + 30.0, hc[1]), vx, vy, S), False)
+            if "fixed" not in it:
+                px, py = round((centre[0] - vx) / S, 4), round((centre[1] + TAG_ANCHOR_MM - vy) / S, 4)
+                set_if(t, "X", float(px))
+                set_if(t, "Y", float(py))
+                set_if(t, PLACED_X, float(px))
+                set_if(t, PLACED_Y, float(py))
 
     # -- the table --------------------------------------------------------------------------------
 
-    def _tables(self, obj, rows, page):
+    def _tables(self, obj, rows, page, edges):
+        """Write the sheet and place the table blocks; -> the boxes of the blocks (page mm)."""
         doc = obj.Document
         sheet = obj.Sheet
-        names = {t.Name for t in self.tags(obj)}
         old_blocks = self.blocks(obj)
-        skip = {b.Name for b in old_blocks}
+        view = obj.View
+        skip = {b.Name for b in old_blocks} | {t.Name for t in self.tags(obj)} | {view.Name}
         body = rows
-        # decide the number of blocks and their places
         area, title = PL.page_areas(page)
-        obs = obstacles(page, skip=skip)
-        # the tags of this table belong to the obstacles through the view's cluster already
+        area = tuple(r3(v) for v in area)
+        obs = [(n, tuple(r3(v) for v in b)) for n, b in obstacles(page, skip=skip)]
+        own = view_box(view, edges)
         header = list(HEADER)
+        # the own view's box, with and without the room its tags will want around it
+        near = [(view.Label, tuple(r3(v) for v in own))] if own else []
+        room = [(view.Label, tuple(r3(v) for v in (own[0] - TAG_ROOM_MM, own[1] - TAG_ROOM_MM, own[2] + TAG_ROOM_MM, own[3] + TAG_ROOM_MM)))] if own else []
         placed, warning = None, ""
         user = {b.Name: b for b in old_blocks if getattr(b, PLACED_X, None) is not None and self._block_moved(b)}
         nrows = len(body)
+        pref = self._pref_point(obj, page, area, own)
         k = 1
         while True:
             per = max(1, int(math.ceil(nrows / float(k)))) if nrows else 1
@@ -1048,19 +1167,30 @@ class HoleTableDriver:
                 sheet_rows.extend(ch)
             widths = [max(PL.MIN_COL_PX, int(math.ceil(max(PL.text_width_px(r[c]) for r in sheet_rows) * PL.FIT_SLACK + PL.PAD_LEFT_PX + PL.PAD_RIGHT_PX))) for c in range(4)]
             wmm = sum(widths) * PL.PX_MM
-            boxes, taken = [], list(obs)
-            ok = True
-            for ci, ch in enumerate(chunks):
-                hmm = (len(ch) + 1) * PL.ROW_PX * PL.PX_MM
-                vcx = self._pref_point(obj, page, area)
-                box = find_slot(wmm, hmm, area, taken, lambda b, p=vcx: math.hypot(0.5 * (b[0] + b[2]) - p[0], 0.5 * (b[1] + b[3]) - p[1]))
-                if box is None:
-                    ok = False
+            sizes = [(wmm, (len(ch) + 1) * PL.ROW_PX * PL.PX_MM) for ch in chunks]
+            # a block the user moved stays where it is and is an obstacle to the others
+            fixed = {}
+            for ci in range(min(len(chunks), len(old_blocks))):
+                v = old_blocks[ci]
+                if v.Name in user:
+                    fixed[ci] = (v.X.Value - sizes[ci][0] / 2, v.Y.Value - sizes[ci][1] / 2, v.X.Value + sizes[ci][0] / 2, v.Y.Value + sizes[ci][1] / 2)
+            for extra in (room, near):
+                taken = list(obs) + list(extra) + [("hole table", b) for b in fixed.values()]
+                boxes = [fixed.get(ci) for ci in range(len(chunks))]
+                ok = True
+                for ci, (bw, bh) in enumerate(sizes):
+                    if ci in fixed:
+                        continue
+                    box = find_slot(bw, bh, area, taken, lambda b, p=pref: math.hypot(0.5 * (b[0] + b[2]) - p[0], 0.5 * (b[1] + b[3]) - p[1]))
+                    if box is None:
+                        ok = False
+                        break
+                    boxes[ci] = tuple(r3(v) for v in box)
+                    taken.append(("hole table", boxes[ci]))
+                if ok:
+                    placed = boxes
                     break
-                boxes.append(box)
-                taken.append(("hole table", box))
-            if ok:
-                placed = boxes
+            if placed:
                 break
             k += 1
             if k > MAX_BLOCKS or k > max(nrows, 1):
@@ -1072,6 +1202,7 @@ class HoleTableDriver:
                 wmm = sum(widths) * PL.PX_MM
                 hmm = len(sheet_rows) * PL.ROW_PX * PL.PX_MM
                 box = default_corner(page, wmm, hmm)
+                obs = obs + near
                 hit = [n for n, b in obs if overlap(box, b)]
                 out = box[3] > area[3] or box[0] < area[0]
                 warning = "HoleTable: no free space on the page holds the table (%d rows); placed in the corner, it overlaps %s%s" % (
@@ -1109,14 +1240,13 @@ class HoleTableDriver:
             set_if(v, "Y", float(cy))
             set_if(v, PLACED_X, float(cx))
             set_if(v, PLACED_Y, float(cy))
+        return placed
 
     @staticmethod
     def _block_moved(b):
         return abs(b.X.Value - b.PlacedX) > 1e-6 or abs(b.Y.Value - b.PlacedY) > 1e-6
 
-    def _pref_point(self, obj, page, area):
-        v = obj.View
-        b = view_box(v)
+    def _pref_point(self, obj, page, area, b):
         return (0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3])) if b else (area[2], area[1])
 
     def _new_block(self, drv, page, sheet):
@@ -1171,18 +1301,29 @@ def warning_of(table):
 
 
 def begin(doc, name):
-    """Open the undo transaction ``name`` that holds only what the calling function does.
+    """Open the undo transaction ``name`` unless the caller has one open; -> True when this call opened it.
 
-    A transaction a caller left open (the page and view were made inside it, say) would otherwise swallow ours, and one undo would
-    then delete the caller's page; commit it first so ours is a step of its own.
+    A caller's open transaction is joined, not committed or aborted: its macro (the page and view made in it, say) stays one undo
+    step, and whatever we make is part of it.  Only a transaction we opened is committed (``end``) or aborted (``fail``) by us.
     """
-    for _ in range(16):  # openTransaction calls nest: close them all
+    if App.getActiveTransaction() is not None:
+        return False
+    for _ in range(16):  # a stray implicit transaction (a removal made outside any) would swallow ours: close it first
         if not getattr(doc, "HasPendingTransaction", False):
             break
         doc.commitTransaction()
-        if getattr(doc, "HasPendingTransaction", False):
-            App.closeActiveTransaction()
     doc.openTransaction(name)
+    return True
+
+
+def end(doc, own):
+    if own:
+        doc.commitTransaction()
+
+
+def fail(doc, own):
+    if own:
+        doc.abortTransaction()
 
 
 def wait_for_geometry(view, timeout=20.0):
@@ -1213,7 +1354,7 @@ def make(page, view, origin=None):
     """
     doc = page.Document
     wait_for_geometry(view)
-    begin(doc, "Hole table")
+    own = begin(doc, "Hole table")
     try:
         drv = next((d for d in drivers_on(page) if d.View == view), None)
         if drv is None:
@@ -1236,8 +1377,8 @@ def make(page, view, origin=None):
         if any("Touched" in o.State for o in drv.Proxy.owned(drv)):
             doc.recompute()
     except Exception:
-        doc.abortTransaction()
+        fail(doc, own)
         raise
-    doc.commitTransaction()
+    end(doc, own)
     blocks = HoleTableDriver.blocks(drv)
     return blocks[0] if blocks else None

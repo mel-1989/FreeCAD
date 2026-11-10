@@ -134,10 +134,7 @@ class HoleTableTest(unittest.TestCase):
         return [o.Name for o in self.doc.Objects if "Touched" in o.State or "Invalid" in o.State]
 
     def tag_box(self, tag):
-        w, h = HT.tag_size(tag.Text)
-        s = tag.SourceView
-        cx, cy = s.X.Value + tag.X.Value * s.Scale, s.Y.Value + tag.Y.Value * s.Scale
-        return (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+        return HT.tag_box(tag.SourceView, tag)
 
     def assertLayout(self, tbl, view, holes_at):
         """Tags: one per row with the row's text, tip on the hole's rim, own hole nearest, near the tip, clear of each other and the table."""
@@ -561,3 +558,186 @@ class HoleTableTest(unittest.TestCase):
         self.assertEqual({o.Name for o in self.doc.Objects}, before)
         HT.make(page2, view2)  # page and view are still alive
         self.assertEqual(len(table_rows(HT.blocks_of(page2.Views[-1])[0])), 1)
+
+    # ---- run 089: transactions, near-parallel holes, rotation, tag placement, and the run 088 mutant survivors
+
+    def solid_page(self, shape, scale=1.0):
+        obj = self.doc.addObject("Part::Feature", "Solid")
+        obj.Shape = shape
+        page = self.page()
+        return obj, page, self.view(page, obj, scale=scale)
+
+    def test_make_joins_a_callers_open_transaction(self):
+        # check 47: neither commit nor abort the caller's transaction; one undo undoes the caller's whole macro
+        plate, page, view = self.plate_page([("through", 20, 15)])
+        before = {o.Name for o in self.doc.Objects}
+        self.doc.openTransaction("macro")
+        page2 = self.page()
+        view2 = self.view(page2, plate.body)
+        HT.make(page2, view2)
+        self.assertTrue(self.doc.HasPendingTransaction, "make closed the caller's transaction")
+        self.doc.commitTransaction()
+        self.assertGreater(len(self.doc.Objects), len(before))
+        self.doc.undo()
+        self.assertEqual({o.Name for o in self.doc.Objects}, before)
+
+    def test_make_does_not_abort_a_callers_transaction_on_failure(self):
+        plate, page, view = self.plate_page([("through", 20, 15)])
+        self.doc.openTransaction("macro")
+        real = HT.drivers_on
+
+        def boom(page):
+            raise RuntimeError("boom")
+
+        HT.drivers_on = boom
+        try:
+            self.assertRaises(RuntimeError, HT.make, page, view)
+        finally:
+            HT.drivers_on = real
+        self.assertIsNotNone(App.getActiveTransaction())
+        self.doc.abortTransaction()
+
+    def tilted(self, eps):
+        box = Part.makeBox(100, 60, 20)
+        cyl = Part.makeCylinder(3, 40, V(50, 30, -5), V(math.sin(eps), 0, math.cos(eps)))
+        return self.solid_page(box.cut(cyl))
+
+    def test_near_parallel_holes_are_listed_up_to_the_axis_tolerance(self):
+        # check 48: ruling 23's 1e-6; the rim of a hole a hair off the view direction is an ellipse to TechDraw
+        for eps in (1e-10, 1e-8, 5e-7):
+            self.setUp()
+            obj, page, view = self.tilted(eps)
+            tbl = HT.make(page, view)
+            self.assertEqual(len(table_rows(tbl)), 1, "tilt %g" % eps)
+            self.assertEqual(len(HT.tags_of(tbl)), 1, "tilt %g" % eps)
+            t = HT.tags_of(tbl)[0]
+            self.assertAlmostEqual(math.hypot(t.OriginX.Value, t.OriginY.Value), 3.0, delta=0.05)  # the hole is at the view's centre
+            self.tearDown()
+        for eps in (1.5e-6, 1e-5):
+            self.setUp()
+            obj, page, view = self.tilted(eps)
+            self.assertEqual(len(table_rows(HT.make(page, view))), 0, "tilt %g" % eps)
+            self.tearDown()
+        self.setUp()
+
+    def test_cover_threshold_is_half_the_circumference(self):
+        # ruling 23 (amended): a rim counts when its visible arcs sum to at least 50% of the circumference
+        obj, page, view = self.solid_page(Part.makeBox(100, 60, 20).cut(Part.makeCylinder(3, 40, V(50, 30, -5))))
+
+        class Stub:
+            def __init__(self, cover):
+                self.cover = cover
+
+            def rim(self, cx, cy, r):
+                return self.cover, []
+
+        for cover, listed in ((0.0, 0), (0.49, 0), (0.4999, 0), (0.5, 1), (0.51, 1), (1.0, 1)):
+            self.assertEqual(len(HT.listed_holes(view, Stub(cover))), listed, cover)
+
+    def csk_plate(self, included):
+        half = math.radians(included / 2.0)
+        h = 3.0 / math.tan(half)  # cone from the mouth (r 6) down to the bore (r 3)
+        box = Part.makeBox(100, 60, 20)
+        cyl = Part.makeCylinder(3, 40, V(50, 30, -5))
+        cone = Part.makeCone(3, 6, h, V(50, 30, 20 - h), V(0, 0, 1))
+        return self.solid_page(box.cut(cyl).cut(cone))
+
+    def test_countersink_angle_is_rounded_to_a_whole_degree(self):
+        for included, text in ((90.0, "90"), (100.4, "100"), (100.6, "101"), (118.0, "118")):
+            self.setUp()
+            obj, page, view = self.csk_plate(included)
+            rows = table_rows(HT.make(page, view))
+            self.assertEqual(rows[0][3], D + "6 THRU, CSK " + D + "12 X " + text + DEG, included)
+            self.tearDown()
+        self.setUp()
+
+    def test_back_bore_clause(self):
+        # a wider bore opening on the far side of the base bore: "BACK Ø{d} DEPTH {its own length}"
+        box = Part.makeBox(100, 60, 20)
+        shape = box.cut(Part.makeCylinder(3, 40, V(50, 30, -5))).cut(Part.makeCylinder(5, 4, V(50, 30, 0)))
+        obj, page, view = self.solid_page(shape)
+        self.assertEqual(table_rows(HT.make(page, view))[0][3], D + "6 THRU, BACK " + D + "10 DEPTH 4")
+
+    def test_a_tag_stays_with_its_hole_below_half_a_millimetre_and_is_new_above(self):
+        # ruling 33
+        plate, page, view = self.plate_page([("through", 20, 20), ("through", 90, 60)])
+        tbl = HT.make(page, view)
+        names = {t.Text: t.Name for t in HT.tags_of(tbl)}
+        sk = [o for o in plate.body.Group if o.TypeId == "Sketcher::SketchObject" and o.Name.startswith("HoleSk")][0]  # the (20, 20) hole
+        sk.AttachmentOffset = App.Placement(V(0.3, 0, 10), App.Rotation())
+        self.doc.recompute()
+        now = {t.Text: t.Name for t in HT.tags_of(HT.blocks_of(tbl)[0])}
+        self.assertEqual(now, names, "moved 0.3 mm: same tags")
+        sk.AttachmentOffset = App.Placement(V(0.8, 0, 10), App.Rotation())
+        self.doc.recompute()
+        now = {t.Text: t.Name for t in HT.tags_of(HT.blocks_of(tbl)[0])}
+        self.assertEqual(sorted(now), sorted(names))
+        self.assertNotEqual(now["A1"], names["A1"], "moved 0.8 mm: a new tag for the hole")
+        self.assertEqual(now["A2"], names["A2"])
+        self.assertEqual(self.untouched(), [])
+
+    def test_rotation_leaves_the_rows_and_the_tips_follow_the_drawn_view(self):
+        # check 50 (ruling 34)
+        plate, page, view = self.plate_page([("through", 20, 15), ("blind", 90, 50)])
+        tbl = HT.make(page, view)
+        want = table_rows(tbl)
+        for rot in (30.0, 90.0):
+            view.Rotation = rot
+            self.doc.recompute()
+            self.assertEqual(table_rows(tbl), want, rot)
+            edges = HT.Edges(view)
+            by = {t.Text: t for t in HT.tags_of(tbl)}
+            self.assertEqual(sorted(by), sorted(r[0] for r in want))
+            for tag, (px, py, R) in {"A1": (-40.0, -25.0, 3.0), "B1": (30.0, 10.0, 4.0)}.items():
+                cx, cy = HT._rot((px, py), rot)
+                t = by[tag]
+                self.assertAlmostEqual(math.hypot(t.OriginX.Value - cx, t.OriginY.Value - cy), R, delta=0.05, msg="%s at %s" % (tag, rot))
+                _, arcs = edges.rim(cx, cy, R)
+                self.assertTrue(any(HT._on_arc(e, (t.OriginX.Value, t.OriginY.Value), 0.05, edges.k) for e in arcs), "%s tip not on the drawn rim at %s" % (tag, rot))
+            self.assertEqual(self.untouched(), [], rot)
+
+    def test_tags_are_clear_of_the_tables_and_of_each_other_on_a_dense_part(self):
+        # check 38 in miniature: pairs of 3 mm holes 6 mm apart in a row of four (tags 13 mm tall), every tag inside the drawing area, clear of the others,
+        # the table and the title block, covering no hole centre, within 35 mm of its tip, no two leaders crossing
+        box = Part.makeBox(60, 30, 10)
+        for i in range(4):
+            for j in range(2):
+                box = box.cut(Part.makeCylinder(1.5, 30, V(10 + i * 14, 12 + j * 6, -5)))
+        obj, page, view = self.solid_page(box)
+        tbl = HT.make(page, view)
+        self.assertEqual(HT.warning_of(tbl), "")
+        tags = HT.tags_of(tbl)
+        self.assertEqual(len(tags), 8)
+        self.assertEqual(HT.driver_of(tbl).Violations, 0)
+        area, title = HT.PL.page_areas(page)
+        edges = HT.Edges(view)
+        vb = HT.view_box(view)
+        S = view.Scale
+        rects = [(self.tag_box(t), t) for t in tags]
+        centres = [(view.X.Value + t.HoleX * S, view.Y.Value + t.HoleY * S) for t in tags]
+        legs = []
+        for i, (b, t) in enumerate(rects):
+            self.assertTrue(b[0] >= area[0] - 0.01 and b[2] <= area[2] + 0.01 and b[1] >= area[1] - 0.01 and b[3] <= area[3] + 0.01, t.Text)
+            self.assertFalse(HT.overlap(b, tuple(title)), t.Text)
+            for blk in HT.blocks_of(tbl):
+                self.assertFalse(HT.overlap(b, HT.sheet_view_box(blk)), t.Text)
+            for c in centres:
+                self.assertFalse(b[0] < c[0] < b[2] and b[1] < c[1] < b[3], "%s covers a hole centre" % t.Text)
+            for b2, t2 in rects[i + 1 :]:
+                self.assertFalse(HT.overlap(b, b2), "%s over %s" % (t.Text, t2.Text))
+            tip = (view.X.Value + t.OriginX.Value * S, view.Y.Value + t.OriginY.Value * S)
+            self.assertLessEqual(math.hypot(0.5 * (b[0] + b[2]) - tip[0], 0.5 * (b[1] + b[3]) - tip[1]), 35.0, t.Text)
+            side = 1.0 if tip[0] > 0.5 * (b[0] + b[2]) else -1.0
+            legs.append(((0.5 * (b[0] + b[2]) + side * (0.5 * (b[2] - b[0]) + HT.TAG_LEAD_MM), 0.5 * (b[1] + b[3]) + HT.TAG_ANCHOR_MM), tip))
+        for i, (a1, a2) in enumerate(legs):
+            for b1, b2 in legs[i + 1 :]:
+                self.assertFalse(HT._seg_cross(a1, a2, b1, b2), "leaders cross")
+
+    def test_layout_is_the_same_whatever_the_noise_in_the_inputs(self):
+        # inputs are rounded to 0.001 mm in one place: nudging them by less than that changes nothing
+        items = [{"tag": "A%d" % i, "c": (100.0 + 7 * i, 100.0), "R": 3.0, "tips": [(100.0 + 7 * i + 3 * math.cos(a), 100.0 + 3 * math.sin(a)) for a in (0, 1.5, 3, 4.5)]} for i in range(5)]
+        area = (10.0, 10.0, 280.0, 200.0)
+        a, _ = HT.plan_tags(items, area, [], (120.0, 100.0), 18.5)
+        self.assertEqual(HT.r3(100.0004), HT.r3(100.0001))
+        b, _ = HT.plan_tags(items, area, [], (120.0, 100.0), 18.5)
+        self.assertEqual(a, b)
