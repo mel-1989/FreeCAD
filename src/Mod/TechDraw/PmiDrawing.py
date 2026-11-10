@@ -676,7 +676,7 @@ def anchorEnd(leader):
     wp = leader.WayPoints
     s = _leader_scale(leader)
     last = wp[-1]
-    return App.Vector(leader.X.Value + last.x / s, leader.Y.Value + last.y / s, 0)
+    return App.Vector(leader.X.Value + last.x / s, leader.Y.Value - last.y / s, 0)  # way points are page mm, y down; the position is y up
 
 
 def _leader_scale(leader):
@@ -917,7 +917,7 @@ class _Projector:
         ld.RotatesWithParent = False
         ld.X = x
         ld.Y = y
-        ld.WayPoints = [App.Vector(0, 0, 0), App.Vector((u.x - x) * s, (u.y - y) * s, 0)]
+        ld.WayPoints = [App.Vector(0, 0, 0), App.Vector((u.x - x) * s, -(u.y - y) * s, 0)]  # way points are page mm, y down
         ld.EndSymbol = "Filled triangle"
         ld.Label = "Leader " + label
         _dyn(ld, "App::PropertyVector", "PmiOffset", "Annotation position minus anchor, unscaled view coordinates")
@@ -1341,6 +1341,48 @@ def _remove_orphans(page):
     return names
 
 
+def clear(page, view=None):
+    """Remove the PMI drawing objects (dimensions, frames, datum symbols and their leaders) of ``page``, or only those on
+    ``view`` (a view or a projection group item; a projection group stands for its members), in one undo transaction.  The
+    views stay; afterwards TechDraw's own delete of a view works, because nothing hangs from it.  Returns the names removed."""
+    doc = page.Document
+    objs = _all_pmi_objects(page)
+    if view is not None:
+        views = set()
+        members = list(view.Views) if view.TypeId == "TechDraw::DrawProjGroup" else []
+        views = {view.Name} | {m.Name for m in members}
+
+        def parent(o):
+            if o.PmiRole == "dimension":
+                r2 = o.References2D
+                return r2[0][0] if len(r2) and r2[0][0] is not None else None
+            if o.PmiRole == "leader":
+                return o.LeaderParent
+            return o.AnnoParent.LeaderParent if o.AnnoParent is not None else None
+
+        objs = [o for o in objs if parent(o) is not None and parent(o).Name in views]
+    names = [o.Name for o in objs]
+    for o in objs:  # a frame or datum symbol takes its leader with it, and a leader its annotation
+        if o.PmiRole in ("frame", "datum") and o.AnnoParent is not None and o.AnnoParent.Name not in names:
+            names.append(o.AnnoParent.Name)
+        if o.PmiRole == "leader":
+            for x in o.InList:
+                if x.TypeId == "TechDraw::DrawRichAnno" and x.Name not in names:
+                    names.append(x.Name)
+    leaders = [n for n in names if doc.getObject(n) is not None and doc.getObject(n).PmiRole == "leader"]
+    names = [n for n in names if n not in leaders] + leaders  # annotations first, then the leaders they hung from
+    doc.openTransaction("PMI clear")
+    try:
+        for n in names:
+            if doc.getObject(n) is not None:
+                doc.removeObject(n)
+    except Exception:
+        doc.abortTransaction()
+        raise
+    doc.commitTransaction()
+    return names
+
+
 def refresh(page):
     """Bring the drawing objects up to date with their items: tolerances of dimensions, frame texts, datum letters; remove
     the objects whose item is gone.  One undo transaction; only properties that differ are written."""
@@ -1467,7 +1509,7 @@ def _refresh_leader(ld, item, geo):
     off = ld.PmiOffset
     s = vw.scale
     x, y = u.x + off.x, u.y + off.y
-    wp = [App.Vector(0, 0, 0), App.Vector(-off.x * s, -off.y * s, 0)]
+    wp = [App.Vector(0, 0, 0), App.Vector(-off.x * s, off.y * s, 0)]  # page mm, y down
     if abs(ld.X.Value - x) > 1e-9 or abs(ld.Y.Value - y) > 1e-9:
         ld.X, ld.Y = x, y
         changed = True
