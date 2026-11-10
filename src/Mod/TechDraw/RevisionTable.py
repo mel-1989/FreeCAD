@@ -60,6 +60,7 @@ class RevisionDriver:
         add = obj.addProperty
         add("App::PropertyLink", "Sheet", "Revision", "The revision sheet")
         add("App::PropertyString", "PageName", "Revision", "Name of the page")
+        add("App::PropertyLink", "Page", "Revision", "The page; a new template on it makes the driver write the revision into it")
         add("App::PropertyString", "ViewName", "Revision", "Name of the table view")
         add("App::PropertyString", "Warning", "Revision", "What the table could not avoid overlapping, or empty")
         add("App::PropertyInteger", "Rows", "Revision", "Rows of the sheet, header included")
@@ -72,6 +73,9 @@ class RevisionDriver:
 
     def onDocumentRestored(self, obj):
         obj.Proxy = self
+        if not hasattr(obj, "Page"):  # saved before the driver followed its page
+            obj.addProperty("App::PropertyLink", "Page", "Revision", "The page; a new template on it makes the driver write the revision into it")
+            obj.Page = obj.Document.getObject(obj.PageName) if obj.PageName else None
         HT.SETTLE.arm(obj.Document)
 
     def owned(self, obj):
@@ -176,6 +180,7 @@ def _make(page):
     drv.Label = "Revision table driver"
     drv.Sheet = sheet
     drv.PageName = page.Name
+    drv.Page = page
     v = doc.addObject("TechDraw::DrawViewSpreadsheet", "RevisionTable")
     v.Label = "Revision table"
     page.addView(v)
@@ -202,21 +207,21 @@ def _settle(doc, drv):
 def make(page):
     """Put a revision table (header only) on ``page`` and return its view; one undo transaction; returns the existing one if there is."""
     doc = page.Document
-    HT.begin(doc, "Revision table")
+    own = HT.begin(doc, "Revision table")
     try:
         drv = _make(page)
         _settle(doc, drv)
     except Exception:
-        doc.abortTransaction()
+        HT.fail(doc, own)
         raise
-    doc.commitTransaction()
+    HT.end(doc, own)
     return doc.getObject(drv.ViewName)
 
 
 def add(page, rev, description, date, approved, zone=""):
     """Append a revision row (newest last) and update the table and the template fields; one undo transaction; -> the view."""
     doc = page.Document
-    HT.begin(doc, "Add revision")
+    own = HT.begin(doc, "Add revision")
     try:
         drv = _make(page)
         rows = read_rows(drv.Sheet)
@@ -224,9 +229,9 @@ def add(page, rev, description, date, approved, zone=""):
         HT.write_cells(drv.Sheet, rows, len(rows))
         _settle(doc, drv)
     except Exception:
-        doc.abortTransaction()
+        HT.fail(doc, own)
         raise
-    doc.commitTransaction()
+    HT.end(doc, own)
     return doc.getObject(drv.ViewName)
 
 
@@ -263,7 +268,7 @@ def from_pdm(page, name, vault=None):
     if vault is None:
         vault = default_vault()
     doc = page.Document
-    HT.begin(doc, "Revisions from PDM")
+    own = HT.begin(doc, "Revisions from PDM")
     try:
         drv = _make(page)
         rows = read_rows(drv.Sheet)
@@ -282,7 +287,7 @@ def from_pdm(page, name, vault=None):
         HT.write_cells(drv.Sheet, rows, len(rows))
         _settle(doc, drv)
     except Exception:
-        doc.abortTransaction()
+        HT.fail(doc, own)
         raise
-    doc.commitTransaction()
+    HT.end(doc, own)
     return doc.getObject(drv.ViewName)

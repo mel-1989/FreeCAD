@@ -193,3 +193,54 @@ class RevisionTableTest(unittest.TestCase):
             self.assertEqual(rows[0][2], "Release to production")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- run 089: template fields by key, a swapped template, a caller's transaction
+
+    def test_issue_date_key_is_written_where_the_template_has_it(self):
+        # the localized ISO 5457 sheets name the date field issue_date, not date_of_issue
+        tpl = os.path.join("ISO", "localized", "ca", "A4_Landscape_ISO5457_minimal.svg")
+        page = self.page(tpl)
+        texts = dict(page.Template.EditableTexts)
+        self.assertIn("issue_date", texts)
+        self.assertNotIn("date_of_issue", texts)
+        RT.add(page, "A", "First", "2026-01-02", "MS")
+        RT.add(page, "B", "Second", "2026-05-06", "MS")
+        texts = dict(page.Template.EditableTexts)
+        self.assertEqual(texts["issue_date"], "2026-05-06")
+        self.assertEqual(texts["revision_index"], "B")
+        self.assertNotIn("date_of_issue", texts)
+
+    def test_swapping_the_template_writes_the_newest_revision_into_the_new_one(self):
+        # check 49
+        page = self.page(os.path.join("ISO", "A4_Landscape_ISO5457_minimal.svg"))
+        RT.add(page, "A", "First", "2026-01-02", "MS")
+        RT.add(page, "B", "Second", "2026-02-03", "MS")
+        new = self.doc.addObject("TechDraw::DrawSVGTemplate", "Template2")
+        new.Template = os.path.join(T, "ISO", "titleblocks", "ISO7200_titleblock_3_advanced.svg")
+        page.Template = new
+        self.doc.recompute()
+        self.assertEqual(page.Template.EditableTexts["revision_index"], "B")
+        self.assertEqual(page.Template.EditableTexts["date_of_issue"], "2026-02-03")
+        self.assertEqual(self.untouched(), [])
+        # and onto a template with other keys (ANSI A has the revision only)
+        ansi = self.doc.addObject("TechDraw::DrawSVGTemplate", "Template3")
+        ansi.Template = os.path.join(T, "ASME", "ANSIA_Landscape.svg")
+        page.Template = ansi
+        self.doc.recompute()
+        self.assertEqual(page.Template.EditableTexts["revision_index"], "B")
+
+    def test_add_joins_a_callers_open_transaction(self):
+        # check 47
+        page = self.page(os.path.join("ISO", "A4_Landscape_ISO5457_minimal.svg"))
+        before = {o.Name for o in self.doc.Objects}
+        self.doc.openTransaction("macro")
+        page2 = self.doc.addObject("TechDraw::DrawPage", "Page2")
+        page2.Template = page.Template
+        RT.add(page2, "A", "First", "2026-01-02", "MS")
+        self.assertIsNotNone(App.getActiveTransaction(), "add closed the caller's transaction")
+        RT.add(page2, "B", "Second", "2026-02-03", "MS")
+        self.assertIsNotNone(App.getActiveTransaction())
+        self.doc.commitTransaction()
+        self.assertEqual(len(self.rows(page2)), 3)
+        self.doc.undo()
+        self.assertEqual({o.Name for o in self.doc.Objects}, before)
