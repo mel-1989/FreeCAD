@@ -669,6 +669,11 @@ class _Settle:
             return
         names = self.doomed.pop(doc.Uid, set())
         keep = {}
+        # removing outside any transaction opens an implicit one that stays pending and swallows what the caller does next
+        # (a page made afterwards would be undone with it): give the removal a transaction of its own
+        own = bool(names) and not doc.HasPendingTransaction
+        if own:
+            doc.openTransaction("Update tables")
         for n in names:
             o = doc.getObject(n)
             if o is None:
@@ -681,6 +686,8 @@ class _Settle:
             dep = doc.getObject(n)
             if dep is not None and not was and "Touched" in dep.State:
                 dep.purgeTouched()
+        if own:
+            doc.commitTransaction()
         for drv in [o for o in doc.Objects if o.TypeId == "App::FeaturePython" and hasattr(getattr(o, "Proxy", None), "owned")]:
             for o in drv.Proxy.owned(drv):
                 if "Touched" in o.State:
@@ -1146,6 +1153,21 @@ def warning_of(table):
     return d.Warning if d is not None else ""
 
 
+def begin(doc, name):
+    """Open the undo transaction ``name`` that holds only what the calling function does.
+
+    A transaction a caller left open (the page and view were made inside it, say) would otherwise swallow ours, and one undo would
+    then delete the caller's page; commit it first so ours is a step of its own.
+    """
+    for _ in range(16):  # openTransaction calls nest: close them all
+        if not getattr(doc, "HasPendingTransaction", False):
+            break
+        doc.commitTransaction()
+        if getattr(doc, "HasPendingTransaction", False):
+            App.closeActiveTransaction()
+    doc.openTransaction(name)
+
+
 def wait_for_geometry(view, timeout=20.0):
     """In the GUI a view's hidden line removal runs in a worker thread and its edges arrive with the event loop: let it finish."""
     if not App.GuiUp:
@@ -1174,7 +1196,7 @@ def make(page, view, origin=None):
     """
     doc = page.Document
     wait_for_geometry(view)
-    doc.openTransaction("Hole table")
+    begin(doc, "Hole table")
     try:
         drv = next((d for d in drivers_on(page) if d.View == view), None)
         if drv is None:

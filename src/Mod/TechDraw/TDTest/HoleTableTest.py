@@ -539,3 +539,25 @@ class HoleTableTest(unittest.TestCase):
             self.assertTrue(any(HT._on_arc(e, (t.OriginX.Value, t.OriginY.Value), 0.05, edges.k) for e in arcs), what)
             self.assertEqual(self.untouched(), [], what)
             self.doc.removeObject(tbl.Name)
+
+    def test_undo_of_make_leaves_a_page_made_after_an_earlier_table_edit(self):
+        # run 088 oracle (check 42): an edit that removes a tag removes it from the observer, outside any transaction; the implicit
+        # transaction that opens must not stay pending and swallow the next page, or one undo of make deletes that page
+        plate, page, view = self.plate_page([("through", 20, 15), ("blind", 60, 40)])
+        HT.make(page, view)
+        self.doc.recompute()
+        holes = [o for o in plate.body.Group if o.TypeId == "PartDesign::Hole"]
+        plate.body.removeObject(holes[1])
+        self.doc.removeObject(holes[1].Name)
+        self.doc.recompute()
+        self.assertFalse(self.doc.HasPendingTransaction)
+        page2 = self.page()
+        view2 = self.view(page2, plate.body)
+        before = {o.Name for o in self.doc.Objects}
+        HT.make(page2, view2)
+        self.doc.recompute()
+        self.doc.undo()
+        self.doc.recompute()
+        self.assertEqual({o.Name for o in self.doc.Objects}, before)
+        HT.make(page2, view2)  # page and view are still alive
+        self.assertEqual(len(table_rows(HT.blocks_of(page2.Views[-1])[0])), 1)

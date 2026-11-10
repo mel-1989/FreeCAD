@@ -200,7 +200,7 @@ def _settle(doc, drv):
 def make(page):
     """Put a revision table (header only) on ``page`` and return its view; one undo transaction; returns the existing one if there is."""
     doc = page.Document
-    doc.openTransaction("Revision table")
+    HT.begin(doc, "Revision table")
     try:
         drv = _make(page)
         _settle(doc, drv)
@@ -214,7 +214,7 @@ def make(page):
 def add(page, rev, description, date, approved, zone=""):
     """Append a revision row (newest last) and update the table and the template fields; one undo transaction; -> the view."""
     doc = page.Document
-    doc.openTransaction("Add revision")
+    HT.begin(doc, "Add revision")
     try:
         drv = _make(page)
         rows = read_rows(drv.Sheet)
@@ -242,7 +242,7 @@ def from_pdm(page, name, vault=None):
         if vault is None:
             raise ValueError("from_pdm: no vault given and the PDM workbench is not connected to one")
     doc = page.Document
-    doc.openTransaction("Revisions from PDM")
+    HT.begin(doc, "Revisions from PDM")
     try:
         drv = _make(page)
         rows = read_rows(drv.Sheet)
