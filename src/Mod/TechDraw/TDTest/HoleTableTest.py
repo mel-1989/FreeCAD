@@ -737,9 +737,9 @@ class HoleTableTest(unittest.TestCase):
         # inputs are rounded to 0.001 mm in one place: nudging them by less than that changes nothing
         items = [{"tag": "A%d" % i, "c": (100.0 + 7 * i, 100.0), "R": 3.0, "tips": [(100.0 + 7 * i + 3 * math.cos(a), 100.0 + 3 * math.sin(a)) for a in (0, 1.5, 3, 4.5)]} for i in range(5)]
         area = (10.0, 10.0, 280.0, 200.0)
-        a, _, _ = HT.plan_tags(items, area, [], (120.0, 100.0), 18.5)
+        a, _, _ = HT.plan_tags(items, area, [], (120.0, 100.0), 20.0)
         self.assertEqual(HT.r3(100.0004), HT.r3(100.0001))
-        b, _, _ = HT.plan_tags(items, area, [], (120.0, 100.0), 18.5)
+        b, _, _ = HT.plan_tags(items, area, [], (120.0, 100.0), 20.0)
         self.assertEqual(a, b)
 
     # ---- run 089 repair round: survivors of the verifier's mutants
@@ -789,8 +789,7 @@ class HoleTableTest(unittest.TestCase):
         self.assertEqual(HT.TAG_LEAD_MM, 1.5)
 
     def test_distance_bounds_stay_inside_the_checked_20_and_35(self):
-        self.assertTrue(15.0 < HT.MAX_TAG_DIST <= 19.5, HT.MAX_TAG_DIST)
-        self.assertTrue(28.0 < HT.MAX_TAG_DIST_DENSE <= 34.5, HT.MAX_TAG_DIST_DENSE)
+        self.assertEqual((HT.MAX_TAG_DIST, HT.MAX_TAG_DIST_DENSE), (20.0, 35.0))  # ruling 27 as it stands, no slack (ruling 43)
         items = [{"tag": "A%d" % i, "c": (100.0 + 20 * i, 100.0), "R": 3.0, "tips": [(100.0 + 20 * i + 3.0, 100.0)]} for i in range(4)]
         for limit in (HT.MAX_TAG_DIST, HT.MAX_TAG_DIST_DENSE):
             plan, bad, conflicts = HT.plan_tags(items, (10.0, 10.0, 280.0, 200.0), [], (130.0, 100.0), limit)
@@ -824,10 +823,10 @@ class HoleTableTest(unittest.TestCase):
         self.assertAlmostEqual(b.x - a.x, 10.0, delta=1e-6)
 
     def test_overfull_dense_layout_is_named_in_the_warning_and_stays_in_the_area(self):
-        box = Part.makeBox(66, 46, 10)
-        for i in range(6):
-            for j in range(4):
-                box = box.cut(Part.makeCylinder(1.5, 30, V(6 + i * 6, 6 + j * 6, -5)))
+        box = Part.makeBox(56, 46, 10)  # 80 holes 5 mm apart: more than 35 mm round the part can hold
+        for i in range(10):
+            for j in range(8):
+                box = box.cut(Part.makeCylinder(1.0, 30, V(6 + i * 5, 6 + j * 5, -5)))
         obj, page, view = self.solid_page(box)
         tbl = HT.make(page, view)
         area, _ = HT.PL.page_areas(page)
@@ -861,3 +860,198 @@ class HoleTableTest(unittest.TestCase):
         for t in HT.tags_of(tbl):
             for b in tb:
                 self.assertFalse(HT.overlap(self.tag_box(t), b), t.Text)
+
+    # ---- run 090: the audit on the drawn geometry, the repair pass, tags and grown tables, block order (checks 51 to 54)
+
+    @staticmethod
+    def ring_item(tag, c, R=3.0):
+        return {"tag": tag, "c": c, "R": R, "tips": [(c[0] + R * math.cos(k * math.pi / 12), c[1] + R * math.sin(k * math.pi / 12)) for k in range(24)]}
+
+    AREA = (20.0, 10.0, 287.0, 200.0)
+
+    def test_leader_starts_where_techdraw_draws_it(self):
+        # QGIViewBalloon::drawBalloon with BubbleShape None and KinkLength 0: one segment from (anchor x +- (text width / 2 + 2 mm), anchor y) to
+        # the tip, on the side facing the tip; the anchor is 1.15 mm above the box centre and the box is the text plus 0.5 mm each side
+        w = HT.tag_size("A13")[0]
+        right = HT.tag_tails("A13", (100.0, 50.0), (130.0, 50.0))
+        left = HT.tag_tails("A13", (100.0, 50.0), (70.0, 50.0))
+        self.assertAlmostEqual(right[0][0], 100.0 + w / 2 + 1.5, places=9)  # the widest the text can be
+        self.assertAlmostEqual(left[0][0], 100.0 - w / 2 - 1.5, places=9)
+        self.assertTrue(all(abs(t[1] - 51.15) < 1e-9 for t in right + left))
+        self.assertLess(right[-1][0], right[0][0])  # the narrowest: the start is nearer the box
+
+    def test_audit_is_exact_at_the_bound_and_names_each_fault_with_the_tag_texts(self):
+        a, b = self.ring_item("A1", (100.0, 100.0)), self.ring_item("A2", (110.0, 100.0))
+        items = [a, b]
+        far = (100.0, 120.0)  # the box centre 20.4 mm from a tip on the rim at (103, 100)... measured below
+        tip = (a["c"][0] + 3.0, a["c"][1])
+        ok = [((tip[0] + 19.9, tip[1]), tip), ((110.0 + 3.0 + 19.9, 100.0), (113.0, 100.0))]
+        self.assertEqual(HT.tag_conflicts(items, ok, self.AREA, [], 20.0), [])
+        slack = [((tip[0] + 20.1, tip[1]), tip), ok[1]]  # 20.1 mm: the old 1.5 mm of slack let this through
+        self.assertEqual(HT.tag_conflicts(items, slack, self.AREA, [], 20.0), ["A1 more than 20 mm from its hole"])
+        self.assertEqual(HT.tag_conflicts(items, slack, self.AREA, [], 35.0), [])
+        # outside the area, over an obstacle, covering a hole centre, over another tag, crossing leaders
+        out = [((24.0, 100.0), (103.0, 100.0)), ok[1]]
+        self.assertIn("A1 outside the drawing area", HT.tag_conflicts(items, out, self.AREA, [], 100.0))
+        over = [((110.0, 130.0), (103.0, 100.0)), ((150.0, 130.0), (113.0, 100.0))]
+        self.assertIn("A1 over hole table", HT.tag_conflicts(items, over, self.AREA, [("hole table", (100.0, 120.0, 120.0, 140.0))], 100.0))
+        cover = [((101.0, 100.0), (103.0, 100.0)), ((150.0, 130.0), (113.0, 100.0))]
+        self.assertIn("A1 covers a hole centre", HT.tag_conflicts(items, cover, self.AREA, [], 100.0))
+        both = [((120.0, 130.0), (103.0, 100.0)), ((124.0, 130.0), (113.0, 100.0))]
+        self.assertIn("A1 over A2", HT.tag_conflicts(items, both, self.AREA, [], 100.0))
+        cross = [((100.0, 140.0), (103.0, 100.0)), ((140.0, 140.0), (107.0, 100.0))]  # A2's leader runs from the right of its box left to the hole
+        items2 = [a, self.ring_item("A2", (110.0, 100.0))]
+        crossed = [((60.0, 140.0), (97.0, 100.0)), ((150.0, 140.0), (107.0, 100.0))]  # fans from (60, 140) to (97, 100) and from (150, 140) to (107, 100)
+        self.assertEqual([w for w in HT.tag_conflicts(items2, crossed, self.AREA, [], 100.0) if "cross" in w], [])
+        swap = [((150.0, 140.0), (97.0, 100.0)), ((60.0, 140.0), (107.0, 100.0))]
+        self.assertIn("leaders of A1 and A2 cross", HT.tag_conflicts(items2, swap, self.AREA, [], 100.0))
+
+    def test_a_hairline_crossing_that_was_drawn_in_run_090_is_found(self):
+        # tags A13 and A14 of a dense grid as the GUI drew them: the leaders crossed by 0.01 mm, which a leader modelled at one text width missed
+        a13, a14 = self.ring_item("A13", (105.5, 91.0)), self.ring_item("A14", (108.0, 100.0))
+        plan = [((110.423, 71.451), (104.876, 89.102)), ((111.926, 84.908), (105.6, 97.402))]
+        self.assertIn("leaders of A13 and A14 cross", HT.tag_conflicts([a13, a14], plan, self.AREA, [], 100.0))
+
+    def dense_grid_items(self, pitch, nx=6, ny=4, x0=75.0, y0=90.0):
+        pts = [(x0 + pitch * i, y0 + pitch * j) for i in range(nx) for j in range(ny)]
+        return [self.ring_item("A%d" % (n + 1), c) for n, c in enumerate(pts)]
+
+    TITLE = ("the title block", (107.0, 10.0, 287.0, 46.0))
+
+    def test_dense_grids_get_no_fault_at_10_and_7_mm_pitch_with_tables_in_place(self):
+        # the corpus' v06 (10 mm pitch, 20 mm bound) and v07 (7 mm, 35 mm): clean in the first fit or after the repair, tables on the right
+        tables = [("hole table", (166.1, 47.7, 208.4, 129.8)), ("hole table", (210.4, 47.7, 252.8, 123.9))]
+        for pitch, limit in ((10.0, 20.0), (7.0, 35.0)):
+            plan, bad, words = HT.plan_tags(self.dense_grid_items(pitch), self.AREA, [self.TITLE] + tables, (100.0, 105.0), limit)
+            self.assertEqual((bad, words), (0, []), pitch)
+
+    def test_the_repair_untangles_what_the_first_fit_left_and_never_makes_it_worse(self):
+        tables = [("hole table", (25.0, 141.7, 108.9, 188.8)), ("hole table", (110.9, 141.7, 194.7, 188.8)), ("hole table", (152.1, 93.2, 236.0, 140.3)), ("hole table", (152.1, 62.1, 236.0, 91.7))]
+        items = self.dense_grid_items(10.0)
+        obs = [self.TITLE] + tables
+        first = HT.plan_tags(items, self.AREA, obs, (100.0, 105.0), 20.0)  # includes the repair
+        pl = HT._Plan(items, first[0], self.AREA, obs, 20.0)
+        self.assertEqual(sorted(pl.audit()[0]), sorted(first[2]))  # the words returned are the audit of the plan returned
+        # a plan with two crossed leaders: the repair swaps the boxes
+        two = [self.ring_item("A1", (100.0, 100.0)), self.ring_item("A2", (140.0, 100.0))]
+        start = [((150.0, 130.0), HT._best_tip(two[0], (150.0, 130.0))), ((90.0, 130.0), HT._best_tip(two[1], (90.0, 130.0)))]
+        self.assertIn("leaders of A1 and A2 cross", HT.tag_conflicts(two, start, self.AREA, [], 100.0))
+        fixed = HT.repair(two, start, self.AREA, [], (120.0, 100.0), 100.0)
+        self.assertEqual(HT.tag_conflicts(two, fixed, self.AREA, [], 100.0), [])
+
+    def test_the_repair_is_deterministic_and_leaves_a_tag_the_user_moved(self):
+        items = self.dense_grid_items(10.0)
+        items[5]["fixed"] = (items[5]["c"][0] + 14.0, items[5]["c"][1] + 14.0)
+        obs = [self.TITLE, ("hole table", (166.1, 47.7, 208.4, 129.8))]
+        runs = []
+        for _ in range(2):
+            HT._PLAN_MEMO.clear()
+            fresh = [dict(it) for it in items]
+            runs.append(HT.plan_tags(fresh, self.AREA, obs, (100.0, 105.0), 20.0))
+        self.assertEqual(runs[0], runs[1])
+        self.assertEqual(runs[0][0][5][0], items[5]["fixed"])
+
+    def test_every_fault_left_is_named_and_none_is_dropped_from_the_warning(self):
+        # an impossible page: 24 tags with a 40 mm wide area; more than 12 faults must all be in the words
+        items = self.dense_grid_items(5.0, 6, 4, 100.0, 100.0)
+        area = (90.0, 90.0, 140.0, 140.0)
+        plan, bad, words = HT.plan_tags(items, area, [], (120.0, 120.0), 20.0)
+        self.assertGreater(len(words), 12)
+        self.assertEqual(sorted(words), sorted(HT.tag_conflicts(items, plan, area, [], 20.0)))
+        self.assertTrue(all(any(k in w for k in ("outside the drawing area", " over ", "covers a hole centre", "more than 20 mm from its hole", "leaders of")) for w in words))
+
+    def grid_part(self, nx, ny, pitch, cbore_at=()):
+        box = Part.makeBox(nx * pitch + 40, ny * pitch + 40, 10)
+        for i in range(nx):
+            for j in range(ny):
+                p = V(20 + i * pitch, 20 + j * pitch, 0)
+                box = box.cut(Part.makeCylinder(3.0, 10, p))
+                if (i, j) in cbore_at:
+                    box = box.cut(Part.makeCylinder(5.0, 4, V(p.x, p.y, 6)))
+        f = self.doc.addObject("Part::Feature", "Grid")
+        f.Shape = box
+        return f
+
+    def test_no_tag_lies_over_a_table_that_grew_with_an_edit(self):
+        # run 090 check 53: v06 / v01 at add_counterbore, where a new size text widened the table and a tag ended over it
+        f = self.grid_part(6, 4, 10.0)
+        page = self.page()
+        view = self.view(page, f, x=95.0, y=100.0)
+        tbl = HT.make(page, view)
+        for n in range(3):
+            self.assertEqual(self.tags_over_tables(tbl), [])
+            shape = self.grid_part(6, 4, 10.0, cbore_at={(1, 1), (2, 2), (3, 1), (4, 2), (5, 3), (0, 3)}).Shape if n == 0 else None
+            if shape is None:
+                break
+            f.Shape = shape
+            self.doc.recompute()
+        self.assertEqual(self.tags_over_tables(tbl), [])
+        self.assertEqual(self.untouched(), [])
+
+    def tags_over_tables(self, tbl):
+        out = []
+        for t in HT.tags_of(tbl):
+            b = self.tag_box(t)
+            for blk in HT.blocks_of(tbl):
+                if HT.overlap(b, HT.sheet_view_box(blk)):
+                    out.append(t.Text)
+        return out
+
+    def test_three_blocks_stand_left_to_right_with_aligned_tops_and_continuous_rows(self):
+        # check 54: 60 holes on A4 split into at least three blocks (ctc_02's 84 on A3 splits the same way)
+        box = Part.makeBox(80, 60, 10)
+        for i in range(10):
+            for j in range(6):
+                box = box.cut(Part.makeCylinder(1.0, 30, V(6 + i * 7.5, 6 + j * 9.5, -5)))
+        obj, page, view = self.solid_page(box)
+        view.X, view.Y = 75.0, 105.0
+        self.doc.recompute()
+        tbl = HT.make(page, view)
+        blocks = sorted(HT.blocks_of(tbl), key=lambda b: int(b.CellStart[1:]))
+        self.assertGreaterEqual(len(blocks), 3)
+        boxes = [HT.sheet_view_box(b) for b in blocks]
+        for a, b in zip(boxes, boxes[1:]):
+            self.assertGreaterEqual(b[0], a[2], "blocks are not left to right")  # reading order
+        for b in boxes:
+            self.assertAlmostEqual(b[3], boxes[0][3], delta=0.01)  # tops aligned
+        sheet = sheet_rows(HT.driver_of(tbl).Sheet)
+        self.assertEqual(sum(1 for r in sheet if r[0] == "TAG"), len(blocks))
+        self.assertEqual([r[0] for r in sheet if r[0] != "TAG"], ["A%d" % i for i in range(1, 61)])  # rows continuous across the blocks, in order
+        per = [len(cells(b)) - 1 for b in blocks]  # data rows each block draws
+        self.assertEqual(sum(per), 60)
+        self.assertEqual(per[:-1], [per[0]] * (len(per) - 1))  # an even split, the short block last
+        self.assertLessEqual(per[-1], per[0])
+        for b in blocks:
+            self.assertEqual(cells(b)[0], ["TAG", "X", "Y", "SIZE"])
+        first_tags = [cells(b)[1][0] for b in blocks]
+        self.assertEqual(first_tags, ["A%d" % (1 + sum(per[:k])) for k in range(len(per))])
+        for b in boxes:
+            self.assertFalse(HT.overlap(b, HT.view_box(view)))
+
+    def test_a_last_resort_tag_may_lie_over_a_view_but_never_over_a_table(self):
+        # ruling 46: no free place within reach; the tag takes one over the view box (soft) rather than over the table (hard)
+        item = self.ring_item("A1", (150.0, 100.0))
+        obs = [("View", (95.0, 40.0, 205.0, 160.0)), ("hole table", (150.0, 40.0, 205.0, 160.0))]
+        plan, bad, words = HT.plan_tags([item], self.AREA, obs, (100.0, 100.0), 20.0, {"View"})
+        self.assertIn("A1 over View", words)
+        self.assertNotIn("A1 over hole table", words)
+        b = HT.tag_size("A1")
+        box = (plan[0][0][0] - b[0] / 2, plan[0][0][1] - b[1] / 2, plan[0][0][0] + b[0] / 2, plan[0][0][1] + b[1] / 2)
+        self.assertFalse(HT.overlap(box, obs[1][1]))
+
+    def test_the_repair_returns_the_best_plan_it_saw_not_the_last(self):
+        tables = [("hole table", (25.0, 141.7, 108.9, 188.8)), ("hole table", (110.9, 141.7, 194.7, 188.8)), ("hole table", (152.1, 93.2, 236.0, 140.3)), ("hole table", (152.1, 62.1, 236.0, 91.7))]
+        items = self.dense_grid_items(10.0)
+        obs = [self.TITLE] + tables
+        for it in items:
+            others = [i2["c"] for i2 in items if i2 is not it]
+            it["tips"] = [q for q in it["tips"] if all(math.hypot(q[0] - c[0], q[1] - c[1]) > it["R"] + 0.02 for c in others)] or it["tips"]
+        start, _ = HT._plan_once(items, self.AREA, obs, (100.0, 105.0), 20.0, HT.ATTEMPTS[0], set(), {"View"})
+        before = len(HT.tag_conflicts(items, start, self.AREA, obs, 20.0))
+        saved = (HT.REPAIR_KICK, HT.REPAIR_RESTARTS, HT.REPAIR_PASSES)
+        try:
+            HT.REPAIR_KICK, HT.REPAIR_RESTARTS, HT.REPAIR_PASSES = 2, 3, 30  # a kick every second pass makes the walk end somewhere worse than its best
+            after = len(HT.tag_conflicts(items, HT.repair(items, start, self.AREA, obs, (100.0, 105.0), 20.0), self.AREA, obs, 20.0))
+        finally:
+            HT.REPAIR_KICK, HT.REPAIR_RESTARTS, HT.REPAIR_PASSES = saved
+        self.assertLessEqual(after, before)
