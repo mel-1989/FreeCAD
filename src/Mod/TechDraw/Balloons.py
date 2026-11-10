@@ -51,6 +51,7 @@ MAX_CENTRE_DIST = 38.0  # bubble centres stay within 40 mm of the view box
 SLOT_STEP = 5.0
 MAX_CANDS = 120
 PENALTY = 1000.0
+SNAP = 0.1  # anchors of the clear tiers are rounded to this grid (mm), well inside the 0.5 mm tolerance
 _RNG_SEED = 20261110
 
 
@@ -377,6 +378,11 @@ def _resample(pl, dists):
         t = 0.0 if L <= 0 else min(1.0, max(0.0, (d - acc) / L))
         out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
     return out
+
+
+def _snap(x, y, q, vx, vy):
+    g = SNAP if q <= 1 else 0.01
+    return (round(x / g) * g + vx, round(y / g) * g + vy, q)
 
 
 def thin(cands, centre, k=MAX_CANDS):
@@ -789,14 +795,16 @@ class BalloonDriver:
         cands = anchor_candidates(vis, grid, n, polys)
         allx = [p[0] for pl in vis for p in pl]
         ally = [p[1] for pl in vis for p in pl]
-        box = (min(allx) + vx, min(ally) + vy, max(allx) + vx, max(ally) + vy)
+        # the GUI's hidden line removal and the headless one differ by a few hundredths of a millimetre: snap the inputs so both
+        # place the same way
+        box = (math.floor(min(allx)) + vx, math.floor(min(ally)) + vy, math.ceil(max(allx)) + vx, math.ceil(max(ally)) + vy)
         centre = (0.5 * (box[0] + box[2]), 0.5 * (box[1] + box[3]))
         area, title = PL.page_areas(page)
         rects = table_rects(page) + ([tuple(title)] if title else [])
         lrows = []
         for i, (r, it) in enumerate(pairs):
             b = mine[r["key"]]
-            cs = [(x + vx, y + vy, q) for (x, y, q) in cands[i]]
+            cs = sorted({_snap(x, y, q, vx, vy) for (x, y, q) in cands[i]})
             cs = thin(cs, centre)
             fixed = None
             if user_moved(b):

@@ -223,6 +223,8 @@ class BalloonsTest(unittest.TestCase):
         self.doc.recompute()
         self.assertEqual(self.texts(), ["1", "2"])
         self.assertEqual(self.touched(), [])
+        self.assertLayout(v, page)  # the view shrank to the cubes: the bubbles moved with it
+        self.assertAnchors(v, b.asm, self.top_paths(b.asm))
 
     def test_recompute_is_idempotent(self):
         b, page, v, table = self.setup_case("three_configs")
@@ -328,3 +330,53 @@ class BalloonsTest(unittest.TestCase):
         self.assertAlmostEqual(BL.bubble_diameter("1"), 12.4, delta=0.1)
         self.assertAlmostEqual(BL.bubble_diameter("12"), 13.51, delta=0.1)
         self.assertAlmostEqual(BL.bubble_diameter("123456"), 22.91, delta=0.1)
+
+    def test_a_recompute_that_changes_nothing_does_not_place_again(self):
+        b, page, v, table = self.setup_case("three_configs")
+        PL.balloon(page, v, table)
+        calls = []
+        real = BL.BalloonDriver._place
+        BL.BalloonDriver._place = lambda self, *a, **k: calls.append(1) or real(self, *a, **k)
+        try:
+            self.doc.recompute()
+            self.doc.recompute()
+            drv = [o for o in self.doc.Objects if isinstance(getattr(o, "Proxy", None), BL.BalloonDriver)][0]
+            drv.touch()
+            self.doc.recompute()
+        finally:
+            BL.BalloonDriver._place = real
+        self.assertEqual(calls, [])
+
+    def test_a_crowded_page_keeps_every_rule(self):
+        roots = [App.getResourceDir(), os.path.join(os.environ.get("FC_SRC", ""), "data")]
+        found = [os.path.join(r, "examples", "AssemblyExample.FCStd") for r in roots if os.path.exists(os.path.join(r, "examples", "AssemblyExample.FCStd"))]
+        path = found[0] if found else ""
+        if not path:
+            self.skipTest("AssemblyExample.FCStd not installed")
+        import Part
+
+        doc = App.openDocument(path)
+        try:
+            self.doc = doc
+            asm = [o for o in doc.Objects if o.TypeId == "Assembly::AssemblyObject"][0]
+            page = doc.addObject("TechDraw::DrawPage", "Page")
+            t = doc.addObject("TechDraw::DrawSVGTemplate", "Template")
+            t.Template = os.path.join(App.getResourceDir(), "Mod", "TechDraw", "Templates", ISO_A4)
+            page.Template = t
+            v = doc.addObject("TechDraw::DrawViewPart", "RefView")
+            page.addView(v)
+            v.Source = [asm]
+            v.Direction = App.Vector(1, 1, 1)
+            v.ScaleType = "Custom"
+            v.Scale = round(70.0 / Part.getShape(asm).BoundBox.DiagonalLength, 4)
+            v.X, v.Y = float(t.Width) / 2 - 20, float(t.Height) / 2 + 10
+            doc.recompute()
+            table = PL.make(page, asm)
+            doc.recompute()
+            PL.balloon(page, v, table)
+            self.assertEqual(self.texts(), sorted(str(i) for i in range(1, 14)))
+            self.assertLayout(v, page)
+            self.assertEqual(self.touched(), [])
+        finally:
+            self.doc = App.newDocument("BalloonsTest")
+            App.closeDocument(doc.Name)
