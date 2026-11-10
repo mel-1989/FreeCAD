@@ -118,6 +118,7 @@ SET(AssemblyTests_SRCS
     AssemblyTests/configuration_corpus.py
     AssemblyTests/TestSkeleton.py
     AssemblyTests/TestMotion.py
+    AssemblyTests/TestBom.py
     AssemblyTests/motion_corpus.py
     AssemblyTests/skeleton_corpus.py
     AssemblyTests/interference_gui_fixture.py

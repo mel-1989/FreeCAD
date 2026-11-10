@@ -33,6 +33,7 @@ from AssemblyTests.TestAssemblyFeature import TestAssemblyFeature
 from AssemblyTests.TestConfigurations import TestConfigurations
 from AssemblyTests.TestSkeleton import TestSkeleton
 from AssemblyTests.TestMotion import TestMotion
+from AssemblyTests.TestBom import TestBom
 
 # Use the modules so that code checkers don't complain (flake8)
 True if TestCore else False
@@ -45,3 +46,4 @@ True if TestAssemblyFeature else False
 True if TestConfigurations else False
 True if TestSkeleton else False
 True if TestMotion else False
+True if TestBom else False
