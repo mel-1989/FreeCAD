@@ -1399,48 +1399,6 @@ def _remove_orphans(page):
     return names
 
 
-def clear(page, view=None):
-    """Remove the PMI drawing objects (dimensions, frames, datum symbols and their leaders) of ``page``, or only those on
-    ``view`` (a view or a projection group item; a projection group stands for its members), in one undo transaction.  The
-    views stay; afterwards TechDraw's own delete of a view works, because nothing hangs from it.  Returns the names removed."""
-    doc = page.Document
-    objs = _all_pmi_objects(page)
-    if view is not None:
-        views = set()
-        members = list(view.Views) if view.TypeId == "TechDraw::DrawProjGroup" else []
-        views = {view.Name} | {m.Name for m in members}
-
-        def parent(o):
-            if o.PmiRole == "dimension":
-                r2 = o.References2D
-                return r2[0][0] if len(r2) and r2[0][0] is not None else None
-            if o.PmiRole == "leader":
-                return o.LeaderParent
-            return o.AnnoParent.LeaderParent if o.AnnoParent is not None else None
-
-        objs = [o for o in objs if parent(o) is not None and parent(o).Name in views]
-    names = [o.Name for o in objs]
-    for o in objs:  # a frame or datum symbol takes its leader with it, and a leader its annotation
-        if o.PmiRole in ("frame", "datum") and o.AnnoParent is not None and o.AnnoParent.Name not in names:
-            names.append(o.AnnoParent.Name)
-        if o.PmiRole == "leader":
-            for x in o.InList:
-                if x.TypeId == "TechDraw::DrawRichAnno" and x.Name not in names:
-                    names.append(x.Name)
-    leaders = [n for n in names if doc.getObject(n) is not None and doc.getObject(n).PmiRole == "leader"]
-    names = [n for n in names if n not in leaders] + leaders  # annotations first, then the leaders they hung from
-    doc.openTransaction("PMI clear")
-    try:
-        for n in names:
-            if doc.getObject(n) is not None:
-                doc.removeObject(n)
-    except Exception:
-        doc.abortTransaction()
-        raise
-    doc.commitTransaction()
-    return names
-
-
 def refresh(page):
     """Bring the drawing objects up to date with their items: tolerances of dimensions, frame texts, datum letters; remove
     the objects whose item is gone.  One undo transaction; only properties that differ are written."""
