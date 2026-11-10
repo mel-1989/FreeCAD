@@ -21,6 +21,7 @@
  *                                                                          *
  ***************************************************************************/
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -29,6 +30,8 @@
 #include <App/DocumentObjectGroup.h>
 #include <App/FeaturePythonPyImp.h>
 #include <App/Link.h>
+#include <App/PropertyLinks.h>
+#include <App/PropertyStandard.h>
 #include <App/PropertyPythonObject.h>
 #include <App/Range.h>
 #include <Base/Console.h>
@@ -195,6 +198,7 @@ void BomObject::addObjectChildrenToBom(
         }
 
         bool isMirrored = isObjMirrored(child);
+        int instances = 1;
 
         if (auto* asmLink = freecad_cast<AssemblyLink*>(child)) {
             child = asmLink->getLinkedAssembly();
@@ -203,8 +207,9 @@ void BomObject::addObjectChildrenToBom(
             }
         }
         else if (child->isDerivedFrom<App::Link>()) {
-            child = static_cast<App::Link*>(child)->getLinkedObject();
-            if (!child) {
+            instances = linkInstanceCount(static_cast<App::Link*>(child));
+            child = linkTarget(static_cast<App::Link*>(child));
+            if (!child || instances <= 0) {
                 continue;
             }
         }
@@ -227,7 +232,7 @@ void BomObject::addObjectChildrenToBom(
                     && idInList < obj_mirrored_list.size()
                     && isMirrored == obj_mirrored_list[idInList]) {
 
-                    int qty = std::stoi(getText(i, quantityColIndex)) + 1;
+                    int qty = std::stoi(getText(i, quantityColIndex)) + instances;
                     setCell(App::CellAddress(i, quantityColIndex), std::to_string(qty).c_str());
                     found = true;
                     break;
@@ -242,6 +247,9 @@ void BomObject::addObjectChildrenToBom(
         ++sub_i;
 
         addObjectToBom(child, row, sub_index, isMirrored);
+        if (hasQuantityCol && instances != 1) {
+            setCell(App::CellAddress(row, quantityColIndex), std::to_string(instances).c_str());
+        }
         siblingRows.push_back(row);
         ++row;
 
@@ -251,6 +259,44 @@ void BomObject::addObjectChildrenToBom(
             addObjectChildrenToBom(child->getOutList(), row, sub_index);
         }
     }
+}
+
+App::DocumentObject* BomObject::linkTarget(App::Link* link)
+{
+    // getLinkedObject() of a link array answers the array itself, so read what the array repeats.
+    auto* countProp = dynamic_cast<App::PropertyInteger*>(link->getPropertyByName("ElementCount"));
+    if (countProp && countProp->getValue() > 0) {
+        if (auto* linked = dynamic_cast<App::PropertyXLink*>(link->getPropertyByName("LinkedObject"))) {
+            if (auto* target = linked->getValue()) {
+                return target->getLinkedObject();
+            }
+        }
+    }
+    return link->getLinkedObject();
+}
+
+int BomObject::linkInstanceCount(App::Link* link)
+{
+    // A link array (ElementCount > 0) stands for ElementCount instances of its target. When the
+    // elements are shown, the ones suppressed by a configuration are not instances any more.
+    auto* countProp = dynamic_cast<App::PropertyInteger*>(link->getPropertyByName("ElementCount"));
+    int count = countProp ? countProp->getValue() : 0;
+    if (count <= 0) {
+        return 1;
+    }
+    auto* showProp = dynamic_cast<App::PropertyBool*>(link->getPropertyByName("ShowElement"));
+    auto* listProp = dynamic_cast<App::PropertyLinkList*>(link->getPropertyByName("ElementList"));
+    if (showProp && showProp->getValue() && listProp) {
+        for (auto* element : listProp->getValues()) {
+            auto* suppressed = element
+                ? dynamic_cast<App::PropertyBool*>(element->getPropertyByName("Suppressed"))
+                : nullptr;
+            if (suppressed && suppressed->getValue()) {
+                --count;
+            }
+        }
+    }
+    return std::max(count, 0);
 }
 
 bool BomObject::isObjMirrored(App::DocumentObject* obj)

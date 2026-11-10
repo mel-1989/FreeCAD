@@ -34,6 +34,7 @@
 namespace App
 {
 class DocumentObject;
+class Link;
 }
 
 namespace Assembly
@@ -79,6 +80,8 @@ public:
     void addObjectChildrenToBom(std::vector<App::DocumentObject*> objs, size_t& row, std::string index);
     void saveCustomColumnData();
     bool isObjMirrored(App::DocumentObject* obj);
+    static int linkInstanceCount(App::Link* link);
+    static App::DocumentObject* linkTarget(App::Link* link);
 
     AssemblyObject* getAssembly() const;
 
