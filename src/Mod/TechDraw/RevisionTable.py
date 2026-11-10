@@ -228,13 +228,19 @@ def add(page, rev, description, date, approved, zone=""):
     return doc.getObject(drv.ViewName)
 
 
-def from_pdm(page, name, vault):
+def from_pdm(page, name, vault=None):
     """Append the released revisions of the PDM document ``name`` that the table lacks, oldest first; -> the view.
 
-    ``vault`` is a ``PDM.vault.Vault`` (anything whose ``history(name)`` returns the newest-first records).  A revision label is
+    ``vault`` is a ``PDM.vault.Vault`` (default: the PDM workbench's connected vault; anything whose ``history(name)`` returns the newest-first records).  A revision label is
     taken once, from its newest released record; the description is the record's first message line, the date its day, APPROVED
     the author.
     """
+    if vault is None:
+        from PDMGui import state  # the connected vault of the PDM workbench
+
+        vault = state.current_vault()
+        if vault is None:
+            raise ValueError("from_pdm: no vault given and the PDM workbench is not connected to one")
     doc = page.Document
     doc.openTransaction("Revisions from PDM")
     try:

@@ -35,9 +35,9 @@ from FreeCAD import Vector
 import PartsList as PL
 
 HEADER = ("TAG", "X", "Y", "SIZE")
-TEXT_MM = 5.0  # label size of a tag, page mm (used to estimate its box)
+TEXT_MM = 7.0  # label size of a tag, page mm (used to estimate its box)
 TAG_PAD_MM = 1.0
-TAG_H_MM = 6.0
+TAG_H_MM = 8.0
 TIP_STEPS = 24  # rim points tried for an arrow tip
 TIP_TOL_MM = 0.02  # a rim point counts as on a visible arc within this
 GAP_MM = 2.0  # clear space kept between a table or tag and its neighbours
@@ -103,7 +103,8 @@ def find_holes(solid, d):
     """Holes of one solid whose axis is oriented toward ``d`` (the viewer): a list of dicts.
 
     Keys: ``c0`` (point on the axis), ``a`` (unit axis, a . d >= 0), ``T0``/``T1`` (extent along a; the mouth is T1),
-    ``segs`` (cylinders and cones, each ``kind, t0, t1, r`` / ``ra, rb``), ``through`` and ``top_open``.
+    ``segs`` (cylinders and cones, each ``kind, t0, t1, r`` / ``ra, rb``); only holes parallel to ``d`` are returned.  ``open_ends``
+    adds ``top_open`` and ``through``.
     """
     raw = []
     for f, s, tid, ax, c in _faces(solid):
@@ -158,14 +159,9 @@ def find_holes(solid, d):
             if not any(x["kind"] == "cyl" for x in run):
                 return
             T0, T1 = min(x["t0"] for x in run), max(x["t1"] for x in run)
-            ends = []
-            for T, sg in ((T1, 1), (T0, -1)):
-                try:
-                    inside = solid.isInside(c0 + a * (T + sg * 0.01), 1e-6, True)
-                except Exception:
-                    inside = True
-                ends.append(not inside)
-            holes.append(dict(c0=c0, a=a, T0=T0, T1=T1, segs=list(run), top_open=ends[0], through=ends[0] and ends[1]))
+            if a.cross(d).Length > 1e-6:  # not parallel to the view direction: never listed
+                return
+            holes.append(dict(c0=c0, a=a, T0=T0, T1=T1, segs=list(run), solid=solid))
 
         reach = None
         for s in segs:
@@ -177,6 +173,18 @@ def find_holes(solid, d):
         if run:
             flush(run)
     return holes
+
+
+def open_ends(h):
+    """Fill in ``top_open`` (the mouth faces the viewer) and ``through`` by probing the solid just beyond each end of the axis."""
+    ends = []
+    for T, sg in ((h["T1"], 1), (h["T0"], -1)):
+        try:
+            inside = h["solid"].isInside(h["c0"] + h["a"] * (T + sg * 0.01), 1e-6, True)
+        except Exception:
+            inside = True
+        ends.append(not inside)
+    h["top_open"], h["through"] = ends[0], ends[0] and ends[1]
 
 
 def size_text(h, thread=None):
@@ -354,8 +362,6 @@ def listed_holes(view, edges, origin=None):
     for shape in source_shapes(view):
         for solid in shape.Solids:
             for h in find_holes(solid, d):
-                if not h["top_open"] or h["a"].cross(d).Length > 1e-6:
-                    continue
                 pc = view.projectPoint(h["c0"] - gc)
                 pcr = _rot((pc.x, pc.y), rot)
                 seen = False
@@ -366,6 +372,10 @@ def listed_holes(view, edges, origin=None):
                         break
                 if not seen:
                     continue
+                open_ends(h)
+                if not h["top_open"]:
+                    continue
+                h["gc"] = gc
                 h["p"] = (pc.x, pc.y)
                 h["pr"] = pcr
                 h["thread"] = _thread_of(h, threads) if threads else None
@@ -377,7 +387,7 @@ def listed_holes(view, edges, origin=None):
 
 def tip_options(view, h, edges):
     """-> [(x, y)] points of the hole's outermost rim at the mouth, in the view's frame, that lie on a visible arc."""
-    gc = view.getGeometricCenter()
+    gc = h["gc"]
     rot = float(view.Rotation.Value) if hasattr(view.Rotation, "Value") else float(view.Rotation)
     R = mouth_radius(h)
     a = h["a"]
@@ -705,6 +715,7 @@ class HoleTableDriver:
         add("App::PropertyString", "Warning", "HoleTable", "What the table could not avoid overlapping, or empty")
         add("App::PropertyInteger", "Rows", "HoleTable", "Rows of the sheet, headers included")
         add("App::PropertyInteger", "HoleCount", "HoleTable", "Holes listed")
+        add("App::PropertyInteger", "Violations", "HoleTable", "Tags that had to stand beyond the distance limit or touch a neighbour")
         obj.setEditorMode("Signature", 2)
 
     def dumps(self):
@@ -846,6 +857,7 @@ class HoleTableDriver:
         vcy = vy + 0.5 * (edges.box[1] + edges.box[3]) * S
         placed_boxes, placed_legs = [], []
         plan = {}
+        fallbacks = 0
         # user-moved tags stay where they are
         for h in holes:
             tips, R = tip_options(view, h, edges)
@@ -898,10 +910,12 @@ class HoleTableDriver:
                 break
             if best is None:
                 # nothing clean within the limit: take the nearest spot that at least covers no hole centre and no other tag
+                fallbacks += 1
                 best = self._fallback(h, hc, centres, placed_boxes, vx, vy, S)
                 placed_boxes.append((best[0][0] - w / 2, best[0][1] - hh / 2, best[0][0] + w / 2, best[0][1] + hh / 2))
                 placed_legs.append(((vx + best[1][0] * S, vy + best[1][1] * S), best[0]))
             plan[id(h)] = best
+        obj.Violations = fallbacks
         for h in holes:
             t = h["tagobj"]
             (cx, cy), tip, moved = plan[id(h)]
@@ -1094,6 +1108,25 @@ def warning_of(table):
     return d.Warning if d is not None else ""
 
 
+def wait_for_geometry(view, timeout=20.0):
+    """In the GUI a view's hidden line removal runs in a worker thread and its edges arrive with the event loop: let it finish."""
+    if not App.GuiUp:
+        return
+    import time
+
+    from PySide import QtWidgets
+
+    t0, last, changed = time.time(), None, time.time()
+    while time.time() - t0 < timeout:
+        QtWidgets.QApplication.processEvents()
+        now = Edges(view).signature()
+        if now != last:
+            last, changed = now, time.time()
+        elif not now.startswith("0:") and time.time() - changed > 0.4:
+            return
+        time.sleep(0.01)
+
+
 def make(page, view, origin=None):
     """Tag every hole ``view`` shows end-on and put their hole table on ``page``; -> the first table view.
 
@@ -1102,6 +1135,7 @@ def make(page, view, origin=None):
     ``origin`` is applied).  Afterwards a plain ``doc.recompute()`` follows edits of the model.
     """
     doc = page.Document
+    wait_for_geometry(view)
     doc.openTransaction("Hole table")
     try:
         drv = next((d for d in drivers_on(page) if d.View == view), None)

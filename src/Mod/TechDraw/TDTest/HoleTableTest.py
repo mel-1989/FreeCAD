@@ -444,3 +444,66 @@ class HoleTableTest(unittest.TestCase):
         HT.make(page, view)
         self.doc.recompute()
         self.assertLess(time.time() - t0, 1.0)
+
+    # ---- scale, letters by diameter, tag size, pocket floor, polar pattern
+
+    def test_scaled_view_and_letters_follow_the_diameter_not_the_text(self):
+        plate = Plate(self.doc)
+        plate.hole([(80, 20)], Diameter=10, DepthType="ThroughAll")
+        plate.hole([(30, 20)], Diameter=9, DepthType="ThroughAll")
+        page = self.page()
+        view = self.view(page, plate.body, scale=0.5, x=90.0, y=110.0)
+        tbl = HT.make(page, view)
+        self.assertEqual(table_rows(tbl), [["A1", "30", "20", D + "9 THRU"], ["B1", "80", "20", D + "10 THRU"]])  # 9 before 10 although "10" < "9" as text
+        tags = {t.Text: t for t in HT.tags_of(tbl)}
+        for tag, (cx, cy, r) in {"A1": (-30.0, -20.0, 4.5), "B1": (20.0, -20.0, 5.0)}.items():
+            t = tags[tag]
+            self.assertAlmostEqual(math.hypot(t.OriginX.Value - cx, t.OriginY.Value - cy), r, delta=0.05)
+        self.assertEqual(self.untouched(), [])
+        area, title = HT.PL.page_areas(page)
+        vb = HT.view_box(view)
+        self.assertAlmostEqual(vb[2] - vb[0], 60.0, delta=0.5)  # the 120 mm plate at 1:2
+        for blk in HT.blocks_of(tbl):
+            self.assertFalse(HT.overlap(HT.sheet_view_box(blk), vb))
+        for t in tags.values():
+            b = self.tag_box(t)
+            self.assertTrue(b[0] >= area[0] and b[2] <= area[2] and b[1] >= area[1] and b[3] <= area[3])
+            self.assertFalse(HT.overlap(b, tuple(title)))
+
+    def test_tag_box_is_at_least_the_measured_drawn_width(self):
+        # drawn widths of a rectangular bubble's text measured in the GUI in run 088 (page mm): the box must not be narrower
+        for text, drawn in (("A1", 7.204), ("A12", 10.326), ("B12", 10.110), ("AA3", 12.246)):
+            self.assertGreaterEqual(HT.tag_size(text)[0], drawn, text)
+
+    def test_hole_on_a_pocket_floor(self):
+        box = Part.makeBox(100, 60, 20).cut(Part.makeBox(60, 40, 12, V(20, 10, 8)))  # pocket 12 deep, floor at z = 8
+        box = box.cut(Part.makeCylinder(3, 8, V(50, 30, 0)))  # hole from the pocket floor through the rest
+        f = self.doc.addObject("Part::Feature", "Pocket")
+        f.Shape = box
+        page = self.page()
+        view = self.view(page, f)
+        tbl = HT.make(page, view)
+        self.assertEqual(table_rows(tbl), [["A1", "50", "30", D + "6 THRU"]])
+
+    def test_polar_pattern(self):
+        plate = Plate(self.doc)
+        sk = plate.body.Group[0]
+        sk.deleteAllGeometry()  # centre the plate on the origin so the Z axis is a pattern axis through its middle
+        for a, b in (((-60, -40), (60, -40)), ((60, -40), (60, 40)), ((60, 40), (-60, 40)), ((-60, 40), (-60, -40))):
+            sk.addGeometry(Part.LineSegment(V(a[0], a[1], 0), V(b[0], b[1], 0)))
+        self.doc.recompute()
+        h = plate.hole([(30, 0)], **dict(KINDS["through"][0]))
+        pat = plate.body.newObject("PartDesign::PolarPattern", "Polar")
+        pat.Originals = [h]
+        pat.Axis = (plate.body.Origin.OriginFeatures[2], [""])
+        pat.Angle = 360
+        pat.Occurrences = 4
+        plate.body.Tip = pat
+        self.doc.recompute()
+        page = self.page()
+        view = self.view(page, plate.body)
+        tbl = HT.make(page, view)
+        self.assertEqual(
+            table_rows(tbl),
+            [["A1", "30", "40", D + "6 THRU"], ["A2", "60", "10", D + "6 THRU"], ["A3", "60", "70", D + "6 THRU"], ["A4", "90", "40", D + "6 THRU"]],
+        )
