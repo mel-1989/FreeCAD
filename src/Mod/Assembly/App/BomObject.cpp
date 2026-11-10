@@ -111,6 +111,104 @@ App::DocumentObjectExecReturn* BomObject::execute()
     return Spreadsheet::Sheet::execute();
 }
 
+short BomObject::mustExecute() const
+{
+    if (short res = Spreadsheet::Sheet::mustExecute()) {
+        return res;
+    }
+    if (isRestoring() || isError()) {
+        return 0;
+    }
+    // The BOM sits inside its assembly's group, so it cannot depend on the assembly's components
+    // without a cycle. Compare what the last run listed with what the assembly lists now, so that
+    // a plain recompute after components were added, removed, relabelled or swapped regenerates it.
+    std::size_t current = componentSignature();
+    if (!hasSignature) {
+        // loaded from a file, or never run: adopt the current state instead of regenerating
+        lastSignature = current;
+        hasSignature = true;
+        return 0;
+    }
+    return current != lastSignature ? 1 : 0;
+}
+
+std::vector<App::DocumentObject*> BomObject::bomRoots() const
+{
+    auto* assembly = getAssembly();
+    if (assembly) {
+        return assembly->getOutList();
+    }
+    return getDocument()->getRootObjectsIgnoreLinks();
+}
+
+namespace
+{
+inline void hashCombine(std::size_t& seed, std::size_t value)
+{
+    seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+}
+
+inline void hashObject(std::size_t& seed, const App::DocumentObject* obj)
+{
+    hashCombine(seed, std::hash<const void*> {}(obj));
+    if (obj) {
+        hashCombine(seed, std::hash<std::string> {}(obj->Label.getValue()));
+    }
+}
+}  // namespace
+
+void BomObject::hashChildren(
+    const std::vector<App::DocumentObject*>& objs,
+    std::size_t& seed,
+    int depth
+) const
+{
+    if (depth > 64) {
+        return;  // a cyclic assembly structure
+    }
+    for (auto* child : objs) {
+        if (!child) {
+            continue;
+        }
+        hashObject(seed, child);
+        hashCombine(seed, isObjMirrored(child) ? 1 : 0);
+        App::DocumentObject* target = child;
+        if (auto* asmLink = freecad_cast<AssemblyLink*>(child)) {
+            target = asmLink->getLinkedAssembly();
+        }
+        else if (child->isDerivedFrom<App::Link>()) {
+            auto* link = static_cast<App::Link*>(child);
+            hashCombine(seed, static_cast<std::size_t>(linkInstanceCount(link)));
+            target = linkTarget(link);
+        }
+        if (!target) {
+            continue;
+        }
+        hashObject(seed, target);
+        for (auto& columnName : columnsNames.getValues()) {
+            if (columnName.starts_with(".")) {
+                hashCombine(
+                    seed,
+                    std::hash<std::string> {}(getBomPropertyValue(target, columnName.substr(1), true))
+                );
+            }
+        }
+        bool detail = (target->isDerivedFrom<AssemblyObject>() && detailSubAssemblies.getValue())
+            || (!target->isDerivedFrom<AssemblyObject>() && target->isDerivedFrom<App::Part>()
+                && detailParts.getValue());
+        if (detail) {
+            hashChildren(target->getOutList(), seed, depth + 1);
+        }
+    }
+}
+
+std::size_t BomObject::componentSignature() const
+{
+    std::size_t seed = 0;
+    hashChildren(bomRoots(), seed, 0);
+    return seed;
+}
+
 void BomObject::saveCustomColumnData()
 {
     // This function saves data that is not automatically generated.
@@ -164,13 +262,9 @@ void BomObject::generateBOM()
     }
     ++row;
 
-    auto* assembly = getAssembly();
-    if (assembly) {
-        addObjectChildrenToBom(assembly->getOutList(), row, "");
-    }
-    else {
-        addObjectChildrenToBom(getDocument()->getRootObjectsIgnoreLinks(), row, "");
-    }
+    addObjectChildrenToBom(bomRoots(), row, "");
+    lastSignature = componentSignature();
+    hasSignature = true;
 }
 
 void BomObject::addObjectChildrenToBom(
@@ -299,20 +393,20 @@ int BomObject::linkInstanceCount(App::Link* link)
     return std::max(count, 0);
 }
 
-bool BomObject::isObjMirrored(App::DocumentObject* obj)
+bool BomObject::isObjMirrored(App::DocumentObject* obj) const
 {
     // Determine mirror state based on Scale properties.
     // We multiply scales to handle nested mirroring (e.g., Mirrored LinkElement inside Mirrored
     // LinkGroup = Normal).
     double accumulatedScale = 1.0;
-    if (auto element = static_cast<App::LinkElement*>(obj)) {
+    if (auto element = freecad_cast<App::LinkElement*>(obj)) {
         accumulatedScale *= element->Scale.getValue();
 
         if (auto group = element->getLinkGroup()) {
             accumulatedScale *= group->Scale.getValue();
         }
     }
-    else if (auto link = static_cast<App::Link*>(obj)) {
+    else if (auto link = freecad_cast<App::Link*>(obj)) {
         accumulatedScale *= link->Scale.getValue();
     }
     return accumulatedScale < 0.0;
@@ -369,11 +463,14 @@ void BomObject::addObjectToBom(App::DocumentObject* obj, size_t row, std::string
     }
 }
 
-std::string BomObject::getBomPropertyValue(App::DocumentObject* obj, const std::string& baseName)
+std::string BomObject::getBomPropertyValue(App::DocumentObject* obj, const std::string& baseName, bool quiet) const
 {
     App::Property* prop = obj->getPropertyByName(baseName.c_str());
 
     if (!prop) {
+        if (quiet) {
+            return {};
+        }
         Base::Console().warning("Property not found: {}\n", baseName);
         return QObject::tr("N/A").toStdString();
     }
@@ -398,6 +495,9 @@ std::string BomObject::getBomPropertyValue(App::DocumentObject* obj, const std::
         return propBool->getValue() ? "True" : "False";
     }
 
+    if (quiet) {
+        return {};
+    }
     Base::Console().warning("Property type not supported for: {}\n", prop->getName());
     return QObject::tr("Not supported").toStdString();
 }
