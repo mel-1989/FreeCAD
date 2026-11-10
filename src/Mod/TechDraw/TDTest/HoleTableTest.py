@@ -1055,3 +1055,23 @@ class HoleTableTest(unittest.TestCase):
         finally:
             HT.REPAIR_KICK, HT.REPAIR_RESTARTS, HT.REPAIR_PASSES = saved
         self.assertLessEqual(after, before)
+
+    def test_a_cavity_that_is_no_listed_hole_is_still_kept_clear_and_named(self):
+        # run 090 repair: two holes that run into each other leave an arc no listed hole explains; a tag over its centre is a fault
+        item = self.ring_item("A1", (100.0, 100.0))
+        plan = [((150.0, 130.0), (103.0, 100.0))]
+        self.assertEqual(HT.tag_conflicts([item], plan, self.AREA, [], 100.0), [])
+        self.assertIn("A1 covers a hole centre", HT.tag_conflicts([item], plan, self.AREA, [], 100.0, avoid=[(151.0, 130.0)]))
+        p2, bad, words = HT.plan_tags([self.ring_item("A1", (100.0, 100.0))], self.AREA, [], (90.0, 100.0), 20.0, None, avoid=[(112.0, 100.0)])
+        self.assertEqual(words, [])
+        b = HT.tag_size("A1")
+        self.assertFalse(p2[0][0][0] - b[0] / 2 < 112.0 < p2[0][0][0] + b[0] / 2 and p2[0][0][1] - 6.5 < 100.0 < p2[0][0][1] + 6.5)
+
+    def test_the_tag_is_within_the_bound_from_its_box_centre_and_from_its_anchor(self):
+        item = self.ring_item("A1", (100.0, 100.0))
+        tip = (103.0, 100.0)
+        far = (tip[0] + 5.0, tip[1] - 19.95 + 0.0)  # straight below the tip: the anchor is nearer, the centre is the far one
+        self.assertEqual(HT.tag_reach(far, tip), math.hypot(far[0] - tip[0], far[1] - tip[1]))
+        above = (tip[0] + 5.0, tip[1] + 19.0)  # above: the anchor, 1.15 mm higher, is the far one
+        self.assertAlmostEqual(HT.tag_reach(above, tip), math.hypot(5.0, 19.0 + 1.15), places=9)
+        self.assertEqual(HT.tag_conflicts([item], [(above, tip)], self.AREA, [], 20.0), ["A1 more than 20 mm from its hole"])
