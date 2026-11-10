@@ -155,7 +155,7 @@ class HoleTableTest(unittest.TestCase):
                 if other != tag:
                     self.assertLess(math.hypot(tip[0] - cx, tip[1] - cy), math.hypot(tip[0] - ox, tip[1] - oy), tag)
             _, arcs = edges.rim(cx, cy, R)
-            self.assertTrue(any(HT._on_arc(e, tip, 0.05) for e in arcs), "%s tip not on a visible arc" % tag)
+            self.assertTrue(any(HT._on_arc(e, tip, 0.05, edges.k) for e in arcs), "%s tip not on a visible arc" % tag)
             b = self.tag_box(t)
             self.assertLessEqual(math.hypot(0.5 * (b[0] + b[2]) - (view.X.Value + tip[0]), 0.5 * (b[1] + b[3]) - (view.Y.Value + tip[1])), 20.0, tag)
             for ocx, ocy, _ in holes_at.values():
@@ -507,3 +507,35 @@ class HoleTableTest(unittest.TestCase):
             table_rows(tbl),
             [["A1", "30", "40", D + "6 THRU"], ["A2", "60", "10", D + "6 THRU"], ["A3", "60", "70", D + "6 THRU"], ["A4", "90", "40", D + "6 THRU"]],
         )
+
+    def test_listing_is_independent_of_scale_type_and_scale(self):
+        # run 088 oracle: with ScaleType Custom getVisibleEdges(True) is multiplied by Scale while projectPoint is not
+        for stype, scale in (("Page", 1.0), ("Custom", 0.5), ("Custom", 0.2), ("Custom", 2.0)):
+            plate = Plate(self.doc)
+            plate.hole([(20, 15)], **dict(KINDS["through"][0]))
+            plate.hole([(90, 55)], **dict(KINDS["cbore"][0]))
+            page = self.page()
+            v = self.doc.addObject("TechDraw::DrawViewPart", "View")
+            page.addView(v)
+            v.Source = [plate.body]
+            v.Direction = V(0, 0, 1)
+            v.ScaleType = stype
+            v.Scale = scale
+            v.X, v.Y = 100.0, 105.0
+            self.doc.recompute()
+            tbl = HT.make(page, v)
+            what = "%s %s" % (stype, scale)
+            self.assertEqual(
+                table_rows(tbl), [["A1", "20", "15", D + "6 THRU"], ["B1", "90", "55", D + "6 THRU, CBORE " + D + "11 DEPTH 6.4"]], what
+            )
+            self.assertEqual(len(HT.tags_of(tbl)), 2, what)
+            edges = HT.Edges(v)
+            self.assertAlmostEqual(edges.box[2] - edges.box[0], 120.0, delta=0.01, msg=what)  # unscaled whatever the view did
+            vb = HT.view_box(v)
+            self.assertAlmostEqual(vb[2] - vb[0], 120.0 * scale, delta=0.05, msg=what)
+            t = {x.Text: x for x in HT.tags_of(tbl)}["B1"]
+            self.assertAlmostEqual(math.hypot(t.OriginX.Value - 30.0, t.OriginY.Value - 15.0), 5.5, delta=0.05, msg=what)
+            _, arcs = edges.rim(30.0, 15.0, 5.5)
+            self.assertTrue(any(HT._on_arc(e, (t.OriginX.Value, t.OriginY.Value), 0.05, edges.k) for e in arcs), what)
+            self.assertEqual(self.untouched(), [], what)
+            self.doc.removeObject(tbl.Name)

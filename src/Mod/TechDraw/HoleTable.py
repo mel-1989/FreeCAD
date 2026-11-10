@@ -236,8 +236,38 @@ def _radii(h):
 # ------------------------------------------------------------------------------------------------
 
 
+def _edge_factor(view, box):
+    """How much ``getVisibleEdges(True)`` is multiplied by: 1 or the view's Scale.
+
+    With ScaleType Page the edges come back unscaled, with ScaleType Custom they come back times Scale while ``projectPoint`` stays
+    unscaled (run 088).  Compare the edges' extent with the projected extent of the sources' bounding boxes.
+    """
+    S = float(view.Scale)
+    if abs(S - 1.0) < 1e-9 or box is None:
+        return 1.0
+    try:
+        gc = view.getGeometricCenter()
+        pts = []
+        for sh in source_shapes(view):
+            bb = sh.BoundBox
+            for x in (bb.XMin, bb.XMax):
+                for y in (bb.YMin, bb.YMax):
+                    for z in (bb.ZMin, bb.ZMax):
+                        q = view.projectPoint(Vector(x, y, z) - gc)
+                        pts.append((q.x, q.y))
+        base = math.hypot(max(p[0] for p in pts) - min(p[0] for p in pts), max(p[1] for p in pts) - min(p[1] for p in pts))
+        ext = math.hypot(box[2] - box[0], box[3] - box[1])
+        r = ext / base
+        return S if abs(math.log(r / S)) < abs(math.log(r)) else 1.0
+    except Exception:
+        return 1.0
+
+
 class Edges:
-    """The visible edges of a view in its own frame (y up, unscaled), with the circles indexed."""
+    """The visible edges of a view in its own frame (y up, unscaled model mm, whatever the view's ScaleType), circles indexed.
+
+    ``k`` is the factor the view applied to the edges; ``box``, ``circles`` and ``rim`` are in unscaled units, ``e`` stays raw.
+    """
 
     def __init__(self, view):
         try:
@@ -245,17 +275,23 @@ class Edges:
         except Exception:
             self.edges = []
         self.box = None
-        self.circles = {}
+        raw = None
         for e in self.edges:
             bb = e.BoundBox
-            if self.box is None:
-                self.box = [bb.XMin, bb.YMin, bb.XMax, bb.YMax]
+            if raw is None:
+                raw = [bb.XMin, bb.YMin, bb.XMax, bb.YMax]
             else:
-                self.box = [min(self.box[0], bb.XMin), min(self.box[1], bb.YMin), max(self.box[2], bb.XMax), max(self.box[3], bb.YMax)]
+                raw = [min(raw[0], bb.XMin), min(raw[1], bb.YMin), max(raw[2], bb.XMax), max(raw[3], bb.YMax)]
+        self.k = _edge_factor(view, raw)
+        k = self.k
+        self.box = [v / k for v in raw] if raw else None
+        self.circles = {}
+        for e in self.edges:
             try:
                 c = e.Curve
                 if c.TypeId == "Part::GeomCircle":
-                    self.circles.setdefault(round(c.Radius, 2), []).append((c.Center.x, c.Center.y, c.Radius, e.Length, e))
+                    r = c.Radius / k
+                    self.circles.setdefault(round(r, 2), []).append((c.Center.x / k, c.Center.y / k, r, e.Length / k, e))
             except Exception:
                 pass
 
@@ -273,10 +309,12 @@ class Edges:
         return tot / (2 * math.pi * radius), es
 
 
-def _on_arc(e, pt, tol_mm):
-    """True when the point (on the circle) lies on the arc ``e``."""
+def _on_arc(e, pt, tol_mm, k=1.0):
+    """True when the point (unscaled, on the circle) lies on the arc ``e`` (whose coordinates are ``k`` times larger)."""
     c = e.Curve
     r = c.Radius
+    pt = (pt[0] * k, pt[1] * k)
+    tol_mm = tol_mm * k
     try:
         u = c.parameter(Vector(pt[0], pt[1], 0))
     except Exception:
@@ -406,7 +444,7 @@ def tip_options(view, h, edges):
         q = view.projectPoint(P - gc)
         q = _rot((q.x, q.y), rot)
         pts.append(q)
-        if any(_on_arc(e, q, TIP_TOL_MM) for e in arcs):
+        if any(_on_arc(e, q, TIP_TOL_MM, edges.k) for e in arcs):
             valid.append(q)
     return valid or pts, R
 
