@@ -676,7 +676,7 @@ def anchorEnd(leader):
     wp = leader.WayPoints
     s = _leader_scale(leader)
     last = wp[-1]
-    return App.Vector(leader.X.Value + last.x / s, leader.Y.Value + last.y / s, 0)
+    return App.Vector(leader.X.Value + last.x / s, leader.Y.Value - last.y / s, 0)  # way points are page mm, y down; the position is y up
 
 
 def _leader_scale(leader):
@@ -917,7 +917,7 @@ class _Projector:
         ld.RotatesWithParent = False
         ld.X = x
         ld.Y = y
-        ld.WayPoints = [App.Vector(0, 0, 0), App.Vector((u.x - x) * s, (u.y - y) * s, 0)]
+        ld.WayPoints = [App.Vector(0, 0, 0), App.Vector((u.x - x) * s, -(u.y - y) * s, 0)]  # way points are page mm, y down
         ld.EndSymbol = "Filled triangle"
         ld.Label = "Leader " + label
         _dyn(ld, "App::PropertyVector", "PmiOffset", "Annotation position minus anchor, unscaled view coordinates")
@@ -1467,7 +1467,7 @@ def _refresh_leader(ld, item, geo):
     off = ld.PmiOffset
     s = vw.scale
     x, y = u.x + off.x, u.y + off.y
-    wp = [App.Vector(0, 0, 0), App.Vector(-off.x * s, -off.y * s, 0)]
+    wp = [App.Vector(0, 0, 0), App.Vector(-off.x * s, off.y * s, 0)]  # page mm, y down
     if abs(ld.X.Value - x) > 1e-9 or abs(ld.Y.Value - y) > 1e-9:
         ld.X, ld.Y = x, y
         changed = True
