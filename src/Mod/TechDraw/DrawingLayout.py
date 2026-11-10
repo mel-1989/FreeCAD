@@ -487,6 +487,7 @@ class _Plan:
         self.dists = []
         self.diag = {}
         self.viol = 0
+        self.levels = {}
 
 
 def _arrangement(vs, s, gap):
@@ -819,6 +820,7 @@ class _Layout:
                 box = (float(x0[k]), float(y0[k]), float(x1[k]), float(y1[k]))
                 O = self.attach(box, A, a)
                 P.viol += 10
+                P.levels[a.kind + "4"] = P.levels.get(a.kind + "4", 0) + 1
                 return self.commitFrame(P, a, grid, box, O, A, float(d[k]), vpos, sc)
             if not ok.any():
                 continue
@@ -829,6 +831,7 @@ class _Layout:
                 box = (float(x0[k]), float(y0[k]), float(x1[k]), float(y1[k]))
                 O = self.attach(box, A, a)
                 if self.leaderOK(P, O, A, box, a, level >= 2):
+                    P.levels[a.kind + str(level)] = P.levels.get(a.kind + str(level), 0) + 1
                     if level >= 2:
                         P.viol += 1
                     return self.commitFrame(P, a, grid, box, O, A, float(d[k]), vpos, sc)
@@ -923,6 +926,7 @@ class _Layout:
             if ok.any():
                 idx = np.nonzero(ok)[0]
                 k = idx[np.lexsort((X[idx], Y[idx], cost[idx]))[0]]
+                P.levels["dim" + str(level)] = P.levels.get("dim" + str(level), 0) + 1
                 return self.commitDim(P, grid, a, hull, tb, d, nN, X, Y, k, vpos, 0)
         # last resort: the least overlap
         ok = inside & (d <= REACH + 25)
@@ -930,6 +934,7 @@ class _Layout:
             return None
         cost4 = 3.0 * grid.count("A", hull[0], hull[1], hull[2], hull[3]) + 0.5 * grid.count("E", tb[0], tb[1], tb[2], tb[3]) + d + np.where(ok, 0.0, 1e9)
         k = int(np.lexsort((X, Y, cost4))[0])
+        P.levels["dim3"] = P.levels.get("dim3", 0) + 1
         return self.commitDim(P, grid, a, hull, tb, d, nN, X, Y, k, vpos, 10)
 
     def commitDim(self, P, grid, a, hull, tb, d, nN, X, Y, k, vpos, extra):
@@ -962,6 +967,29 @@ def _dim_geometry(dim, s0):
         return {"type": t, "pts": [(p.x / s0, -p.y / s0) for p in pts]}
     except Exception:
         return None
+
+
+def estimateScale(page, sources):
+    """The largest preferred scale at which the Front, Top and Right views of ``sources`` (third angle, along the body's axes) fit
+    the drawing area of ``page`` with the margin and spacing; None when none does.  PmiDrawing makes its projection group at this
+    scale, so the hidden-line removal is not run twice; ``layout`` refines the choice with everything it has to place."""
+    import PmiDrawing as PD
+
+    try:
+        shapes = [PD._global_shape(o).copy() for o in PD._occluder_objects(list(sources))]
+        comp = Part.makeCompound([sh for sh in shapes if not sh.isNull()])
+        rot = sources[0].getGlobalPlacement().Rotation if hasattr(sources[0], "getGlobalPlacement") else App.Rotation()
+        local = comp.copy()
+        local.transformShape(App.Placement(App.Vector(), rot).inverse().toMatrix())
+        bb = local.optimalBoundingBox(True, False)
+    except Exception:
+        return None
+    dx, dy, dz = bb.XMax - bb.XMin, bb.YMax - bb.YMin, bb.ZMax - bb.ZMin
+    sheet, W, H = sheetOf(page)
+    for s in reversed(ISO_SCALES):
+        if (dx + dy) * s + VIEW_GAP <= (sheet[2] - sheet[0]) - 2 * FIT_MARGIN and (dz + dy) * s + VIEW_GAP <= (sheet[3] - sheet[1]) - 2 * FIT_MARGIN:
+            return s
+    return None
 
 
 def _managed_group(page):
@@ -1147,6 +1175,7 @@ def _layout(page, forced_scale):
         "max_reach": float(max(chosen.dists)) if chosen.dists else None,
         "tried": [(round(t.s, 4), t.gap, t.ok, t.reason, t.viol) for t in tried],
         "violations": chosen.viol,
+        "levels": chosen.levels,
         "diag": {n: chosen.diag.get(n) for n in chosen.failed},
     }
 
@@ -1167,21 +1196,26 @@ def _apply(page, lay, P, group):
     doc = page.Document
     s = P.s
     expect = {}
+    rescaled = False
+    moved = False
     if group is not None and not lay.pins:
-        if abs(float(group.Scale) - s) > 1e-12 or group.ScaleType != "Custom":
+        rescaled = abs(float(group.Scale) - s) > 1e-12 or group.ScaleType != "Custom"
+        if rescaled:
             group.ScaleType = "Custom"
             group.Scale = s
         if group.AutoDistribute:
             group.AutoDistribute = False
         front = next((v for v in lay.managed if v.label == "Front"), lay.managed[0])
         fx, fy = P.pos[front.view.Name]
-        group.X, group.Y = fx, fy
+        if abs(_mm(group.X) - fx) > 1e-9 or abs(_mm(group.Y) - fy) > 1e-9:
+            group.X, group.Y = fx, fy
         for v in lay.managed:
             if v is front:
                 continue
             x, y = P.pos[v.view.Name]
-            v.view.X, v.view.Y = x - fx, y - fy
-        doc.recompute()
+            # moving a projection group item makes TechDraw run its hidden-line removal again: only when it really moves
+            if abs(_mm(v.view.X) - (x - fx)) > 1e-9 or abs(_mm(v.view.Y) - (y - fy)) > 1e-9:
+                v.view.X, v.view.Y = x - fx, y - fy
         for v in lay.managed:
             q0, q1 = v.segments(lay.defl)
             if len(q0):
@@ -1199,30 +1233,85 @@ def _apply(page, lay, P, group):
         if r is None:
             continue
         if a.kind == "dim":
-            a.obj.X, a.obj.Y = round(r["dimXY"][0], 3), round(r["dimXY"][1], 3)
+            moved |= _set_xy(a.obj, round(r["dimXY"][0], 3), round(r["dimXY"][1], 3))
             _store(a.obj, (_mm(a.obj.X), _mm(a.obj.Y)))
         else:
             ld = a.leader
-            ld.X, ld.Y = round(r["leaderXY"][0], 4), round(r["leaderXY"][1], 4)
+            moved |= _set_xy(ld, round(r["leaderXY"][0], 4), round(r["leaderXY"][1], 4))
             O, A = r["origin"], r["anchor"]
             ox, oy = px + _mm(ld.X) * sc, py + _mm(ld.Y) * sc
-            ld.WayPoints = [App.Vector(0, 0, 0), App.Vector(A[0] - ox, -(A[1] - oy), 0)]
-            a.obj.X, a.obj.Y = round(r["annoXY"][0], 3), round(r["annoXY"][1], 3)
+            wp = [App.Vector(0, 0, 0), App.Vector(A[0] - ox, -(A[1] - oy), 0)]
+            cur = ld.WayPoints
+            if len(cur) != 2 or (cur[1] - wp[1]).Length > 1e-9:
+                ld.WayPoints = wp
+            moved |= _set_xy(a.obj, round(r["annoXY"][0], 3), round(r["annoXY"][1], 3))
             u = a.view.vw.u(ld.PmiAnchor)
-            ld.PmiOffset = App.Vector(_mm(ld.X) - u.x, _mm(ld.Y) - u.y, 0)
+            off = App.Vector(_mm(ld.X) - u.x, _mm(ld.Y) - u.y, 0)
+            if (ld.PmiOffset - off).Length > 1e-12:
+                ld.PmiOffset = off
             _store(a.obj, (_mm(a.obj.X), _mm(a.obj.Y)))
             _store(ld, (_mm(ld.X), _mm(ld.Y)))
         _dyn(a.obj, "App::PropertyBool", "PmiPinned", "The user moved this annotation after the last layout: layout keeps it")
-        a.obj.PmiPinned = False
+        if a.obj.PmiPinned:
+            a.obj.PmiPinned = False
     doc.recompute()
     if group is not None and not lay.pins:
         _wait_views(page, expect)
+        if App.GuiUp and rescaled:
+            # with the page open while the scale changes, the Front view's drawn edges can stay at the old scale: touch the views
+            # so the GUI redraws them (a page opened afterwards is built from the properties and needs nothing)
+            for v in lay.managed:
+                v.view.touch()
+            group.touch()
+            doc.recompute()
+            _wait_views(page, expect)
     PD.settle(page)
+    if App.GuiUp and (rescaled or moved):
+        _rebuild_gui(page)
+
+
+def _rebuild_gui(page):
+    """A page whose window was open while the layout moved things can keep stale scene items (the views' drawn edges at the old
+    scale, the group away from its position): hiding and showing the page builds its scene again from the properties.  Nothing
+    happens when the page has no window, so a layout never opens one."""
+    try:
+        import FreeCADGui as Gui
+        import TechDrawGui
+        from PySide import QtWidgets
+
+        if TechDrawGui.getSceneForPage(page) is None:
+            return
+        vp = Gui.getDocument(page.Document.Name).getObject(page.Name)
+        vp.hide()
+        for _ in range(30):
+            QtWidgets.QApplication.processEvents()
+        vp.show()
+        for _ in range(30):
+            QtWidgets.QApplication.processEvents()
+        import PmiDrawing as PD
+
+        PD.settle(page)
+    except Exception:
+        pass
+
+
+def _set_xy(obj, x, y):
+    """Write X, Y only when they differ: a write touches the object and TechDraw then recomputes it (a dimension takes 0.3 s)."""
+    wrote = False
+    if abs(_mm(obj.X) - x) > 1e-9:
+        obj.X = x
+        wrote = True
+    if abs(_mm(obj.Y) - y) > 1e-9:
+        obj.Y = y
+        wrote = True
+    return wrote
 
 
 def _store(obj, xy):
     _dyn(obj, "App::PropertyVector", "PmiLayout", "Position written by the last layout (X, Y); a different position means the user moved it")
-    obj.PmiLayout = App.Vector(xy[0], xy[1], 0)
+    v = App.Vector(xy[0], xy[1], 0)
+    if (obj.PmiLayout - v).Length > 1e-12:
+        obj.PmiLayout = v
 
 
 def _refresh_pinned(a, P, lay, sc, vpos):

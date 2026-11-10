@@ -300,9 +300,10 @@ class DrawingLayoutTest(unittest.TestCase):
     def test_layout_is_one_undo_step(self):
         first = positions(self.page)
         g = group_of(self.page)
-        g.Scale = 1.0  # a hand edit that the layout will undo
+        g.Scale = 0.5 if g.Scale != 0.5 else 0.2  # a hand edit that the layout will undo
         self.doc.recompute()
         edited = positions(self.page)
+        self.assertNotEqual(edited, first)
         DL.layout(self.page)
         self.assertEqual(positions(self.page), first)
         self.doc.undo()

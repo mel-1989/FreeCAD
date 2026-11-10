@@ -751,7 +751,8 @@ def _find_anchor(geo, vw, refs, params=COARSE, occ=None):
 
 
 class _Projector:
-    def __init__(self, page, sources, view):
+    def __init__(self, page, sources, view, prescale=False):
+        self.prescale = prescale
         self.page = page
         self.doc = page.Document
         self.sources = sources
@@ -795,6 +796,14 @@ class _Projector:
             g = self.doc.addObject("TechDraw::DrawProjGroup", "PmiProjGroup")
             self.page.addView(g)
             g.Source = list(self.sources)
+            if self.prescale:
+                # the group starts at the scale the layout will most likely keep: the hidden-line removal then runs once
+                import DrawingLayout
+
+                est = DrawingLayout.estimateScale(self.page, self.sources)
+                if est:
+                    g.ScaleType = "Custom"
+                    g.Scale = est
             g.ProjectionType = "Third angle"
             _dyn(g, "App::PropertyString", "PmiRole", "view")
             g.PmiRole = "view"
@@ -1265,7 +1274,7 @@ def project(page, source, items=None, view=None, layout=True):
     doc.openTransaction("PMI onto TechDraw views")
     try:
         _remove_orphans(page)
-        report = _Projector(page, sources, view).run(list(items))
+        report = _Projector(page, sources, view, prescale=layout).run(list(items))
         if layout:
             import DrawingLayout
 
