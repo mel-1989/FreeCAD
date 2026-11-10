@@ -162,3 +162,34 @@ class RevisionTableTest(unittest.TestCase):
         self.assertLess(time.time() - t0, 0.5)
         self.assertAlmostEqual(v.X.Value, 150.0, delta=1e-6)
         self.assertAlmostEqual(v.Y.Value, 100.0, delta=1e-6)
+
+    def test_from_pdm_without_a_vault_argument_uses_the_environment_vault(self):
+        import shutil
+        from PDM import vault as V
+
+        tmp = tempfile.mkdtemp(prefix="revpdm")
+        try:
+            wc = os.path.join(tmp, "wc")
+            vault = V.Vault.clone(V.Vault.create(os.path.join(tmp, "v.git")), wc, "alice")
+            os.makedirs(vault.doc_path("bracket"))
+            with open(os.path.join(vault.doc_path("bracket"), "Document.xml"), "w") as fh:
+                fh.write("<Document/>")
+            vault.add_document("bracket", message="Initial revision")
+            vault.transition("bracket", "InReview", message="Ready")
+            vault.transition("bracket", "Released", message="Release to production")
+            old = {k: os.environ.get(k) for k in ("PDM_WORKDIR", "PDM_USER")}
+            os.environ["PDM_WORKDIR"], os.environ["PDM_USER"] = wc, "alice"
+            try:
+                page = self.page(os.path.join("ISO", "A4_Landscape_ISO5457_minimal.svg"))
+                RT.from_pdm(page, "bracket")
+                RT.from_pdm(page, "bracket")
+            finally:
+                for k, v in old.items():
+                    os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+            rows = self.rows(page)[1:]
+            self.assertEqual(len(rows), 1)
+            self.assertTrue(rows[0][1].startswith("B") or rows[0][1].startswith("A"), rows)
+            self.assertEqual(rows[0][4], "alice")
+            self.assertEqual(rows[0][2], "Release to production")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)

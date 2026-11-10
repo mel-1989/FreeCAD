@@ -25,6 +25,8 @@ APPROVED; newest row last), placed in free space at the top right of the drawing
 a template without those keys is left alone.  Edit the sheet to change a row.
 """
 
+import os
+
 import FreeCAD as App
 
 import HoleTable as HT
@@ -228,6 +230,26 @@ def add(page, rev, description, date, approved, zone=""):
     return doc.getObject(drv.ViewName)
 
 
+def default_vault():
+    """The vault ``from_pdm`` uses when none is passed.
+
+    G03 has no default vault of its own: the PDM workbench keeps the connection in the ``PDM`` parameter group
+    (``PDMGui.state.current_vault()``, which also works headless once ``state.connect`` has saved it).  Resolution order:
+    the environment (``PDM_WORKDIR`` = a working copy of the vault, ``PDM_USER`` = the user), then that saved connection.
+    """
+    wd, user = os.environ.get("PDM_WORKDIR"), os.environ.get("PDM_USER")
+    if wd and user:
+        from PDM import vault as V
+
+        return V.Vault.open(wd, user)
+    from PDMGui import state
+
+    v = state.current_vault()
+    if v is None:
+        raise ValueError("from_pdm: no vault given, PDM_WORKDIR/PDM_USER are not set and the PDM workbench is not connected to one")
+    return v
+
+
 def from_pdm(page, name, vault=None):
     """Append the released revisions of the PDM document ``name`` that the table lacks, oldest first; -> the view.
 
@@ -236,11 +258,7 @@ def from_pdm(page, name, vault=None):
     the author.
     """
     if vault is None:
-        from PDMGui import state  # the connected vault of the PDM workbench
-
-        vault = state.current_vault()
-        if vault is None:
-            raise ValueError("from_pdm: no vault given and the PDM workbench is not connected to one")
+        vault = default_vault()
     doc = page.Document
     HT.begin(doc, "Revisions from PDM")
     try:
