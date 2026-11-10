@@ -51,9 +51,10 @@ MEDIAN_GOAL = 24.5  # mm, a scale whose median reach is above this loses to a sm
 PIN_TOL = 1e-6
 # global slot assignment (run 085): costs of a conflict, candidate budget and the fixed annealing schedule
 W_OVERLAP, W_LEADER_BOX, W_CROSS, W_EDGE = 100.0, 60.0, 30.0, 30.0
-KEEP_NEAR, KEEP_SPREAD = 300, 300  # candidates kept per annotation: the cheapest ones plus an even spread of the rest
+KEEP_NEAR, KEEP_SPREAD = 200, 200  # candidates kept per annotation: the cheapest ones plus an even spread of the rest
 SWEEPS = 24  # heat-bath sweeps; the move count is capped by iterations, never by the clock (ruling 3)
 SWAPS = 300  # exchange trials after the sweeps
+STALE_SWEEPS, STALE_SWAPS = 6, 60  # stop after this many sweeps or exchanges in a row that bring no gain
 SEED = 20261110
 FAR = -1.0e6  # a leader that does not exist sits here, away from everything
 # TechDraw draws a RichAnno's frame with its top left this far from the leader's origin (page mm, y up), measured in run 084
@@ -117,7 +118,7 @@ def frameSize(text):
             else:
                 sp += _osi(v)
     w = 1.33 + 3.16 * len(cells) + 4.64 * sg + 5.25 * sp
-    return w + FRAME_SLACK, FRAME_H
+    return _q(w + FRAME_SLACK), FRAME_H
 
 
 def _decimals(spec):
@@ -164,12 +165,22 @@ def dimTextSize(dim):
             tol = ["+%.*f" % (min(n, 4), abs(dim.OverTolerance.Value)), "-%.*f" % (min(n, 4), abs(dim.UnderTolerance.Value))]
             w += 1.5 + TOL_K * max(_osi(t) for t in tol) + 1.0
             h = max(h, 10.0)
-    return w, h
+    return _q(w), _q(h)
 
 
 # ------------------------------------------------------------------------------------------------
 # page geometry
 # ------------------------------------------------------------------------------------------------
+
+
+def _q(x):
+    """A layout input rounded to 0.01 mm, so that tiny differences between a headless and a GUI run (a view's edges, its centre) cannot tip the annealing."""
+    return round(float(x) * 100.0) / 100.0
+
+
+def _q5(x):
+    """A dimension's feature point or circle to 0.5 mm: TechDraw's dimension points differ by up to 0.15 mm between a headless and a GUI run (run 086, ctc_01), more than 0.01 mm could absorb.  The drawn geometry is TechDraw's own; the layout only needs the cell."""
+    return round(float(x) * 2.0) / 2.0
 
 
 def _mm(q):
@@ -205,12 +216,22 @@ def _group_of(v):
 def _view_pos(v):
     g = _group_of(v)
     if g is not None:
-        return _mm(g.X) + _mm(v.X), _mm(g.Y) + _mm(v.Y)
-    return _mm(v.X), _mm(v.Y)
+        return _q(_mm(g.X) + _mm(v.X)), _q(_mm(g.Y) + _mm(v.Y))
+    return _q(_mm(v.X)), _q(_mm(v.Y))
 
 
 def _snap(x, q=0.5):
     return round(x / q) * q
+
+
+_BOXES = {}
+_CENTRES = {}
+
+
+def _remember(cache, key, value):
+    if len(cache) > 256:
+        cache.clear()
+    cache[key] = value
 
 
 class _V:
@@ -223,10 +244,39 @@ class _V:
         self.label = label
         self.vw = PD._View(view, label, source)
         self.s0 = cur_scale
-        # a symmetric frame from the geometry-only box of the sources in the view's frame: identical headless and in the GUI
-        self.half = self._box()
+        self._key = self._geometry_key()
+        # a symmetric frame from the geometry-only box of the sources in the view's frame: identical headless and in the GUI.  The same
+        # box gives the view centre (what PmiDrawing's _View.center() reads from the saved centroid in the GUI and from
+        # getGeometricCenter headless, equal to 1e-9 mm on the corpus), so the model's box is measured once, not twice, and kept while
+        # the geometry is unchanged
+        hit = _BOXES.get(self._key) if self._key is not None else None
+        if hit is None:
+            hit = self._box()
+            if self._key is not None:
+                _remember(_BOXES, self._key, hit)
+        self.half, c3 = hit
+        if c3 is not None:
+            self.vw._center = self.view.projectPoint(c3)
         self.seg = None
         self.pos = _view_pos(view)
+
+    def _geometry_key(self):
+        """What the box and the centre of the view depend on: the sources' shapes (with their placements) and the view direction; None when unknown."""
+        import PmiDrawing as PD
+
+        try:
+            g = _group_of(self.view)
+            srcs = list((g or self.view).Source)
+            hs = []
+            for o in PD._occluder_objects(srcs):
+                sh = PD._global_shape(o)
+                if not sh.isNull():
+                    bb = sh.BoundBox
+                    hs.append((round(bb.XMin, 6), round(bb.XMax, 6), round(bb.YMin, 6), round(bb.YMax, 6), round(bb.ZMin, 6), round(bb.ZMax, 6), len(sh.Edges), round(sh.Length, 6)))
+            vw = self.vw
+            return (App.GuiUp, tuple(hs), tuple(round(c, 9) for c in (vw.x.x, vw.x.y, vw.x.z, vw.d.x, vw.d.y, vw.d.z)))
+        except Exception:
+            return None
 
     def _box(self):
         import PmiDrawing as PD
@@ -246,10 +296,11 @@ class _V:
             local = comp.copy()
             local.transformShape(m.inverse().toMatrix())
             bb = local.optimalBoundingBox(True, False)
-            return ((bb.XMax - bb.XMin) / 2 + 0.2, (bb.YMax - bb.YMin) / 2 + 0.2)
+            c3 = m.multVec(App.Vector((bb.XMin + bb.XMax) / 2, (bb.YMin + bb.YMax) / 2, (bb.ZMin + bb.ZMax) / 2))
+            return (_q((bb.XMax - bb.XMin) / 2 + 0.2), _q((bb.YMax - bb.YMin) / 2 + 0.2)), c3
         except Exception:
             fr = self.vw.frame()
-            return (max(abs(fr[0]), abs(fr[1])) + 0.2, max(abs(fr[2]), abs(fr[3])) + 0.2)
+            return (_q(max(abs(fr[0]), abs(fr[1])) + 0.2), _q(max(abs(fr[2]), abs(fr[3])) + 0.2)), None
 
     def segments(self, deflection):
         """The visible edges as unscaled segments: (P0, P1) arrays of shape (N, 2) (cached)."""
@@ -263,7 +314,7 @@ class _V:
                     continue
                 if len(pts) < 2:
                     continue
-                a = np.array([(p.x, p.y) for p in pts], dtype=float) / s
+                a = np.round(np.array([(p.x, p.y) for p in pts], dtype=float) * 100.0) / 100.0 / s  # page mm at the current scale, to 0.01 mm
                 p0.append(a[:-1])
                 p1.append(a[1:])
             if p0:
@@ -836,7 +887,7 @@ class _Layout:
         box = np.stack([np.asarray(hull[i])[keep] if np.ndim(hull[i]) else np.full(len(keep), float(hull[i])) for i in range(4)], axis=1)
         tbk = np.stack([np.asarray(tb[i])[keep] if np.ndim(tb[i]) else np.full(len(keep), float(tb[i])) for i in range(4)], axis=1)
         far = np.full((len(keep), 2), FAR)
-        return _Cand(a, box, far, np.array([FAR, FAR]), static[keep], {"d": d[keep], "X": X[keep], "Y": Y[keep], "tb": tbk, "vpos": (px, py), "cE": cE[keep]})
+        return _Cand(a, box, far, np.array([FAR, FAR]), static[keep], {"d": d[keep], "X": X[keep], "Y": Y[keep], "tb": tbk, "vpos": (px, py), "cE": cE[keep]}, tb=tbk)
 
     def assign(self, P, free, grid):
         """Place every free annotation at once: one candidate each, chosen by a greedy seed (largest first) and a fixed number of
@@ -892,7 +943,7 @@ class _Layout:
 
         def choose(i, T):
             c = cands[i]
-            E = c.static + F.energy(c.box, c.O, np.broadcast_to(c.A, c.O.shape) if c.A[0] != FAR else c.O, others(i), nf + i)
+            E = c.static + F.energy(c.box, c.O, np.broadcast_to(c.A, c.O.shape) if c.A[0] != FAR else c.O, others(i), nf + i, c.tb)
             if T <= 0:
                 k = int(np.argmin(E))
             else:
@@ -904,7 +955,7 @@ class _Layout:
         def put(i, k):
             c = cands[i]
             sel[i] = k
-            F.put(i, c.box[k], c.O[k], c.A)
+            F.put(i, c.box[k], c.O[k], c.A, c.tb[k])
 
         order = sorted(range(n), key=lambda i: (-cands[i].area, cands[i].name))
         for i in order:
@@ -913,6 +964,7 @@ class _Layout:
         rows = np.arange(nf, nf + n)
         best = (F.state(rows)[0].sum(), list(sel))
         T0, T1 = 30.0, 3.0
+        stale = 0
         for sweep in range(SWEEPS):
             per, _, _, _ = F.state(rows)
             if per.sum() == 0 and sweep >= 2:
@@ -928,6 +980,11 @@ class _Layout:
             tot = F.state(rows)[0].sum()
             if tot < best[0]:
                 best = (tot, list(sel))
+                stale = 0
+            else:
+                stale += 1
+                if stale >= STALE_SWEEPS and sweep >= 2:  # a fixed count, never the clock: still deterministic
+                    break
         if F.state(rows)[0].sum() > best[0]:
             for i in range(n):
                 put(i, best[1][i])
@@ -935,12 +992,15 @@ class _Layout:
         # other stands), which sorts the fans of leaders that single moves cannot untangle
         ctr = [0.5 * (c.box[:, 0] + c.box[:, 2]) for c in cands]
         ctr2 = [0.5 * (c.box[:, 1] + c.box[:, 3]) for c in cands]
+        failed_swaps = 0
         for it in range(SWAPS):
+            if failed_swaps >= STALE_SWAPS:
+                break
             per, nov_, nlb_, ncr_ = F.state(rows)
             if per.sum() == 0:
                 break
             idx = np.nonzero(F.ACT)[0]
-            ov, lb, lb2, cr = F.parts(F.BOX[rows], F.SO[rows], F.SA[rows], idx, rows)
+            ov, lb, lb2, cr = F.parts(F.BOX[rows], F.SO[rows], F.SA[rows], idx, rows, F.TB[rows])
             bad = [(a_, int(idx[b_]) - nf) for a_, b_ in zip(*np.nonzero(ov | cr | lb))]
             bad = [(a_, b_) for a_, b_ in bad if b_ >= 0 and a_ != b_ and cands[a_].A[0] != FAR and cands[b_].A[0] != FAR]
             if not bad:
@@ -957,7 +1017,9 @@ class _Layout:
             put(b_, kb)
             after = F.state([ra, rb])[0].sum() + cands[a_].static[ka] + cands[b_].static[kb]
             if after < before - 1e-9:
+                failed_swaps = 0
                 continue
+            failed_swaps += 1
             put(a_, oa)
             put(b_, ob)
         # a last greedy sweep that keeps a candidate unless another is strictly cheaper
@@ -1021,14 +1083,38 @@ def _cross_vec(p1x, p1y, p2x, p2y, q1x, q1y, q2x, q2y):
     return (d1 * d2 < 0) & (d3 * d4 < 0)
 
 
+def _seg_box_sparse(px, py, qx, qy, x0, y0, x1, y1):
+    """``_seg_box_vec`` on the pairs whose bounding boxes meet only (a broad phase; the same answer, a fraction of the work)."""
+    shape = np.broadcast(px, py, qx, qy, x0, y0, x1, y1).shape
+    near = (np.maximum(px, qx) >= x0) & (np.minimum(px, qx) <= x1) & (np.maximum(py, qy) >= y0) & (np.minimum(py, qy) <= y1)
+    out = np.zeros(shape, dtype=bool)
+    ii = np.nonzero(np.broadcast_to(near, shape))
+    if len(ii[0]):
+        out[ii] = _seg_box_vec(*[np.broadcast_to(v, shape)[ii] for v in (px, py, qx, qy, x0, y0, x1, y1)])
+    return out
+
+
+def _cross_sparse(p1x, p1y, p2x, p2y, q1x, q1y, q2x, q2y):
+    """``_cross_vec`` on the pairs whose segment boxes meet only."""
+    shape = np.broadcast(p1x, p1y, p2x, p2y, q1x, q1y, q2x, q2y).shape
+    near = (np.maximum(p1x, p2x) >= np.minimum(q1x, q2x)) & (np.maximum(q1x, q2x) >= np.minimum(p1x, p2x))
+    near = near & (np.maximum(p1y, p2y) >= np.minimum(q1y, q2y)) & (np.maximum(q1y, q2y) >= np.minimum(p1y, p2y))
+    out = np.zeros(shape, dtype=bool)
+    ii = np.nonzero(np.broadcast_to(near, shape))
+    if len(ii[0]):
+        out[ii] = _cross_vec(*[np.broadcast_to(v, shape)[ii] for v in (p1x, p1y, p2x, p2y, q1x, q1y, q2x, q2y)])
+    return out
+
+
 class _Cand:
     """The candidate places of one annotation: collision boxes, leader starts (frames and datums) and a static cost."""
 
-    __slots__ = ("ann", "box", "O", "A", "static", "area", "extra", "name")
+    __slots__ = ("ann", "box", "O", "A", "static", "area", "extra", "name", "tb")
 
-    def __init__(self, ann, box, O, A, static, extra):
+    def __init__(self, ann, box, O, A, static, extra, tb=None):
         self.ann = ann
         self.box = box  # (K, 4)
+        self.tb = box if tb is None else tb  # (K, 4) the text box (a dimension's hull also holds its arrows)
         self.O = O  # (K, 2) leader starts, FAR for a dimension
         self.A = A  # (2,) the anchor, FAR for a dimension
         self.static = static  # (K,)
@@ -1054,6 +1140,7 @@ class _Field:
         nf = len(fixed_boxes)
         self.nf = nf
         self.BOX = np.zeros((nf + n, 4))
+        self.TB = np.zeros((nf + n, 4))
         self.SO = np.full((nf + n, 2), FAR)
         self.SA = np.full((nf + n, 2), FAR)
         self.ACT = np.zeros(nf + n, dtype=bool)
@@ -1061,40 +1148,58 @@ class _Field:
         self.FORCE = np.zeros((nf + n, nf + n), dtype=bool)  # FORCE[k, j]: the leader of row k must end inside the box of row j (see assign)
         for i, (b, sg) in enumerate(zip(fixed_boxes, fixed_segs)):
             self.BOX[i] = b
+            self.TB[i] = b
             if sg is not None:
                 self.SO[i], self.SA[i] = sg
             self.ACT[i] = True
 
-    def put(self, i, box, O, A):
+    def put(self, i, box, O, A, tb=None):
         r = self.nf + i
         self.BOX[r] = box
+        self.TB[r] = box if tb is None else tb
         self.SO[r] = O
         self.SA[r] = A
         self.ACT[r] = True
 
-    def parts(self, box, O, A, idx, rows):
+    def parts(self, box, O, A, idx, rows, tb=None):
         """(overlap, leader-over-box, crossing) boolean matrices (K, M) of K candidate boxes (the rows ``rows`` of the arrays) against the rows ``idx``."""
         B, bO, bA = self.BOX[idx], self.SO[idx], self.SA[idx]
         ov = (box[:, 0:1] < B[None, :, 2] + CLEAR) & (B[None, :, 0] < box[:, 2:3] + CLEAR) & (box[:, 1:2] < B[None, :, 3] + CLEAR) & (B[None, :, 1] < box[:, 3:4] + CLEAR)
-        Ax, Ay = (A[:, 0:1], A[:, 1:2]) if A.ndim == 2 else (A[0], A[1])
-        lb = _seg_box_vec(O[:, 0:1], O[:, 1:2], Ax, Ay, B[None, :, 0] - 0.3, B[None, :, 1] - 0.3, B[None, :, 2] + 0.3, B[None, :, 3] + 0.3)
-        lb2 = _seg_box_vec(bO[None, :, 0], bO[None, :, 1], bA[None, :, 0], bA[None, :, 1], box[:, 0:1] - 0.3, box[:, 1:2] - 0.3, box[:, 2:3] + 0.3, box[:, 3:4] + 0.3)
-        cr = _cross_vec(O[:, 0:1], O[:, 1:2], Ax, Ay, bO[None, :, 0], bO[None, :, 1], bA[None, :, 0], bA[None, :, 1])
+        K, M = len(box), len(idx)
+        Ax, Ay = (A[:, 0:1], A[:, 1:2]) if A.ndim == 2 else (np.full((K, 1), A[0]), np.full((K, 1), A[1]))
+        # only frames and datums have leaders (a dimension's sit at FAR): leader tests run on those rows and columns alone
+        Lc = O[:, 0] > FAR / 2
+        Lo = bO[:, 0] > FAR / 2
+        lb = np.zeros((K, M), dtype=bool)
+        lb2 = np.zeros((K, M), dtype=bool)
+        cr = np.zeros((K, M), dtype=bool)
+        if Lc.any():
+            lb[Lc] = _seg_box_sparse(O[Lc, 0:1], O[Lc, 1:2], Ax[Lc], Ay[Lc], B[None, :, 0] - 0.3, B[None, :, 1] - 0.3, B[None, :, 2] + 0.3, B[None, :, 3] + 0.3)
+        if Lo.any():
+            lb2[:, Lo] = _seg_box_sparse(bO[None, Lo, 0], bO[None, Lo, 1], bA[None, Lo, 0], bA[None, Lo, 1], box[:, 0:1] - 0.3, box[:, 1:2] - 0.3, box[:, 2:3] + 0.3, box[:, 3:4] + 0.3)
+        if Lc.any() and Lo.any():
+            cr[np.ix_(Lc, Lo)] = _cross_sparse(O[Lc, 0:1], O[Lc, 1:2], Ax[Lc], Ay[Lc], bO[None, Lo, 0], bO[None, Lo, 1], bA[None, Lo, 0], bA[None, Lo, 1])
         rows = np.broadcast_to(np.asarray(rows), (len(box),))
-        ov = ov & ~self.FORCE_OV[rows[:, None], idx[None, :]]
+        fo = self.FORCE_OV[rows[:, None], idx[None, :]]
+        ov = ov & ~fo
+        if tb is not None and fo.any():
+            # concentric diameter and radius dimensions: their hulls meet at the common centre, but their texts must stay apart (run 085 wrongly exempted the pair)
+            T = self.TB[idx]
+            ovt = (tb[:, None, 0] < T[None, :, 2] + CLEAR) & (T[None, :, 0] < tb[:, None, 2] + CLEAR) & (tb[:, None, 1] < T[None, :, 3] + CLEAR) & (T[None, :, 1] < tb[:, None, 3] + CLEAR)
+            ov = ov | (ovt & fo)
         lb = lb & ~self.FORCE[rows[:, None], idx[None, :]]
         lb2 = lb2 & ~self.FORCE[idx[None, :], rows[:, None]]
         return ov, lb, lb2, cr
 
-    def energy(self, box, O, A, idx, row):
-        ov, lb, lb2, cr = self.parts(box, O, A, idx, row)
+    def energy(self, box, O, A, idx, row, tb=None):
+        ov, lb, lb2, cr = self.parts(box, O, A, idx, row, tb)
         return W_OVERLAP * ov.sum(axis=1) + W_LEADER_BOX * (lb.sum(axis=1) + lb2.sum(axis=1)) + W_CROSS * cr.sum(axis=1)
 
     def state(self, rows):
         """Conflicts of the chosen candidates in ``rows`` against every active row: (per-row weighted conflicts, overlaps, leader-over-box, crossings)."""
         idx = np.nonzero(self.ACT)[0]
         box, O, A = self.BOX[rows], self.SO[rows], self.SA[rows]
-        ov, lb, lb2, cr = self.parts(box, O, A, idx, rows)
+        ov, lb, lb2, cr = self.parts(box, O, A, idx, rows, self.TB[rows])
         same = idx[None, :] == np.asarray(rows)[:, None]
         ov, lb, lb2, cr = ov & ~same, lb & ~same, lb2 & ~same, cr & ~same
         per = W_OVERLAP * ov.sum(axis=1) + W_LEADER_BOX * (lb.sum(axis=1) + lb2.sum(axis=1)) + W_CROSS * cr.sum(axis=1)
@@ -1111,14 +1216,14 @@ def _dim_geometry(dim, s0):
             ap = dim.getArcPoints()
             c = ap[0]
             r = math.hypot(ap[1].x - c.x, ap[1].y - c.y)
-            return {"type": t, "c": (c.x / s0, -c.y / s0), "r": r / s0}
+            return {"type": t, "c": (_q5(c.x) / s0, -_q5(c.y) / s0), "r": _q5(r) / s0}
         if t.startswith("Angle"):
             pts = dim.getAnglePoints()
         else:
             pts = dim.getLinearPoints()
         if len(pts) < 2:
             return None
-        return {"type": t, "pts": [(p.x / s0, -p.y / s0) for p in pts]}
+        return {"type": t, "pts": [(_q5(p.x) / s0, -_q5(p.y) / s0) for p in pts]}
     except Exception:
         return None
 
@@ -1346,7 +1451,7 @@ def _anchor_unscaled(a):
     if "PmiAnchor" not in ld.PropertiesList:
         return None
     u = a.view.vw.u(ld.PmiAnchor)
-    return (u.x, u.y)
+    return (_q(u.x), _q(u.y))
 
 
 def _apply(page, lay, P, group):

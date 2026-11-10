@@ -4,3 +4,4 @@
 # The same tests are also part of TestTechDrawApp.
 
 from TDTest.DrawingLayoutTest import DrawingLayoutTest  # noqa: F401
+from TDTest.DrawingLayoutCrowdedTest import CrowdedLayoutTest, ViewGeometryCacheTest  # noqa: F401
