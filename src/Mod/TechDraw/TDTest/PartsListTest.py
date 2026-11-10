@@ -373,3 +373,89 @@ class PartsListTest(unittest.TestCase):
         finally:
             App.Console.PrintWarning = real
         self.assertFalse([m for m in seen if "PartsList" in m], seen)
+
+    # ---- 2a repairs (run 087 R1 to R3): damage and layout changes heal on the next recompute
+
+    def untouched(self):
+        return [o.Name for o in self.doc.Objects if "Touched" in o.State or "Invalid" in o.State]
+
+    def test_r1_deleted_bom_is_rebuilt_by_make(self):
+        b = self.case("sub_assembly_child")
+        page = self.page(ISO_A3)
+        view = PL.make(page, b.asm)
+        self.doc.recompute()
+        self.doc.removeObject(view.Source.Name)
+        self.doc.recompute()
+        again = PL.make(page, b.asm)
+        self.doc.recompute()
+        self.assertEqual(again.Name, view.Name)  # repaired in place, no second table
+        self.assertEqual(len(PL.views_on(page)), 1)
+        self.assertEqual(sheet_rows(again.Source)[0], ["Index", "Name", "Quantity"])
+        self.assertTable(again, sheet_rows(again.Source))
+        self.assertEqual(len(sheet_rows(again.Source)), 4)  # header + 3 rows of sub_assembly_child
+        self.assertEqual(self.untouched(), [])
+
+    def test_r1_deleted_fit_helper_is_rebuilt_by_refresh(self):
+        b = self.case("three_configs")
+        page = self.page(ISO_A3)
+        view = PL.make(page, b.asm)
+        self.doc.recompute()
+        self.doc.removeObject(PL.fit_of(view).Name)
+        self.doc.recompute()
+        PL.refresh(page)
+        self.assertEqual(len(PL.views_on(page)), 1)
+        self.assertIsNotNone(PL.fit_of(view))
+        self.assertTable(view, sheet_rows(view.Source))
+        area, title = PL.page_areas(page)
+        self.assertAlmostEqual(table_box(view)[2], area[2] - PL.MARGIN_MM, delta=1.0)
+        # and it follows the assembly again with a plain recompute
+        lk = b.asm.newObject("App::Link", "Extra")
+        lk.LinkedObject = self.doc.addObject("Part::Box", "ExtraSrc")
+        self.doc.recompute()
+        self.assertEqual(len(cells(view)), len(sheet_rows(view.Source)))
+        self.assertIn("ExtraSrc", [r[1] for r in cells(view)])
+
+    def test_r1_deleted_bom_and_helper_together(self):
+        b = self.case("three_configs")
+        page = self.page(ISO_A3)
+        view = PL.make(page, b.asm)
+        self.doc.recompute()
+        bom, fit = view.Source, PL.fit_of(view)
+        self.doc.removeObject(fit.Name)
+        self.doc.removeObject(bom.Name)
+        PL.refresh(page)
+        self.assertEqual(len(PL.views_on(page)), 1)
+        self.assertTable(view, sheet_rows(view.Source))
+
+    def test_r2_new_template_object_moves_the_table_in_the_same_recompute(self):
+        b = self.case("three_configs")
+        page = self.page()  # blank default: no title block
+        view = PL.make(page, b.asm)
+        self.doc.recompute()
+        t2 = self.doc.addObject("TechDraw::DrawSVGTemplate", "Template2")
+        t2.Template = os.path.join(App.getResourceDir(), "Mod", "TechDraw", "Templates", ISO_A3)
+        page.Template = t2
+        self.doc.recompute()
+        area, title = PL.page_areas(page)
+        self.assertIsNotNone(title)
+        x0, y0, x1, y1 = table_box(view)
+        self.assertGreaterEqual(y0, title[3] + PL.MARGIN_MM - 1.0)
+        self.assertAlmostEqual(x1, area[2] - PL.MARGIN_MM, delta=1.0)
+        self.assertEqual(self.untouched(), [])
+
+    def test_r3_deleting_the_middle_table_closes_the_gap(self):
+        b1 = self.case("three_configs")
+        page = self.page(ISO_A3)
+        v1 = PL.make(page, b1.asm)
+        v2 = PL.make(page, self.second_assembly().asm)
+        v3 = PL.make(page, self.second_assembly().asm)
+        self.doc.recompute()
+        self.assertNoOverlap([table_box(v1), table_box(v2), table_box(v3)])
+        high = table_box(v3)[1]
+        page.removeView(v2)
+        self.doc.removeObject(v2.Name)
+        self.doc.recompute()
+        box1, box3 = table_box(v1), table_box(v3)
+        self.assertLess(table_box(v3)[1], high - 1.0)
+        self.assertAlmostEqual(box3[1], box1[3] + PL.GAP_MM, delta=1.0)
+        self.assertEqual(self.untouched(), [])
