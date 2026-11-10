@@ -485,7 +485,7 @@ def array_element(doc):
     b = Built(doc, asm)
     b.comps = [Comp("GL", gl, "PlateSrc", box=(100, 100, 10)), Comp("Arr", arr, "CubeSrc", bom=False, keys=[], kind="array")]
     for i, el in enumerate(arr.ElementList):
-        b.comps.append(Comp(el.Name, el, "CubeSrc", keys=["Arr.%d" % i], bom=False, box=(10, 10, 10), kind="element"))
+        b.comps.append(Comp(el.Name, el, "CubeSrc", keys=["Arr.%d" % i], box=(10, 10, 10), kind="element"))  # G04 2a: each shown element is one counted part (the BOM used to skip arrays)
     b.arr = arr
     finish(b)
     mid = arr.ElementList[1].Name

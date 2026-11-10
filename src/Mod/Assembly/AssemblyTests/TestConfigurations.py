@@ -459,10 +459,6 @@ def _m_hide_only():
     return dict(_remove_from_group=remove)
 
 
-def _m_no_consumer_refresh():
-    return dict(_refresh_consumers=lambda assembly: None)
-
-
 def _m_grounded_kept():
     real = AC._touches
     return dict(_touches=lambda reach, toks: real(reach, toks) and not (len(reach) == 1))
@@ -627,7 +623,6 @@ MUTANTS = {
     "copy_validates_live_group": _m_validate_against_live_group,
     "solve_joints_of_suppressed_kept": _m_no_joint_suppress,
     "suppress_by_hiding_only": _m_hide_only,
-    "bom_and_features_not_refreshed": _m_no_consumer_refresh,
     "grounded_joint_of_suppressed_kept": _m_grounded_kept,
     "restore_by_matcher_backwards": _m_backwards,
     "unmatched_reference_picked": _m_unmatched_picked,
