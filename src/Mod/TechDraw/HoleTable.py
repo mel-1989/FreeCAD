@@ -655,18 +655,20 @@ def _angle_gap(a, b):
     return abs(((a - b + math.pi) % (2 * math.pi)) - math.pi)
 
 
-def plan_tags(items, area, obs, view_centre, limit):
-    """Choose a tag position for every hole: -> ([(box centre, tip)] in input order, number that fell back to a poorer spot).
+# attempts of the placer, widest margins first: (extra width, extra height, clear space, ring step, directions)
+ATTEMPTS = (
+    (TAG_PLAN_W_MM, TAG_PLAN_H_MM, TAG_CLEAR_MM, RING_MM, RING_DIRS),
+    (0.2, 0.3, 0.1, 1.0, 24),
+    (0.0, 0.0, 0.02, 0.75, 32),
+)
 
-    ``items`` are dicts with ``tag``, ``c`` (hole centre), ``R`` (rim radius), ``tips`` (rim points that lie on a visible arc) and,
-    for a tag the user moved, ``fixed`` (its box centre); all in page mm, rounded by the caller.  ``obs`` are the (name, box) the
-    tags must stay clear of, ``area`` the drawing area.  A first fit in rings around each hole, most crowded hole first: the nearest
-    free place where the tag lies in the area, clear of every obstacle and tag, covers no hole centre, is within ``limit`` of its
-    arrow tip, and whose leader crosses no other leader and runs through no other tag.  A tag may lie over its own view.
-    """
+
+def _plan_once(items, area, obs, view_centre, limit, prm, front):
+    """One pass of the first fit.  -> (plan, tiers): per hole its (box centre, tip) and the tier it was placed at (0 = clean)."""
+    dw, dh, mg, ring, ndir = prm
     n = len(items)
     cs = [it["c"] for it in items]
-    plan = [None] * n
+    plan, tiers = [None] * n, [0] * n
     boxes, legs = [], []
 
     def geom(it, centre, tip):
@@ -691,42 +693,40 @@ def plan_tags(items, area, obs, view_centre, limit):
             plan[i] = (it["fixed"], tip)
         else:
             free.append(i)
-    # the tips a tag may point at: nearer their own hole's centre than any other's
-    for i, it in enumerate(items):
-        others = [c for k, c in enumerate(cs) if k != i]
-        good = [q for q in it["tips"] if all(math.hypot(q[0] - c[0], q[1] - c[1]) > it["R"] + 0.02 for c in others)]
-        it["tips"] = good or it["tips"]
-    free.sort(key=lambda i: (-sum(1 for k, c in enumerate(cs) if k != i and math.hypot(cs[i][0] - c[0], cs[i][1] - c[1]) < 12.0), i))
+    crowd = {i: sum(1 for k, c in enumerate(cs) if k != i and math.hypot(cs[i][0] - c[0], cs[i][1] - c[1]) < 12.0) for i in free}
+    free.sort(key=lambda i: (0 if i in front else 1, -crowd[i], i))
     vcx, vcy = view_centre
-    fallbacks = 0
-    mg = TAG_CLEAR_MM
     for i in free:
         it = items[i]
         hc, R = it["c"], it["R"]
         w, h = tag_size(it["tag"])
-        pw, ph = w + TAG_PLAN_W_MM, h + TAG_PLAN_H_MM
+        pw, ph = w + dw, h + dh
         outward = math.atan2(hc[1] - vcy, hc[0] - vcx)
         cands = []
-        for k in range(int((limit + R) / RING_MM) + 2):
-            rho = 2.0 + k * RING_MM
-            for j in range(RING_DIRS):
-                ang = outward + ((j + 1) // 2) * (2 * math.pi / RING_DIRS) * (1 if j % 2 else -1)
+        for k in range(int((limit + R + 12.0) / ring) + 2):
+            rho = 2.0 + k * ring
+            for j in range(ndir):
+                ang = outward + ((j + 1) // 2) * (2 * math.pi / ndir) * (1 if j % 2 else -1)
                 cands.append((rho + 1.5 * _angle_gap(ang, outward), rho, ang))
         cands.sort()
-        done = None
+        done, tier_done = None, 0
         for tier in (0, 1, 2):
             for _, rho, ang in cands:
                 cx, cy = round(hc[0] + rho * math.cos(ang), 4), round(hc[1] + rho * math.sin(ang), 4)
                 box = (cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2)
-                if tier < 2 and (box[0] < area[0] + 0.05 or box[1] < area[1] + 0.05 or box[2] > area[2] - 0.05 or box[3] > area[3] - 0.05):
-                    continue
+                if box[0] < area[0] + 0.05 or box[1] < area[1] + 0.05 or box[2] > area[2] - 0.05 or box[3] > area[3] - 0.05:
+                    continue  # never outside the drawing area, at any tier
                 m = mg if tier == 0 else 0.0
                 if any(box[0] - m < c[0] < box[2] + m and box[1] - m < c[1] < box[3] + m for c in cs):
                     continue
-                if any(overlap(box, b, m) for b in boxes) or (tier < 2 and any(overlap(box, b, m) for _, b in obs)):
+                if any(overlap(box, b, m) for b in boxes):
+                    continue
+                if tier < 2 and any(overlap(box, b, m) for _, b in obs):
                     continue
                 tip = best_tip(it, (cx, cy))
-                if tier < 2 and math.hypot(cx - tip[0], cy - tip[1]) > limit - (mg if tier == 0 else 0.0):
+                if tier == 0 and math.hypot(cx - tip[0], cy - tip[1]) > limit - mg:
+                    continue
+                if tier == 1 and math.hypot(cx - tip[0], cy - tip[1]) > limit + 12.0:
                     continue
                 _, tail = geom(it, (cx, cy), tip)
                 if tier == 0:
@@ -736,25 +736,100 @@ def plan_tags(items, area, obs, view_centre, limit):
                         continue
                     if any(_seg_hits_box(a, b, (box[0] - 0.2, box[1] - 0.2, box[2] + 0.2, box[3] + 0.2)) for a, b in legs):
                         continue
-                done = ((cx, cy), tip, box, tail)
+                done, tier_done = ((cx, cy), tip, box, tail), tier
                 break
             if done:
-                fallbacks += 1 if tier else 0
                 break
-        if done is None:  # nothing at all: stand it off to the side
-            fallbacks += 1
-            centre = (hc[0] + R + 30.0, hc[1])
+        if done is None:  # not even a free spot inside the area: the first place in the area that covers no hole centre
+            tier_done = 3
+            for _, rho, ang in cands:
+                cx, cy = round(hc[0] + rho * math.cos(ang), 4), round(hc[1] + rho * math.sin(ang), 4)
+                box = (cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2)
+                if box[0] >= area[0] + 0.05 and box[1] >= area[1] + 0.05 and box[2] <= area[2] - 0.05 and box[3] <= area[3] - 0.05:
+                    tip = best_tip(it, (cx, cy))
+                    done = ((cx, cy), tip, box, geom(it, (cx, cy), tip)[1])
+                    break
+        if done is None:  # the area cannot hold the tag at all (a tiny page)
+            centre = (min(max(hc[0], area[0] + pw / 2), area[2] - pw / 2), min(max(hc[1], area[1] + ph / 2), area[3] - ph / 2))
             tip = best_tip(it, centre)
-            real, tail = geom(it, centre, tip)
-            done = (centre, tip, real, tail)
-        centre, tip, real, tail = done
-        boxes.append(real)
+            done = (centre, tip, (centre[0] - pw / 2, centre[1] - ph / 2, centre[0] + pw / 2, centre[1] + ph / 2), geom(it, centre, tip)[1])
+        centre, tip, box, tail = done
+        boxes.append(box)
         legs.append((tail, tip))
         plan[i] = (centre, tip)
-    return plan, fallbacks
+        tiers[i] = tier_done
+    return plan, tiers
 
 
-def find_slot(w, h, area, obs, pref, gap=GAP_MM):
+def tag_conflicts(items, plan, area, obs, bound):
+    """-> list of words naming what a finished tag plan still gets wrong (the checks of ruling 27 and 28), empty when clean."""
+    out = []
+    cs = [it["c"] for it in items]
+    rects, legs = [], []
+    for it, (centre, tip) in zip(items, plan):
+        w, h = tag_size(it["tag"])
+        r = (centre[0] - w / 2, centre[1] - h / 2, centre[0] + w / 2, centre[1] + h / 2)
+        side = 1.0 if tip[0] > centre[0] else -1.0
+        rects.append(r)
+        legs.append(((centre[0] + side * (w / 2 + TAG_LEAD_MM), centre[1] + TAG_ANCHOR_MM), tip))
+
+    def pen(a, b):
+        return min(a[2], b[2]) - max(a[0], b[0]) > 0.05 and min(a[3], b[3]) - max(a[1], b[1]) > 0.05
+
+    for i, (it, r) in enumerate(zip(items, rects)):
+        t = it["tag"]
+        if r[0] < area[0] - 0.01 or r[1] < area[1] - 0.01 or r[2] > area[2] + 0.01 or r[3] > area[3] + 0.01:
+            out.append("%s outside the drawing area" % t)
+        for n, b in obs:
+            if pen(r, b):
+                out.append("%s over %s" % (t, n))
+        if any(r[0] < c[0] < r[2] and r[1] < c[1] < r[3] for c in cs):
+            out.append("%s covers a hole centre" % t)
+        if math.hypot((r[0] + r[2]) / 2 - plan[i][1][0], (r[1] + r[3]) / 2 - plan[i][1][1]) > bound:
+            out.append("%s more than %g mm from its hole" % (t, bound))
+        for j in range(i + 1, len(items)):
+            if pen(r, rects[j]):
+                out.append("%s over %s" % (t, items[j]["tag"]))
+            if _seg_cross(legs[i][0], legs[i][1], legs[j][0], legs[j][1]):
+                out.append("leaders of %s and %s cross" % (t, items[j]["tag"]))
+    return out
+
+
+def plan_tags(items, area, obs, view_centre, limit):
+    """Choose a tag position for every hole: -> (plan, number placed below the clean standard, conflicts left).
+
+    ``items`` are dicts with ``tag``, ``c`` (hole centre), ``R`` (rim radius), ``tips`` (rim points that lie on a visible arc) and,
+    for a tag the user moved, ``fixed`` (its box centre); all in page mm, rounded by the caller.  ``obs`` are the (name, box) the
+    tags must stay clear of, ``area`` the drawing area.  A first fit in rings around each hole, most crowded hole first: the nearest
+    free place where the tag lies in the area, clear of every obstacle and tag, covers no hole centre, is within ``limit`` of its
+    arrow tip, and whose leader crosses no other leader and runs through no other tag.  A tag may lie over its own view.  When a pass
+    leaves a tag unplaced the search runs again with the failing tags first and then with smaller margins; of all passes the
+    one with fewest conflicts wins, and whatever conflicts remain are named (ruling 28: never silently).
+    """
+    for it in items:  # the tips a tag may point at: nearer their own hole's centre than any other's
+        others = [it2["c"] for it2 in items if it2 is not it]
+        good = [q for q in it["tips"] if all(math.hypot(q[0] - c[0], q[1] - c[1]) > it["R"] + 0.02 for c in others)]
+        it["tips"] = good or it["tips"]
+    bound = limit + 1.5
+    best = None
+    front = set()
+    for prm in ATTEMPTS:
+        for _ in range(2):
+            plan, tiers = _plan_once(items, area, obs, view_centre, limit, prm, front)
+            bad = {i for i, t in enumerate(tiers) if t}
+            conflicts = tag_conflicts(items, plan, area, obs, bound) if bad else []
+            key = (len(conflicts), len(bad))
+            if best is None or key < best[0]:
+                best = (key, plan, len(bad), conflicts)
+            if not bad:
+                return plan, 0, []
+            if bad <= front:
+                break
+            front = front | bad
+    return best[1], best[2], best[3]
+
+
+def find_slot(w, h, area, obs, pref, gap=GAP_MM, accept=None):
     """-> box (x0, y0, x1, y1) of the best free place of size w x h inside ``area`` clear of ``obs`` by ``gap``, or None.
 
     ``pref`` maps a candidate box to a number, lower is better.
@@ -773,7 +848,7 @@ def find_slot(w, h, area, obs, pref, gap=GAP_MM):
             if y < area[1] + m - 1e-6 or y + h > area[3] - m + 1e-6:
                 continue
             box = (x, y, x + w, y + h)
-            if any(overlap(box, b, gap - 1e-6) for _, b in obs):
+            if any(overlap(box, b, gap - 1e-6) for _, b in obs) or (accept and not accept(box)):
                 continue
             key = (round(pref(box), 6), y, x)
             if best_key is None or key < best_key:
@@ -933,7 +1008,7 @@ class _Settle:
             again = False
             for o in d.Objects:
                 p = getattr(o, "Proxy", None)
-                if o.TypeId == "App::FeaturePython" and isinstance(p, HoleTableDriver) and p.stale(o):
+                if o.TypeId == "App::FeaturePython" and isinstance(p, HoleTableDriver) and (p.stale(o) or p.unsettled(o)):
                     o.touch()
                     again = True
             if again:
@@ -993,6 +1068,11 @@ class HoleTableDriver:
     def owned(self, obj):
         out = [obj.Sheet] if obj.Sheet is not None else []
         return out + self.blocks(obj) + self.tags(obj)
+
+    def unsettled(self, obj):
+        """The view or its page was left Touched by the recompute (the hidden-line run was still going): another pass settles it."""
+        v = obj.View
+        return v is not None and "Touched" in v.State
 
     def stale(self, obj):
         v = obj.View
@@ -1117,8 +1197,13 @@ class HoleTableDriver:
             items.append(it)
         cs = [it["c"] for it in items]
         dense = any(math.hypot(a[0] - b[0], a[1] - b[1]) < NEAR_MM for i, a in enumerate(cs) for b in cs[i + 1 :])
-        plan, fallbacks = plan_tags(items, area, obs, (vcx, vcy), MAX_TAG_DIST_DENSE if dense else MAX_TAG_DIST)
+        plan, fallbacks, conflicts = plan_tags(items, area, obs, (vcx, vcy), MAX_TAG_DIST_DENSE if dense else MAX_TAG_DIST)
         obj.Violations = fallbacks
+        note = ""
+        if conflicts:
+            note = "HoleTable: no clean tag layout found; left over: " + "; ".join(conflicts[:12]) + (" and %d more" % (len(conflicts) - 12) if len(conflicts) > 12 else "")
+            App.Console.PrintWarning(note + "\n")
+        obj.Warning = (obj.Warning + " | " if obj.Warning and note else obj.Warning) + note
         for h, it, (centre, tip) in zip(holes, items, plan):
             t = h["tagobj"]
             # the tip back into the view's frame (unscaled, relative to the view)
@@ -1158,6 +1243,7 @@ class HoleTableDriver:
         nrows = len(body)
         pref = self._pref_point(obj, page, area, own)
         k = 1
+        strict = True  # blocks side by side in one row; failing that, rows of blocks, each row below the last
         while True:
             per = max(1, int(math.ceil(nrows / float(k)))) if nrows else 1
             chunks = [body[i : i + per] for i in range(0, nrows, per)] or [[]]
@@ -1181,7 +1267,12 @@ class HoleTableDriver:
                 for ci, (bw, bh) in enumerate(sizes):
                     if ci in fixed:
                         continue
-                    box = find_slot(bw, bh, area, taken, lambda b, p=pref: math.hypot(0.5 * (b[0] + b[2]) - p[0], 0.5 * (b[1] + b[3]) - p[1]))
+                    # side by side in reading order (ruling 37): each block to the right of the one before it
+                    left = boxes[ci - 1] if ci and boxes[ci - 1] else None
+                    box = find_slot(
+                        bw, bh, area, taken, lambda b, p=pref: math.hypot(0.5 * (b[0] + b[2]) - p[0], 0.5 * (b[1] + b[3]) - p[1]),
+                        accept=(lambda b, l=left: b[0] >= l[2] + GAP_MM - 1e-6 or (not strict and b[3] <= l[1] - GAP_MM + 1e-6)) if left else None,
+                    )
                     if box is None:
                         ok = False
                         break
@@ -1193,6 +1284,9 @@ class HoleTableDriver:
             if placed:
                 break
             k += 1
+            if strict and (k > MAX_BLOCKS or k > max(nrows, 1)):
+                strict, k = False, 1
+                continue
             if k > MAX_BLOCKS or k > max(nrows, 1):
                 # no free space holds it: the default corner, and say what it overlaps
                 k = 1

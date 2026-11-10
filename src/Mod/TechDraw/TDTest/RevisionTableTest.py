@@ -244,3 +244,33 @@ class RevisionTableTest(unittest.TestCase):
         self.assertEqual(len(self.rows(page2)), 3)
         self.doc.undo()
         self.assertEqual({o.Name for o in self.doc.Objects}, before)
+
+    def test_make_and_from_pdm_join_a_callers_transaction_too(self):
+        page = self.page(os.path.join("ISO", "A4_Landscape_ISO5457_minimal.svg"))
+        before = {o.Name for o in self.doc.Objects}
+        self.doc.openTransaction("macro")
+        RT.make(page)
+        self.assertIsNotNone(App.getActiveTransaction())
+        RT.from_pdm(page, "bracket", FakeVault([{"revision": "A.1", "released": True, "message": "m", "time": "2026-03-01T10:00:00", "author": "ann"}]))
+        self.assertIsNotNone(App.getActiveTransaction())
+        RT.add(page, "B", "x", "2026-04-01", "MS")
+        self.assertIsNotNone(App.getActiveTransaction())
+        self.doc.commitTransaction()
+        self.doc.undo()
+        self.assertEqual({o.Name for o in self.doc.Objects}, before)
+
+    def test_a_failed_add_aborts_its_own_transaction(self):
+        page = self.page(os.path.join("ISO", "A4_Landscape_ISO5457_minimal.svg"))
+        before = {o.Name for o in self.doc.Objects}
+        real = RT._settle
+
+        def boom(doc, drv):
+            raise RuntimeError("boom")
+
+        RT._settle = boom
+        try:
+            self.assertRaises(RuntimeError, RT.add, page, "A", "x", "2026-01-01", "MS")
+        finally:
+            RT._settle = real
+        self.assertIsNone(App.getActiveTransaction())
+        self.assertEqual({o.Name for o in self.doc.Objects}, before)

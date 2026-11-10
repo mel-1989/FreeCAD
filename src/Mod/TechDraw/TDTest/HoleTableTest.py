@@ -737,7 +737,127 @@ class HoleTableTest(unittest.TestCase):
         # inputs are rounded to 0.001 mm in one place: nudging them by less than that changes nothing
         items = [{"tag": "A%d" % i, "c": (100.0 + 7 * i, 100.0), "R": 3.0, "tips": [(100.0 + 7 * i + 3 * math.cos(a), 100.0 + 3 * math.sin(a)) for a in (0, 1.5, 3, 4.5)]} for i in range(5)]
         area = (10.0, 10.0, 280.0, 200.0)
-        a, _ = HT.plan_tags(items, area, [], (120.0, 100.0), 18.5)
+        a, _, _ = HT.plan_tags(items, area, [], (120.0, 100.0), 18.5)
         self.assertEqual(HT.r3(100.0004), HT.r3(100.0001))
-        b, _ = HT.plan_tags(items, area, [], (120.0, 100.0), 18.5)
+        b, _, _ = HT.plan_tags(items, area, [], (120.0, 100.0), 18.5)
         self.assertEqual(a, b)
+
+    # ---- run 089 repair round: survivors of the verifier's mutants
+
+    def test_edge_signature_follows_positions_not_only_counts(self):
+        class Stub:
+            Scale = 1.0
+            Rotation = 0.0
+
+            def __init__(self, x):
+                self.e = [Part.makeCircle(3, V(x, 0, 0)), Part.makeLine(V(0, 0, 0), V(10, 0, 0))]
+
+            def getVisibleEdges(self, conv=False):
+                return self.e
+
+        a, b, c = HT.Edges(Stub(20.0)).signature(), HT.Edges(Stub(20.0)).signature(), HT.Edges(Stub(25.0)).signature()
+        self.assertEqual(a, b)
+        self.assertNotEqual(a, c, "same count and lengths, the circle moved")
+
+    def test_nearly_round_ellipse_counts_as_a_rim_and_a_real_one_does_not(self):
+        class Stub:
+            Scale = 1.0
+            Rotation = 0.0
+
+            def __init__(self, minor):
+                el = Part.Ellipse(V(20, 0, 0), 3.0, minor)
+                self.e = [el.toShape()]
+
+            def getVisibleEdges(self, conv=False):
+                return self.e
+
+        self.assertEqual(sum(len(v) for v in HT.Edges(Stub(3.0 - 1e-6)).circles.values()), 1)
+        self.assertEqual(sum(len(v) for v in HT.Edges(Stub(2.99)).circles.values()), 0)
+
+    def test_a_half_round_notch_on_the_edge_is_not_a_hole(self):
+        # a concave cylinder face covering half the circle (a notch cut at the plate's edge) is under the 95% a hole needs
+        shape = Part.makeBox(100, 60, 20).cut(Part.makeCylinder(3, 40, V(0, 30, -5)))
+        obj, page, view = self.solid_page(shape)
+        self.assertEqual(table_rows(HT.make(page, view)), [])
+
+    def test_tag_box_size_is_pinned_to_the_measurement(self):
+        w, h = HT.tag_size("A1")
+        self.assertEqual(h, 13.0)
+        self.assertTrue(9.37 <= w <= 10.5, w)  # measured 7.4 to 9.4 for two characters
+        self.assertTrue(11.66 <= HT.tag_size("C28")[0] <= 14.0)
+        self.assertEqual(HT.TAG_ANCHOR_MM, 1.15)
+        self.assertEqual(HT.TAG_LEAD_MM, 1.5)
+
+    def test_distance_bounds_stay_inside_the_checked_20_and_35(self):
+        self.assertTrue(15.0 < HT.MAX_TAG_DIST <= 19.5, HT.MAX_TAG_DIST)
+        self.assertTrue(28.0 < HT.MAX_TAG_DIST_DENSE <= 34.5, HT.MAX_TAG_DIST_DENSE)
+        items = [{"tag": "A%d" % i, "c": (100.0 + 20 * i, 100.0), "R": 3.0, "tips": [(100.0 + 20 * i + 3.0, 100.0)]} for i in range(4)]
+        for limit in (HT.MAX_TAG_DIST, HT.MAX_TAG_DIST_DENSE):
+            plan, bad, conflicts = HT.plan_tags(items, (10.0, 10.0, 280.0, 200.0), [], (130.0, 100.0), limit)
+            self.assertEqual((bad, conflicts), (0, []))
+            for (c, tip) in plan:
+                self.assertLessEqual(math.hypot(c[0] - tip[0], c[1] - tip[1]), limit)
+
+    def test_a_failed_make_aborts_its_own_transaction_only(self):
+        plate, page, view = self.plate_page([("through", 20, 15)])
+        before = {o.Name for o in self.doc.Objects}
+        real = HT.drivers_on
+
+        def boom(page):
+            raise RuntimeError("boom")
+
+        HT.drivers_on = boom
+        try:
+            self.assertRaises(RuntimeError, HT.make, page, view)
+        finally:
+            HT.drivers_on = real
+        self.assertIsNone(App.getActiveTransaction())
+        self.assertEqual({o.Name for o in self.doc.Objects}, before)
+
+    def test_centre_follows_a_moved_part(self):
+        # the cached centre is keyed on the placement too
+        obj, page, view = self.solid_page(Part.makeBox(100, 60, 20).cut(Part.makeCylinder(3, 40, V(50, 30, -5))))
+        a = HT.gc_of(view)
+        obj.Placement = App.Placement(V(10, 0, 0), App.Rotation())
+        self.doc.recompute()
+        b = HT.gc_of(view)
+        self.assertAlmostEqual(b.x - a.x, 10.0, delta=1e-6)
+
+    def test_overfull_dense_layout_is_named_in_the_warning_and_stays_in_the_area(self):
+        box = Part.makeBox(66, 46, 10)
+        for i in range(6):
+            for j in range(4):
+                box = box.cut(Part.makeCylinder(1.5, 30, V(6 + i * 6, 6 + j * 6, -5)))
+        obj, page, view = self.solid_page(box)
+        tbl = HT.make(page, view)
+        area, _ = HT.PL.page_areas(page)
+        for t in HT.tags_of(tbl):
+            b = self.tag_box(t)
+            self.assertTrue(b[0] >= area[0] - 0.01 and b[2] <= area[2] + 0.01 and b[1] >= area[1] - 0.01 and b[3] <= area[3] + 0.01, t.Text)
+        self.assertIn("no clean tag layout", HT.warning_of(tbl))
+
+    def test_blocks_stand_side_by_side_in_reading_order(self):
+        box = Part.makeBox(60, 40, 10)
+        for i in range(8):
+            for j in range(9):
+                box = box.cut(Part.makeCylinder(1.0, 30, V(4 + i * 7, 4 + j * 4, -5)))
+        obj, page, view = self.solid_page(box)
+        tbl = HT.make(page, view)
+        blocks = HT.blocks_of(tbl)
+        self.assertGreaterEqual(len(blocks), 2)
+        boxes = [HT.sheet_view_box(b) for b in sorted(blocks, key=lambda b: int(b.CellStart[1:]))]
+        for a, b in zip(boxes, boxes[1:]):
+            self.assertTrue(b[0] >= a[2] or b[3] <= a[1], "block %s not after %s" % (b, a))
+
+    def test_tags_follow_when_an_edit_grows_the_table_into_more_blocks(self):
+        plate, page, view = self.plate_page([("through", 20 + 6 * i, 15 + 6 * j) for i in range(5) for j in range(5)])
+        tbl = HT.make(page, view)
+        n0 = len(HT.blocks_of(tbl))
+        for k in range(3):
+            plate.hole([(100 + 4 * k, 70)], **dict(KINDS["cbore"][0]))
+        self.doc.recompute()
+        self.assertGreaterEqual(len(HT.blocks_of(tbl)), n0)
+        tb = [HT.sheet_view_box(b) for b in HT.blocks_of(tbl)]
+        for t in HT.tags_of(tbl):
+            for b in tb:
+                self.assertFalse(HT.overlap(self.tag_box(t), b), t.Text)
