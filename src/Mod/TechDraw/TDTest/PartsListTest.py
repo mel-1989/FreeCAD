@@ -206,9 +206,31 @@ class PartsListTest(unittest.TestCase):
         self.doc.recompute()
         x0, y0, x1, y1 = table_box(view)
         W, H = page.Template.Width.Value, page.Template.Height.Value
-        self.assertAlmostEqual(x1, W - PL.MARGIN_MM, delta=1.0)
-        self.assertAlmostEqual(y0, PL.MARGIN_MM, delta=1.0)
-        self.assertTrue(x0 > 0 and y1 < H)
+        area, title = PL.page_areas(page)
+        self.assertEqual(area, (10.0, 10.0, W - 10.0, H - 10.0))
+        self.assertIsNone(title)
+        self.assertAlmostEqual(x1, W - 10.0 - PL.MARGIN_MM, delta=1.0)
+        self.assertAlmostEqual(y0, 10.0 + PL.MARGIN_MM, delta=1.0)
+        self.assertTrue(x0 > 10 and y1 < H - 10)
+
+    def test_r5_no_frame_templates_inset_the_page_by_10_mm(self):
+        for tpl in (
+            os.path.join("ASME", "ANSIA_Landscape.svg"),
+            os.path.join("ISO", "A4_Landscape_TD.svg"),
+            "Default_Template_A4_Landscape.svg",
+            os.path.join("ISO", "A4_Landscape_blank.svg"),
+        ):
+            page = self.page(tpl)
+            W, H = page.Template.Width.Value, page.Template.Height.Value
+            area, title = PL.page_areas(page)
+            self.assertEqual((tuple(round(v, 6) for v in area), title), ((10.0, 10.0, round(W - 10.0, 6), round(H - 10.0, 6)), None), tpl)
+            self.doc.removeObject(page.Name)
+
+    def test_r5_framed_template_is_unchanged_by_the_inset(self):
+        page = self.page(ISO_A3)
+        area, title = PL.page_areas(page)
+        self.assertIsNotNone(title)
+        self.assertEqual(round(area[0]), 20)  # the ISO 5457 frame, not the 10 mm inset
 
     def test_corner_above_the_title_block(self):
         b = self.case("three_configs")
@@ -333,7 +355,7 @@ class PartsListTest(unittest.TestCase):
         page = self.page()  # blank default template: no title block
         view = PL.make(page, b.asm)
         self.doc.recompute()
-        self.assertAlmostEqual(table_box(view)[1], PL.MARGIN_MM, delta=1.0)
+        self.assertAlmostEqual(table_box(view)[1], PL.NO_FRAME_INSET_MM + PL.MARGIN_MM, delta=1.0)
         page.Template.Template = os.path.join(App.getResourceDir(), "Mod", "TechDraw", "Templates", ISO_A3)
         self.doc.recompute()
         area, title = PL.page_areas(page)

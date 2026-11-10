@@ -38,6 +38,7 @@ PAD_RIGHT_PX = 6.0
 ROW_PX = 22  # row height in symbol units (5.8 mm); the view puts the baseline 7.5 units above the cell bottom
 MIN_COL_PX = 24
 MARGIN_MM = 5.0  # between the table and the frame, and between the table and the title block
+NO_FRAME_INSET_MM = 10.0  # drawing area of a template whose frame cannot be found: the page less this on every side
 GAP_MM = 3.0  # between two parts lists stacked on one page
 FIT_SLACK = 1.04  # fontTools advances against the renderer's shaping
 FALLBACK_ADVANCE = 0.55  # em, for a glyph the font lacks
@@ -102,11 +103,13 @@ def page_areas(page):
     """-> (drawing area, title block or None), boxes (x0, y0, x1, y1) in page millimetres, y up.
 
     Read from the template's rectangles: the drawing space frame, and the title block frame.  A template that names none
-    (the blank default) has the page itself as its drawing area and no title block.
+    (the blank default, ASME ANSIA, ``A4_Landscape_TD``) has the page inset by ``NO_FRAME_INSET_MM`` on every side as its drawing
+    area and no title block.
     """
     t = page.Template
     W, H = float(t.Width), float(t.Height)
-    area, title = (0.0, 0.0, W, H), None
+    inset = NO_FRAME_INSET_MM
+    area, title = (inset, inset, W - inset, H - inset), None
     try:
         with open(t.Template, encoding="utf-8", errors="replace") as fh:
             svg = fh.read()
