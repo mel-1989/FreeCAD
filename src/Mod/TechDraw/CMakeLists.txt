@@ -15,6 +15,7 @@ set(TechDraw_Scripts
     TestTechDrawGui.py
     TestTechDrawPmi.py
     PmiDrawing.py
+    PartsList.py
 )
 
 if(BUILD_GUI)
