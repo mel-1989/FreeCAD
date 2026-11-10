@@ -47,8 +47,15 @@ CLEAR = 0.8  # mm clearance between annotations
 EDGE_CLEAR = 0.6  # mm clearance between annotation text and visible edges
 ARROW = 3.9  # mm an arrow head reaches past the end of its dimension line
 REACH = 78.0  # mm, the farthest an annotation may sit from its anchor (M6 bar is 80)
-MEDIAN_GOAL = 20.0  # mm, a scale whose median reach is above this loses to a smaller one
+MEDIAN_GOAL = 24.5  # mm, a scale whose median reach is above this loses to a smaller one
 PIN_TOL = 1e-6
+# global slot assignment (run 085): costs of a conflict, candidate budget and the fixed annealing schedule
+W_OVERLAP, W_LEADER_BOX, W_CROSS, W_EDGE = 100.0, 60.0, 30.0, 30.0
+KEEP_NEAR, KEEP_SPREAD = 300, 300  # candidates kept per annotation: the cheapest ones plus an even spread of the rest
+SWEEPS = 24  # heat-bath sweeps; the move count is capped by iterations, never by the clock (ruling 3)
+SWAPS = 300  # exchange trials after the sweeps
+SEED = 20261110
+FAR = -1.0e6  # a leader that does not exist sits here, away from everything
 # TechDraw draws a RichAnno's frame with its top left this far from the leader's origin (page mm, y up), measured in run 084
 ANNO_OFFSET = {"frame": (1.38, -1.38), "datum": (-0.2, 0.0)}
 FRAME_H, DATUM_H = 9.4, 8.6
@@ -57,6 +64,7 @@ DATUM_W = 6.4
 DIM_LINE_OFFSET = 3.75  # the dimension line of a distance sits this far below (X) or beside (Y) the text centre
 TEXT_K, TEXT_PAD = 6.4, 0.6  # dimension text width per em of osifont advance, and padding
 TOL_K = 3.4
+DIA_TOL_H = 11.6  # mm, text height of a diameter or radius dimension with an equal tolerance (run 085 measurement)
 
 _FONTS = {}
 
@@ -150,6 +158,8 @@ def dimTextSize(dim):
         n, _ = _decimals(spec)
         if dim.EqualTolerance:  # one line: the value, then plus-minus and the tolerance
             w = TEXT_K * _osi(main + " \u00b1" + "%.*f" % (min(n, 4), abs(dim.OverTolerance.Value))) + TEXT_PAD + 1.5
+            if dim.Type in ("Diameter", "Radius"):
+                h = max(h, DIA_TOL_H)  # measured in run 085: these draw 10 to 11.6 mm tall when level, not one line
         else:  # the two limits stacked beside the value
             tol = ["+%.*f" % (min(n, 4), abs(dim.OverTolerance.Value)), "-%.*f" % (min(n, 4), abs(dim.UnderTolerance.Value))]
             w += 1.5 + TOL_K * max(_osi(t) for t in tol) + 1.0
@@ -271,7 +281,7 @@ class _V:
 class _Grid:
     def __init__(self, W, H):
         self.nx, self.ny = int(math.ceil(W / CELL)) + 2, int(math.ceil(H / CELL)) + 2
-        self.raw = {k: np.zeros((self.ny, self.nx), dtype=np.int32) for k in ("A", "E", "V", "L", "N")}
+        self.raw = {k: np.zeros((self.ny, self.nx), dtype=np.int32) for k in ("E", "V")}
         self.integ = {}
 
     def _rng(self, x0, y0, x1, y1):
@@ -595,13 +605,6 @@ class _Layout:
         P.inner = (ax0, ay0, ax1, ay1)
         placed_boxes = []  # (box, name)
         leaders = []  # (O, A, name)
-        # anchors of every leader are obstacles for dimension hulls
-        for a in self.anns:
-            if a.leader is not None and a.anchor is not None:
-                px, py = P.pos[a.view.view.Name]
-                sc = s if a.view in self.managed else a.view.s0
-                A = (px + a.anchor[0] * sc, py + a.anchor[1] * sc)
-                grid.markAt("N", A[0], A[1])
         P.leaders, P.boxes = leaders, placed_boxes
         # pinned annotations: obstacles at their current place
         free = []
@@ -610,14 +613,7 @@ class _Layout:
                 self.markPinned(P, a, grid)
             else:
                 free.append(a)
-        failed = []
-        for a in sorted(free, key=lambda a: (self.difficulty(P, a, grid), a.key())):
-            r = self.place(P, a, grid, final)
-            if r is None:
-                failed.append(a.obj.Name)
-            else:
-                P.placed[a.obj.Name] = r
-                P.dists.append(r["dist"])
+        failed = self.assign(P, free, grid)
         P.failed = failed
         P.ok = not failed
         if P.ok and P.dists and not final:
@@ -636,13 +632,13 @@ class _Layout:
         return (px + a.anchor[0] * sc, py + a.anchor[1] * sc)
 
     def markPinned(self, P, a, grid):
+        """A pinned annotation stays where it is and is a fixed obstacle of the assignment: its box and, for a frame or datum, its leader."""
         px, py = P.pos[a.view.view.Name]
         sc = P.s if a.view in self.managed else a.view.s0
         if a.kind == "dim":
             tx, ty = px + _mm(a.obj.X), py + _mm(a.obj.Y)
             hull, tb, _ = self.dimBox(P, a, np.array([tx]), np.array([ty]), sc, (px, py))
             b = tuple(float(h[0]) for h in hull)
-            grid.mark("A", b[0], b[1], b[2], b[3], CLEAR)
             P.boxes.append((b, a.obj.Name))
         else:
             ox, oy = px + _mm(a.leader.X) * sc, py + _mm(a.leader.Y) * sc
@@ -650,20 +646,9 @@ class _Layout:
             tlx, tly = ox + dx + _mm(a.obj.X), oy + dy + _mm(a.obj.Y)
             w, h = a.size
             b = (tlx, tly - h, tlx + w, tly)
-            grid.mark("A", b[0], b[1], b[2], b[3], CLEAR)
             P.boxes.append((b, a.obj.Name))
             A = self.anchorPage(P, a)
             P.leaders.append(((ox, oy), A, a.obj.Name))
-            self.markLeader(grid, (ox, oy), A)
-
-    def markLeader(self, grid, O, A):
-        n = max(2, int(math.hypot(A[0] - O[0], A[1] - O[1]) / 0.4))
-        t = np.arange(n) / (n - 1.0)
-        # the last 1.5 mm at the anchor stay unmarked so that two leaders may meet at one anchor
-        L = math.hypot(A[0] - O[0], A[1] - O[1])
-        t = t[t * L <= max(0.0, L - 1.5)]
-        if len(t):
-            grid.markPoints("L", O[0] + (A[0] - O[0]) * t, O[1] + (A[1] - O[1]) * t, 0)
 
     # ---- dimension hulls
     def dimBox(self, P, a, tx, ty, sc, vpos):
@@ -741,43 +726,6 @@ class _Layout:
                 d = np.minimum(d, _box_dist(p[0], p[1], *tb))
         return hull, tb, d
 
-    def difficulty(self, P, a, grid):
-        """How many places the annotation could take before anything else is placed: the fewer, the earlier it goes."""
-        px, py = P.pos[a.view.view.Name]
-        sc = P.s if a.view in self.managed else a.view.s0
-        self.cur_inner = P.inner
-        if a.kind == "dim":
-            g = a.geo
-            if g["type"] in ("Diameter", "Radius"):
-                cx, cy = px + g["c"][0] * sc, py + g["c"][1] * sc
-                X, Y = self.candidates(cx, cy, a.size[0] / 2, 3.0, REACH + g["r"] * sc)
-            else:
-                pts = [(px + p[0] * sc, py + p[1] * sc) for p in g["pts"]]
-                X, Y = self.candidates(sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts), a.size[0] / 2, a.size[1] / 2, REACH + 40)
-            if not len(X):
-                return 0
-            hull, tb, d = self.dimBox(P, a, X, Y, sc, (px, py))
-            ok = ~grid.hit("E", tb[0] - EDGE_CLEAR, tb[1] - EDGE_CLEAR, tb[2] + EDGE_CLEAR, tb[3] + EDGE_CLEAR) & (d <= REACH)
-            return int(ok.sum())
-        A = self.anchorPage(P, a)
-        w, h = a.size
-        X, Y = self.candidates(A[0], A[1], w / 2, h / 2, REACH)
-        if not len(X):
-            return 0
-        x0, y0, x1, y1 = X - w / 2, Y - h / 2, X + w / 2, Y + h / 2
-        d = _box_dist(A[0], A[1], x0, y0, x1, y1)
-        ok = ~grid.hit("E", x0 - EDGE_CLEAR, y0 - EDGE_CLEAR, x1 + EDGE_CLEAR, y1 + EDGE_CLEAR) & (d >= 1.5) & (d <= REACH)
-        return int(ok.sum())
-
-    # ---- placing one annotation
-    def place(self, P, a, grid, final):
-        px, py = P.pos[a.view.view.Name]
-        sc = P.s if a.view in self.managed else a.view.s0
-        ax0, ay0, ax1, ay1 = P.inner
-        if a.kind == "dim":
-            return self.placeDim(P, a, grid, sc, (px, py), final)
-        return self.placeFrame(P, a, grid, sc, (px, py), final)
-
     def candidates(self, cx, cy, hw, hh, R):
         """Lattice centres of a box of half size (hw, hh) near (cx, cy), inside the sheet inset."""
         ax0, ay0, ax1, ay1 = self.cur_inner
@@ -792,159 +740,365 @@ class _Layout:
         X, Y = np.meshgrid(xs, ys)
         return X.ravel(), Y.ravel()
 
-    def placeFrame(self, P, a, grid, sc, vpos, final):
+    # ---- global slot assignment (run 085)
+    def frameCands(self, P, a, grid):
         self.cur_inner = P.inner
         A = self.anchorPage(P, a)
         w, h = a.size
-        for level in (0, 1, 2, 3, 4):
-            Rl = (0.6 * REACH, REACH, REACH + 25, REACH + 25, REACH + 25)[level]
-            X, Y = self.candidates(A[0], A[1], w / 2, h / 2, Rl)
-            if not len(X):
-                continue
-            x0, y0, x1, y1 = X - w / 2, Y - h / 2, X + w / 2, Y + h / 2
-            cA = grid.hit("A", x0, y0, x1, y1)
-            cE = grid.hit("E", x0 - EDGE_CLEAR, y0 - EDGE_CLEAR, x1 + EDGE_CLEAR, y1 + EDGE_CLEAR)
-            cL = grid.hit("L", x0, y0, x1, y1)
-            cV = grid.hit("V", x0, y0, x1, y1) if level == 0 else np.zeros(len(X), dtype=bool)
-            d = _box_dist(A[0], A[1], x0, y0, x1, y1)
-            P.diag[a.obj.Name] = {"n": len(X), "A": int(cA.sum()), "E": int(cE.sum()), "L": int(cL.sum()), "V": int(cV.sum()), "dmin": int((d < 1.5).sum()), "level": level, "anchor": A}
-            ok = ~cA & ~cE & ~cV
-            if level < 3:
-                ok &= ~cL
-            ok &= d >= 1.5
-            ok &= d <= Rl
-            if level == 4:
-                ok = (d >= 1.5) & (d <= Rl)
-                cost4 = 3.0 * grid.count("A", x0, y0, x1, y1) + 0.5 * grid.count("E", x0, y0, x1, y1) + d
-                k = int(np.lexsort((X, Y, cost4 + np.where(ok, 0.0, 1e9)))[0])
-                box = (float(x0[k]), float(y0[k]), float(x1[k]), float(y1[k]))
-                O = self.attach(box, A, a)
-                P.viol += 10
-                P.levels[a.kind + "4"] = P.levels.get(a.kind + "4", 0) + 1
-                return self.commitFrame(P, a, grid, box, O, A, float(d[k]), vpos, sc)
-            if not ok.any():
-                continue
-            idx = np.nonzero(ok)[0]
-            order = idx[np.lexsort((X[idx], Y[idx], d[idx]))]
-            tried = 0
-            for k in order:
-                box = (float(x0[k]), float(y0[k]), float(x1[k]), float(y1[k]))
-                O = self.attach(box, A, a)
-                if self.leaderOK(P, O, A, box, a, level >= 2):
-                    P.levels[a.kind + str(level)] = P.levels.get(a.kind + str(level), 0) + 1
-                    if level >= 2:
-                        P.viol += 1
-                    return self.commitFrame(P, a, grid, box, O, A, float(d[k]), vpos, sc)
-                tried += 1
-                if tried > 400:
-                    break
-        return None
-
-    def attach(self, box, A, a):
-        """The point where the leader starts: on the box boundary nearest the anchor, kept inside the drawn box (the drawn box
-        may be narrower than the estimate: its left edge and its top and bottom are exact)."""
-        x0, y0, x1, y1 = box
+        X, Y = self.candidates(A[0], A[1], w / 2, h / 2, REACH)
+        if not len(X):
+            return None
+        x0, y0, x1, y1 = X - w / 2, Y - h / 2, X + w / 2, Y + h / 2
+        d = _box_dist(A[0], A[1], x0, y0, x1, y1)
+        cE = grid.hit("E", x0 - EDGE_CLEAR, y0 - EDGE_CLEAR, x1 + EDGE_CLEAR, y1 + EDGE_CLEAR)
+        cV = grid.hit("V", x0, y0, x1, y1)
+        ok = (d >= 1.5) & (d <= REACH)
+        if (ok & ~cE).sum() >= 20:
+            ok &= ~cE
+        idx = np.nonzero(ok)[0]
+        if not len(idx):
+            return None
+        static = (d + W_EDGE * cE + 6.0 * cV)[idx]
+        keep = idx[_thin(static)]
+        sel = {int(k): n for n, k in enumerate(keep)}
+        x0, y0, x1, y1, d = x0[keep], y0[keep], x1[keep], y1[keep], d[keep]
+        static = (d + W_EDGE * cE[keep] + 6.0 * cV[keep])
         slack = FRAME_SLACK if a.kind == "frame" else DATUM_SLACK
-        inset = slack + 0.7 if a.kind == "frame" else 1.2  # a leader starts this far inside the estimated right edge
-        cx = min(max(A[0], x0), x1)
-        cy = min(max(A[1], y0), y1)
-        # nearest side
-        dl, dr, db, dt = A[0] - x0, x1 - A[0], A[1] - y0, y1 - A[1]
-        if A[0] < x0:
-            return (x0 + 0.3, min(max(A[1], y0 + 1.0), y1 - 1.0))
-        if A[0] > x1:
-            return (x1 - inset - (0.0 if a.kind == "frame" else 0.0), min(max(A[1], y0 + 1.0), y1 - 1.0))
-        xr = min(max(A[0], x0 + 2.0), x1 - slack - 1.0)
-        return (xr, y0 + 0.1 if A[1] < y0 else y1 - 0.1)
+        inset = slack + 0.7 if a.kind == "frame" else 1.2
+        cy = np.clip(A[1], y0 + 1.0, y1 - 1.0)
+        left, right = A[0] < x0, A[0] > x1
+        xr = np.clip(A[0], x0 + 2.0, x1 - slack - 1.0)
+        Ox = np.where(left, x0 + 0.3, np.where(right, x1 - inset, xr))
+        Oy = np.where(left | right, cy, np.where(A[1] < y0, y0 + 0.1, y1 - 0.1))
+        box = np.stack([x0, y0, x1, y1], axis=1)
+        return _Cand(a, box, np.stack([Ox, Oy], axis=1), np.array(A, dtype=float), static, {"d": d, "A": A})
 
-    def leaderOK(self, P, O, A, box, a, relaxed):
-        for b, name in P.boxes:
-            if _seg_hits_box(O, A, b, 0.3):
-                return False
-        if not relaxed:
-            for (o2, a2, name) in P.leaders:
-                shared = math.hypot(A[0] - a2[0], A[1] - a2[1]) < 1.6
-                if _seg_cross(O, A, o2, a2, 0.0 if shared else 0.8):
-                    if not shared or _seg_cross(O, A, o2, a2, 0.0):
-                        return False
-        return True
-
-    def commitFrame(self, P, a, grid, box, O, A, d, vpos, sc):
-        w, h = a.size
-        grid.mark("A", box[0], box[1], box[2], box[3], CLEAR)
-        P.boxes.append((box, a.obj.Name))
-        P.leaders.append((O, A, a.obj.Name))
-        self.markLeader(grid, O, A)
-        # TechDraw puts the drawn box's top left at the leader origin plus (ANNO_DX, ANNO_DY) plus the annotation's X, Y
-        tlx, tly = box[0], box[3]
-        dx, dy = ANNO_OFFSET[a.kind]
-        return {"kind": a.kind, "origin": O, "anchor": A, "box": box, "dist": d, "annoXY": (tlx - O[0] - dx, tly - O[1] - dy), "leaderXY": ((O[0] - vpos[0]) / sc, (O[1] - vpos[1]) / sc)}
-
-    def placeDim(self, P, a, grid, sc, vpos, final):
+    def dimCands(self, P, a, grid):
         self.cur_inner = P.inner
+        px, py = P.pos[a.view.view.Name]
+        sc = P.s if a.view in self.managed else a.view.s0
         g = a.geo
-        px, py = vpos
         typ = g["type"]
         tw, th = a.size
-        if typ in ("Diameter", "Radius"):
-            cx, cy = px + g["c"][0] * sc, py + g["c"][1] * sc
-            r = g["r"] * sc
-            X, Y = self.candidates(cx, cy, tw / 2, 3.0, REACH + r)
-            mid = (cx, cy)
-        else:
+        ax0, ay0, ax1, ay1 = P.inner
+        along = None
+        if typ in ("DistanceX", "DistanceY"):
+            (x1_, y1_), (x2_, y2_) = [(px + p[0] * sc, py + p[1] * sc) for p in g["pts"]]
+            mid = ((x1_ + x2_) / 2, (y1_ + y2_) / 2)
+            hw, hh = (tw / 2, th / 2) if typ == "DistanceX" else (th / 2, tw / 2)
+            offs = np.array([0, -4, 4, -8, 8, -12, 12, -20, 20, -30, 30], dtype=float)
             if typ == "DistanceX":
-                (x1, y1), (x2, y2) = [(px + p[0] * sc, py + p[1] * sc) for p in g["pts"]]
-                mid = ((x1 + x2) / 2, (y1 + y2) / 2)
-                hw, hh = tw / 2, th / 2
-            elif typ == "DistanceY":
-                (x1, y1), (x2, y2) = [(px + p[0] * sc, py + p[1] * sc) for p in g["pts"]]
-                mid = ((x1 + x2) / 2, (y1 + y2) / 2)
-                hw, hh = th / 2, tw / 2
+                xs = np.round(mid[0] + offs)
+                ys = np.arange(math.ceil(max(ay0 + hh, mid[1] - REACH - 20) / LATTICE), math.floor(min(ay1 - hh, mid[1] + REACH + 20) / LATTICE) + 1) * LATTICE
+                xs = xs[(xs >= ax0 + hw) & (xs <= ax1 - hw)]
             else:
-                pts = [(px + p[0] * sc, py + p[1] * sc) for p in g["pts"]]
-                mid = (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
-                hw = hh = math.hypot(tw, th) / 2 + 0.5
+                ys = np.round(mid[1] + offs)
+                xs = np.arange(math.ceil(max(ax0 + hw, mid[0] - REACH - 20) / LATTICE), math.floor(min(ax1 - hw, mid[0] + REACH + 20) / LATTICE) + 1) * LATTICE
+                ys = ys[(ys >= ay0 + hh) & (ys <= ay1 - hh)]
+            if not len(xs) or not len(ys):
+                return None
+            X, Y = np.meshgrid(xs, ys)
+            X, Y = X.ravel(), Y.ravel()
+            along = np.abs(X - mid[0]) if typ == "DistanceX" else np.abs(Y - mid[1])
+        elif typ in ("Diameter", "Radius"):
+            cx, cy = px + g["c"][0] * sc, py + g["c"][1] * sc
+            X, Y = self.candidates(cx, cy, tw / 2, 3.0, REACH + g["r"] * sc)
+            # the text exactly level with or above the centre: the dimension line is then horizontal or vertical and its box is a thin strip
+            R = g["r"] * sc + tw / 2 + 2.0
+            ss = np.arange(-REACH, REACH + 0.1, 1.0)
+            ss = ss[np.abs(ss) >= R]
+            ex = np.concatenate([cx + ss, np.full(len(ss), cx)])
+            ey = np.concatenate([np.full(len(ss), cy), cy + ss])
+            okc = (ex >= ax0 + tw / 2) & (ex <= ax1 - tw / 2) & (ey >= ay0 + 3.0) & (ey <= ay1 - 3.0)
+            X, Y = np.concatenate([X, ex[okc]]), np.concatenate([Y, ey[okc]])
+        else:
+            pts = [(px + p[0] * sc, py + p[1] * sc) for p in g["pts"]]
+            mid = (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+            hw = hh = math.hypot(tw, th) / 2 + 0.5
             X, Y = self.candidates(mid[0], mid[1], hw, hh, REACH + 40)
         if not len(X):
             return None
-        hull, tb, d = self.dimBox(P, a, X, Y, sc, vpos)
-        ax0, ay0, ax1, ay1 = P.inner
+        hull, tb, d = self.dimBox(P, a, X, Y, sc, (px, py))
         inside = (hull[0] >= ax0 - 1e-9) & (hull[1] >= ay0 - 1e-9) & (hull[2] <= ax1 + 1e-9) & (hull[3] <= ay1 + 1e-9)
-        cA = grid.hit("A", hull[0], hull[1], hull[2], hull[3])
-        nN = grid.count("N", hull[0], hull[1], hull[2], hull[3])
-        cL = grid.hit("L", hull[0], hull[1], hull[2], hull[3])
         cE = grid.hit("E", tb[0] - EDGE_CLEAR, tb[1] - EDGE_CLEAR, tb[2] + EDGE_CLEAR, tb[3] + EDGE_CLEAR)
         cV = grid.hit("V", tb[0], tb[1], tb[2], tb[3]) if typ not in ("Diameter", "Radius") else np.zeros(len(X), dtype=bool)
         area = (hull[2] - hull[0]) * (hull[3] - hull[1])
-        cost = d + 0.012 * area + 60.0 * nN
-        if typ in ("DistanceX", "DistanceY"):
-            cost = cost + 0.15 * (np.abs(X - mid[0]) if typ == "DistanceX" else np.abs(Y - mid[1]))
-        P.diag[a.obj.Name] = {"n": len(X), "A": int(cA.sum()), "N": int((nN > 0).sum()), "L": int(cL.sum()), "E": int(cE.sum()), "V": int(cV.sum()), "inside": int(inside.sum())}
-        # level 0: everything clear; 1: a leader anchor of another annotation may lie under the box; 2: and the text may stand in a view
-        for level, mask in ((0, ~cA & ~cL & ~cE & ~cV & (nN == 0)), (1, ~cA & ~cL & ~cE & ~cV), (2, ~cA & ~cL & ~cE)):
-            ok = mask & inside & (d <= REACH)
-            if ok.any():
-                idx = np.nonzero(ok)[0]
-                k = idx[np.lexsort((X[idx], Y[idx], cost[idx]))[0]]
-                P.levels["dim" + str(level)] = P.levels.get("dim" + str(level), 0) + 1
-                return self.commitDim(P, grid, a, hull, tb, d, nN, X, Y, k, vpos, 0)
-        # last resort: the least overlap
-        ok = inside & (d <= REACH + 25)
-        if not ok.any():
+        static = d + 0.012 * area + 120.0 * cE + 8.0 * cV
+        if along is not None:
+            static = static + 0.15 * along
+        ok = inside & (d <= REACH)
+        if (ok & ~cE).sum() >= 10:
+            ok &= ~cE
+        idx = np.nonzero(ok)[0]
+        if not len(idx):
             return None
-        cost4 = 3.0 * grid.count("A", hull[0], hull[1], hull[2], hull[3]) + 0.5 * grid.count("E", tb[0], tb[1], tb[2], tb[3]) + d + np.where(ok, 0.0, 1e9)
-        k = int(np.lexsort((X, Y, cost4))[0])
-        P.levels["dim3"] = P.levels.get("dim3", 0) + 1
-        return self.commitDim(P, grid, a, hull, tb, d, nN, X, Y, k, vpos, 10)
+        keep = idx[_thin(static[idx])]
+        box = np.stack([np.asarray(hull[i])[keep] if np.ndim(hull[i]) else np.full(len(keep), float(hull[i])) for i in range(4)], axis=1)
+        tbk = np.stack([np.asarray(tb[i])[keep] if np.ndim(tb[i]) else np.full(len(keep), float(tb[i])) for i in range(4)], axis=1)
+        far = np.full((len(keep), 2), FAR)
+        return _Cand(a, box, far, np.array([FAR, FAR]), static[keep], {"d": d[keep], "X": X[keep], "Y": Y[keep], "tb": tbk, "vpos": (px, py), "cE": cE[keep]})
 
-    def commitDim(self, P, grid, a, hull, tb, d, nN, X, Y, k, vpos, extra):
-        px, py = vpos
-        b = tuple(float(h[k]) if np.ndim(h) else float(h) for h in hull)
-        tbk = tuple(float(t[k]) if np.ndim(t) else float(t) for t in tb)
-        grid.mark("A", b[0], b[1], b[2], b[3], CLEAR)
-        P.boxes.append((b, a.obj.Name))
-        P.viol += int(nN[k]) + extra
-        return {"kind": "dim", "box": b, "text": tbk, "dist": float(d[k]), "T": (float(X[k]), float(Y[k])), "dimXY": (float(X[k]) - px, float(Y[k]) - py)}
+    def assign(self, P, free, grid):
+        """Place every free annotation at once: one candidate each, chosen by a greedy seed (largest first) and a fixed number of
+        heat-bath annealing sweeps over the cost of overlaps, leaders over foreign boxes, leader crossings and distance.  The random
+        generator is seeded, and the work is capped by sweeps, so the result is the same on every machine and in the GUI."""
+        failed = []
+        cands = []
+        for a in sorted(free, key=lambda a: a.key()):
+            c = self.dimCands(P, a, grid) if a.kind == "dim" else self.frameCands(P, a, grid)
+            if c is None:
+                failed.append(a.obj.Name)
+            else:
+                cands.append(c)
+        lead = {n: (np.array(o, float), np.array(an, float)) for o, an, n in P.leaders}
+        fixed_boxes = [b for b, _ in P.boxes]
+        fixed_segs = [lead.get(n) for _, n in P.boxes]
+        n = len(cands)
+        P.resid = {"overlaps": 0, "leader_over_box": 0, "crossings": 0, "dims_over_edge": 0}
+        if not n:
+            return failed
+        F = _Field(fixed_boxes, fixed_segs, n)
+        nf = F.nf
+        # A leader whose anchor sits on a circle that a diameter or radius dimension measures ends inside that dimension's box wherever
+        # the dimension goes (its arrows stand on both sides of the circle, so the box spans the circle): that pair is not charged.
+        for i, c in enumerate(cands):
+            if c.ann.kind == "dim" or c.A[0] == FAR:
+                continue
+            for j, d_ in enumerate(cands):
+                g = d_.ann.geo if d_.ann.kind == "dim" else None
+                if g is not None and g["type"] in ("Diameter", "Radius") and d_.ann.view is c.ann.view:
+                    qx, qy = P.pos[d_.ann.view.view.Name]
+                    scj = P.s if d_.ann.view in self.managed else d_.ann.view.s0
+                    if math.hypot(c.A[0] - (qx + g["c"][0] * scj), c.A[1] - (qy + g["c"][1] * scj)) <= g["r"] * scj + 3.5:
+                        F.FORCE[nf + i, nf + j] = True
+        # Two diameter or radius dimensions of concentric circles cannot be kept apart: each box spans its circle's centre.
+        for i, c in enumerate(cands):
+            gi = c.ann.geo if c.ann.kind == "dim" else None
+            if gi is None or gi["type"] not in ("Diameter", "Radius"):
+                continue
+            for j in range(i + 1, n):
+                gj = cands[j].ann.geo if cands[j].ann.kind == "dim" else None
+                if gj is None or gj["type"] not in ("Diameter", "Radius") or cands[j].ann.view is not c.ann.view:
+                    continue
+                scj = P.s if c.ann.view in self.managed else c.ann.view.s0
+                if math.hypot(gi["c"][0] - gj["c"][0], gi["c"][1] - gj["c"][1]) * scj <= 6.0:
+                    F.FORCE_OV[nf + i, nf + j] = F.FORCE_OV[nf + j, nf + i] = True
+        rng = np.random.RandomState(SEED)
+        sel = [-1] * n
+
+        def others(i):
+            idx = np.nonzero(F.ACT)[0]
+            return idx[idx != nf + i]
+
+        def choose(i, T):
+            c = cands[i]
+            E = c.static + F.energy(c.box, c.O, np.broadcast_to(c.A, c.O.shape) if c.A[0] != FAR else c.O, others(i), nf + i)
+            if T <= 0:
+                k = int(np.argmin(E))
+            else:
+                w = np.exp(-(E - E.min()) / T)
+                cum = np.cumsum(w)
+                k = int(min(np.searchsorted(cum, rng.random_sample() * cum[-1]), len(E) - 1))
+            return k, E
+
+        def put(i, k):
+            c = cands[i]
+            sel[i] = k
+            F.put(i, c.box[k], c.O[k], c.A)
+
+        order = sorted(range(n), key=lambda i: (-cands[i].area, cands[i].name))
+        for i in order:
+            k, _ = choose(i, 0.0)
+            put(i, k)
+        rows = np.arange(nf, nf + n)
+        best = (F.state(rows)[0].sum(), list(sel))
+        T0, T1 = 30.0, 3.0
+        for sweep in range(SWEEPS):
+            per, _, _, _ = F.state(rows)
+            if per.sum() == 0 and sweep >= 2:
+                break
+            T = T0 * (T1 / T0) ** (sweep / max(1, SWEEPS - 1))
+            if sweep < 2:
+                todo = rng.permutation(n)
+            else:
+                todo = [i for i in rng.permutation(n) if per[i] > 0 or rng.random_sample() < 0.12]
+            for i in todo:
+                k, _ = choose(int(i), T)
+                put(int(i), k)
+            tot = F.state(rows)[0].sum()
+            if tot < best[0]:
+                best = (tot, list(sel))
+        if F.state(rows)[0].sum() > best[0]:
+            for i in range(n):
+                put(i, best[1][i])
+        # exchanges: two frames or datums whose leaders cross or whose boxes overlap trade places (the box of one goes where the box of the
+        # other stands), which sorts the fans of leaders that single moves cannot untangle
+        ctr = [0.5 * (c.box[:, 0] + c.box[:, 2]) for c in cands]
+        ctr2 = [0.5 * (c.box[:, 1] + c.box[:, 3]) for c in cands]
+        for it in range(SWAPS):
+            per, nov_, nlb_, ncr_ = F.state(rows)
+            if per.sum() == 0:
+                break
+            idx = np.nonzero(F.ACT)[0]
+            ov, lb, lb2, cr = F.parts(F.BOX[rows], F.SO[rows], F.SA[rows], idx, rows)
+            bad = [(a_, int(idx[b_]) - nf) for a_, b_ in zip(*np.nonzero(ov | cr | lb))]
+            bad = [(a_, b_) for a_, b_ in bad if b_ >= 0 and a_ != b_ and cands[a_].A[0] != FAR and cands[b_].A[0] != FAR]
+            if not bad:
+                break
+            a_, b_ = bad[int(rng.randint(len(bad)))]
+            cxa, cya = 0.5 * (F.BOX[nf + a_, 0] + F.BOX[nf + a_, 2]), 0.5 * (F.BOX[nf + a_, 1] + F.BOX[nf + a_, 3])
+            cxb, cyb = 0.5 * (F.BOX[nf + b_, 0] + F.BOX[nf + b_, 2]), 0.5 * (F.BOX[nf + b_, 1] + F.BOX[nf + b_, 3])
+            ka = int(np.argmin((ctr[a_] - cxb) ** 2 + (ctr2[a_] - cyb) ** 2))
+            kb = int(np.argmin((ctr[b_] - cxa) ** 2 + (ctr2[b_] - cya) ** 2))
+            ra, rb = nf + a_, nf + b_
+            before = F.state([ra, rb])[0].sum() + cands[a_].static[sel[a_]] + cands[b_].static[sel[b_]]
+            oa, ob = sel[a_], sel[b_]
+            put(a_, ka)
+            put(b_, kb)
+            after = F.state([ra, rb])[0].sum() + cands[a_].static[ka] + cands[b_].static[kb]
+            if after < before - 1e-9:
+                continue
+            put(a_, oa)
+            put(b_, ob)
+        # a last greedy sweep that keeps a candidate unless another is strictly cheaper
+        for i in range(n):
+            c = cands[i]
+            k, E = choose(i, 0.0)
+            if E[k] < E[sel[i]] - 1e-9:
+                put(i, k)
+        per, nov, nlb, ncr = F.state(rows)
+        P.resid.update({"overlaps": nov // 2, "leader_over_box": nlb, "crossings": ncr // 2})
+        P.viol += nov // 2 + nlb + ncr // 2
+        for i, c in enumerate(cands):
+            k = sel[i]
+            a = c.ann
+            px, py = P.pos[a.view.view.Name]
+            sc = P.s if a.view in self.managed else a.view.s0
+            b = tuple(float(v) for v in c.box[k])
+            d = float(c.extra["d"][k])
+            if a.kind == "dim":
+                if c.extra["cE"][k]:
+                    P.resid["dims_over_edge"] += 1
+                P.viol += 0
+                X, Y = float(c.extra["X"][k]), float(c.extra["Y"][k])
+                r = {"kind": "dim", "box": b, "text": tuple(float(v) for v in c.extra["tb"][k]), "dist": d, "T": (X, Y), "dimXY": (X - px, Y - py)}
+            else:
+                O = (float(c.O[k, 0]), float(c.O[k, 1]))
+                Aa = (float(c.A[0]), float(c.A[1]))
+                dx, dy = ANNO_OFFSET[a.kind]
+                r = {"kind": a.kind, "origin": O, "anchor": Aa, "box": b, "dist": d, "annoXY": (b[0] - O[0] - dx, b[3] - O[1] - dy), "leaderXY": ((O[0] - px) / sc, (O[1] - py) / sc)}
+                P.leaders.append((O, Aa, a.obj.Name))
+            P.boxes.append((b, a.obj.Name))
+            P.placed[a.obj.Name] = r
+            P.dists.append(d)
+        return failed
+
+
+def _seg_box_vec(px, py, qx, qy, x0, y0, x1, y1):
+    """Does the segment p-q meet the box (broadcasting arrays; Liang-Barsky, as _seg_hits_box)."""
+    dx, dy = qx - px, qy - py
+    shape = np.broadcast(dx, dy, x0, y0, x1, y1, px, py).shape
+    t0 = np.zeros(shape)
+    t1 = np.ones(shape)
+    ok = np.ones(shape, dtype=bool)
+    for pp, qq in ((-dx, px - x0), (dx, x1 - px), (-dy, py - y0), (dy, y1 - py)):
+        par = pp == 0
+        ok = ok & ~(par & (qq < 0))
+        t = qq / np.where(par, 1.0, pp)
+        t0 = np.where((pp < 0), np.maximum(t0, t), t0)
+        t1 = np.where((pp > 0), np.minimum(t1, t), t1)
+    return ok & (t0 <= t1)
+
+
+def _cross_vec(p1x, p1y, p2x, p2y, q1x, q1y, q2x, q2y):
+    """Proper crossing of the segments p1-p2 and q1-q2 (broadcasting arrays)."""
+
+    def o(ax, ay, bx, by, cx, cy):
+        return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+
+    d1, d2 = o(q1x, q1y, q2x, q2y, p1x, p1y), o(q1x, q1y, q2x, q2y, p2x, p2y)
+    d3, d4 = o(p1x, p1y, p2x, p2y, q1x, q1y), o(p1x, p1y, p2x, p2y, q2x, q2y)
+    return (d1 * d2 < 0) & (d3 * d4 < 0)
+
+
+class _Cand:
+    """The candidate places of one annotation: collision boxes, leader starts (frames and datums) and a static cost."""
+
+    __slots__ = ("ann", "box", "O", "A", "static", "area", "extra", "name")
+
+    def __init__(self, ann, box, O, A, static, extra):
+        self.ann = ann
+        self.box = box  # (K, 4)
+        self.O = O  # (K, 2) leader starts, FAR for a dimension
+        self.A = A  # (2,) the anchor, FAR for a dimension
+        self.static = static  # (K,)
+        self.extra = extra  # per-kind data for the record
+        self.area = float(np.mean((box[:, 2] - box[:, 0]) * (box[:, 3] - box[:, 1])))
+        self.name = ann.obj.Name
+
+
+def _thin(static, keep_near=KEEP_NEAR, keep_spread=KEEP_SPREAD):
+    """Indices of the candidates worth keeping: the cheapest ones and an even spread of the rest (deterministic)."""
+    order = np.argsort(static, kind="stable")
+    if len(order) <= keep_near + keep_spread:
+        return order
+    rest = order[keep_near:]
+    pick = rest[np.linspace(0, len(rest) - 1, keep_spread).astype(int)]
+    return np.concatenate([order[:keep_near], pick])
+
+
+class _Field:
+    """The annotations of one plan as arrays (fixed obstacles first, then the movable ones), for the cost of a candidate against the rest."""
+
+    def __init__(self, fixed_boxes, fixed_segs, n):
+        nf = len(fixed_boxes)
+        self.nf = nf
+        self.BOX = np.zeros((nf + n, 4))
+        self.SO = np.full((nf + n, 2), FAR)
+        self.SA = np.full((nf + n, 2), FAR)
+        self.ACT = np.zeros(nf + n, dtype=bool)
+        self.FORCE_OV = np.zeros((nf + n, nf + n), dtype=bool)  # two dimensions of one circle: their boxes meet at its centre
+        self.FORCE = np.zeros((nf + n, nf + n), dtype=bool)  # FORCE[k, j]: the leader of row k must end inside the box of row j (see assign)
+        for i, (b, sg) in enumerate(zip(fixed_boxes, fixed_segs)):
+            self.BOX[i] = b
+            if sg is not None:
+                self.SO[i], self.SA[i] = sg
+            self.ACT[i] = True
+
+    def put(self, i, box, O, A):
+        r = self.nf + i
+        self.BOX[r] = box
+        self.SO[r] = O
+        self.SA[r] = A
+        self.ACT[r] = True
+
+    def parts(self, box, O, A, idx, rows):
+        """(overlap, leader-over-box, crossing) boolean matrices (K, M) of K candidate boxes (the rows ``rows`` of the arrays) against the rows ``idx``."""
+        B, bO, bA = self.BOX[idx], self.SO[idx], self.SA[idx]
+        ov = (box[:, 0:1] < B[None, :, 2] + CLEAR) & (B[None, :, 0] < box[:, 2:3] + CLEAR) & (box[:, 1:2] < B[None, :, 3] + CLEAR) & (B[None, :, 1] < box[:, 3:4] + CLEAR)
+        Ax, Ay = (A[:, 0:1], A[:, 1:2]) if A.ndim == 2 else (A[0], A[1])
+        lb = _seg_box_vec(O[:, 0:1], O[:, 1:2], Ax, Ay, B[None, :, 0] - 0.3, B[None, :, 1] - 0.3, B[None, :, 2] + 0.3, B[None, :, 3] + 0.3)
+        lb2 = _seg_box_vec(bO[None, :, 0], bO[None, :, 1], bA[None, :, 0], bA[None, :, 1], box[:, 0:1] - 0.3, box[:, 1:2] - 0.3, box[:, 2:3] + 0.3, box[:, 3:4] + 0.3)
+        cr = _cross_vec(O[:, 0:1], O[:, 1:2], Ax, Ay, bO[None, :, 0], bO[None, :, 1], bA[None, :, 0], bA[None, :, 1])
+        rows = np.broadcast_to(np.asarray(rows), (len(box),))
+        ov = ov & ~self.FORCE_OV[rows[:, None], idx[None, :]]
+        lb = lb & ~self.FORCE[rows[:, None], idx[None, :]]
+        lb2 = lb2 & ~self.FORCE[idx[None, :], rows[:, None]]
+        return ov, lb, lb2, cr
+
+    def energy(self, box, O, A, idx, row):
+        ov, lb, lb2, cr = self.parts(box, O, A, idx, row)
+        return W_OVERLAP * ov.sum(axis=1) + W_LEADER_BOX * (lb.sum(axis=1) + lb2.sum(axis=1)) + W_CROSS * cr.sum(axis=1)
+
+    def state(self, rows):
+        """Conflicts of the chosen candidates in ``rows`` against every active row: (per-row weighted conflicts, overlaps, leader-over-box, crossings)."""
+        idx = np.nonzero(self.ACT)[0]
+        box, O, A = self.BOX[rows], self.SO[rows], self.SA[rows]
+        ov, lb, lb2, cr = self.parts(box, O, A, idx, rows)
+        same = idx[None, :] == np.asarray(rows)[:, None]
+        ov, lb, lb2, cr = ov & ~same, lb & ~same, lb2 & ~same, cr & ~same
+        per = W_OVERLAP * ov.sum(axis=1) + W_LEADER_BOX * (lb.sum(axis=1) + lb2.sum(axis=1)) + W_CROSS * cr.sum(axis=1)
+        return per, int(ov.sum()), int(lb.sum()), int(cr.sum())
 
 
 def _dim_geometry(dim, s0):
@@ -1151,12 +1305,16 @@ def _layout(page, forced_scale):
                 break
             if any(t.ok for t in tried):
                 spare -= 1
-        if chosen is not None or spare <= 0:
+        if chosen is not None or spare <= 0 or any(t.ok for t in tried):
             break
     if chosen is None:
         good = [t for t in tried if t.ok]
         if good:
             chosen = min(good, key=lambda t: (t.viol, -t.s, t.gap))
+    if chosen is None:
+        placed = [t for t in tried if t.reason != "views do not fit" and not t.failed and t.dists]
+        if placed:  # everything is placed but the reach goal is missed at every scale: the plan with the lowest median reach, the larger scale on a tie
+            chosen = min(placed, key=lambda t: (round(float(np.median(t.dists)), 1), -t.s, t.gap))
     if chosen is None and tried:
         chosen = tried[-1]  # nothing placed cleanly down to the smallest scale that fits: the best effort at that one
     if chosen is None:
@@ -1175,6 +1333,7 @@ def _layout(page, forced_scale):
         "max_reach": float(max(chosen.dists)) if chosen.dists else None,
         "tried": [(round(t.s, 4), t.gap, t.ok, t.reason, t.viol) for t in tried],
         "violations": chosen.viol,
+        "resid": getattr(chosen, "resid", None),
         "levels": chosen.levels,
         "diag": {n: chosen.diag.get(n) for n in chosen.failed},
     }

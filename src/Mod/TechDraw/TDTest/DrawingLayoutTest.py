@@ -351,3 +351,61 @@ class DrawingLayoutTest(unittest.TestCase):
         doc.removeObject(v.Name)  # raised NameError: Unknown document '{}' before the fix
         self.assertIsNone(doc.getObject("PlainView"))
         self.assertIsNone(doc.getObject("PlainDim"))
+
+    # ---- run 085: the global slot assignment
+    def test_vector_segment_tests_agree_with_the_scalar_ones(self):
+        import numpy as np
+
+        rng = np.random.RandomState(7)
+        for _ in range(400):
+            p, q, r, s = rng.uniform(0, 50, (4, 2))
+            b = np.sort(rng.uniform(0, 50, (2, 2)), axis=0)
+            box = (b[0, 0], b[0, 1], b[1, 0], b[1, 1])
+            self.assertEqual(bool(DL._seg_box_vec(p[0], p[1], q[0], q[1], *box)), DL._seg_hits_box(p, q, box), (p, q, box))
+            self.assertEqual(bool(DL._cross_vec(p[0], p[1], q[0], q[1], r[0], r[1], s[0], s[1])), DL._seg_cross(p, q, r, s))
+
+    def test_field_counts_overlaps_leaders_over_boxes_and_crossings_and_a_swap_removes_a_crossing(self):
+        import numpy as np
+
+        F = DL._Field([], [], 4)
+        # two frames whose leaders cross (boxes stand left, anchors on the right, the upper box goes to the lower anchor)
+        F.put(0, (0, 20, 10, 30), (10, 25), (50, 5))
+        F.put(1, (0, 0, 10, 10), (10, 5), (50, 25))
+        per, ov, lb, cr = F.state(np.array([0, 1]))
+        self.assertEqual((ov, lb, cr), (0, 0, 2))  # counted once per row, so 2 for one crossing
+        F.put(0, (0, 0, 10, 10), (10, 5), (50, 5))
+        F.put(1, (0, 20, 10, 30), (10, 25), (50, 25))
+        per, ov, lb, cr = F.state(np.array([0, 1]))
+        self.assertEqual((ov, lb, cr), (0, 0, 0))
+        # overlapping boxes, and a leader through a foreign box
+        F.put(2, (5, 5, 15, 15), (15, 10), (60, 10))
+        F.put(3, (30, 8, 40, 12), (30, 10), (60, 30))
+        per, ov, lb, cr = F.state(np.array([0, 1, 2, 3]))
+        self.assertEqual(ov, 2)  # boxes 0 and 2 overlap, counted from both rows
+        self.assertGreaterEqual(lb, 1)  # the leader of 2 runs through box 3
+
+    def test_candidate_thinning_keeps_the_cheapest_and_is_deterministic(self):
+        import numpy as np
+
+        cost = np.random.RandomState(3).uniform(0, 100, 2000)
+        k1, k2 = DL._thin(cost), DL._thin(cost)
+        self.assertTrue((k1 == k2).all())
+        self.assertLessEqual(len(k1), DL.KEEP_NEAR + DL.KEEP_SPREAD)
+        self.assertEqual(set(np.argsort(cost)[: DL.KEEP_NEAR]) - set(k1), set())
+
+    def test_the_layout_leaves_no_conflict_on_the_test_page_and_reports_it(self):
+        rep = DL.layout(self.page)
+        self.assertIsNotNone(rep["resid"])
+        self.assertEqual((rep["resid"]["overlaps"], rep["resid"]["leader_over_box"], rep["resid"]["crossings"]), (0, 0, 0))
+
+    def test_a_pinned_annotation_is_a_fixed_obstacle_for_the_assignment(self):
+        boxes = DL.annotationBoxes(self.page)
+        o = [x for x in self.doc.Objects if "PmiRole" in x.PropertiesList and x.PmiRole == "dimension"][0]
+        o.X = o.X.Value + 3.0
+        self.doc.recompute()
+        DL.layout(self.page)
+        after = DL.annotationBoxes(self.page)
+        pinned = after[o.Name]
+        for n, b in after.items():
+            if n != o.Name:
+                self.assertFalse(overlap(b, pinned), (n, b, pinned))
