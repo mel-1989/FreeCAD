@@ -47,7 +47,7 @@ BUBBLE_GAP = 1.5  # between two bubbles (mm)
 LEADER_GAP = 0.4  # two leaders closer than this count as crossing (mm)
 RING_FIRST = 5.0  # first ring: bubble edge this far from the view box (mm)
 RING_STEP = 8.0
-MAX_CENTRE_DIST = 38.0  # bubble centres stay within 40 mm of the view box
+MAX_CENTRE_DIST = 35.0  # bubble centres stay within 40 mm of the view box
 SLOT_STEP = 5.0
 MAX_CANDS = 120
 PENALTY = 1000.0
@@ -318,30 +318,40 @@ class SegGrid:
 TIERS = ((0.03, 1.0), (0.03, 0.3), (0.1, 0.15), (0.3, 0.06))
 
 
-def anchor_candidates(vis_polys, grid, nrows, own_polys=None):
-    """-> per row a list of (x, y, quality) on visible edges, best tier only; quality is the tier index (lower is better)."""
-    tiers = [[[] for _ in TIERS] for _ in range(nrows)]
-    for pl in vis_polys:
-        total = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pl[:-1], pl[1:]))
-        if total <= 2 * SKIP_EDGE_END:
-            continue
-        n = max(1, int(total // CAND_STEP))
-        pts = _resample(pl, [(k + 0.5) * total / n for k in range(n)])
-        for (x, y) in pts:
-            d = grid.row_dists(x, y)
-            if not d:
-                continue
-            own = min(d, key=d.get)
-            od = d[own]
-            other = min((v for k, v in d.items() if k != own), default=1e9)
-            for ti, (own_max, lead) in enumerate(TIERS):
-                if od <= own_max and other - od >= lead:
-                    tiers[own][ti].append((x, y, ti))
-                    break
+# a sample on the row's own projected edge counts as on a visible edge when this close (clear), or this close (fallback)
+VIS_CLEAR, VIS_NEAR = 0.1, 0.3
+
+
+def anchor_candidates(vis_polys, grid, nrows, own_polys):
+    """-> per row a list of (x, y, quality) on the row's own projected edges that lie on a visible edge and that no other row shares.
+
+    The points come from the components' own projection, sampled at fixed arc lengths, so they are the same in every process;
+    the view's visible edges (whose discretisation differs by a few hundredths of a millimetre between the GUI and a headless
+    run) only filter them, with a gap between "clearly on" and "not on" so a sample is not decided by that noise.  Quality is
+    the tier index (lower is better)."""
+    visgrid = SegGrid({0: vis_polys})
     out = []
     for row in range(nrows):
-        pick = next((t for t in tiers[row] if t), [])
-        if not pick and own_polys is not None:
+        clear = [[] for _ in TIERS]
+        near = [[] for _ in TIERS]
+        for pl in own_polys.get(row, []):
+            total = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pl[:-1], pl[1:]))
+            if total <= 2 * SKIP_EDGE_END:
+                continue
+            n = max(1, int(total // CAND_STEP))
+            for (x, y) in _resample(pl, [(k + 0.5) * total / n for k in range(n)]):
+                vd = visgrid.row_dists(x, y).get(0)
+                if vd is None or vd > VIS_NEAR:
+                    continue
+                d = grid.row_dists(x, y)
+                od = d.get(row, 1e9)
+                other = min((v for k, v in d.items() if k != row), default=1e9)
+                for ti, (own_max, lead) in enumerate(TIERS):
+                    if od <= own_max and other - od >= lead:
+                        (clear if vd <= VIS_CLEAR else near)[ti].append((x, y, ti))
+                        break
+        pick = next((t for t in clear if t), None) or next((t for t in near if t), None)
+        if not pick:
             pick = _hidden_candidates(row, own_polys.get(row, []), grid)
         out.append(pick)
     return out
@@ -709,8 +719,10 @@ class BalloonDriver:
         try:
             gc = view.getGeometricCenter()
             parts.append("%.4f,%.4f,%.4f" % (gc.x, gc.y, gc.z))
-            bb = [e.BoundBox for e in view.getVisibleEdges(True)]
-            parts.append("%d:%.2f,%.2f,%.2f,%.2f" % (len(bb), min([b.XMin for b in bb] or [0]), min([b.YMin for b in bb] or [0]), max([b.XMax for b in bb] or [0]), max([b.YMax for b in bb] or [0])))
+            ve = view.getVisibleEdges(True)
+            bb = [e.BoundBox for e in ve]
+            parts.append("%d:%.3f:%.2f,%.2f,%.2f,%.2f" % (len(bb), sum(e.Length for e in ve), min([b.XMin for b in bb] or [0]), min([b.YMin for b in bb] or [0]), max([b.XMax for b in bb] or [0]), max([b.YMax for b in bb] or [0])))
+            parts.append("%x" % (hash(tuple((round(b.XMin, 3), round(b.YMin, 3), round(b.XMax, 3), round(b.YMax, 3)) for b in bb)) & 0xFFFFFFFF))
         except Exception:
             parts.append("novis")
         for r in rows:
@@ -763,6 +775,7 @@ class BalloonDriver:
         # A balloon added or changed in the middle of a recompute may be touched again by the view's second pass, and a
         # document recomputes each object at most twice; the observer below settles whatever is left once the recompute ends.
         _arm(doc)
+        _SETTLE.poll(doc)
 
     def _new_balloon(self, drv, page, view, key):
         doc = drv.Document
@@ -797,7 +810,7 @@ class BalloonDriver:
         ally = [p[1] for pl in vis for p in pl]
         # the GUI's hidden line removal and the headless one differ by a few hundredths of a millimetre: snap the inputs so both
         # place the same way
-        box = (math.floor(min(allx)) + vx, math.floor(min(ally)) + vy, math.ceil(max(allx)) + vx, math.ceil(max(ally)) + vy)
+        box = (math.floor(min(allx) / 2) * 2 + vx, math.floor(min(ally) / 2) * 2 + vy, math.ceil(max(allx) / 2) * 2 + vx, math.ceil(max(ally) / 2) * 2 + vy)
         centre = (0.5 * (box[0] + box[2]), 0.5 * (box[1] + box[3]))
         area, title = PL.page_areas(page)
         rects = table_rects(page) + ([tuple(title)] if title else [])
@@ -845,19 +858,36 @@ class _Settle:
     def __init__(self):
         self.docs = set()  # Uid of the documents that hold a driver
         self.pending = set()  # names of documents with a re-placement scheduled
+        self.timers, self.ticks = {}, {}
         self.doomed = {}  # Uid -> names of balloons whose row is gone
 
-    def slotRecomputedObject(self, obj):
-        # In the GUI a view finds its edges in a worker thread: its balloons are recomputed when that ends
-        # (DrawViewPart::postHlrTasks), which is the moment the geometry the driver needs is new.  Place again then.
-        if not App.GuiUp or obj.TypeId != "TechDraw::DrawViewBalloon" or not getattr(obj, DRIVER_PROP, ""):
+    def poll(self, doc):
+        """GUI only: a view's edges arrive from a worker thread after the recompute, and no signal says when (the document
+        signals of a recompute do not fire for it).  Watch the document for a while and place again once the geometry the
+        balloons were placed against is no longer the view's."""
+        if not App.GuiUp:
             return
-        doc = obj.Document
-        if doc.Uid in self.docs and doc.Name not in self.pending:
-            self.pending.add(doc.Name)
-            from PySide import QtCore
+        from PySide import QtCore
 
-            QtCore.QTimer.singleShot(30, lambda name=doc.Name: self._replace(name))
+        name = doc.Name
+        if name in self.timers:
+            self.ticks[name] = 0
+            return
+        t = QtCore.QTimer()
+        t.setInterval(100)
+        self.timers[name] = t
+        self.ticks[name] = 0
+
+        def tick():
+            self.ticks[name] = self.ticks.get(name, 0) + 1
+            if self.ticks[name] > 150 or name not in App.listDocuments():
+                t.stop()
+                self.timers.pop(name, None)
+                return
+            self._replace(name)
+
+        t.timeout.connect(tick)
+        t.start()
 
     def _replace(self, name):
         self.pending.discard(name)
