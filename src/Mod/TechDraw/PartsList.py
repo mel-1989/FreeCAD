@@ -220,7 +220,7 @@ class PartsListFit:
     def __init__(self, obj):
         obj.Proxy = self
         add = obj.addProperty
-        add("App::PropertyLink", "Source", "PartsList", "The bill of materials sheet")
+        add("App::PropertyLinkGlobal", "Source", "PartsList", "The bill of materials sheet")
         add("App::PropertyString", "CellEnd", "PartsList", "Last cell of the table (read by the view)")
         add("App::PropertyInteger", "Rows", "PartsList", "Rows of the table, header included")
         add("App::PropertyInteger", "Columns", "PartsList", "Columns of the table")
