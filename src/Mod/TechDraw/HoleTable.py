@@ -919,9 +919,9 @@ class _Plan:
             if _pen(r, b):
                 out.append("%s over %s" % (t, n))
         if any(r[0] < c[0] < r[2] and r[1] < c[1] < r[3] for c in self.cs):
-            out.append("%s covers a hole centre" % t)
+            out.append("%s covers a %s centre" % (t, self.items[i].get("noun", "hole")))
         if tag_reach(centre, tip) > self.limit - 0.001:
-            out.append("%s more than %g mm from its hole" % (t, self.limit))
+            out.append("%s more than %g mm from %s" % (t, self.limit, self.items[i].get("of", "its hole")))
         return out
 
     def pair(self, i, j):

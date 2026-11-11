@@ -449,6 +449,8 @@ class BendTableTest(unittest.TestCase):
         self.assertEqual([v.TypeId for v in b.page.Views], ["TechDraw::DrawViewPart"])
         b.doc.redo()
         self.assertEqual(len(b.view.CosmeticEdges), 2)
+        b.doc.recompute()
+        self.assertEqual(len(b.view.CosmeticEdges), 2)
 
     def test_save_and_reopen(self):
         for prefix in ("g16", "g05", "g20", "g11"):
@@ -475,6 +477,54 @@ class BendTableTest(unittest.TestCase):
             self.assertEqual(b.snapshot()["lines"], got, prefix)
             self.assertEqual(len(cosmetics(b.view)), len(got), prefix)
             self.assertEqual(len(table_rows(b.table)), len(b.bends()[0]), prefix)
+
+    def test_warning_wording_names_bends(self):
+        item = {"tag": "B1", "c": (100.0, 100.0), "R": 0.0, "tips": [(100.0, 100.0)], "noun": "bend line", "of": "its bend"}
+        area = (25.0, 25.0, 280.0, 190.0)
+        far = [((100.0 + 20.1, 100.0), (100.0, 100.0))]
+        self.assertEqual(HT.tag_conflicts([item], far, area, [], 20.0), ["B1 more than 20 mm from its bend"])
+        cover = [((101.0, 100.0), (100.0, 100.0))]
+        self.assertIn("B1 covers a bend line centre", HT.tag_conflicts([item], cover, area, [], 100.0))
+        # and the driver hands the placer items with those words
+        b = self.build("g16", table=False)
+        seen = []
+        real = HT.plan_tags
+        HT.plan_tags = lambda items, *a, **k: (seen.extend(items), real(items, *a, **k))[1]
+        try:
+            BT.make(b.page, b.view)
+        finally:
+            HT.plan_tags = real
+        self.assertTrue(seen)
+        self.assertTrue(all(i["noun"] == "bend line" and i["of"] == "its bend" for i in seen))
+        hole = dict(item, tag="A1")
+        del hole["noun"], hole["of"]
+        self.assertEqual(HT.tag_conflicts([hole], far, area, [], 20.0), ["A1 more than 20 mm from its hole"])
+
+    def test_undo_and_redo_leave_exactly_the_bend_lines(self):
+        for prefix, edit in (("g16", ("Unfold", "KFactor", 0.5)), ("g05", ("Base_", "Radius", 2.0))):
+            b = self.build(prefix)
+            n = len(b.expected_lines())
+            user = b.view.makeCosmeticLine(V(1, 1, 0), V(5, 5, 0), 1, 0.35, (0.0, 0.0, 1.0, 1.0), UP_LINE)  # a user's blue line with a bend's line number
+            b.doc.recompute()
+            self.assertEqual(len(b.view.CosmeticEdges), n + 1)
+            before = b.snapshot()
+            b.doc.openTransaction("edit")
+            setattr(b.obj(edit[0], edit[1]), edit[1], edit[2])
+            b.doc.recompute()
+            b.doc.commitTransaction()
+            edited = b.snapshot()
+            self.assertEqual(len(b.view.CosmeticEdges), n + 1, prefix)
+            b.doc.undo()
+            b.doc.recompute()
+            self.assertEqual(b.snapshot(), before, prefix)
+            self.assertEqual(len(b.view.CosmeticEdges), n + 1, prefix)
+            b.doc.redo()
+            b.doc.recompute()
+            self.assertEqual(b.snapshot(), edited, prefix)
+            self.assertEqual(len(b.view.CosmeticEdges), n + 1, prefix)
+            self.assertTrue(any(ce.Tag == user for ce in b.view.CosmeticEdges), prefix)  # the user's line survives every step
+            b.close()
+            self.built.remove(b)
 
     # -- a hole table on the same page --------------------------------------------------------
 

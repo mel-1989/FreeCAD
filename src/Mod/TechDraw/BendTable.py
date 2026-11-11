@@ -44,7 +44,7 @@ LINE_NUMBERS = tuple(LINE_NUMBER.values())
 LONG_TABLE = 30  # more bends than this: all are listed and the table says it is long
 ORDER_MM = 0.1  # rows and tags are ordered on midpoints rounded to this
 LINE_TOL = 1e-6  # a cosmetic line is the one drawn earlier when its ends lie this close
-LINE_WEIGHT = 0.35
+LINE_WEIGHT = 0.351  # a weight of its own: with the line number and colour it marks the driver's lines, which an undo of the view's cosmetics can leave behind
 LINE_COLOR = (0.0, 0.0, 0.0, 1.0)
 DEG = "°"
 
@@ -131,6 +131,15 @@ def _lines_wanted(bends):
     return [(a[0], a[1], e[0], e[1], LINE_NUMBER[b["dir"]]) for b in bends for a, e in b["lines"]]
 
 
+def _marked(ce):
+    """True for a line in the driver's own style: a bend line number, its weight and its colour (a user's line differs in at least one)."""
+    try:
+        f = ce.Format
+        return _line_number(ce) in LINE_NUMBERS and abs(float(f["weight"]) - LINE_WEIGHT) < 1e-6 and tuple(round(c, 3) for c in f["color"]) == LINE_COLOR
+    except Exception:
+        return False
+
+
 def _own_edges(view, drawn):
     """The cosmetic edges of ``view`` that are the bend lines drawn earlier: found by geometry (and line number), in list order.
 
@@ -141,6 +150,9 @@ def _own_edges(view, drawn):
     out = []
     for ce in view.CosmeticEdges:
         cur = (ce.Start.x, ce.Start.y, ce.End.x, ce.End.y, _line_number(ce))
+        if _marked(ce):
+            out.append(ce)
+            continue
         for i, d in enumerate(left):
             if _same(cur, d):
                 out.append(ce)
@@ -155,9 +167,18 @@ def update_lines(view, drawn, wanted):
     now = [(ce.Start.x, ce.Start.y, ce.End.x, ce.End.y, _line_number(ce)) for ce in own]
     if len(now) == len(wanted) == len(drawn) and all(_same(a, b) for a, b in zip(now, wanted)):
         return False
-    for ce in own:
+    # lines that stay are moved in place (removing and adding them in the same transaction as an edit crashed the view's recompute
+    # after an undo); only a difference in their number adds or removes any
+    for ce, (x1, y1, x2, y2, ln) in zip(own, wanted):
+        live = view.getCosmeticEdge(ce.Tag)
+        if (ce.Start - Vector(x1, y1, 0)).Length > LINE_TOL or (ce.End - Vector(x2, y2, 0)).Length > LINE_TOL:
+            live.Start = Vector(x1, y1, 0)
+            live.End = Vector(x2, y2, 0)
+        if _line_number(ce) != ln or not _marked(ce):
+            live.Format = {"style": 1, "weight": LINE_WEIGHT, "color": LINE_COLOR, "visible": True, "lineNumber": ln}
+    for ce in own[len(wanted) :]:
         view.removeCosmeticEdge(ce.Tag)
-    for x1, y1, x2, y2, ln in wanted:
+    for x1, y1, x2, y2, ln in wanted[len(own) :]:
         view.makeCosmeticLine(Vector(x1, y1, 0), Vector(x2, y2, 0), 1, LINE_WEIGHT, LINE_COLOR, ln)
     return True
 
@@ -236,7 +257,7 @@ class BendTableDriver(HT.HoleTableDriver):
         for b in bends:
             t = b["tagobj"]
             c = (HT.r3(vx + b["p"][0] * S), HT.r3(vy + b["p"][1] * S))
-            it = {"tag": b["tag"], "c": c, "R": 0.0, "tips": [c]}
+            it = {"tag": b["tag"], "c": c, "R": 0.0, "tips": [c], "noun": "bend line", "of": "its bend"}  # the words the placer's faults use
             if t.HoleSize and self._moved(t):  # a tag the user moved stays where it is
                 it["fixed"] = (HT.r3(vx + HT._num(t.X) * S), HT.r3(vy + HT._num(t.Y) * S - HT.TAG_ANCHOR_MM))
             items.append(it)
