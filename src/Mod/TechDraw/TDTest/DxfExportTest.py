@@ -714,6 +714,41 @@ class DxfExportTest(unittest.TestCase):
     def test_standard_argument_validated(self):
         with self.assertRaises(ValueError):
             DX.write(self.page, os.path.join(self.tmp, "bad.dxf"), "DIN")
+        with self.assertRaises(ValueError):  # not a string either (run 095 verifier: was AttributeError)
+            DX.write(self.page, os.path.join(self.tmp, "bad.dxf"), 5)
+
+    def test_dimension_block_mtext_has_no_group_50(self):
+        # libredwg's dxf2dwg rejects group 50 on MTEXT; rotation goes in the text direction (run 095 verifier)
+        for e in self.msp("DIMENSIONS", "DIMENSION"):
+            for x in self.dxf.blocks.get(e.dxf.geometry):
+                if x.dxftype() == "MTEXT":
+                    self.assertFalse(x.dxf.hasattr("rotation"), e.dxf.text)
+        for x in self.msp(kind="MTEXT"):
+            self.assertFalse(x.dxf.hasattr("rotation"))
+
+    def test_view_without_shape_is_named(self):
+        doc = App.newDocument("DxfNoShape")
+        try:
+            page = createPageWithSVGTemplate(doc)
+            v = doc.addObject("TechDraw::DrawViewPart", "Empty")
+            page.addView(v)
+            doc.recompute()
+            rep = DX.write(page, os.path.join(self.tmp, "noshape.dxf"), "ISO")
+            self.assertIn("Empty", [s["name"] for s in rep["skipped"]])
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_page_without_template_writes(self):
+        doc = App.newDocument("DxfNoTemplate")
+        try:
+            page = doc.addObject("TechDraw::DrawPage", "Page")
+            doc.recompute()
+            path = os.path.join(self.tmp, "notemplate.dxf")
+            DX.write(page, path, "ISO")
+            d = self.ezdxf.readfile(path)
+            self.assertEqual(len(d.audit().errors), 0)
+        finally:
+            App.closeDocument(doc.Name)
 
     def test_default_standard_follows_the_preference(self):
         fake = mock.Mock()

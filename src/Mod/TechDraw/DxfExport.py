@@ -595,6 +595,9 @@ def _view_edges(run, msp, types, view, off, dedupe):
     """Visible, hidden, cosmetic and centre-line edges of a DrawViewPart."""
     vis = list(view.getVisibleEdges(True))
     hid = list(view.getHiddenEdges(True))
+    if not vis and not hid:  # never silent: a view with no source shape or an empty projection draws nothing
+        run.skip(view, "view has no edges to write (no source shape or an empty projection)")
+        return
     cosmetic = list(view.CosmeticEdges)
     centers = list(view.CenterLines)
     n_cos = len([c for c in cosmetic if c.Format.get("visible", True)])
@@ -722,6 +725,7 @@ def _write_dimension(run, msp, dim, group_of):
     try:
         ov = _dim_entity(run, msp, dim, off, text, text_loc, {"layer": "DIMENSIONS"}, override)
         ov.render()
+        _mtext_direction(msp.doc.blocks.get(ov.dimension.dxf.geometry))
         if getattr(ov, "aligned", False):  # ezdxf builds an aligned dimension as type 0 plus the line's angle; the type is the DXF one
             ov.dimension.dxf.dimtype = (ov.dimension.dxf.dimtype & ~7) | 1
     except Exception as ex:  # a dimension ezdxf cannot build is named, not lost
@@ -801,6 +805,27 @@ SKIP_REASONS = (
 )
 
 
+def _mtext_direction(block):
+    """Rotated MTEXT inside a rendered dimension block carries its rotation as a text direction (group 11), not group 50,
+    as the annotations do: both are valid DXF, and libredwg's dxf2dwg rejects group 50 on MTEXT (run 095 verifier)."""
+    if block is None:
+        return
+    for e in block:
+        if e.dxftype() == "MTEXT" and e.dxf.hasattr("rotation"):
+            rad = math.radians(e.dxf.rotation)
+            e.dxf.discard("rotation")
+            if abs(rad) > 1e-12:
+                e.dxf.text_direction = (math.cos(rad), math.sin(rad), 0.0)
+
+
+def _page_size(page):
+    """The sheet's width and height in mm, or None for a page without a usable template."""
+    try:
+        return _val(page.PageWidth), _val(page.PageHeight)
+    except Exception:
+        return None
+
+
 def _classify(run, msp, types, views, group_of):
     dedupe_by_view = {}
     names = {v.Name for v in views}
@@ -865,12 +890,15 @@ def _extents(doc, msp, page):
         lo = (lo.x - EXTENTS_MARGIN, lo.y - EXTENTS_MARGIN, 0.0)
         hi = (hi.x + EXTENTS_MARGIN, hi.y + EXTENTS_MARGIN, 0.0)
     else:
-        lo, hi = (0.0, 0.0, 0.0), (_val(page.PageWidth), _val(page.PageHeight), 0.0)
+        size = _page_size(page) or (0.0, 0.0)
+        lo, hi = (0.0, 0.0, 0.0), (size[0], size[1], 0.0)
     if lo == (0.0, 0.0, 0.0):  # ezdxf treats an extmin of exactly (0, 0, 0) as unset
         lo = (-1e-6, -1e-6, 0.0)
     msp.reset_extents(lo, hi)
-    msp.dxf.limmin = (0.0, 0.0)
-    msp.dxf.limmax = (_val(page.PageWidth), _val(page.PageHeight))
+    size = _page_size(page)
+    if size is not None:
+        msp.dxf.limmin = (0.0, 0.0)
+        msp.dxf.limmax = size
 
 
 def _warn(msg):
@@ -882,7 +910,7 @@ def write(page, path, standard=None):
     objects not written, each with ``name`` and ``reason``)."""
     import ezdxf
 
-    std = (standard or line_standard()).upper()
+    std = str(standard or line_standard()).upper()
     if std not in CSV_FILES:
         raise ValueError("standard must be one of ISO, ANSI, ASME, not %r" % standard)
     run = _Run(page, std)
