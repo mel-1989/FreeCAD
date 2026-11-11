@@ -292,6 +292,12 @@ class SheetSetTest(unittest.TestCase):
         self.assertEqual(m2.texts(m2.pages[0])["MATERIALMARK"], STEEL[1])
         self.assertEqual(m2.untouched(), [])
 
+    def test_chinese_craftsman_cell_is_not_the_author(self):
+        m = self.corpus(["cn", "cn"])
+        for p in m.pages:
+            self.assertEqual(m.texts(p)["CRAFTS_NAME"], m.before[p.Name]["CRAFTS_NAME"])
+            self.assertEqual(m.texts(p)["AUTHOR_NAME"], "Max")
+
     def test_default_material_is_no_material(self):
         m = self.corpus(["cn", "gost", "iso"], material=None)
         self.assertEqual(m.box.ShapeMaterial.Name, "Default")
@@ -451,6 +457,27 @@ class SheetSetTest(unittest.TestCase):
         m.doc.recompute()
         self.assertEqual([m.texts(p)["creator"] for p in m.pages], ["Same"] * 3)
         self.assertNotIn("creator", SS.warning_of(m.set))
+
+    def test_edit_of_a_field_nobody_wrote_is_adopted_and_conflicts_name_the_key(self):
+        # document_type and general_tolerances have no value in the set, so the driver never wrote them: a typed value is still an edit
+        m = self.corpus(["iso"] * 4)
+        self.assertEqual(m.set.State, ["Up-to-date"])  # the driver's own bookkeeping must not hide FreeCAD's State
+        self.type_into(m.pages[1], document_type="Assembly")
+        m.doc.recompute()
+        self.assertEqual([m.texts(p)["document_type"] for p in m.pages], ["Assembly"] * 4)
+        self.assertEqual(m.set.Fields["document_type"], "Assembly")
+        self.type_into(m.pages[3], general_tolerances="ISO 2768-c")
+        self.type_into(m.pages[2], general_tolerances="ISO 2768-f")
+        m.doc.recompute()
+        self.assertEqual([m.texts(p)["general_tolerances"] for p in m.pages], ["ISO 2768-f"] * 4)
+        w = SS.warning_of(m.set)
+        self.assertIn(m.pages[3].Label, w)
+        self.assertIn("general_tolerances", w)
+        # GOST checker typed on the last sheet
+        g = self.corpus(["gost", "gost", "gost"])
+        self.type_into(g.pages[2], Утвердил="С. Иванов")
+        g.doc.recompute()
+        self.assertEqual([g.texts(p)["Утвердил"] for p in g.pages], ["С. Иванов"] * 3)
 
     def test_a_template_reset_is_not_a_user_edit(self):
         m = self.corpus(["iso", "iso"])

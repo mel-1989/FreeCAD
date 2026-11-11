@@ -282,7 +282,7 @@ App.addDocumentObserver(_WATCH)
 
 def _load_state(obj):
     try:
-        s = json.loads(obj.State) if obj.State else {}
+        s = json.loads(obj.Memo) if obj.Memo else {}
     except ValueError:
         s = {}
     for k, v in (("date", ""), ("written", {}), ("pinned", {}), ("file", {}), ("conflicts", [])):
@@ -304,8 +304,8 @@ class SheetSetDriver:
         add("App::PropertyLink", "Source", "SheetSet", "The model object whose material, weight and PartNumber the title blocks show")
         add("App::PropertyMap", "Fields", "SheetSet", "Canonical field name to value; a field set here overrides its default")
         add("App::PropertyString", "Warning", "SheetSet", "What the set could not do or keeps as the user left it, or empty")
-        add("App::PropertyString", "State", "SheetSet", "What the driver last wrote per sheet and key, pinned fields, the set's date (JSON)")
-        obj.setEditorMode("State", 2)
+        add("App::PropertyString", "Memo", "SheetSet", "What the driver last wrote per sheet and key, pinned fields, the set's date (JSON)")
+        obj.setEditorMode("Memo", 2)
 
     def dumps(self):
         return None
@@ -428,6 +428,7 @@ class SheetSetDriver:
                 else:
                     v = shared.get(c)
                 if v is None:
+                    wr.setdefault(k, cur.get(k))  # left as found, but a later change by the user is still an edit
                     continue
                 new[k] = v
                 wr[k] = v
@@ -440,8 +441,8 @@ class SheetSetDriver:
         if obj.Warning != text:
             obj.Warning = text
         js = json.dumps(state, sort_keys=True)
-        if obj.State != js:
-            obj.State = js
+        if obj.Memo != js:
+            obj.Memo = js
 
 
 # ------------------------------------------------------------------------------------------------
@@ -472,7 +473,7 @@ def make(doc, pages=None, source=None, fields=None):
         drv.Fields = {str(k): str(v) for k, v in (fields or {}).items()}
         st = _load_state(drv)
         st["date"] = datetime.date.today().isoformat()  # the day the set was made, kept: never the clock at a later recompute
-        drv.State = json.dumps(st, sort_keys=True)
+        drv.Memo = json.dumps(st, sort_keys=True)
         _settle(doc, drv)
     except Exception:
         HT.fail(doc, own)
@@ -570,7 +571,7 @@ def unpin(sset, page, name):
             for k, c in kmap.items():
                 if c == name:
                     wr.pop(k, None)  # the typed value is the new baseline, not an edit
-            sset.State = json.dumps(st, sort_keys=True)
+            sset.Memo = json.dumps(st, sort_keys=True)
         _settle(doc, sset)
     except Exception:
         HT.fail(doc, own)
