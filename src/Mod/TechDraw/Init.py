@@ -26,3 +26,21 @@
 # FreeCAD init script of the TechDraw module
 
 FreeCAD.__unit_test__ += ["TestTechDrawApp", "TestTechDrawPmi"]
+
+
+# G04 slice 5a: a dimension-set driver (DimChain.py) that stable FreeCAD re-saved comes back without its Proxy; give it back when
+# the Proxy property is restored.  The module is imported only when such a feature is met.
+class _DimChainRehome:
+    def slotChangedObject(self, obj, prop):
+        if prop != "Proxy":
+            return
+        try:
+            if obj.TypeId == "App::FeaturePython" and obj.Proxy is None and "Vertices" in obj.PropertiesList and obj.getGroupOfProperty("Vertices") == "DimChain":
+                import DimChain
+
+                DimChain.reattach(obj)
+        except Exception:
+            pass
+
+
+FreeCAD.addDocumentObserver(_DimChainRehome())
