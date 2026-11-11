@@ -818,6 +818,21 @@ def _mtext_direction(block):
                 e.dxf.text_direction = (math.cos(rad), math.sin(rad), 0.0)
 
 
+_ANG3P_16 = re.compile(r"(AcDb3PointAngularDimension\n(?: 1[345]\n[^\n]*\n 2[345]\n[^\n]*\n 3[345]\n[^\n]*\n)+) 16\n[^\n]*\n 26\n[^\n]*\n 36\n[^\n]*\n")
+
+
+def _drop_3p_arc_point(path):
+    """The AutoCAD DXF Reference gives a 3-point angular dimension (AcDb3PointAngularDimension) the groups 13, 14 and 15,
+    and the arc point 16 only to the 2-line angular one; ezdxf always writes 16 on both, and libredwg's dxf2dwg rejects
+    it on the 3-point one (run 095). The arc's location stays in group 10."""
+    with open(path, encoding="utf-8", newline="") as f:
+        text = f.read()
+    new = _ANG3P_16.sub(r"\1", text)
+    if new != text:
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(new)
+
+
 def _page_size(page):
     """The sheet's width and height in mm, or None for a page without a usable template."""
     try:
@@ -927,6 +942,7 @@ def write(page, path, standard=None):
         _order_classes(doc)
         tmp = str(path) + ".tmp"
         doc.saveas(tmp)
+        _drop_3p_arc_point(tmp)
         os.replace(tmp, str(path))
     finally:
         ezdxf.options.write_fixed_meta_data_for_testing = previous

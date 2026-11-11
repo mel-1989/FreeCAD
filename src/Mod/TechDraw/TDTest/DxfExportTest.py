@@ -725,6 +725,9 @@ class DxfExportTest(unittest.TestCase):
                     self.assertFalse(x.dxf.hasattr("rotation"), e.dxf.text)
         for x in self.msp(kind="MTEXT"):
             self.assertFalse(x.dxf.hasattr("rotation"))
+        for e in self.msp("DIMENSIONS", "DIMENSION"):
+            if e.dxf.dimtype & 7 == 5:  # 3-point angular: no group 16 (2-line angular only)
+                self.assertFalse(e.dxf.hasattr("defpoint5"))
 
     def test_view_without_shape_is_named(self):
         doc = App.newDocument("DxfNoShape")
