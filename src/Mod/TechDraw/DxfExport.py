@@ -39,6 +39,7 @@ Y14.2 element and line definitions, ``LineGroup.csv`` widths) and FreeCAD's stoc
 """
 
 import codecs
+import errno
 import html.parser
 import math
 import os
@@ -47,17 +48,10 @@ import re
 import FreeCAD as App
 
 LAYERS = ("VISIBLE", "HIDDEN", "CENTER", "COSMETIC", "DIMENSIONS", "TEXT")
-STANDARDS = ("ANSI", "ISO", "ASME")  # index = the LineStandard preference value
 TEXT_STYLE = "TECHDRAW"
 DIM_STYLE = "TECHDRAW"
 VALID_LINEWEIGHTS = (0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211)
-CSV_FILES = {
-    "ISO": "ISO.128.20.1996",
-    "ANSI": "ANSI.Y14.2M.1992",
-    "ASME": "ASME.Y14.2.2008",
-}
-HIDDEN_LINE = {"ISO": 2, "ANSI": 2, "ASME": 2}
-CENTER_LINE = {"ISO": 4, "ANSI": 3, "ASME": 4}
+HIDDEN_LINE = 2  # the hidden line's number in every standard's LineDef file
 DUP_TOL = 1e-6
 SPLINE_TOL = 0.002  # discretisation deflection, well inside the 0.01 mm the brief allows
 SMOOTH_NOTE = "smooth, seam and iso edges are not separable in Python and are written to VISIBLE or HIDDEN with the other edges"
@@ -76,14 +70,44 @@ def layered_enabled():
     return _group("General").GetBool("LayeredDxf", True)
 
 
-def line_standard():
-    """-> "ANSI", "ISO" or "ASME" from the Standards/LineStandard preference."""
-    index = _group("Standards").GetInt("LineStandard", 1)
-    return STANDARDS[index] if 0 <= index < len(STANDARDS) else "ISO"
-
-
 def _resource_dir():
     return os.path.join(App.getResourceDir(), "Mod", "TechDraw", "LineGroup")
+
+
+def standard_files():
+    """-> the standards' file stems, sorted as ``LineGenerator::getAvailableLineStandards`` lists them: the names of the
+    ``*.LineDef.csv`` files in ``Mod/TechDraw/LineGroup`` without that suffix (index = the ``LineStandard`` preference)."""
+    suffix = ".LineDef.csv"
+    try:
+        names = os.listdir(_resource_dir())
+    except OSError:
+        names = []
+    return sorted(n[: -len(suffix)] for n in names if n.endswith(suffix))
+
+
+def standard_body(stem):
+    """"ISO.128.20.1996" -> "ISO": the body name that TechDraw tests (``ANSI`` is the one non-proportional standard)."""
+    return stem.split(".")[0].upper()
+
+
+def standard_names():
+    """-> {body name: file stem} of the standards found."""
+    return {standard_body(s): s for s in standard_files()}
+
+
+def line_standard():
+    """-> the body name (``"ANSI"``, ``"ASME"``, ``"ISO"``) of the standard at the ``LineStandard`` preference index into
+    ``standard_files()``; index 1 (ASME) when unset or out of range (ruling 84)."""
+    stems = standard_files()
+    index = _group("Standards").GetInt("LineStandard", 1)
+    if not 0 <= index < len(stems):
+        index = 1
+    return standard_body(stems[index])
+
+
+def center_line_number():
+    """TechDraw's number for a new centre line: the ``LineStyleCenter`` preference (default 4) plus one (Preferences.cpp)."""
+    return _group("Decorations").GetInt("LineStyleCenter", 4) + 1
 
 
 def _csv_rows(path):
@@ -121,7 +145,7 @@ def load_line_group():
 
 def load_standard(std):
     """-> (elements {name: length}, lines {number: (name, [element names] | None | "noline")}) from the CSV files."""
-    base = os.path.join(_resource_dir(), CSV_FILES[std])
+    base = os.path.join(_resource_dir(), standard_names()[std])
     elements = {}
     for row in _csv_rows(base + ".ElementDef.csv"):
         elements[row[0]] = float(row[1])
@@ -145,8 +169,8 @@ def _clean(x):
 def line_pattern(std, number, width):
     """The DXF dash pattern ``[total, e1, e2, ...]`` of line ``number`` under ``std`` at pen ``width`` mm, or None (continuous).
 
-    Dash and long dash are positive, gap and space negative, a dot a zero-length element; ISO lengths are the CSV's pen-width
-    units times ``width``, ANSI and ASME lengths are the CSV's mm."""
+    Dash and long dash are positive, gap and space negative, a dot a zero-length element; ISO and ASME lengths are the CSV's
+    pen-width numbers times ``width``, ANSI lengths are the CSV's mm (``LineGenerator::getLinePen``, ruling 85)."""
     elements, lines = load_standard(std)
     if number not in lines:
         return None
@@ -155,7 +179,7 @@ def line_pattern(std, number, width):
         return None
     out = []
     for name in els:
-        length = elements[name] * (width if std == "ISO" else 1.0)
+        length = elements[name] * (1.0 if std == "ANSI" else width)
         if name == "Dot":
             out.append(0.0)
         elif name in ("Gap", "Space"):
@@ -188,10 +212,10 @@ class _Types:
             return "CONTINUOUS"
         if els == "noline":
             return None
-        if self.std == "ISO":
-            name = "ISO_%02d_%s" % (number, ("%.3f" % width).rstrip("0").rstrip("."))
-        else:
+        if self.std == "ANSI":
             name = "%s_%02d" % (self.std, number)
+        else:
+            name = "%s_%02d_%s" % (self.std, number, ("%.3f" % width).rstrip("0").rstrip("."))
         if name not in self.doc.linetypes:
             self.doc.linetypes.add(
                 name, pattern=line_pattern(self.std, number, width), description="%s %s" % (self.std, self.lines[number][0])
@@ -391,6 +415,16 @@ def mtext_escape(s):
     return s.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
 
 
+_PERCENT_CODE = re.compile(r"%%[A-Za-z0-9]")
+
+
+def percent_codes(text):
+    """The ``%%x`` codes in ``text``: CAD readers (and FreeCAD's importer) turn ``%%c``, ``%%d``, ``%%p`` into ⌀, ° and ± in
+    any text, and ``\\U+0025`` does not survive ezdxf or FreeCAD (run 096 probe), so such texts are named in the report
+    (ruling 93's fallback) and written as typed."""
+    return _PERCENT_CODE.findall(text)
+
+
 def annotation_lines(view):
     """The lines of a DrawViewAnnotation as the GUI draws them (legacy ``\\x`` escapes decoded as the C++ does)."""
     out = []
@@ -548,6 +582,10 @@ class _Run:
         self.thick = self.group["thick"]
         self.skipped = []
         self.notes = [SMOOTH_NOTE]
+        self.percent = []
+        self.layers = list(LAYERS)
+        self.approximate = []
+        self.template = None
         self.counts = {}
         self.dups = 0
         self.edges = {"VISIBLE": 0, "HIDDEN": 0, "COSMETIC": 0, "CENTER": 0}
@@ -570,8 +608,8 @@ def _new_document(run):
     h["$CELTSCALE"] = 1.0
     h["$LWDISPLAY"] = 1
     types = _Types(doc, run.std, run.thin)
-    hidden = types.name(HIDDEN_LINE[run.std], run.thin) or "CONTINUOUS"
-    center = types.name(CENTER_LINE[run.std], run.thin) or "CONTINUOUS"
+    hidden = types.name(HIDDEN_LINE, run.thin) or "CONTINUOUS"
+    center = types.name(center_line_number(), run.thin) or "CONTINUOUS"
     spec = {
         "VISIBLE": ("CONTINUOUS", run.thick),
         "HIDDEN": (hidden, run.thin),
@@ -633,7 +671,7 @@ def _view_edges(run, msp, types, view, off, dedupe):
                 continue
             attribs["linetype"] = lt
         elif abs(w - run.thin) > 1e-9:
-            lt = types.name(CENTER_LINE[run.std], w)
+            lt = types.name(center_line_number(), w)
             if lt:
                 attribs["linetype"] = lt
         rgb = _rgb(fmt.get("color", (0, 0, 0, 1)))
@@ -794,9 +832,143 @@ def _write_rich(run, msp, view, group_of, view_names):
         run.skip(view, "rich annotation frame is not drawn (the text is written)")
 
 
+def _layer(run, msp, name):
+    """Create the role layer ``name`` (FRAME, TITLE, BALLOONS, LEADERS) on first use; layers appear in order of first use."""
+    doc = msp.doc
+    if name not in doc.layers:
+        doc.layers.add(name, color=7, linetype="CONTINUOUS", lineweight=lineweight(run.thin))
+        run.layers.append(name)
+
+
+def _emit(run, msp, prims, attribs):
+    """Add page-mm primitives (``line``, ``poly`` with optional bulges, ``circle``, ``ellipse``, ``solid``) to ``msp``."""
+    for pr in prims:
+        k = pr[0]
+        if k == "line":
+            e = msp.add_line(pr[1], pr[2], dxfattribs=attribs)
+        elif k == "circle":
+            e = msp.add_circle(pr[1], pr[2], dxfattribs=attribs)
+        elif k == "ellipse":
+            e = msp.add_ellipse(pr[1], major_axis=pr[2], ratio=pr[3], dxfattribs=attribs)
+        elif k == "solid":
+            pts = list(pr[1])
+            e = msp.add_solid(pts if len(pts) == 4 else pts + [pts[-1]], dxfattribs=attribs)
+        else:
+            pts, closed = pr[1], pr[2]
+            if len(pts) == 2 and len(pts[0]) == 2 and not closed:
+                e = msp.add_line(pts[0], pts[1], dxfattribs=attribs)
+            else:
+                e = msp.add_lwpolyline([(p[0], p[1], 0.0, 0.0, p[2] if len(p) > 2 else 0.0) for p in pts], format="xyseb", close=closed, dxfattribs=attribs)
+        run.count(e)
+
+
+def _template_path(tpl):
+    import os as _os
+
+    for prop in ("Template", "PageResult"):
+        path = getattr(tpl, prop, "") or ""
+        if path and _os.path.isfile(path):
+            return path
+    return None
+
+
+def _write_template(run, msp, tpl):
+    """Rulings 87 and 88: the template's frame on FRAME, its text on TITLE."""
+    import DxfTemplate as DT
+
+    path = _template_path(tpl)
+    if path is None:
+        run.skip(tpl, "template file not found (%s)" % (getattr(tpl, "Template", "") or "no file"))
+        return
+    try:
+        flat = DT.flatten_template(path, dict(tpl.EditableTexts))
+    except Exception as ex:  # a template that does not parse is named, the page is still written
+        run.skip(tpl, "template not written: %s: %s" % (type(ex).__name__, ex))
+        return
+    if not flat.shapes and not flat.texts:
+        run.notes.append("template %s is empty: it has no frame or title block to write" % os.path.basename(path))
+        run.template = {"file": os.path.basename(path), "shapes": 0, "texts": 0}
+        return
+    if flat.shapes:
+        _layer(run, msp, "FRAME")
+        _emit(run, msp, flat.shapes, {"layer": "FRAME"})
+    if flat.filled:
+        run.notes.append("template: %d filled shapes are written as their outline, the fill is not" % flat.filled)
+    for kind in sorted(set(flat.unsupported)):
+        run.skip(tpl, "template element <%s> is not written" % kind)
+    from ezdxf.enums import TextEntityAlignment
+
+    align = {"start": TextEntityAlignment.LEFT, "middle": TextEntityAlignment.CENTER, "end": TextEntityAlignment.RIGHT}
+    if flat.texts:
+        _layer(run, msp, "TITLE")
+    for t in flat.texts:
+        attribs = {"layer": "TITLE", "style": TEXT_STYLE, "height": t["height"], "rotation": t["rotation"]}
+        if abs(t["width_factor"] - 1.0) > 1e-9:
+            attribs["width"] = t["width_factor"]
+        e = msp.add_text(t["text"], dxfattribs=attribs)
+        e.set_placement((t["x"], t["y"]), align=align[t["anchor"]])
+        run.count(e)
+        codes = percent_codes(t["text"])
+        if codes:
+            run.percent.append({"name": tpl.Name, "label": tpl.Label, "codes": sorted(set(codes))})
+    run.template = {"file": os.path.basename(path), "shapes": len(flat.shapes), "texts": len(flat.texts)}
+
+
+def _format_attribs(run, msp, layer, fmt):
+    attribs = {"layer": layer, "lineweight": lineweight(fmt["LineWidth"])}
+    rgb = _rgb(fmt["Color"]) if fmt.get("Color") else None
+    if rgb is not None:
+        attribs["true_color"] = rgb
+    return attribs
+
+
+def _write_balloon(run, msp, balloon, group_of, formats):
+    import DxfAnnotations as DA
+
+    src = balloon.SourceView
+    if src is None:
+        run.skip(balloon, "balloon has no source view")
+        return
+    fmt = formats.get(balloon)
+    pos = page_position(src, group_of)
+    prims, centre, approx, _info = DA.balloon_geometry(balloon, pos, fmt)
+    _layer(run, msp, "BALLOONS")
+    attribs = _format_attribs(run, msp, "BALLOONS", fmt)
+    _emit(run, msp, prims, attribs)
+    from ezdxf.enums import MTextEntityAlignment
+
+    text = left_aligned(mtext_escape(balloon.Text))
+    t_attribs = {"layer": "BALLOONS", "style": TEXT_STYLE, "char_height": fmt["Fontsize"]}
+    if "true_color" in attribs:
+        t_attribs["true_color"] = attribs["true_color"]
+    mt = msp.add_mtext(text, dxfattribs=t_attribs)
+    mt.set_location(centre, attachment_point=int(MTextEntityAlignment.MIDDLE_CENTER))
+    run.count(mt)
+    if approx:
+        run.approximate.append({"name": balloon.Name, "label": balloon.Label, "reason": approx})
+
+
+def _write_leader(run, msp, leader, group_of, formats):
+    import DxfAnnotations as DA
+
+    parent = leader.LeaderParent
+    fmt = formats.get(leader)
+    if not fmt["LineVisible"]:
+        run.skip(leader, "leader line is hidden (LineVisible is off)")
+        return
+    if parent is None:  # TechDraw draws nothing for it (ruling 91; the GUI export holds no stroke for it)
+        run.skip(leader, "leader has no parent view (TechDraw draws nothing for it)")
+        return
+    pos = page_position(parent, group_of)
+    prims = DA.leader_geometry(leader, pos)
+    if not prims:
+        run.skip(leader, "leader has fewer than two points")
+        return
+    _layer(run, msp, "LEADERS")
+    _emit(run, msp, prims, _format_attribs(run, msp, "LEADERS", fmt))
+
+
 SKIP_REASONS = (
-    ("TechDraw::DrawViewBalloon", "balloon (bubble and leader) is not written"),
-    ("TechDraw::DrawLeaderLine", "leader line is not written"),
     ("TechDraw::DrawViewSpreadsheet", "table or parts list (spreadsheet view) is not written"),
     ("TechDraw::DrawWeldSymbol", "weld symbol is not written"),
     ("TechDraw::DrawViewClip", "clip group is not written"),
@@ -841,11 +1013,30 @@ def _page_size(page):
         return None
 
 
+def _view_texts(v):
+    if _is(v, "TechDraw::DrawViewAnnotation"):
+        return list(v.Text)
+    if _is(v, "TechDraw::DrawRichAnno"):
+        return [v.AnnoText]
+    if _is(v, "TechDraw::DrawViewDimension"):
+        return [v.getText()]
+    if _is(v, "TechDraw::DrawViewBalloon"):
+        return [v.Text]
+    return []
+
+
 def _classify(run, msp, types, views, group_of):
+    import DxfAnnotations as DA
+
     dedupe_by_view = {}
     names = {v.Name for v in views}
+    formats = DA.GuiFormats(run.page.Document, run.thin)
     for v in views:
         tid = v.TypeId
+        for t in _view_texts(v):
+            codes = percent_codes(t)
+            if codes:
+                run.percent.append({"name": v.Name, "label": v.Label, "codes": sorted(set(codes))})
         if tid == "TechDraw::DrawProjGroup":
             continue
         if _is(v, "TechDraw::DrawViewPart"):
@@ -863,6 +1054,10 @@ def _classify(run, msp, types, views, group_of):
             _write_annotation(run, msp, v)
         elif _is(v, "TechDraw::DrawRichAnno"):
             _write_rich(run, msp, v, group_of, names)
+        elif _is(v, "TechDraw::DrawViewBalloon"):
+            _write_balloon(run, msp, v, group_of, formats)
+        elif _is(v, "TechDraw::DrawLeaderLine"):
+            _write_leader(run, msp, v, group_of, formats)
         else:
             for t, why in SKIP_REASONS:
                 if _is(v, t):
@@ -873,7 +1068,7 @@ def _classify(run, msp, types, views, group_of):
     page = run.page
     tpl = getattr(page, "Template", None)
     if tpl is not None:
-        run.skip(tpl, "template and title block are not written")
+        _write_template(run, msp, tpl)
     for o in page.Document.Objects:
         if o.TypeId in ("TechDraw::DrawHatch", "TechDraw::DrawGeomHatch"):
             src = o.Source
@@ -920,14 +1115,29 @@ def _warn(msg):
     App.Console.PrintWarning(msg + "\n")
 
 
+def _check_target(path):
+    """Ruling 92: refuse a target that cannot be written, with an ``OSError`` that names ``path`` (never the ``.tmp`` file)."""
+    path = str(path)
+    folder = os.path.dirname(os.path.abspath(path))
+    if os.path.isdir(path):
+        raise IsADirectoryError(errno.EISDIR, "the target is a folder", path)
+    if not os.path.isdir(folder):
+        raise FileNotFoundError(errno.ENOENT, "the target's folder does not exist", path)
+    if os.path.lexists(path) and not os.access(path, os.W_OK):
+        raise PermissionError(errno.EACCES, "the target exists and is read-only", path)
+    if not os.access(folder, os.W_OK | os.X_OK):
+        raise PermissionError(errno.EACCES, "the target's folder is not writable", path)
+
+
 def write(page, path, standard=None):
     """Write ``page`` as a layered DXF R2013 file at ``path``; returns the report (a dict, ``report["skipped"]`` the list of
     objects not written, each with ``name`` and ``reason``)."""
     import ezdxf
 
     std = str(standard or line_standard()).upper()
-    if std not in CSV_FILES:
-        raise ValueError("standard must be one of ISO, ANSI, ASME, not %r" % standard)
+    if std not in standard_names():
+        raise ValueError("standard must be one of %s, not %r" % (", ".join(sorted(standard_names())), standard))
+    _check_target(path)
     run = _Run(page, std)
     # A file must be a function of the page alone: fixed dates, GUIDs and metadata, restored afterwards so no ezdxf global
     # outlives this call.
@@ -941,22 +1151,34 @@ def write(page, path, standard=None):
         _extents(doc, msp, page)
         _order_classes(doc)
         tmp = str(path) + ".tmp"
-        doc.saveas(tmp)
-        _drop_3p_arc_point(tmp)
-        os.replace(tmp, str(path))
+        try:
+            doc.saveas(tmp)
+            _drop_3p_arc_point(tmp)
+            os.replace(tmp, str(path))
+        except OSError as ex:
+            raise type(ex)(ex.errno, ex.strerror or str(ex), str(path)) from None
+        finally:
+            if os.path.lexists(tmp):
+                os.remove(tmp)
     finally:
         ezdxf.options.write_fixed_meta_data_for_testing = previous
     report = {
         "path": str(path),
         "standard": std,
         "line_group": run.group["name"],
-        "layers": list(LAYERS),
+        "layers": list(run.layers),
         "entities": dict(run.counts),
         "edges": dict(run.edges),
         "duplicates_dropped": run.dups,
         "skipped": run.skipped,
         "notes": run.notes,
+        "percent_codes": run.percent,
+        "approximate": run.approximate,
+        "template": run.template,
     }
+    if run.percent:
+        _warn("DXF export of %s: text with %%%% codes (%s) is written as typed; CAD readers show them as symbols" % (
+            page.Name, ", ".join("%s: %s" % (p["name"], " ".join(p["codes"])) for p in run.percent)))
     if run.skipped:
         seen, items = set(), []
         for s in run.skipped:
@@ -988,7 +1210,11 @@ def export_page(page, path):
         except ImportError:
             why = "ezdxf is not installed"
     if why is None:
-        return write(page, path)
+        try:
+            return write(page, path)
+        except OSError as ex:
+            App.Console.PrintError("DXF export of %s failed: %s: %s\n" % (page.Name, ex.strerror or ex, ex.filename or path))
+            return False
     _warn("DXF export of %s: %s, so the stock writer was used (no line types or layers by role, hidden edges as visible)" % (page.Name, why))
     TechDraw.writeDXFPage(page, path)
     return None

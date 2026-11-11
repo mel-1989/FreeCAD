@@ -845,6 +845,25 @@ for ProjectionGroups</string>
           </property>
          </widget>
         </item>
+        <item>
+         <widget class="Gui::PrefCheckBox" name="cb_LayeredDxf">
+          <property name="toolTip">
+           <string>Writes Export Page as DXF with layers by role (visible, hidden, centre, cosmetic, dimensions, text) and real line types. Off writes the plain DXF of earlier versions.</string>
+          </property>
+          <property name="text">
+           <string>Export DXF with layers and line types</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+          <property name="prefEntry" stdset="0">
+           <cstring>LayeredDxf</cstring>
+          </property>
+          <property name="prefPath" stdset="0">
+           <cstring>/Mod/TechDraw/General</cstring>
+          </property>
+         </widget>
+        </item>
        </layout>
       </item>
       <item row="0" column="1">
