@@ -534,7 +534,8 @@ class DxfExportTest(unittest.TestCase):
         # the text sits at the dimension's own position on the page
         tx, ty = self.dims["Distance"].X.Value + ox, self.dims["Distance"].Y.Value + oy
         e = [e for e in self.msp("DIMENSIONS", "DIMENSION") if e.dxf.dimtype & 7 == 1][0]
-        self.assertLess(abs(e.dxf.text_midpoint.y - ty), 6.0)
+        self.assertLess(abs(e.dxf.text_midpoint.x - tx), 0.01)
+        self.assertLess(abs(e.dxf.text_midpoint.y - ty), 0.01)
 
     def test_one_sided_tolerance_zero_side_has_no_sign(self):
         d = self.dims["Unequal"]

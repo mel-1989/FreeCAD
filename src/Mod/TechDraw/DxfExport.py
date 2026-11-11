@@ -666,6 +666,7 @@ def _dim_entity(run, msp, dim, parent_off, text, text_loc, attribs, override):
             normal = (-d[1] / n, d[0] / n)
             distance = (text_loc[0] - p1[0]) * normal[0] + (text_loc[1] - p1[1]) * normal[1]
             ov = msp.add_aligned_dim(p1, p2, distance, text=text, dimstyle=DIM_STYLE, override=override, dxfattribs=attribs)
+            ov.set_location(text_loc)  # ruling 80: group 11 is the dimension's page position, as for the other types
             ov.aligned = True
             return ov
         angle = 0 if t == "DistanceX" else 90
