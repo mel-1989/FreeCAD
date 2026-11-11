@@ -776,6 +776,45 @@ def _write_dimension(run, msp, dim, group_of):
         run.skip(dim, "theoretically exact frame around the dimension is not drawn (the dimension is written)")
 
 
+def _ordinate_driver(sym):
+    """The ordinate set (G04 slice 5a, ``DimChain``) a symbol view draws, or None for any other symbol."""
+    name = getattr(sym, "DimChainDriver", "")
+    drv = sym.Document.getObject(name) if name else None
+    if drv is not None and getattr(drv, "Kind", "") == "ordinate" and getattr(drv, "View", None) is not None:
+        return drv
+    return None
+
+
+def _write_ordinate(run, msp, sym, drv):
+    """Slice 5a ruling 102: each entry of an ordinate set, datum included, is an ezdxf ordinate DIMENSION on DIMENSIONS.
+
+    The feature point, the leader end (where the text stands) and the text are those of the symbol; the datum point is the
+    dimension's origin, and the text is the symbol's (unsigned, formatted as a stock dimension), so the file reads what the page shows.
+    Public sources: AutoCAD DXF Reference (DIMENSION, dimension type 6 and 7: ordinate, X-type bit 64), ezdxf 1.4.2 add_ordinate_x_dim.
+    """
+    import DimChain
+
+    axis, entries = DimChain.ordinate_dxf_entries(drv)
+    if not entries:
+        run.skip(sym, "ordinate set has no entries to write")
+        return
+    override = {"dimtxt": DimChain.font_size()}
+    make = msp.add_ordinate_x_dim if axis == 0 else msp.add_ordinate_y_dim
+    for e in entries:
+        fx, fy = e["feature"]
+        ex, ey = e["end"]
+        before = len(msp)
+        try:
+            ov = make((fx, fy), (ex - fx, ey - fy), origin=e["datum"], text=e["text"], dimstyle=DIM_STYLE, override=override, dxfattribs={"layer": "DIMENSIONS"})
+            ov.render()
+        except Exception as ex_:
+            for x in list(msp)[before:]:
+                msp.delete_entity(x)
+            run.skip(sym, "ordinate entry %s not written: %s" % (e["name"], ex_))
+            continue
+        run.count(ov.dimension)
+
+
 def _text_height(v, default=3.5):
     h = _val(v)
     return h if h > 0 else default
@@ -1050,6 +1089,8 @@ def _classify(run, msp, types, views, group_of):
                 run.skip(v, "cosmetic vertices are not written")
         elif _is(v, "TechDraw::DrawViewDimension"):
             _write_dimension(run, msp, v, group_of)
+        elif _is(v, "TechDraw::DrawViewSymbol") and _ordinate_driver(v) is not None:
+            _write_ordinate(run, msp, v, _ordinate_driver(v))
         elif _is(v, "TechDraw::DrawViewAnnotation"):
             _write_annotation(run, msp, v)
         elif _is(v, "TechDraw::DrawRichAnno"):
