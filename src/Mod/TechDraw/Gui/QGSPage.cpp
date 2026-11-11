@@ -1240,7 +1240,12 @@ void QGSPage::embedFontsInFile(const QString& fileName)
 {
     Base::PyGILStateLocker lock;
     try {
-        Py::Module module(PyImport_ImportModule("SvgFonts"), true);
+        PyObject* raw = PyImport_ImportModule("SvgFonts");
+        if (!raw) {
+            // a failed import must leave the stock file, never a NULL module (run 094 verifier, MEDIUM)
+            throw Py::Exception();
+        }
+        Py::Module module(raw, true);
         std::string fontDir = App::Application::getResourceDir() + "Mod/TechDraw/Resources/fonts/";
         Py::Tuple args(2);
         args.setItem(0, Py::String(fileName.toStdString()));

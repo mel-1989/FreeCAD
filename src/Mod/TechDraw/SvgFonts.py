@@ -468,8 +468,15 @@ def embed_file(path, font_dir=None):
             text = fh.read()
         new, report = embed(text, font_dir)
         if new != text:
-            with open(path, "w", encoding="utf-8", newline="") as fh:
-                fh.write(new)
+            # write beside the file and rename, so a failure mid-write never truncates the export
+            tmp = path + ".fonts.tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8", newline="") as fh:
+                    fh.write(new)
+                os.replace(tmp, path)
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
         return report["warning"]
     except Exception as e:  # the export must never fail because of the fonts
         return "fonts not embedded (%s: %s)" % (type(e).__name__, e)
