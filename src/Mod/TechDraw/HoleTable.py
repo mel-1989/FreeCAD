@@ -802,6 +802,15 @@ def obstacles(page, skip=()):
     return out
 
 
+def foreign_tags(page, view, own):
+    """-> [(name, box)] of the tags other tables keep on ``view`` (their names are not in ``own``): a tag must keep clear of them."""
+    return [
+        ("tag " + t.Text, tuple(r3(v) for v in tag_box(view, t)))
+        for t in page.Views
+        if t.TypeId == "TechDraw::DrawViewBalloon" and t.Name not in own and t.SourceView == view
+    ]
+
+
 def _angle_gap(a, b):
     return abs(((a - b + math.pi) % (2 * math.pi)) - math.pi)
 
@@ -910,9 +919,9 @@ class _Plan:
             if _pen(r, b):
                 out.append("%s over %s" % (t, n))
         if any(r[0] < c[0] < r[2] and r[1] < c[1] < r[3] for c in self.cs):
-            out.append("%s covers a hole centre" % t)
+            out.append("%s covers a %s centre" % (t, self.items[i].get("noun", "hole")))
         if tag_reach(centre, tip) > self.limit - 0.001:
-            out.append("%s more than %g mm from its hole" % (t, self.limit))
+            out.append("%s more than %g mm from %s" % (t, self.limit, self.items[i].get("of", "its hole")))
         return out
 
     def pair(self, i, j):
@@ -1505,7 +1514,16 @@ App.addDocumentObserver(SETTLE)
 
 
 class HoleTableDriver:
-    """Python feature between a view and its hole table: lists the holes, writes the sheet, keeps tags and table blocks."""
+    """Python feature between a view and its hole table: lists the holes, writes the sheet, keeps tags and table blocks.
+
+    ``BendTable.BendTableDriver`` is a subclass: the class attributes below are what differs in the table it keeps.
+    """
+
+    NAME = "HoleTable"  # prefix of the driver's warnings
+    TITLE = "Hole table"  # label of a table block
+    BLOCK_NAME = "HoleTable"  # object name of a table block
+    TAG_NAME = "HoleTag"  # object name of a tag
+    COLUMNS = HEADER  # the table's header row
 
     def __init__(self, obj):
         obj.Proxy = self
@@ -1634,7 +1652,7 @@ class HoleTableDriver:
 
     def _new_tag(self, drv, page, view):
         doc = drv.Document
-        b = doc.addObject("TechDraw::DrawViewBalloon", "HoleTag")
+        b = doc.addObject("TechDraw::DrawViewBalloon", self.TAG_NAME)
         b.SourceView = view
         page.addView(b)
         add = b.addProperty
@@ -1662,6 +1680,7 @@ class HoleTableDriver:
         area, title = PL.page_areas(page)
         names = {t.Name for t in self.tags(obj)} | {b.Name for b in self.blocks(obj)} | {view.Name}
         obs = [(n, tuple(r3(v) for v in b)) for n, b in obstacles(page, skip=names)] + [("hole table", tuple(r3(v) for v in b)) for b in blocks]
+        obs += foreign_tags(page, view, names)
         area = tuple(r3(v) for v in area)
         vb = edges.drawn_box
         vcx, vcy = r3(vx + 0.5 * (vb[0] + vb[2]) * S), r3(vy + 0.5 * (vb[1] + vb[3]) * S)
@@ -1728,7 +1747,8 @@ class HoleTableDriver:
         area = tuple(r3(v) for v in area)
         obs = [(n, tuple(r3(v) for v in b)) for n, b in obstacles(page, skip=skip)]
         own = view_box(view, edges)
-        header = list(HEADER)
+        header = list(self.COLUMNS)
+        ncols = len(header)
         # the own view's box, with and without the room its tags will want around it
         near = [(view.Label, tuple(r3(v) for v in own))] if own else []
         room = [(view.Label, tuple(r3(v) for v in (own[0] - TAG_ROOM_MM, own[1] - TAG_ROOM_MM, own[2] + TAG_ROOM_MM, own[3] + TAG_ROOM_MM)))] if own else []
@@ -1745,7 +1765,7 @@ class HoleTableDriver:
             for ch in chunks:
                 sheet_rows.append(header)
                 sheet_rows.extend(ch)
-            widths = [max(PL.MIN_COL_PX, int(math.ceil(max(PL.text_width_px(r[c]) for r in sheet_rows) * PL.FIT_SLACK + PL.PAD_LEFT_PX + PL.PAD_RIGHT_PX))) for c in range(4)]
+            widths = [max(PL.MIN_COL_PX, int(math.ceil(max(PL.text_width_px(r[c]) for r in sheet_rows) * PL.FIT_SLACK + PL.PAD_LEFT_PX + PL.PAD_RIGHT_PX))) for c in range(ncols)]
             wmm = sum(widths) * PL.PX_MM
             sizes = [(wmm, (len(ch) + 1) * PL.ROW_PX * PL.PX_MM) for ch in chunks]
             # a block the user moved stays where it is and is an obstacle to the others
@@ -1786,15 +1806,15 @@ class HoleTableDriver:
                 k = 1
                 chunks = [body] if body else [[]]
                 sheet_rows = [header] + body
-                widths = [max(PL.MIN_COL_PX, int(math.ceil(max(PL.text_width_px(r[c]) for r in sheet_rows) * PL.FIT_SLACK + PL.PAD_LEFT_PX + PL.PAD_RIGHT_PX))) for c in range(4)]
+                widths = [max(PL.MIN_COL_PX, int(math.ceil(max(PL.text_width_px(r[c]) for r in sheet_rows) * PL.FIT_SLACK + PL.PAD_LEFT_PX + PL.PAD_RIGHT_PX))) for c in range(ncols)]
                 wmm = sum(widths) * PL.PX_MM
                 hmm = len(sheet_rows) * PL.ROW_PX * PL.PX_MM
                 box = default_corner(page, wmm, hmm)
                 obs = obs + near
                 hit = [n for n, b in obs if overlap(box, b)]
                 out = box[3] > area[3] or box[0] < area[0]
-                warning = "HoleTable: no free space on the page holds the table (%d rows); placed in the corner, it overlaps %s%s" % (
-                    len(body), ", ".join(hit) if hit else "nothing", " and runs outside the drawing area" if out else ""
+                warning = "%s: no free space on the page holds the table (%d rows); placed in the corner, it overlaps %s%s" % (
+                    self.NAME, len(body), ", ".join(hit) if hit else "nothing", " and runs outside the drawing area" if out else ""
                 )
                 placed = [box]
                 break
@@ -1818,7 +1838,7 @@ class HoleTableDriver:
             v = views[ci]
             r1 = r0 + len(ch)
             set_if(v, "CellStart", "A%d" % r0)
-            set_if(v, "CellEnd", "D%d" % r1)
+            set_if(v, "CellEnd", "%s%d" % (col(ncols - 1), r1))
             r0 = r1 + 1
             box = placed[ci]
             cx, cy = 0.5 * (box[0] + box[2]), 0.5 * (box[1] + box[3])
@@ -1839,8 +1859,8 @@ class HoleTableDriver:
 
     def _new_block(self, drv, page, sheet):
         doc = drv.Document
-        v = doc.addObject("TechDraw::DrawViewSpreadsheet", "HoleTable")
-        v.Label = "Hole table"
+        v = doc.addObject("TechDraw::DrawViewSpreadsheet", self.BLOCK_NAME)
+        v.Label = self.TITLE
         page.addView(v)
         v.addProperty("App::PropertyString", "HoleDriver", "HoleTable", "Name of the driver that keeps this table")
         v.addProperty("App::PropertyFloat", PLACED_X, "HoleTable", "X written by the driver; a different X means the user moved it")
@@ -1863,7 +1883,7 @@ def drivers_on(page):
     return [
         o
         for o in page.Document.Objects
-        if o.TypeId == "App::FeaturePython" and isinstance(getattr(o, "Proxy", None), HoleTableDriver) and o.PageName == page.Name
+        if o.TypeId == "App::FeaturePython" and type(getattr(o, "Proxy", None)) is HoleTableDriver and o.PageName == page.Name
     ]
 
 
