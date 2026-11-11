@@ -378,7 +378,17 @@ def flatten_root(root):
         def add_poly(pts, closed):
             if not visible or len(pts) < 2:
                 return
-            flat.shapes.append(("poly", [page(m, p) for p in pts], closed))
+            # drop zero-length pieces (a repeated point, or a stroke that is a single point): they draw nothing,
+            # and FreeCAD's importer discards a zero-length LINE (run 096: DE frame 64 written, 60 imported)
+            pp = []
+            for q in (page(m, p) for p in pts):
+                if not pp or math.hypot(q[0] - pp[-1][0], q[1] - pp[-1][1]) > 1e-6:
+                    pp.append(q)
+            if closed and len(pp) > 1 and math.hypot(pp[0][0] - pp[-1][0], pp[0][1] - pp[-1][1]) <= 1e-6:
+                pp.pop()
+            if len(pp) < 2:
+                return
+            flat.shapes.append(("poly", pp, closed))
             if filled and not stroked:
                 flat.filled += 1
 

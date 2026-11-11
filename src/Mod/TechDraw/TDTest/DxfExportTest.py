@@ -953,6 +953,16 @@ class DxfFrameTest(unittest.TestCase):
         fl = DT.flatten_template(p)
         self.assertEqual((len(fl.shapes), fl.filled, len(fl.texts)), (1, 1, 0))  # fill-only shape as its outline; blank text dropped
 
+    def test_zero_length_template_strokes_are_not_written(self):
+        import DxfTemplate as DT
+
+        p = os.path.join(self.tmp, "zero.svg")
+        with open(p, "w") as f:
+            f.write('<svg xmlns="http://www.w3.org/2000/svg" width="50mm" height="50mm"><path d="m 5,5 h 0"/><path d="m 5,5 v 0 m 10,10 h 5"/>'
+                    '<polyline points="1,1 1,1 4,4"/><line x1="2" y1="2" x2="2" y2="2"/></svg>')
+        polys = [s for s in DT.flatten_template(p).shapes if s[0] == "poly"]
+        self.assertEqual(sorted(len(s[1]) for s in polys), [2, 2])  # the h 5 piece and the polyline with its repeated point removed
+
     def test_editable_value_fills_only_the_first_child_element(self):
         import DxfTemplate as DT
 
