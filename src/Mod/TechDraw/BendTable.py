@@ -328,12 +328,22 @@ def flat_view(page, unfold):
         doc.recompute()
         HT.wait_for_geometry(v)
         e = HT.Edges(v)
-        area, _title = PL.page_areas(page)
+        area, title = PL.page_areas(page)
         if e.box is not None:
-            v.Scale = scale_for(e.box[2] - e.box[0], e.box[3] - e.box[1], area)
-        # centred in the left 60 % of the drawing area
-        v.X = area[0] + 0.3 * (area[2] - area[0])
-        v.Y = 0.5 * (area[1] + area[3])
+            w, h = e.box[2] - e.box[0], e.box[3] - e.box[1]
+            s = scale_for(w, h, area)
+            # centred in the left 60 % of the drawing area; a flat that would run into the title block moves left, then down a scale
+            while True:
+                v.Scale = s
+                y = 0.5 * (area[1] + area[3])
+                for x in (area[0] + 0.3 * (area[2] - area[0]), area[0] + PL.MARGIN_MM + 0.5 * w * s):
+                    box = (x - 0.5 * w * s, y - 0.5 * h * s, x + 0.5 * w * s, y + 0.5 * h * s)
+                    if not title or not HT.overlap(box, tuple(title)):
+                        break
+                if not title or not HT.overlap(box, tuple(title)) or s <= 0.01:
+                    break
+                s = max(c for c in (0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0) if c < s) if s > 0.01 else 0.01
+            v.X, v.Y = x, y
         doc.recompute()
         HT.wait_for_geometry(v)
     except Exception:

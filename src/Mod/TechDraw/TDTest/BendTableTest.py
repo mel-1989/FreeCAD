@@ -210,7 +210,7 @@ class BendTableTest(unittest.TestCase):
         self.assertEqual(BT.k_text(0.5), "0.50")
 
     def test_order_follows_midpoints_not_list_order(self):
-        for name in ("g17", "g20", "g16"):  # the stored list order differs from the order along the view's x axis here
+        for name in ("g17", "g20", "g16", "g15"):  # the stored list order differs from the order along the view's x axis here; g15 has bends in both axes
             b = self.build(name)
             tags = BT.tags_of(b.table)
             tips = [(t.OriginX.Value, t.OriginY.Value) for t in tags]
@@ -302,6 +302,9 @@ class BendTableTest(unittest.TestCase):
                 for c in blocks[i + 1 :] + ([tuple(title)] if title else []) + [HT.view_box(sv)]:
                     self.assertFalse(HT.overlap(a, c, -0.01), (name, a, c))
             self.assertEqual(BT.warning_of(b.table), "", name)
+            vb = HT.view_box(sv)
+            self.assertGreaterEqual(vb[0], area[0] - 0.01, name)
+            self.assertFalse(title and HT.overlap(vb, tuple(title), -0.01), name)  # the flat itself stands clear of the title block
             b.close()
             self.built.remove(b)
 
