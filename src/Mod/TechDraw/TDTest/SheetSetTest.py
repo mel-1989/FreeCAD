@@ -84,7 +84,8 @@ class Corpus:
 
             self.box = self.doc.addObject("Part::Box", "Box")
             self.box.Length, self.box.Width, self.box.Height = size
-            self.box.ShapeMaterial = Materials.MaterialManager().getMaterial(material[0])
+            if material is not None:  # None: the object's default material, named "Default"
+                self.box.ShapeMaterial = Materials.MaterialManager().getMaterial(material[0])
             self.doc.recompute()
         self.fam_of = {}
         self.pages = [self.page(f, labels[i] if labels else None) for i, f in enumerate(fams)]
@@ -291,6 +292,15 @@ class SheetSetTest(unittest.TestCase):
         self.assertEqual(m2.texts(m2.pages[0])["MATERIALMARK"], STEEL[1])
         self.assertEqual(m2.untouched(), [])
 
+    def test_default_material_is_no_material(self):
+        m = self.corpus(["cn", "gost", "iso"], material=None)
+        self.assertEqual(m.box.ShapeMaterial.Name, "Default")
+        for p in m.pages:
+            t = m.texts(p)
+            for k in ("MATERIALMARK", "WEIGHT", "Материал1", "Масса", "part_material"):
+                if k in t:
+                    self.assertEqual(t[k], m.before[p.Name][k], k)
+
     # -- check 73: scale ---------------------------------------------------------------------
 
     def view_on(self, m, page, scale):
@@ -360,6 +370,18 @@ class SheetSetTest(unittest.TestCase):
         finally:
             App.closeDocument(alone.Name)
         self.assertEqual(m.untouched(), [])
+
+    def test_two_tables_the_first_sheet_in_set_order_feeds_the_others(self):
+        m = self.corpus(["iso", "iso", "iso", "cn"])
+        for page, rev in ((m.pages[2], "Y"), (m.pages[0], "X")):
+            RT.make(page)
+            RT.add(page, rev, "d", "2026-02-02", "MS")
+        m.doc.recompute()
+        self.assertEqual([m.texts(p)["revision_index"] for p in m.pages[:3]], ["X", "X", "Y"])  # sheet 3 keeps its own table's revision
+        self.assertEqual(m.texts(m.pages[3])["VERSION"], "X")
+        SS.move_sheet(m.set, m.pages[2], 0)  # now the table of sheet "Y" comes first
+        self.assertEqual([m.texts(p)["revision_index"] for p in m.pages[:3]], ["X", "Y", "Y"])  # X keeps its own table's; sheet 2 now follows Y
+        self.assertEqual(m.texts(m.pages[3])["VERSION"], "Y")
 
     def test_revision_table_on_a_later_sheet_still_owns_its_keys(self):
         m = self.corpus(["iso", "iso"])
