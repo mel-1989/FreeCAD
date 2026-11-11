@@ -1928,10 +1928,12 @@ void CmdTechDrawExportPageDXF::activated(int iMsg)
 
     std::string PageName = page->getNameInDocument();
     openCommand(QT_TRANSLATE_NOOP("Command", "Save page to DXF"));
-    doCommand(Doc, "import TechDraw");
+    doCommand(Doc, "import DxfExport");
     auto filespec = DU::cleanFilespecBackslash(
         Base::Tools::escapeEncodeFilename(fileName.toStdString()));
-    doCommand(Doc, "TechDraw.writeDXFPage(App.activeDocument().%s, u\"%s\")", PageName.c_str(),
+    // G04 slice 7: layered DXF with ezdxf, or the stock writer (TechDraw.writeDXFPage) when the
+    // preference LayeredDxf is off or ezdxf is missing
+    doCommand(Doc, "DxfExport.export_page(App.activeDocument().%s, u\"%s\")", PageName.c_str(),
               filespec.c_str());
     commitCommand();
 }
