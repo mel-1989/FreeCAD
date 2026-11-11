@@ -119,6 +119,11 @@ Base::Color Preferences::vertexColor()
     return fcColor;
 }
 
+bool Preferences::embedFonts()
+{
+    return getPreferenceGroup("General")->GetBool("EmbedFonts", true);
+}
+
 double Preferences::vertexScale()
 {
     return getPreferenceGroup("General")->GetFloat("VertexScale", 3.0);

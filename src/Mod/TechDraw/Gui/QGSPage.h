@@ -148,6 +148,7 @@ public:
     /// Renders the page to SVG with filename.
     void saveSvg(QString filename);
     void postProcessXml(QTemporaryFile& temporaryFile, QString filename, QString pagename);
+    void embedFontsInFile(const QString& fileName);
 
     // scene parentage fixups
     void setViewParents();

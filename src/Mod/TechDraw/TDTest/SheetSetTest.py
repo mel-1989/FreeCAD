@@ -582,6 +582,35 @@ class SheetSetTest(unittest.TestCase):
         self.assertEqual(len(m.doc.Objects), n)
         self.assertEqual(len(SS.drivers(m.doc)), 1)
 
+    def test_r8_a_page_listed_twice_is_refused(self):
+        m = self.corpus(["iso", "iso"])
+        extra = m.page("iso")
+        m.doc.recompute()
+        n = len(m.doc.Objects)
+        with self.assertRaises(ValueError) as cm:
+            SS.make(m.doc, pages=[extra, extra])
+        self.assertIn(extra.Label, str(cm.exception))
+        self.assertEqual(len(m.doc.Objects), n)
+        self.assertEqual(len(SS.drivers(m.doc)), 1)
+
+    def test_r8_face_only_source_leaves_weight_alone_and_is_named(self):
+        import Materials
+        import Part
+
+        m = self.corpus(["cn"], source=False)
+        before = m.texts(m.pages[0])["WEIGHT"]
+        face = m.doc.addObject("Part::Feature", "Face")
+        face.Shape = Part.makePlane(10, 20)
+        face.ShapeMaterial = Materials.MaterialManager().getMaterial(STEEL[0])
+        m.doc.recompute()
+        m.set.Source = face
+        m.doc.recompute()
+        t = m.texts(m.pages[0])
+        self.assertEqual(t["WEIGHT"], before)
+        self.assertNotIn("0.000", " ".join(t.values()))
+        self.assertIn("no solid volume", m.set.Warning)
+        self.assertIn(face.Label, m.set.Warning)
+
     def test_each_operation_is_one_undo_step_and_undo_restores_the_keys(self):
         m = self.corpus(["iso", "iso"])
         doc = m.doc

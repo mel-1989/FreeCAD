@@ -33,8 +33,10 @@
 #include <QTextStream>
 
 
+#include <App/Application.h>
 #include <App/Document.h>
 #include <Base/Console.h>
+#include <Base/Interpreter.h>
 #include <Base/Parameter.h>
 #include <Base/Tools.h>
 #include <Gui/Command.h>
@@ -1224,7 +1226,43 @@ void QGSPage::postProcessXml(QTemporaryFile& temporaryFile, QString fileName, QS
     stream.setGenerateByteOrderMark(false);
 
     stream << exportDoc.toByteArray();
+    stream.flush();
     outFile.close();
+
+    if (Preferences::embedFonts()) {
+        embedFontsInFile(fileName);
+    }
+}
+
+// G04 slice 1b: SvgFonts.embed_file adds subsets of the bundled symbol fonts to the written SVG (and quotes the
+// family names CSS needs quoted).  It never raises; a failure leaves the stock file and says why in the Report view.
+void QGSPage::embedFontsInFile(const QString& fileName)
+{
+    Base::PyGILStateLocker lock;
+    try {
+        PyObject* raw = PyImport_ImportModule("SvgFonts");
+        if (!raw) {
+            // a failed import must leave the stock file, never a NULL module (run 094 verifier, MEDIUM)
+            throw Py::Exception();
+        }
+        Py::Module module(raw, true);
+        std::string fontDir = App::Application::getResourceDir() + "Mod/TechDraw/Resources/fonts/";
+        Py::Tuple args(2);
+        args.setItem(0, Py::String(fileName.toStdString()));
+        args.setItem(1, Py::String(fontDir));
+        Py::Object result = module.callMemberFunction("embed_file", args);
+        std::string warning = Py::String(result).as_std_string("utf-8");
+        if (!warning.empty()) {
+            Base::Console().warning("TechDraw SVG export: {}\n", warning);
+        }
+    }
+    catch (Py::Exception&) {
+        Base::PyException e;  // extract the Python error text
+        Base::Console().warning("TechDraw SVG export: fonts not embedded ({})\n", e.what());
+    }
+    catch (...) {
+        Base::Console().warning("TechDraw SVG export: fonts not embedded\n");
+    }
 }
 
 TechDraw::DrawPage* QGSPage::getDrawPage() { return m_vpPage->getDrawPage(); }
