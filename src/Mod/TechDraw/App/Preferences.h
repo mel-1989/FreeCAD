@@ -72,6 +72,7 @@ public:
     static double scale();
     static bool useGlobalDecimals();
     static bool keepPagesUpToDate();
+    static bool embedFonts();  // G04 slice 1b: SVG export carries subsets of the bundled symbol fonts
 
     static int projectionAngle();
     static bool groupAutoDistribute();

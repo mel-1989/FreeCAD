@@ -20,6 +20,7 @@ set(TechDraw_Scripts
     BendTable.py
     RevisionTable.py
     SheetSet.py
+    SvgFonts.py
     TitleBlockKeys.json
 )
 
@@ -208,6 +209,7 @@ SET(TDTest_SRCS
     TDTest/BendTableTest.py
     TDTest/RevisionTableTest.py
     TDTest/SheetSetTest.py
+    TDTest/SvgFontsTest.py
     TDTest/PmiDrawingGuiTest.py
 )
 
