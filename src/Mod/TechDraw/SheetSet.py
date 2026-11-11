@@ -267,7 +267,8 @@ _RESET = set()
 
 class _TemplateWatch:
     def slotChangedObject(self, obj, prop):
-        if prop == "Template" and obj.TypeId == "TechDraw::DrawSVGTemplate":
+        if prop == "Template" and obj.TypeId == "TechDraw::DrawSVGTemplate" and not obj.Document.Restoring and "Restore" not in obj.State:
+            # (not while a document is being read: the stored fields, pins and baselines are then exactly what the user left)
             _RESET.add((obj.Document.Name, obj.Name))
 
 
@@ -462,7 +463,14 @@ def drivers(doc):
 
 
 def make(doc, pages=None, source=None, fields=None):
-    """Make a sheet set of ``pages`` (default: every page of the document, in document order); -> the driver.  One undo step."""
+    """Make a sheet set of ``pages`` (default: every page of the document, in document order); -> the driver.  One undo step.
+
+    A page belongs to one set only: pages already in another set raise ``ValueError`` and nothing is made."""
+    taken = {p.Name: d for d in drivers(doc) for p in d.Pages if p is not None}
+    mine = list(pages) if pages is not None else list(doc.findObjects("TechDraw::DrawPage"))
+    clash = [p for p in mine if p.Name in taken]
+    if clash:
+        raise ValueError("make: %s already belong to the sheet set %s; a page is in one set only" % (", ".join(p.Label for p in clash), taken[clash[0].Name].Label))
     own = HT.begin(doc, "Sheet set")
     try:
         drv = doc.addObject("App::FeaturePython", "SheetSet")

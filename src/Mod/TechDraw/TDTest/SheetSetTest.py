@@ -544,6 +544,44 @@ class SheetSetTest(unittest.TestCase):
         self.assertEqual(dict(s.Pages[2].Template.EditableTexts)["Листов"], "3")
         self.assertEqual(dict(s.Pages[2].Template.EditableTexts)["Лист"], "3")
 
+    def reopen(self, m):
+        path = os.path.join(tempfile.mkdtemp(), "r.FCStd")
+        m.doc.saveAs(path)
+        App.closeDocument(m.doc.Name)
+        m.doc = App.openDocument(path)
+        return SS.drivers(m.doc)[0]
+
+    def test_a_pinned_field_survives_save_and_reopen(self):
+        m = self.corpus(["iso", "iso", "iso"])
+        self.type_into(m.pages[1], sheet_number="X-2")
+        m.doc.recompute()
+        self.assertIn("sheet", SS.warning_of(m.set))
+        s = self.reopen(m)
+        s.Document.recompute()
+        self.assertEqual([dict(p.Template.EditableTexts)["sheet_number"] for p in s.Pages], ["1 / 3", "X-2", "3 / 3"])
+        self.assertIn("sheet", s.Warning)
+        self.assertIn(s.Pages[1].Label, s.Warning)
+        self.assertEqual([o.Name for o in s.Document.Objects if "Touched" in o.State], [])
+
+    def test_an_edit_made_before_save_and_not_yet_recomputed_is_adopted_after_reopen(self):
+        m = self.corpus(["iso", "iso"])
+        self.type_into(m.pages[1], document_type="Assembly")  # typed, saved, no recompute in between
+        s = self.reopen(m)
+        s.Document.recompute()
+        self.assertEqual([dict(p.Template.EditableTexts)["document_type"] for p in s.Pages], ["Assembly", "Assembly"])
+        self.assertEqual(s.Fields["document_type"], "Assembly")
+
+    def test_a_page_belongs_to_one_set_only(self):
+        m = self.corpus(["iso", "iso"])
+        n = len(m.doc.Objects)
+        with self.assertRaises(ValueError) as cm:
+            SS.make(m.doc, pages=[m.pages[1]])
+        self.assertIn(m.pages[1].Label, str(cm.exception))
+        with self.assertRaises(ValueError):
+            SS.make(m.doc)  # every page of the document: both are taken
+        self.assertEqual(len(m.doc.Objects), n)
+        self.assertEqual(len(SS.drivers(m.doc)), 1)
+
     def test_each_operation_is_one_undo_step_and_undo_restores_the_keys(self):
         m = self.corpus(["iso", "iso"])
         doc = m.doc
