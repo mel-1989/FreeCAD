@@ -536,6 +536,17 @@ class DxfExportTest(unittest.TestCase):
         e = [e for e in self.msp("DIMENSIONS", "DIMENSION") if e.dxf.dimtype & 7 == 1][0]
         self.assertLess(abs(e.dxf.text_midpoint.y - ty), 6.0)
 
+    def test_one_sided_tolerance_zero_side_has_no_sign(self):
+        d = self.dims["Unequal"]
+        try:
+            for over, under, want in ((0.3, 0.0, "\\S+0.3^ 0;"), (0.0, -0.25, "\\S 0^-0.25;")):
+                d.OverTolerance, d.UnderTolerance = over, under
+                self.doc.recompute()
+                self.assertEqual(DX.dimension_text(d)[0], d.getText() + want)
+        finally:
+            d.OverTolerance, d.UnderTolerance = 0.2, -0.1
+            self.doc.recompute()
+
     def test_text_is_get_text_and_tolerances_follow_the_gui(self):
         texts = [e.dxf.text for e in self.msp("DIMENSIONS", "DIMENSION")]
         for n in ("Distance", "Radius", "Diameter", "Angle", "Angle3Pt", "Arbitrary", "Equal", "Exact"):
@@ -593,6 +604,40 @@ class DxfExportTest(unittest.TestCase):
         self.assertEqual(DX.rich_text_to_mtext("<p>a</p>"), "a")
         self.assertEqual(DX.rich_text_to_mtext("<body><p> a  \n b </p><p>c<br/>d</p></body>"), "a b\\Pc\\Pd")
         self.assertEqual(DX.rich_text_to_mtext("<p>x&nbsp;y z <b>bold</b> &lt;&amp;&gt;</p>"), "x y z bold <&>")
+
+    def test_rich_annotation_qt_html_makes_no_empty_paragraphs(self):
+        qt = (
+            '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0//EN" "http://www.w3.org/TR/REC-html40/strict.dtd">\n<html><head>'
+            '<meta name="qrichtext" content="1" /><meta charset="utf-8" /><style type="text/css">\np, li { white-space: pre-wrap; }\n'
+            'hr { height: 1px; border-width: 0; }\n</style></head><body style=" font-family:\'.AppleSystemUIFont\'; font-size:13pt;">\n'
+            '<p style="margin:0px;">First paragraph \u2300 16 \u00b1 0.1 \u00b0</p>\n'
+            '<p style="margin:0px;">Second paragraph<br />after a break &lt;tag&gt; &amp; more</p>\n</body></html>'
+        )
+        self.assertEqual(DX.rich_text_to_mtext(qt), "First paragraph \u2300 16 \u00b1 0.1 \u00b0\\PSecond paragraph\\Pafter a break <tag> & more")
+        self.assertEqual(DX.rich_text_to_mtext("hand written <b>bold</b> &amp; text"), "hand written bold & text")
+        tbl = '<table border="1"><tr><td><span style="font-family:\'Y14.5-FreeCAD\';">&#184;</span></td><td><span>0.05</span></td></tr></table>'
+        self.assertEqual(DX.rich_text_to_mtext(tbl), "\u00b8 0.05")
+
+    def test_pmi_frames_are_named_and_the_text_still_written(self):
+        ra = self.doc.addObject("TechDraw::DrawRichAnno", "PmiFrame")
+        self.page.addView(ra)
+        ra.addProperty("App::PropertyString", "PmiRole", "Pmi", "role")
+        ra.PmiRole = "frame"
+        ra.AnnoText = "<p>0.05</p>"
+        ta = self.doc.addObject("TechDraw::DrawRichAnno", "PmiTable")
+        self.page.addView(ta)
+        ta.AnnoText = '<table border="1"><tr><td>A</td><td>0.05</td></tr></table>'
+        self.doc.recompute()
+        try:
+            rep = DX.write(self.page, os.path.join(self.tmp, "pmi.dxf"), "ISO")
+            for n in ("PmiFrame", "PmiTable"):
+                self.assertIn((n, "PMI frame not drawn (its text is written)"), [(s["name"], s["reason"]) for s in rep["skipped"]])
+        finally:
+            self.page.removeView(ra)
+            self.page.removeView(ta)
+            self.doc.removeObject("PmiFrame")
+            self.doc.removeObject("PmiTable")
+            self.doc.recompute()
 
     def test_rich_annotation_centred_and_parent_offsets(self):
         self.rich.OriginCentered = True

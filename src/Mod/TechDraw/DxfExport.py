@@ -429,9 +429,12 @@ class _BodyParser(html.parser.HTMLParser):
             self.skip += 1
         elif tag == "body":
             self.in_body = True
-        elif tag == "p":
+        elif tag in ("p", "tr"):
             self.cur = []
             self.paras.append(self.cur)
+        elif tag in ("td", "th"):
+            if self.cur:
+                self.cur.append(" ")
         elif tag == "br":
             self._para().append("\n")
 
@@ -444,12 +447,14 @@ class _BodyParser(html.parser.HTMLParser):
     def handle_endtag(self, tag):
         if tag in ("head", "style", "script", "title"):
             self.skip = max(0, self.skip - 1)
-        elif tag == "p":
+        elif tag in ("p", "tr"):
             self.cur = None
 
     def handle_data(self, data):
         if self.skip:
             return
+        if self.cur is None and not data.strip(" \t\r\n\f"):
+            return  # white space between block elements makes no paragraph
         self._para().append(data)
 
 
@@ -520,6 +525,11 @@ def dimension_text(dim):
     else:
         o = _tolerance_value(dim.FormatSpecOverTolerance, over)
         u = _tolerance_value(dim.FormatSpecUnderTolerance, under)
+    # QGIDatumLabel::setToleranceString: a zero side loses its sign (the first character becomes a space)
+    if under == 0.0 and u[:1] in ("+", "-"):
+        u = " " + u[1:]
+    if over == 0.0 and o[:1] in ("+", "-"):
+        o = " " + o[1:]
     return text + "\\S" + mtext_escape(o).replace("^", "\\^") + "^" + mtext_escape(u).replace("^", "\\^") + ";", exact
 
 
@@ -748,7 +758,16 @@ def _write_annotation(run, msp, view):
     run.count(mt)
 
 
+def _is_pmi_frame(view):
+    """A PmiDrawing annotation: a non-empty ``PmiRole`` or a ``<table>`` frame in the HTML (ruling 82)."""
+    if "PmiRole" in view.PropertiesList and view.PmiRole:
+        return True
+    return re.search(r"<table[\s>/]", view.AnnoText, re.I) is not None
+
+
 def _write_rich(run, msp, view, group_of, view_names):
+    if _is_pmi_frame(view):
+        run.skip(view, "PMI frame not drawn (its text is written)")
     text = rich_text_to_mtext(view.AnnoText)
     if not text:
         return
