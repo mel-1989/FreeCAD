@@ -290,6 +290,24 @@ class DimChainTest(unittest.TestCase):
         self.assertAlmostEqual(after, -(30.0 * S) - 10.0 + OFF + 0.0, places=3)
         self.assertLess(after, before)
 
+    def test_rows_at_other_scales_vertical_and_datum_between(self):
+        for sc in (0.5, 2.0):
+            p = self.plate(scale=sc)
+            v = DC.make(p.page, p.view, [p.corner(), p.hole(0), p.hole(1)], "baseline", direction="vertical")
+            xs = sorted(round(x.X.Value, 3) for x in members(v))
+            self.assertEqual(xs, [round(-50 * sc - 10.0 - 7.0 * k - OFF, 3) for k in (1, 0)])  # 10 mm out, then 7 mm steps; the label OFF left of its line
+            b = DC.make(p.page, p.view, [p.hole(1), p.hole(2), p.hole(0)], "baseline")  # datum between features
+            by = {refs(x)[1]: x for x in members(b)}
+            self.assertAlmostEqual(by[p.hole(0)].Y.Value, -20 * sc - 10.0 + OFF, places=3)  # 30 from the datum: innermost
+            self.assertAlmostEqual(by[p.hole(2)].Y.Value, -20 * sc - 17.0 + OFF, places=3)  # 35: next
+            self.assertAlmostEqual(by[p.hole(0)].X.Value, (-15.0) * sc, places=3)
+            self.assertAlmostEqual(by[p.hole(2)].X.Value, 17.5 * sc, places=3)
+            self.doc.removeObject(b.Name)
+            self.doc.removeObject(v.Name)
+            for o in list(self.doc.Objects):
+                if o.TypeId == "TechDraw::DrawViewDimension":
+                    self.doc.removeObject(o.Name)
+
     # ---- ordinate
 
     def check_ordinate(self, p, d):
@@ -318,7 +336,10 @@ class DimChainTest(unittest.TestCase):
             self.assertAlmostEqual(start[1 - a], feat[1 - a] + sign * 1.5, delta=0.002)
             ds = txt[0] == "0"
             if ds:
-                self.assertAlmostEqual(last[1 - a], edge + sign * 10.0 - sign * 3.0, delta=0.002)  # stops at the datum circle
+                self.assertAlmostEqual(last[1 - a], edge + sign * 10.0, delta=0.002)  # the datum line reaches 10 mm like the others
+                cc = to_page(sym, circles[0][:2])  # the open circle is centred on that end
+                self.assertAlmostEqual(cc[1 - a], last[1 - a], delta=0.002)
+                self.assertAlmostEqual(cc[a], last[a], delta=0.002)
             else:
                 self.assertAlmostEqual(last[1 - a], edge + sign * 10.0, delta=0.002)  # text end: 10 mm outside the outline
             # text anchor sits on the line's end, rotated for horizontal sets, upright for vertical ones

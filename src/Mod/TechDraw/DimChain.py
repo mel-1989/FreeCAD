@@ -513,28 +513,26 @@ def ordinate_svg(frame, names, direction, side):
         if a == 0:
             # extension line vertical, texts rotated
             y_start = py + sign * ORD_GAP_MM
-            if datum:
-                pts = [(px, y_start), (px, e - sign * ORD_CIRCLE_D)]
-                parts.append(("circle", px, e - sign * 0.5 * ORD_CIRCLE_D, 0.5 * ORD_CIRCLE_D))
-            elif j > 1e-9:
+            if j > 1e-9:
                 y_j = e - sign * (ORD_JOG_STUB + j)
                 pts = [(px, y_start), (px, y_j), (px + j, e - sign * ORD_JOG_STUB), (px + j, e)]
             else:
                 pts = [(px, y_start), (px, e)]
             parts.append(("poly", pts))
-            parts.append(("text", t, e, r["text"], sign))
+            if datum:  # ruling 99: the open circle is centred on the line's end, the 0 stands beyond it
+                parts.append(("circle", t, e, 0.5 * ORD_CIRCLE_D))
+            parts.append(("text", t, e + (sign * 0.5 * ORD_CIRCLE_D if datum else 0.0), r["text"], sign))
         else:
             x_start = px + sign * ORD_GAP_MM
-            if datum:
-                pts = [(x_start, py), (e - sign * ORD_CIRCLE_D, py)]
-                parts.append(("circle", e - sign * 0.5 * ORD_CIRCLE_D, py, 0.5 * ORD_CIRCLE_D))
-            elif j > 1e-9:
+            if j > 1e-9:
                 x_j = e - sign * (ORD_JOG_STUB + j)
                 pts = [(x_start, py), (x_j, py), (e - sign * ORD_JOG_STUB, py + j), (e, py + j)]
             else:
                 pts = [(x_start, py), (e, py)]
             parts.append(("poly", pts))
-            parts.append(("text", e, r["t"], r["text"], sign))
+            if datum:
+                parts.append(("circle", e, t, 0.5 * ORD_CIRCLE_D))
+            parts.append(("text", e + (sign * 0.5 * ORD_CIRCLE_D if datum else 0.0), t, r["text"], sign))
     # extent
     xs, ys = [], []
     for p in parts:
