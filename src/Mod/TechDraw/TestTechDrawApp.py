@@ -40,3 +40,4 @@ from TDTest.RevisionTableTest import RevisionTableTest  # noqa: F401
 from TDTest.SheetSetTest import SheetSetTest  # noqa: F401
 
 from TDTest.SvgFontsTest import SvgFontsTest  # noqa: F401
+from TDTest.DxfExportTest import DxfExportTest  # noqa: F401

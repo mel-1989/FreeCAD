@@ -132,7 +132,7 @@ void QGIViewAnnotation::drawAnnotation()
     std::stringstream ss;
     ss << "<html>\n<head>\n<style>\n";
     ss << "p {";
-    ss << "font-family:" << viewAnno->Font.getValue() << "; ";
+    ss << "font-family:'" << viewAnno->Font.getValue() << "'; ";
     ss << "font-size:" << scaledSize << "px; ";
     if (viewAnno->TextStyle.isValue("Normal")) {
         ss << "font-weight:normal; font-style:normal; ";

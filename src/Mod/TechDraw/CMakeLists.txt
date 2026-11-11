@@ -21,6 +21,7 @@ set(TechDraw_Scripts
     RevisionTable.py
     SheetSet.py
     SvgFonts.py
+    DxfExport.py
     TitleBlockKeys.json
 )
 
@@ -210,6 +211,7 @@ SET(TDTest_SRCS
     TDTest/RevisionTableTest.py
     TDTest/SheetSetTest.py
     TDTest/SvgFontsTest.py
+    TDTest/DxfExportTest.py
     TDTest/PmiDrawingGuiTest.py
 )
 
