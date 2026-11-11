@@ -160,107 +160,112 @@ def path_polylines(d, scale=1.0):
             out.append((cur, closed))
         cur = None
 
-    while i < len(toks):
-        if re.match("[A-Za-z]", toks[i]):
-            cmd = toks[i]
-            i += 1
-        if cmd is None:
-            raise ValueError("path data does not start with a command")
-        rel, c = cmd.islower(), cmd.upper()
-        if c == "Z":
-            if cur is not None:
-                flush(True)
-            pos = start
-            last_ctl = None
-            continue
-        if c == "M":
-            x, y = num(), num()
-            if rel:
-                x, y = x + pos[0], y + pos[1]
-            flush(False)
-            pos = start = (x, y)
-            cur = [pos]
-            cmd = "l" if rel else "L"
-            last_ctl = None
-            continue
-        if cur is None:
-            cur = [pos]
-        if c == "L":
-            x, y = num(), num()
-            if rel:
-                x, y = x + pos[0], y + pos[1]
-            pos = (x, y)
-            cur.append(pos)
-            last_ctl = None
-        elif c == "H":
-            x = num()
-            pos = (x + (pos[0] if rel else 0), pos[1])
-            cur.append(pos)
-            last_ctl = None
-        elif c == "V":
-            y = num()
-            pos = (pos[0], y + (pos[1] if rel else 0))
-            cur.append(pos)
-            last_ctl = None
-        elif c in "CS":
-            if c == "C":
-                p1 = (num(), num())
-            p2 = (num(), num())
-            p3 = (num(), num())
-            if rel:
+    # SVG 1.1 implementation notes (F.2, path data error handling): render the path up to the last
+    # correct segment and drop the rest, as Qt does; e.g. the Catalan A0 and A1 templates' "m 1179,670..5 h 5"
+    try:
+        while i < len(toks):
+            if re.match("[A-Za-z]", toks[i]):
+                cmd = toks[i]
+                i += 1
+            if cmd is None:
+                raise ValueError("path data does not start with a command")
+            rel, c = cmd.islower(), cmd.upper()
+            if c == "Z":
+                if cur is not None:
+                    flush(True)
+                pos = start
+                last_ctl = None
+                continue
+            if c == "M":
+                x, y = num(), num()
+                if rel:
+                    x, y = x + pos[0], y + pos[1]
+                flush(False)
+                pos = start = (x, y)
+                cur = [pos]
+                cmd = "l" if rel else "L"
+                last_ctl = None
+                continue
+            if cur is None:
+                cur = [pos]
+            if c == "L":
+                x, y = num(), num()
+                if rel:
+                    x, y = x + pos[0], y + pos[1]
+                pos = (x, y)
+                cur.append(pos)
+                last_ctl = None
+            elif c == "H":
+                x = num()
+                pos = (x + (pos[0] if rel else 0), pos[1])
+                cur.append(pos)
+                last_ctl = None
+            elif c == "V":
+                y = num()
+                pos = (pos[0], y + (pos[1] if rel else 0))
+                cur.append(pos)
+                last_ctl = None
+            elif c in "CS":
                 if c == "C":
-                    p1 = (p1[0] + pos[0], p1[1] + pos[1])
-                p2 = (p2[0] + pos[0], p2[1] + pos[1])
-                p3 = (p3[0] + pos[0], p3[1] + pos[1])
-            if c == "S":
-                p1 = (2 * pos[0] - last_ctl[0], 2 * pos[1] - last_ctl[1]) if last_ctl and last_ctl[2] == "c" else pos
-            p0 = pos
-            m2 = 6 * max(
-                math.hypot(p0[0] - 2 * p1[0] + p2[0], p0[1] - 2 * p1[1] + p2[1]),
-                math.hypot(p1[0] - 2 * p2[0] + p3[0], p1[1] - 2 * p2[1] + p3[1]),
-            )
-            n = _segments(m2, scale, 1 / 8)
-            for k in range(1, n + 1):
-                t = k / n
-                u = 1 - t
-                cur.append(
-                    (
-                        u**3 * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t**3 * p3[0],
-                        u**3 * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t**3 * p3[1],
-                    )
+                    p1 = (num(), num())
+                p2 = (num(), num())
+                p3 = (num(), num())
+                if rel:
+                    if c == "C":
+                        p1 = (p1[0] + pos[0], p1[1] + pos[1])
+                    p2 = (p2[0] + pos[0], p2[1] + pos[1])
+                    p3 = (p3[0] + pos[0], p3[1] + pos[1])
+                if c == "S":
+                    p1 = (2 * pos[0] - last_ctl[0], 2 * pos[1] - last_ctl[1]) if last_ctl and last_ctl[2] == "c" else pos
+                p0 = pos
+                m2 = 6 * max(
+                    math.hypot(p0[0] - 2 * p1[0] + p2[0], p0[1] - 2 * p1[1] + p2[1]),
+                    math.hypot(p1[0] - 2 * p2[0] + p3[0], p1[1] - 2 * p2[1] + p3[1]),
                 )
-            last_ctl = (p2[0], p2[1], "c")
-            pos = p3
-        elif c in "QT":
-            if c == "Q":
-                p1 = (num(), num())
-            p3 = (num(), num())
-            if rel:
+                n = _segments(m2, scale, 1 / 8)
+                for k in range(1, n + 1):
+                    t = k / n
+                    u = 1 - t
+                    cur.append(
+                        (
+                            u**3 * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t**3 * p3[0],
+                            u**3 * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t**3 * p3[1],
+                        )
+                    )
+                last_ctl = (p2[0], p2[1], "c")
+                pos = p3
+            elif c in "QT":
                 if c == "Q":
-                    p1 = (p1[0] + pos[0], p1[1] + pos[1])
-                p3 = (p3[0] + pos[0], p3[1] + pos[1])
-            if c == "T":
-                p1 = (2 * pos[0] - last_ctl[0], 2 * pos[1] - last_ctl[1]) if last_ctl and last_ctl[2] == "q" else pos
-            p0 = pos
-            m2 = 2 * math.hypot(p0[0] - 2 * p1[0] + p3[0], p0[1] - 2 * p1[1] + p3[1])
-            n = _segments(m2, scale, 1 / 8)
-            for k in range(1, n + 1):
-                t = k / n
-                u = 1 - t
-                cur.append((u * u * p0[0] + 2 * u * t * p1[0] + t * t * p3[0], u * u * p0[1] + 2 * u * t * p1[1] + t * t * p3[1]))
-            last_ctl = (p1[0], p1[1], "q")
-            pos = p3
-        elif c == "A":
-            rx, ry, ph = num(), num(), num()
-            fa, fs = int(num()), int(num())
-            x, y = num(), num()
-            if rel:
-                x, y = x + pos[0], y + pos[1]
-            cur.extend(_arc_points(pos, rx, ry, ph, fa, fs, (x, y), scale))
-            pos = (x, y)
-            last_ctl = None
-        else:
-            raise ValueError("unsupported path command %s" % cmd)
+                    p1 = (num(), num())
+                p3 = (num(), num())
+                if rel:
+                    if c == "Q":
+                        p1 = (p1[0] + pos[0], p1[1] + pos[1])
+                    p3 = (p3[0] + pos[0], p3[1] + pos[1])
+                if c == "T":
+                    p1 = (2 * pos[0] - last_ctl[0], 2 * pos[1] - last_ctl[1]) if last_ctl and last_ctl[2] == "q" else pos
+                p0 = pos
+                m2 = 2 * math.hypot(p0[0] - 2 * p1[0] + p3[0], p0[1] - 2 * p1[1] + p3[1])
+                n = _segments(m2, scale, 1 / 8)
+                for k in range(1, n + 1):
+                    t = k / n
+                    u = 1 - t
+                    cur.append((u * u * p0[0] + 2 * u * t * p1[0] + t * t * p3[0], u * u * p0[1] + 2 * u * t * p1[1] + t * t * p3[1]))
+                last_ctl = (p1[0], p1[1], "q")
+                pos = p3
+            elif c == "A":
+                rx, ry, ph = num(), num(), num()
+                fa, fs = int(num()), int(num())
+                x, y = num(), num()
+                if rel:
+                    x, y = x + pos[0], y + pos[1]
+                cur.extend(_arc_points(pos, rx, ry, ph, fa, fs, (x, y), scale))
+                pos = (x, y)
+                last_ctl = None
+            else:
+                raise ValueError("unsupported path command %s" % cmd)
+    except (ValueError, IndexError):
+        cur = None if cur is None or len(cur) < 2 else cur
     flush(False)
     return out
 

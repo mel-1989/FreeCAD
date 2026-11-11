@@ -953,6 +953,13 @@ class DxfFrameTest(unittest.TestCase):
         fl = DT.flatten_template(p)
         self.assertEqual((len(fl.shapes), fl.filled, len(fl.texts)), (1, 1, 0))  # fill-only shape as its outline; blank text dropped
 
+    def test_path_data_error_renders_up_to_the_last_correct_segment(self):
+        """SVG 1.1 F.2: a path with an error is drawn up to the last correct segment (the Catalan A0 and A1 templates' "m 1179,670..5 h 5")."""
+        import DxfTemplate as DT
+        self.assertEqual(DT.path_polylines("m 1179,670..5 h 5"), [])
+        self.assertEqual(DT.path_polylines("M 0,0 L 10,0 L 10,"), [([(0.0, 0.0), (10.0, 0.0)], False)])
+        self.assertEqual(DT.path_polylines("M 0,0 L 10,0 L 10,5"), [([(0.0, 0.0), (10.0, 0.0), (10.0, 5.0)], False)])
+
     def test_zero_length_template_strokes_are_not_written(self):
         import DxfTemplate as DT
 
