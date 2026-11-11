@@ -47,17 +47,10 @@ import re
 import FreeCAD as App
 
 LAYERS = ("VISIBLE", "HIDDEN", "CENTER", "COSMETIC", "DIMENSIONS", "TEXT")
-STANDARDS = ("ANSI", "ISO", "ASME")  # index = the LineStandard preference value
 TEXT_STYLE = "TECHDRAW"
 DIM_STYLE = "TECHDRAW"
 VALID_LINEWEIGHTS = (0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211)
-CSV_FILES = {
-    "ISO": "ISO.128.20.1996",
-    "ANSI": "ANSI.Y14.2M.1992",
-    "ASME": "ASME.Y14.2.2008",
-}
-HIDDEN_LINE = {"ISO": 2, "ANSI": 2, "ASME": 2}
-CENTER_LINE = {"ISO": 4, "ANSI": 3, "ASME": 4}
+HIDDEN_LINE = 2  # the hidden line's number in every standard's LineDef file
 DUP_TOL = 1e-6
 SPLINE_TOL = 0.002  # discretisation deflection, well inside the 0.01 mm the brief allows
 SMOOTH_NOTE = "smooth, seam and iso edges are not separable in Python and are written to VISIBLE or HIDDEN with the other edges"
@@ -76,14 +69,44 @@ def layered_enabled():
     return _group("General").GetBool("LayeredDxf", True)
 
 
-def line_standard():
-    """-> "ANSI", "ISO" or "ASME" from the Standards/LineStandard preference."""
-    index = _group("Standards").GetInt("LineStandard", 1)
-    return STANDARDS[index] if 0 <= index < len(STANDARDS) else "ISO"
-
-
 def _resource_dir():
     return os.path.join(App.getResourceDir(), "Mod", "TechDraw", "LineGroup")
+
+
+def standard_files():
+    """-> the standards' file stems, sorted as ``LineGenerator::getAvailableLineStandards`` lists them: the names of the
+    ``*.LineDef.csv`` files in ``Mod/TechDraw/LineGroup`` without that suffix (index = the ``LineStandard`` preference)."""
+    suffix = ".LineDef.csv"
+    try:
+        names = os.listdir(_resource_dir())
+    except OSError:
+        names = []
+    return sorted(n[: -len(suffix)] for n in names if n.endswith(suffix))
+
+
+def standard_body(stem):
+    """"ISO.128.20.1996" -> "ISO": the body name that TechDraw tests (``ANSI`` is the one non-proportional standard)."""
+    return stem.split(".")[0].upper()
+
+
+def standard_names():
+    """-> {body name: file stem} of the standards found."""
+    return {standard_body(s): s for s in standard_files()}
+
+
+def line_standard():
+    """-> the body name (``"ANSI"``, ``"ASME"``, ``"ISO"``) of the standard at the ``LineStandard`` preference index into
+    ``standard_files()``; index 1 (ASME) when unset or out of range (ruling 84)."""
+    stems = standard_files()
+    index = _group("Standards").GetInt("LineStandard", 1)
+    if not 0 <= index < len(stems):
+        index = 1
+    return standard_body(stems[index])
+
+
+def center_line_number():
+    """TechDraw's number for a new centre line: the ``LineStyleCenter`` preference (default 4) plus one (Preferences.cpp)."""
+    return _group("Decorations").GetInt("LineStyleCenter", 4) + 1
 
 
 def _csv_rows(path):
@@ -121,7 +144,7 @@ def load_line_group():
 
 def load_standard(std):
     """-> (elements {name: length}, lines {number: (name, [element names] | None | "noline")}) from the CSV files."""
-    base = os.path.join(_resource_dir(), CSV_FILES[std])
+    base = os.path.join(_resource_dir(), standard_names()[std])
     elements = {}
     for row in _csv_rows(base + ".ElementDef.csv"):
         elements[row[0]] = float(row[1])
@@ -145,8 +168,8 @@ def _clean(x):
 def line_pattern(std, number, width):
     """The DXF dash pattern ``[total, e1, e2, ...]`` of line ``number`` under ``std`` at pen ``width`` mm, or None (continuous).
 
-    Dash and long dash are positive, gap and space negative, a dot a zero-length element; ISO lengths are the CSV's pen-width
-    units times ``width``, ANSI and ASME lengths are the CSV's mm."""
+    Dash and long dash are positive, gap and space negative, a dot a zero-length element; ISO and ASME lengths are the CSV's
+    pen-width numbers times ``width``, ANSI lengths are the CSV's mm (``LineGenerator::getLinePen``, ruling 85)."""
     elements, lines = load_standard(std)
     if number not in lines:
         return None
@@ -155,7 +178,7 @@ def line_pattern(std, number, width):
         return None
     out = []
     for name in els:
-        length = elements[name] * (width if std == "ISO" else 1.0)
+        length = elements[name] * (1.0 if std == "ANSI" else width)
         if name == "Dot":
             out.append(0.0)
         elif name in ("Gap", "Space"):
@@ -188,10 +211,10 @@ class _Types:
             return "CONTINUOUS"
         if els == "noline":
             return None
-        if self.std == "ISO":
-            name = "ISO_%02d_%s" % (number, ("%.3f" % width).rstrip("0").rstrip("."))
-        else:
+        if self.std == "ANSI":
             name = "%s_%02d" % (self.std, number)
+        else:
+            name = "%s_%02d_%s" % (self.std, number, ("%.3f" % width).rstrip("0").rstrip("."))
         if name not in self.doc.linetypes:
             self.doc.linetypes.add(
                 name, pattern=line_pattern(self.std, number, width), description="%s %s" % (self.std, self.lines[number][0])
@@ -570,8 +593,8 @@ def _new_document(run):
     h["$CELTSCALE"] = 1.0
     h["$LWDISPLAY"] = 1
     types = _Types(doc, run.std, run.thin)
-    hidden = types.name(HIDDEN_LINE[run.std], run.thin) or "CONTINUOUS"
-    center = types.name(CENTER_LINE[run.std], run.thin) or "CONTINUOUS"
+    hidden = types.name(HIDDEN_LINE, run.thin) or "CONTINUOUS"
+    center = types.name(center_line_number(), run.thin) or "CONTINUOUS"
     spec = {
         "VISIBLE": ("CONTINUOUS", run.thick),
         "HIDDEN": (hidden, run.thin),
@@ -633,7 +656,7 @@ def _view_edges(run, msp, types, view, off, dedupe):
                 continue
             attribs["linetype"] = lt
         elif abs(w - run.thin) > 1e-9:
-            lt = types.name(CENTER_LINE[run.std], w)
+            lt = types.name(center_line_number(), w)
             if lt:
                 attribs["linetype"] = lt
         rgb = _rgb(fmt.get("color", (0, 0, 0, 1)))
@@ -926,8 +949,8 @@ def write(page, path, standard=None):
     import ezdxf
 
     std = str(standard or line_standard()).upper()
-    if std not in CSV_FILES:
-        raise ValueError("standard must be one of ISO, ANSI, ASME, not %r" % standard)
+    if std not in standard_names():
+        raise ValueError("standard must be one of %s, not %r" % (", ".join(sorted(standard_names())), standard))
     run = _Run(page, std)
     # A file must be a function of the page alone: fixed dates, GUIDs and metadata, restored afterwards so no ezdxf global
     # outlives this call.

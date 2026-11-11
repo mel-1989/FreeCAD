@@ -47,7 +47,7 @@ def expected_pattern(std, number, width):
                 return None
             out = []
             for n in r[2:]:
-                ln = el[n] * (width if std == "ISO" else 1.0)
+                ln = el[n] * (1.0 if std == "ANSI" else width)
                 out.append(0.0 if n == "Dot" else (-ln if n in ("Gap", "Space") else ln))
             return [sum(abs(v) for v in out)] + out
 
@@ -348,8 +348,7 @@ class DxfExportTest(unittest.TestCase):
     def test_iso_hidden_and_center_line_types_from_the_csv(self):
         layers = {l.dxf.name: l.dxf.linetype for l in self.dxf.layers}
         w = 0.35
-        self.assertTrue(close(self.pattern(self.dxf, layers["HIDDEN"])[0], expected_pattern("ISO", 2, w)[0]))
-        for layer, number in (("HIDDEN", 2), ("CENTER", 4)):
+        for layer, number in (("HIDDEN", 2), ("CENTER", 5)):  # centre line LineStyleCenter + 1 = 5
             got = self.pattern(self.dxf, layers[layer])
             want = expected_pattern("ISO", number, w)
             self.assertEqual(len(got), len(want), layer)
@@ -364,7 +363,10 @@ class DxfExportTest(unittest.TestCase):
             d = self.ezdxf.readfile(p)
             layers = {l.dxf.name: l.dxf.linetype for l in d.layers}
             out[std] = d
-            for layer, number in (("HIDDEN", DX.HIDDEN_LINE[std]), ("CENTER", DX.CENTER_LINE[std])):
+            for layer, number in (("HIDDEN", DX.HIDDEN_LINE), ("CENTER", 5 if std != "ANSI" else None)):
+                if number is None:  # ANSI has no line 5: TechDraw draws the centre line continuous
+                    self.assertEqual(layers[layer].upper(), "CONTINUOUS")
+                    continue
                 got = self.pattern(d, layers[layer])
                 want = expected_pattern(std, number, 0.35)
                 self.assertEqual(len(got), len(want), (std, layer))
@@ -372,7 +374,9 @@ class DxfExportTest(unittest.TestCase):
                     self.assertTrue(close(a, b), (std, layer, got, want))
         iso = self.pattern(out["ISO"], {l.dxf.name: l.dxf.linetype for l in out["ISO"].layers}["HIDDEN"])
         ansi = self.pattern(out["ANSI"], {l.dxf.name: l.dxf.linetype for l in out["ANSI"].layers}["HIDDEN"])
+        asme = self.pattern(out["ASME"], {l.dxf.name: l.dxf.linetype for l in out["ASME"].layers}["HIDDEN"])
         self.assertTrue(close(max(abs(v) for v in iso[1:]), 12 * 0.35))  # dash 12 pen widths of the thin line, not 12 mm
+        self.assertTrue(close(max(abs(v) for v in asme[1:]), 12 * 0.35))  # ASME numbers are pen widths too (ruling 85)
         self.assertTrue(close(max(abs(v) for v in ansi[1:]), 3.0))  # ANSI dash 3 mm
 
     # -- ruling 78: edges ----------------------------------------------------------------------------------------------
@@ -755,7 +759,30 @@ class DxfExportTest(unittest.TestCase):
 
     def test_default_standard_follows_the_preference(self):
         fake = mock.Mock()
-        fake.GetInt = lambda key, default: 2 if key == "LineStandard" else default
-        with mock.patch.object(DX, "_group", lambda name: fake if name == "Standards" else DX.App.ParamGet("User parameter:BaseApp/Preferences/Mod/TechDraw/" + name)):
-            rep = DX.write(self.page, os.path.join(self.tmp, "asme.dxf"))
-        self.assertEqual(rep["standard"], "ASME")
+        prefs = "User parameter:BaseApp/Preferences/Mod/TechDraw/"
+        for index, want in ((0, "ANSI"), (1, "ASME"), (2, "ISO"), (None, "ASME"), (-1, "ASME"), (3, "ASME"), (99, "ASME")):
+            fake.GetInt = lambda key, default, index=index: (default if index is None else index) if key == "LineStandard" else default
+            with mock.patch.object(DX, "_group", lambda name: fake if name == "Standards" else DX.App.ParamGet(prefs + name)):
+                rep = DX.write(self.page, os.path.join(self.tmp, "std.dxf"))
+            self.assertEqual(rep["standard"], want, index)
+            d = self.ezdxf.readfile(os.path.join(self.tmp, "std.dxf"))
+            hidden = {l.dxf.name: l.dxf.linetype for l in d.layers}["HIDDEN"]
+            self.assertTrue(close(self.pattern(d, hidden)[0], expected_pattern(want, 2, 0.35)[0]), index)
+
+    def test_standard_index_follows_the_sorted_line_def_files(self):
+        stems = sorted(f[: -len(".LineDef.csv")] for f in os.listdir(LG) if f.endswith(".LineDef.csv"))
+        self.assertEqual(DX.standard_files(), stems)
+        self.assertEqual([DX.standard_body(s) for s in stems], ["ANSI", "ASME", "ISO"])
+
+    def test_center_line_follows_line_style_center(self):
+        fake = mock.Mock()
+        fake.GetInt = lambda key, default: 2 if key == "LineStyleCenter" else default
+        prefs = "User parameter:BaseApp/Preferences/Mod/TechDraw/"
+        with mock.patch.object(DX, "_group", lambda name: fake if name == "Decorations" else DX.App.ParamGet(prefs + name)):
+            DX.write(self.page, os.path.join(self.tmp, "cl.dxf"), "ISO")
+        d = self.ezdxf.readfile(os.path.join(self.tmp, "cl.dxf"))
+        center = {l.dxf.name: l.dxf.linetype for l in d.layers}["CENTER"]
+        got = self.pattern(d, center)
+        want = expected_pattern("ISO", 3, 0.35)
+        self.assertEqual(len(got), len(want))
+        self.assertTrue(all(close(a, b) for a, b in zip(got, want)))
