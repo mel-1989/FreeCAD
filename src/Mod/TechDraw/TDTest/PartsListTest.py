@@ -223,7 +223,13 @@ class PartsListTest(unittest.TestCase):
             page = self.page(tpl)
             W, H = page.Template.Width.Value, page.Template.Height.Value
             area, title = PL.page_areas(page)
-            self.assertEqual((tuple(round(v, 6) for v in area), title), ((10.0, 10.0, round(W - 10.0, 6), round(H - 10.0, 6)), None), tpl)
+            inset = (10.0, 10.0, round(W - 10.0, 6), round(H - 10.0, 6))
+            if title is None:  # no text at all: exactly the inset page
+                self.assertEqual(tuple(round(v, 6) for v in area), inset, tpl)
+            else:  # edges are pulled in past template text near them (zone letters), never out
+                self.assertTrue(area[0] >= 10.0 and area[1] >= 10.0 and area[2] <= inset[2] and area[3] <= inset[3], (tpl, area))
+            # R7: the two templates that carry title-block fields now report a title block (they named no rectangle for one)
+            self.assertEqual(title is not None, tpl in (os.path.join("ASME", "ANSIA_Landscape.svg"), os.path.join("ISO", "A4_Landscape_TD.svg")), tpl)
             self.doc.removeObject(page.Name)
 
     def test_r5_framed_template_is_unchanged_by_the_inset(self):
@@ -231,6 +237,82 @@ class PartsListTest(unittest.TestCase):
         area, title = PL.page_areas(page)
         self.assertIsNotNone(title)
         self.assertEqual(round(area[0]), 20)  # the ISO 5457 frame, not the 10 mm inset
+
+    # ---- R7: the title block rectangle covers the template's own text
+
+    R7_TEMPLATES = (
+        os.path.join("ISO", "A4_Landscape_ISO5457_minimal.svg"),
+        os.path.join("ISO", "A3_Landscape_ISO5457_minimal.svg"),
+        os.path.join("ISO", "A4_Landscape_ISO5457_advanced.svg"),
+        os.path.join("ASME", "ANSIA_Landscape.svg"),
+        os.path.join("ASME", "ANSIB_Landscape.svg"),
+        os.path.join("ISO", "localized", "de", "A4_Landscape_ISO7200_DE.svg"),
+        os.path.join("ISO", "localized", "fi", "A4_Landscape_SFS_ISO.svg"),
+        os.path.join("ISO", "localized", "zh-CN", "landscape", "A4_Landscape_CN_CLIP.svg"),
+        os.path.join("ISO", "localized", "ru", "Leading", "Landscape_A4_NotInGOST.svg"),
+        # title blocks at the left or in the middle of the bottom band, and zone letters inside the frame (verifier 1, M2)
+        os.path.join("ISO", "localized", "es-AR", "A4.svg"),
+        os.path.join("ASME", "ANSIA_Portrait.svg"),
+        os.path.join("ASME", "Arch_A_Portrait.svg"),
+        os.path.join("ISO", "localized", "de", "A4_Portrait_ISO7200_DE.svg"),
+    )
+
+    def template_text_boxes(self, page, template):
+        """Every text element of the template as a box in page mm (y up), measured from the SVG."""
+        W, H = float(page.Template.Width), float(page.Template.Height)
+        with open(page.Template.Template, encoding="utf-8") as fh:
+            svg = fh.read()
+        vb = [float(v) for v in re.search(r'viewBox="\s*([-\d.]+)[ ,]+([-\d.]+)[ ,]+([-\d.]+)[ ,]+([-\d.]+)', svg).groups()]
+        sx, sy = W / vb[2], H / vb[3]
+        return [
+            ((b[0] - vb[0]) * sx, H - (b[3] - vb[1]) * sy, (b[2] - vb[0]) * sx, H - (b[1] - vb[1]) * sy, n)
+            for b, n in PL.template_texts(svg)
+        ]
+
+    def test_r7_title_block_covers_its_text_and_fields(self):
+        for tpl in self.R7_TEMPLATES:
+            page = self.page(tpl)
+            area, title = PL.page_areas(page)
+            self.assertIsNotNone(title, tpl)
+            boxes = self.template_text_boxes(page, tpl)
+            fields = [b for b in boxes if b[4] is not None and area[0] <= (b[0] + b[2]) / 2 <= area[2] and area[1] <= (b[1] + b[3]) / 2 <= area[3] and b[1] < 0.4 * page.Template.Height.Value]
+            self.assertGreaterEqual(len(fields), 3, tpl)
+            for b in fields:  # an empty field has only a nominal width: judge it where it meets the frame
+                self.assertGreaterEqual(b[0], title[0] - 0.01, (tpl, b))
+                self.assertGreaterEqual(b[1], title[1] - 0.01, (tpl, b))
+                self.assertLessEqual(min(b[2], area[2]), title[2] + 0.01, (tpl, b))
+                self.assertLessEqual(b[3], title[3] + 0.01, (tpl, b))
+
+    def test_r7_iso_minimal_fields_above_the_rectangle(self):
+        # part_material, general_tolerances and scale sit at page y 48.8, above the 36 mm rectangle (fact p)
+        page = self.page(self.R7_TEMPLATES[0])
+        area, title = PL.page_areas(page)
+        self.assertGreater(title[3], 48.8 + 0.25 * 5)
+        page = self.page(self.R7_TEMPLATES[2])  # advanced: the same three at 60.8
+        self.assertGreater(PL.page_areas(page)[1][3], 60.8 + 0.25 * 5)
+
+    def test_r7_ansi_has_a_title_block(self):
+        a = self.page(self.R7_TEMPLATES[3])
+        b = self.page(self.R7_TEMPLATES[4])
+        for pg, top in ((a, 58.1), (b, 63.5)):
+            area, title = PL.page_areas(pg)
+            self.assertIsNotNone(title)
+            self.assertGreater(title[3], top)
+
+    def test_r7_a_placed_table_covers_no_template_text(self):
+        for tpl in self.R7_TEMPLATES:
+            App.closeDocument(self.doc.Name)  # a fresh document per template; tearDown closes the last
+            self.doc = doc = App.newDocument("R7")
+            doc.UndoMode = 1
+            page = self.page(tpl)
+            b = C.build_case(doc, "three_configs")
+            doc.recompute()
+            view = PL.make(page, b.asm)
+            doc.recompute()
+            x0, y0, x1, y1 = table_box(view)
+            for t in self.template_text_boxes(page, tpl):
+                clash = t[0] < x1 and x0 < t[2] and t[1] < y1 and y0 < t[3]
+                self.assertFalse(clash, (tpl, t))
 
     def test_corner_above_the_title_block(self):
         b = self.case("three_configs")

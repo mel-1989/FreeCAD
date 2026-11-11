@@ -99,10 +99,166 @@ def _rects(svg):
     return out
 
 
+# -- the title block's text, read from the template ---------------------------------------------
+
+TITLE_PAD_MM = 2.0  # text boxes closer than this belong to one title-block cluster
+MARKER_BAND_MM = 15.0  # template text this close to an edge of the drawing area (zone letters between a double frame, or inside the frame) pulls that edge in
+NOMINAL_EDIT_CHARS = 6  # an editable field is empty in the template: give it the width of this many characters
+ASCENT, DESCENT = 1.0, 0.25  # of the font size, above and below a text's baseline
+
+
+def _mat(t):
+    """The 2D affine matrix (a, b, c, d, e, f) of an SVG ``transform`` attribute (translate, scale, rotate, matrix)."""
+    m = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    for name, args in re.findall(r"(\w+)\s*\(([^)]*)\)", t or ""):
+        v = [float(x) for x in re.findall(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?", args)]
+        if name == "matrix" and len(v) == 6:
+            n = tuple(v)
+        elif name == "translate" and v:
+            n = (1.0, 0.0, 0.0, 1.0, v[0], v[1] if len(v) > 1 else 0.0)
+        elif name == "scale" and v:
+            n = (v[0], 0.0, 0.0, v[1] if len(v) > 1 else v[0], 0.0, 0.0)
+        elif name == "rotate" and v:
+            c, s_ = math.cos(math.radians(v[0])), math.sin(math.radians(v[0]))
+            n = (c, s_, -s_, c, 0.0, 0.0)
+            if len(v) == 3:
+                n = _mul((1.0, 0.0, 0.0, 1.0, v[1], v[2]), _mul(n, (1.0, 0.0, 0.0, 1.0, -v[1], -v[2])))
+        else:
+            continue
+        m = _mul(m, n)
+    return m
+
+
+def _mul(m, n):
+    return (
+        m[0] * n[0] + m[2] * n[1],
+        m[1] * n[0] + m[3] * n[1],
+        m[0] * n[2] + m[2] * n[3],
+        m[1] * n[2] + m[3] * n[3],
+        m[0] * n[4] + m[2] * n[5] + m[4],
+        m[1] * n[4] + m[3] * n[5] + m[5],
+    )
+
+
+def _first_num(v):
+    m = re.search(r"[-+]?(?:\d+\.?\d*|\.\d+)", v or "")
+    return float(m.group()) if m else None
+
+
+def _style(el):
+    d = dict(re.findall(r"([\w-]+)\s*:\s*([^;]+)", el.get("style", "")))
+    d.update({k: el.get(k) for k in ("font-size", "text-anchor") if el.get(k) is not None})
+    return d
+
+
+def template_texts(svg):
+    """-> [(box, editable name or None)]: every ``<text>`` of the template as a box (x0, y0, x1, y1) in SVG user units, y down.
+
+    Transforms of the element and its ancestors are applied, the font size and anchor are inherited, and the width is the text's
+    width in osifont (an empty editable field counts ``NOMINAL_EDIT_CHARS`` characters).
+    """
+    import xml.etree.ElementTree as ET
+
+    out = []
+    try:
+        root = ET.fromstring(svg.encode("utf-8"))
+    except ET.ParseError:
+        return out
+
+    def local(tag):
+        return tag.rsplit("}", 1)[-1]
+
+    def walk(el, m, inherited):
+        st = dict(inherited)
+        st.update(_style(el))
+        m = _mul(m, _mat(el.get("transform")))
+        if local(el.tag) == "text":
+            tspans = [c for c in el.iter() if local(c.tag) == "tspan"]
+            for c in tspans:  # a size on the tspan (Inkscape puts it there)
+                if "font-size" in _style(c):
+                    st["font-size"] = _style(c)["font-size"]
+                    break
+            size = _first_num(st.get("font-size")) or 3.5
+            text = "".join(el.itertext()).strip()
+            name = next((v for k, v in el.attrib.items() if local(k) == "editable"), None)
+            x = _first_num(el.get("x"))
+            y = _first_num(el.get("y"))
+            for c in tspans:
+                x = _first_num(c.get("x")) if x is None else x
+                y = _first_num(c.get("y")) if y is None else y
+            if x is None or y is None:
+                return
+            w = text_width_px(text, size) if text else NOMINAL_EDIT_CHARS * 0.55 * size
+            if name is not None and text:
+                w = max(w, NOMINAL_EDIT_CHARS * 0.55 * size)
+            anchor = (st.get("text-anchor") or "start").strip()
+            x0 = x - (w / 2 if anchor == "middle" else w if anchor == "end" else 0.0)
+            pts = [(x0, y - ASCENT * size), (x0 + w, y - ASCENT * size), (x0, y + DESCENT * size), (x0 + w, y + DESCENT * size)]
+            pts = [(m[0] * px + m[2] * py + m[4], m[1] * px + m[3] * py + m[5]) for px, py in pts]
+            xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+            out.append(((min(xs), min(ys), max(xs), max(ys)), name))
+            return
+        for c in el:
+            walk(c, m, st)
+
+    walk(root, (1.0, 0.0, 0.0, 1.0, 0.0, 0.0), {})
+    return out
+
+
+def _near(a, b, pad):
+    return a[0] - pad < b[2] and b[0] - pad < a[2] and a[1] - pad < b[3] and b[1] - pad < a[3]
+
+
+def clip_box(t, area):
+    """``t`` = (box, name) with the box cut to ``area`` (an empty editable field has only a nominal width)."""
+    b = t[0]
+    return ((max(b[0], area[0]), max(b[1], area[1]), min(b[2], area[2]), min(b[3], area[3])), t[1])
+
+
+def inset_for_markers(texts, area, title):
+    """``area`` with each edge pulled in past template text (zone letters and the like) that sits within ``MARKER_BAND_MM`` of it and
+    outside the title block, so no table can cover a template text element."""
+    x0, y0, x1, y1 = area
+    for b, _ in (clip_box(t, area) for t in texts):
+        if (title and _near(title, b, 0.0)) or b[2] <= b[0] or b[3] <= b[1]:
+            continue
+        if b[2] < area[0] + MARKER_BAND_MM:
+            x0 = max(x0, b[2] + 1.0)
+        elif b[0] > area[2] - MARKER_BAND_MM:
+            x1 = min(x1, b[0] - 1.0)
+        if b[3] < area[1] + MARKER_BAND_MM:
+            y0 = max(y0, b[3] + 1.0)
+        elif b[1] > area[3] - MARKER_BAND_MM:
+            y1 = min(y1, b[1] - 1.0)
+    return (x0, y0, x1, y1)
+
+
+def title_cluster(texts, area, seed, W, H):
+    """The box (page mm, y up) around the title block's text: the editable fields in the bottom 40 % of the page, anywhere along its width, grown over every
+    text box inside ``area`` closer than ``TITLE_PAD_MM`` to the cluster; ``seed`` is a box the template names as its title block.
+    ``texts`` are boxes in page mm, y up, with the editable name or None."""
+    inside = [clip_box(t, area) for t in texts if area[0] - 1 <= (t[0][0] + t[0][2]) / 2 <= area[2] + 1 and area[1] - 1 <= (t[0][1] + t[0][3]) / 2 <= area[3] + 1]
+    box = tuple(seed) if seed else None
+    for b, name in inside:
+        if name is not None and (b[1] + b[3]) / 2 < 0.4 * H:
+            box = b if box is None else (min(box[0], b[0]), min(box[1], b[1]), max(box[2], b[2]), max(box[3], b[3]))
+    if box is None:
+        return None
+    changed = True
+    while changed:
+        changed = False
+        for b, _ in inside:
+            if _near(box, b, TITLE_PAD_MM) and not (b[0] >= box[0] and b[1] >= box[1] and b[2] <= box[2] and b[3] <= box[3]):
+                box = (min(box[0], b[0]), min(box[1], b[1]), max(box[2], b[2]), max(box[3], b[3]))
+                changed = True
+    return box
+
+
 def page_areas(page):
     """-> (drawing area, title block or None), boxes (x0, y0, x1, y1) in page millimetres, y up.
 
-    Read from the template's rectangles: the drawing space frame, and the title block frame.  A template that names none
+    Read from the template's rectangles: the drawing space frame, and the title block frame, grown to cover every text element and
+    editable field of the title block (``title_cluster``).  A template that names none
     (the blank default, ASME ANSIA, ``A4_Landscape_TD``) has the page inset by ``NO_FRAME_INSET_MM`` on every side as its drawing
     area and no title block.
     """
@@ -130,8 +286,31 @@ def page_areas(page):
         hit = [r for r in rects if re.search(r"title[_ -]?block[_ -]?(frame|border)|title[_ -]?block", r[0], re.I)]
         if hit:
             title = box(max(hit, key=lambda r: r[3] * r[4]))
-    except Exception:
-        pass
+        # the true title block is whatever the template writes there: its rectangle, every text element and editable field beside it
+        # (the ISO minimal template keeps three fields above its rectangle; ANSI names no rectangle at all)
+        def page_box(b):
+            return (
+                (b[0] - vb[0]) * sx,
+                H - (b[3] - vb[1]) * sy,
+                (b[2] - vb[0]) * sx,
+                H - (b[1] - vb[1]) * sy,
+            )
+
+        texts = [(page_box(b), n) for b, n in template_texts(svg)]
+        grown = title_cluster(texts, area, title, W, H)
+        if grown is not None:
+            # the cells' own rectangles that the text cluster touches (ANSI draws its title block as unnamed rectangles)
+            cells = [box(r) for r in rects if r[3] * r[4] * sx * sy < 0.25 * (area[2] - area[0]) * (area[3] - area[1])]
+            cells = [c for c in cells if c[0] >= area[0] - 1 and c[2] <= area[2] + 1 and c[1] >= area[1] - 1 and c[3] <= area[3] + 1]
+            for c in cells:
+                if _near(grown, c, 0.0):
+                    grown = (min(grown[0], c[0]), min(grown[1], c[1]), max(grown[2], c[2]), max(grown[3], c[3]))
+            title = grown
+        area = inset_for_markers(texts, area, title)
+    except OSError:
+        pass  # no template file to read: the inset page stands
+    except Exception as e:  # a template this reader cannot parse: say so, keep what was found before it
+        App.Console.PrintWarning("PartsList.page_areas: %s: %s (%s)\n" % (type(e).__name__, e, getattr(t, "Template", "")))
     return area, title
 
 

@@ -322,6 +322,36 @@ class BendTableTest(unittest.TestCase):
         b.doc.recompute()
         return v
 
+    def test_flat_view_without_bend_data(self):
+        """R6: a V2 unfold (no BendData) gets a flat view along the largest planar face, a warning and an empty table, not a ValueError."""
+        FP, C, feature_unfold = _sm()
+        for prefix in ("g01", "g06", "g11", "g17"):
+            b = self.build(prefix, table=False)
+            ref = HT.Edges(b.view).box
+            case = next(c for c in C.all_cases() if c.name.startswith(prefix))
+            doc = App.newDocument("BendTableV2")
+            self.addCleanup(App.closeDocument, doc.Name)
+            obj, face, material, k = case.build(doc)
+            feat = feature_unfold(doc, obj, face, material=material, k=k, old=False)
+            if getattr(feat, "BendData", "x"):  # the new unfolder is not available in this build: fake the V2 outcome
+                feat.BendData = ""
+            page = doc.addObject("TechDraw::DrawPage", "Page")
+            t = doc.addObject("TechDraw::DrawSVGTemplate", "Template")
+            t.Template = os.path.join(App.getResourceDir(), "Mod", "TechDraw", "Templates", A4)
+            page.Template = t
+            view = BT.flat_view(page, feat)  # raises nothing
+            box = HT.Edges(view).box
+            self.assertIsNotNone(box, prefix)
+            # the outline matches the V1 view's (boxes are in unscaled units; the axes may swap)
+            w1, h1 = ref[2] - ref[0], ref[3] - ref[1]
+            w2, h2 = box[2] - box[0], box[3] - box[1]
+            self.assertTrue(
+                (abs(w1 - w2) < 0.01 and abs(h1 - h2) < 0.01) or (abs(w1 - h2) < 0.01 and abs(h1 - w2) < 0.01), "%s %s %s" % (prefix, (w1, h1), (w2, h2))
+            )
+            tbl = BT.make(page, view)
+            self.assertIn("BendTable: no bend data", BT.warning_of(tbl))
+            self.assertEqual(table_rows(tbl), [])
+
     def test_warning_no_bend_data(self):
         b = self.build("g03", table=False)
         v = self.fake(b, "")
