@@ -583,6 +583,9 @@ class _Run:
         self.skipped = []
         self.notes = [SMOOTH_NOTE]
         self.percent = []
+        self.layers = list(LAYERS)
+        self.approximate = []
+        self.template = None
         self.counts = {}
         self.dups = 0
         self.edges = {"VISIBLE": 0, "HIDDEN": 0, "COSMETIC": 0, "CENTER": 0}
@@ -829,9 +832,143 @@ def _write_rich(run, msp, view, group_of, view_names):
         run.skip(view, "rich annotation frame is not drawn (the text is written)")
 
 
+def _layer(run, msp, name):
+    """Create the role layer ``name`` (FRAME, TITLE, BALLOONS, LEADERS) on first use; layers appear in order of first use."""
+    doc = msp.doc
+    if name not in doc.layers:
+        doc.layers.add(name, color=7, linetype="CONTINUOUS", lineweight=lineweight(run.thin))
+        run.layers.append(name)
+
+
+def _emit(run, msp, prims, attribs):
+    """Add page-mm primitives (``line``, ``poly`` with optional bulges, ``circle``, ``ellipse``, ``solid``) to ``msp``."""
+    for pr in prims:
+        k = pr[0]
+        if k == "line":
+            e = msp.add_line(pr[1], pr[2], dxfattribs=attribs)
+        elif k == "circle":
+            e = msp.add_circle(pr[1], pr[2], dxfattribs=attribs)
+        elif k == "ellipse":
+            e = msp.add_ellipse(pr[1], major_axis=pr[2], ratio=pr[3], dxfattribs=attribs)
+        elif k == "solid":
+            pts = list(pr[1])
+            e = msp.add_solid(pts if len(pts) == 4 else pts + [pts[-1]], dxfattribs=attribs)
+        else:
+            pts, closed = pr[1], pr[2]
+            if len(pts) == 2 and len(pts[0]) == 2 and not closed:
+                e = msp.add_line(pts[0], pts[1], dxfattribs=attribs)
+            else:
+                e = msp.add_lwpolyline([(p[0], p[1], 0.0, 0.0, p[2] if len(p) > 2 else 0.0) for p in pts], format="xyseb", close=closed, dxfattribs=attribs)
+        run.count(e)
+
+
+def _template_path(tpl):
+    import os as _os
+
+    for prop in ("Template", "PageResult"):
+        path = getattr(tpl, prop, "") or ""
+        if path and _os.path.isfile(path):
+            return path
+    return None
+
+
+def _write_template(run, msp, tpl):
+    """Rulings 87 and 88: the template's frame on FRAME, its text on TITLE."""
+    import DxfTemplate as DT
+
+    path = _template_path(tpl)
+    if path is None:
+        run.skip(tpl, "template file not found (%s)" % (getattr(tpl, "Template", "") or "no file"))
+        return
+    try:
+        flat = DT.flatten_template(path, dict(tpl.EditableTexts))
+    except Exception as ex:  # a template that does not parse is named, the page is still written
+        run.skip(tpl, "template not written: %s: %s" % (type(ex).__name__, ex))
+        return
+    if not flat.shapes and not flat.texts:
+        run.notes.append("template %s is empty: it has no frame or title block to write" % os.path.basename(path))
+        run.template = {"file": os.path.basename(path), "shapes": 0, "texts": 0}
+        return
+    if flat.shapes:
+        _layer(run, msp, "FRAME")
+        _emit(run, msp, flat.shapes, {"layer": "FRAME"})
+    if flat.filled:
+        run.notes.append("template: %d filled shapes are written as their outline, the fill is not" % flat.filled)
+    for kind in sorted(set(flat.unsupported)):
+        run.skip(tpl, "template element <%s> is not written" % kind)
+    from ezdxf.enums import TextEntityAlignment
+
+    align = {"start": TextEntityAlignment.LEFT, "middle": TextEntityAlignment.CENTER, "end": TextEntityAlignment.RIGHT}
+    if flat.texts:
+        _layer(run, msp, "TITLE")
+    for t in flat.texts:
+        attribs = {"layer": "TITLE", "style": TEXT_STYLE, "height": t["height"], "rotation": t["rotation"]}
+        if abs(t["width_factor"] - 1.0) > 1e-9:
+            attribs["width"] = t["width_factor"]
+        e = msp.add_text(t["text"], dxfattribs=attribs)
+        e.set_placement((t["x"], t["y"]), align=align[t["anchor"]])
+        run.count(e)
+        codes = percent_codes(t["text"])
+        if codes:
+            run.percent.append({"name": tpl.Name, "label": tpl.Label, "codes": sorted(set(codes))})
+    run.template = {"file": os.path.basename(path), "shapes": len(flat.shapes), "texts": len(flat.texts)}
+
+
+def _format_attribs(run, msp, layer, fmt):
+    attribs = {"layer": layer, "lineweight": lineweight(fmt["LineWidth"])}
+    rgb = _rgb(fmt["Color"]) if fmt.get("Color") else None
+    if rgb is not None:
+        attribs["true_color"] = rgb
+    return attribs
+
+
+def _write_balloon(run, msp, balloon, group_of, formats):
+    import DxfAnnotations as DA
+
+    src = balloon.SourceView
+    if src is None:
+        run.skip(balloon, "balloon has no source view")
+        return
+    fmt = formats.get(balloon)
+    pos = page_position(src, group_of)
+    prims, centre, approx, _info = DA.balloon_geometry(balloon, pos, fmt)
+    _layer(run, msp, "BALLOONS")
+    attribs = _format_attribs(run, msp, "BALLOONS", fmt)
+    _emit(run, msp, prims, attribs)
+    from ezdxf.enums import MTextEntityAlignment
+
+    text = left_aligned(mtext_escape(balloon.Text))
+    t_attribs = {"layer": "BALLOONS", "style": TEXT_STYLE, "char_height": fmt["Fontsize"]}
+    if "true_color" in attribs:
+        t_attribs["true_color"] = attribs["true_color"]
+    mt = msp.add_mtext(text, dxfattribs=t_attribs)
+    mt.set_location(centre, attachment_point=int(MTextEntityAlignment.MIDDLE_CENTER))
+    run.count(mt)
+    if approx:
+        run.approximate.append({"name": balloon.Name, "label": balloon.Label, "reason": approx})
+
+
+def _write_leader(run, msp, leader, group_of, formats):
+    import DxfAnnotations as DA
+
+    parent = leader.LeaderParent
+    fmt = formats.get(leader)
+    if not fmt["LineVisible"]:
+        run.skip(leader, "leader line is hidden (LineVisible is off)")
+        return
+    if parent is None:  # TechDraw draws nothing for it (ruling 91; the GUI export holds no stroke for it)
+        run.skip(leader, "leader has no parent view (TechDraw draws nothing for it)")
+        return
+    pos = page_position(parent, group_of)
+    prims = DA.leader_geometry(leader, pos)
+    if not prims:
+        run.skip(leader, "leader has fewer than two points")
+        return
+    _layer(run, msp, "LEADERS")
+    _emit(run, msp, prims, _format_attribs(run, msp, "LEADERS", fmt))
+
+
 SKIP_REASONS = (
-    ("TechDraw::DrawViewBalloon", "balloon (bubble and leader) is not written"),
-    ("TechDraw::DrawLeaderLine", "leader line is not written"),
     ("TechDraw::DrawViewSpreadsheet", "table or parts list (spreadsheet view) is not written"),
     ("TechDraw::DrawWeldSymbol", "weld symbol is not written"),
     ("TechDraw::DrawViewClip", "clip group is not written"),
@@ -889,8 +1026,11 @@ def _view_texts(v):
 
 
 def _classify(run, msp, types, views, group_of):
+    import DxfAnnotations as DA
+
     dedupe_by_view = {}
     names = {v.Name for v in views}
+    formats = DA.GuiFormats(run.page.Document, run.thin)
     for v in views:
         tid = v.TypeId
         for t in _view_texts(v):
@@ -914,6 +1054,10 @@ def _classify(run, msp, types, views, group_of):
             _write_annotation(run, msp, v)
         elif _is(v, "TechDraw::DrawRichAnno"):
             _write_rich(run, msp, v, group_of, names)
+        elif _is(v, "TechDraw::DrawViewBalloon"):
+            _write_balloon(run, msp, v, group_of, formats)
+        elif _is(v, "TechDraw::DrawLeaderLine"):
+            _write_leader(run, msp, v, group_of, formats)
         else:
             for t, why in SKIP_REASONS:
                 if _is(v, t):
@@ -924,7 +1068,7 @@ def _classify(run, msp, types, views, group_of):
     page = run.page
     tpl = getattr(page, "Template", None)
     if tpl is not None:
-        run.skip(tpl, "template and title block are not written")
+        _write_template(run, msp, tpl)
     for o in page.Document.Objects:
         if o.TypeId in ("TechDraw::DrawHatch", "TechDraw::DrawGeomHatch"):
             src = o.Source
@@ -1022,13 +1166,15 @@ def write(page, path, standard=None):
         "path": str(path),
         "standard": std,
         "line_group": run.group["name"],
-        "layers": list(LAYERS),
+        "layers": list(run.layers),
         "entities": dict(run.counts),
         "edges": dict(run.edges),
         "duplicates_dropped": run.dups,
         "skipped": run.skipped,
         "notes": run.notes,
         "percent_codes": run.percent,
+        "approximate": run.approximate,
+        "template": run.template,
     }
     if run.percent:
         _warn("DXF export of %s: text with %%%% codes (%s) is written as typed; CAD readers show them as symbols" % (

@@ -22,6 +22,8 @@ set(TechDraw_Scripts
     SheetSet.py
     SvgFonts.py
     DxfExport.py
+    DxfTemplate.py
+    DxfAnnotations.py
     TitleBlockKeys.json
 )
 

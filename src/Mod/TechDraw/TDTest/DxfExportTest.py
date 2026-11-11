@@ -9,6 +9,7 @@
 # The GUI routes (TechDrawGui.export, the menu command) are exercised by the GUI script in harness/g04.
 
 import hashlib
+import math
 import os
 import sys
 import tempfile
@@ -655,7 +656,7 @@ class DxfExportTest(unittest.TestCase):
             d = self.ezdxf.readfile(os.path.join(self.tmp, "ctr.dxf"))
             mt = [m for m in d.modelspace().query("MTEXT") if "NOTE" in m.text][0]
             self.assertEqual(mt.dxf.attachment_point, 5)
-            self.assertTrue(rep["entities"]["MTEXT"] == 2)
+            self.assertEqual(len(d.modelspace().query('MTEXT[layer=="TEXT"]')), 2)
             self.rich.OriginCentered = False
             self.rich.AnnoParent = self.v0
             self.rich.X = 20
@@ -676,14 +677,16 @@ class DxfExportTest(unittest.TestCase):
 
     def test_skipped_objects_are_named_in_report_and_one_warning(self):
         names = {s["name"] for s in self.report["skipped"]}
-        for n in ("Template", "Balloon", "Hatch", "Section", "Detail", "Note", "DimExact"):
+        for n in ("Hatch", "Section", "Detail", "Note", "DimExact"):
             self.assertIn(n, names)
+        for n in ("Template", "Balloon"):  # written since slice 7b
+            self.assertNotIn(n, names)
         self.assertTrue(any("smooth" in n for n in self.report["notes"]))
         warnings = []
         with mock.patch.object(DX, "_warn", warnings.append):
             DX.write(self.page, os.path.join(self.tmp, "w.dxf"), "ISO")
         self.assertEqual(len(warnings), 1)
-        for n in ("Template", "Balloon", "Hatch", "Section", "Detail", "Note"):
+        for n in ("Hatch", "Section", "Detail", "Note"):
             self.assertIn(n, warnings[0])
 
     def test_every_object_is_written_or_named(self):
@@ -691,7 +694,7 @@ class DxfExportTest(unittest.TestCase):
         names = {s["name"] for s in self.report["skipped"]}
         for o in self.doc.Objects:
             if o.TypeId.startswith("TechDraw::") and o.TypeId not in written_types and o.TypeId not in ("TechDraw::DrawPage",):
-                if o.TypeId in ("TechDraw::DrawViewDimension", "TechDraw::DrawViewAnnotation", "TechDraw::DrawRichAnno"):
+                if o.TypeId in ("TechDraw::DrawViewDimension", "TechDraw::DrawViewAnnotation", "TechDraw::DrawRichAnno", "TechDraw::DrawViewBalloon", "TechDraw::DrawLeaderLine", "TechDraw::DrawSVGTemplate"):
                     continue  # written (a dimension frame or annotation frame is named in addition)
                 self.assertIn(o.Name, names, o.TypeId)
 
@@ -701,10 +704,10 @@ class DxfExportTest(unittest.TestCase):
             page = createPageWithSVGTemplate(doc)
             rep = DX.write(page, os.path.join(self.tmp, "empty.dxf"), "ISO")
             d = self.ezdxf.readfile(os.path.join(self.tmp, "empty.dxf"))
-            self.assertEqual(len(d.modelspace()), 0)
+            self.assertEqual({e.dxf.layer for e in d.modelspace()} - {"FRAME", "TITLE"}, set())  # only the template is on it
             self.assertEqual(len(d.audit().errors), 0)
             self.assertLess(abs(d.header["$EXTMAX"][0]), 1e6)
-            self.assertEqual([s["name"] for s in rep["skipped"]], ["Template"])
+            self.assertEqual(rep["skipped"], [])
         finally:
             App.closeDocument(doc.Name)
 
@@ -862,3 +865,291 @@ class DxfExportTest(unittest.TestCase):
         want = expected_pattern("ISO", 3, 0.35)
         self.assertEqual(len(got), len(want))
         self.assertTrue(all(close(a, b) for a, b in zip(got, want)))
+
+
+TEMPLATE_SVG = """<svg xmlns="http://www.w3.org/2000/svg" xmlns:freecad="http://www.freecad.org/wiki/index.php?title=Svg_Namespace" width="200mm" height="100mm" viewBox="0 0 400 200">
+ <g transform="translate(20,10) scale(2)" style="font-size:4px;font-family:osifont;text-anchor:start">
+  <rect x="5" y="5" width="30" height="10" style="fill:none;stroke:#000"/>
+  <path d="m 5,50 h 10 v 10 l 5,5 z" style="fill:none;stroke:#000"/>
+  <path d="M 50 50 C 50 70, 70 70, 70 50" style="fill:none;stroke:#000"/>
+  <circle cx="100" cy="30" r="5" style="fill:none;stroke:#000"/>
+  <text freecad:editable="title"><tspan x="10" y="90">Default</tspan></text>
+  <text style="text-anchor:middle"><tspan x="50" y="90">Mid</tspan></text>
+  <text transform="scale(0.5 1)"><tspan x="100" y="40">Narrow</tspan></text>
+ </g>
+</svg>
+"""
+
+
+def seg_distance(p, a, b):
+    vx, vy = b[0] - a[0], b[1] - a[1]
+    n = vx * vx + vy * vy
+    t = 0 if n == 0 else max(0, min(1, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / n))
+    return math.hypot(p[0] - a[0] - t * vx, p[1] - a[1] - t * vy)
+
+
+def dist_to_poly(p, pts):
+    return min(seg_distance(p, a, b) for a, b in zip(pts, pts[1:]))
+
+
+class DxfFrameTest(unittest.TestCase):
+    """Slice 7b: template frame and title block, balloons, leaders (rulings 87 to 91)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import ezdxf
+
+        cls.ezdxf = ezdxf
+        cls.tmp = tempfile.mkdtemp()
+        cls.svg = os.path.join(cls.tmp, "tpl.svg")
+        with open(cls.svg, "w", encoding="utf-8") as f:
+            f.write(TEMPLATE_SVG)
+
+    def test_template_flattening_applies_transforms_viewbox_and_relative_commands(self):
+        import DxfTemplate as DT
+
+        fl = DT.flatten_template(self.svg)
+        self.assertEqual((fl.width, fl.height), (200.0, 100.0))
+        polys = [s for s in fl.shapes if s[0] == "poly"]
+        rect = [p for p in polys if len(p[1]) == 4 and p[2]][0][1]
+        for want in ((15, 90), (45, 90), (45, 80), (15, 80)):  # viewBox 0.5 x translate(20,10) x scale(2), page y up
+            self.assertTrue(any(math.hypot(p[0] - want[0], p[1] - want[1]) < 1e-9 for p in rect), want)
+        rel = [p for p in polys if len(p[1]) == 4 and p[2] and p is not [q for q in polys if q[1] is rect][0]][0][1]
+        for got, want in zip(rel, ((15, 45), (25, 45), (25, 35), (30, 30))):  # relative m, h, v, l, z
+            self.assertAlmostEqual(got[0], want[0], 9)
+            self.assertAlmostEqual(got[1], want[1], 9)
+        curve = [p for p in polys if not p[2]][0][1]
+        self.assertGreater(len(curve), 8)
+        self.assertEqual((round(curve[0][0], 9), round(curve[0][1], 9)), (60, 45))
+        self.assertEqual((round(curve[-1][0], 9), round(curve[-1][1], 9)), (80, 45))
+        self.assertLess(dist_to_poly((70, 30), curve), 0.002)  # the curve's midpoint (t = 0.5) is (60, 65) in user units
+        circ = [s for s in fl.shapes if s[0] == "circle"][0]
+        self.assertAlmostEqual(circ[2], 5.0, 9)
+        self.assertAlmostEqual(circ[1][0], 110.0, 9)
+        self.assertAlmostEqual(circ[1][1], 65.0, 9)
+
+    def test_template_text_anchor_height_scale_and_editable_fields(self):
+        import DxfTemplate as DT
+
+        fl = DT.flatten_template(self.svg, {"title": "EDITED"})
+        by = {t["text"]: t for t in fl.texts}
+        self.assertEqual(sorted(by), ["EDITED", "Mid", "Narrow"])  # the editable field takes its EditableTexts string
+        self.assertAlmostEqual(by["EDITED"]["x"], 20.0, 9)
+        self.assertAlmostEqual(by["EDITED"]["y"], 5.0, 9)
+        self.assertAlmostEqual(by["EDITED"]["height"], 4.0, 9)
+        self.assertEqual(by["Mid"]["anchor"], "middle")
+        self.assertAlmostEqual(by["Mid"]["x"], 60.0, 9)
+        self.assertAlmostEqual(by["Narrow"]["width_factor"], 0.5, 9)  # non-uniform scale: height by the y scale, width factor the ratio
+        self.assertAlmostEqual(by["Narrow"]["height"], 4.0, 9)
+        self.assertEqual(DT.flatten_template(self.svg).texts[0]["text"], "Default")
+
+    def test_filled_and_invisible_shapes(self):
+        import DxfTemplate as DT
+
+        p = os.path.join(self.tmp, "fill.svg")
+        with open(p, "w") as f:
+            f.write('<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm"><rect x="1" y="1" width="2" height="2" style="fill:#000;stroke:none"/>'
+                    '<rect x="4" y="4" width="2" height="2" style="fill:none;stroke:none"/><text x="1" y="9">   </text></svg>')
+        fl = DT.flatten_template(p)
+        self.assertEqual((len(fl.shapes), fl.filled, len(fl.texts)), (1, 1, 0))  # fill-only shape as its outline; blank text dropped
+
+    def make_template_page(self, name):
+        doc = App.newDocument(name)
+        page = doc.addObject("TechDraw::DrawPage", "Page")
+        tpl = doc.addObject("TechDraw::DrawSVGTemplate", "Template")
+        tpl.Template = self.svg
+        page.Template = tpl
+        doc.recompute()
+        return doc, page, tpl
+
+    def test_frame_and_title_in_the_dxf(self):
+        doc, page, tpl = self.make_template_page("DxfTplPage")
+        try:
+            tpl.setEditFieldContent("title", "EDITED 16")
+            path = os.path.join(self.tmp, "tpl.dxf")
+            rep = DX.write(page, path, "ISO")
+            d = self.ezdxf.readfile(path)
+            self.assertEqual(len(d.audit().errors), 0)
+            frame = [e for e in d.modelspace() if e.dxf.layer == "FRAME"]
+            self.assertEqual(sorted(e.dxftype() for e in frame), ["CIRCLE", "LWPOLYLINE", "LWPOLYLINE", "LWPOLYLINE"])
+            texts = {e.dxf.text: e for e in d.modelspace() if e.dxf.layer == "TITLE"}
+            self.assertEqual(sorted(texts), ["EDITED 16", "Mid", "Narrow"])
+            self.assertAlmostEqual(texts["EDITED 16"].dxf.insert.x, 20.0, 6)
+            self.assertAlmostEqual(texts["EDITED 16"].dxf.insert.y, 5.0, 6)
+            self.assertEqual(texts["Mid"].dxf.halign, 1)
+            self.assertAlmostEqual(texts["Mid"].dxf.align_point.x, 60.0, 6)
+            self.assertAlmostEqual(texts["Narrow"].dxf.width, 0.5, 6)
+            self.assertEqual(rep["template"], {"file": "tpl.svg", "shapes": 4, "texts": 3})
+            self.assertEqual(rep["skipped"], [])
+            self.assertIn("FRAME", rep["layers"])
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_unparseable_template_is_named_and_the_page_still_written(self):
+        doc, page, tpl = self.make_template_page("DxfTplBad")
+        try:
+            bad = os.path.join(self.tmp, "bad.svg")
+            with open(bad, "w") as f:
+                f.write("<svg><g></svg>")
+            tpl.Template = bad
+            rep = DX.write(page, os.path.join(self.tmp, "bad.dxf"), "ISO")
+            self.assertEqual([s["name"] for s in rep["skipped"]], ["Template"])
+            self.assertIn("ParseError", rep["skipped"][0]["reason"])
+            self.assertTrue(os.path.isfile(os.path.join(self.tmp, "bad.dxf")))
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_default_template_writes_nothing_and_says_so(self):
+        doc = App.newDocument("DxfTplDefault")
+        try:
+            page = doc.addObject("TechDraw::DrawPage", "Page")
+            tpl = doc.addObject("TechDraw::DrawSVGTemplate", "Template")
+            tpl.Template = os.path.join(App.getResourceDir(), "Mod", "TechDraw", "Templates", "Default_Template_A4_Landscape.svg")
+            page.Template = tpl
+            doc.recompute()
+            rep = DX.write(page, os.path.join(self.tmp, "def.dxf"), "ISO")
+            self.assertEqual(rep["template"]["shapes"] + rep["template"]["texts"], 0)
+            self.assertTrue(any("is empty" in n for n in rep["notes"]))
+            self.assertEqual(rep["skipped"], [])
+        finally:
+            App.closeDocument(doc.Name)
+
+    # -- balloons and leaders ------------------------------------------------------------------------------------------
+
+    def make_view_doc(self, name):
+        doc = App.newDocument(name)
+        part = doc.addObject("Part::Feature", "Box")
+        part.Shape = Part.makeBox(30, 20, 10)
+        page = createPageWithSVGTemplate(doc)
+        v = doc.addObject("TechDraw::DrawViewPart", "View")
+        page.addView(v)
+        v.Source = [part]
+        v.Direction = V(0, 0, 1)
+        v.ScaleType = "Custom"
+        v.Scale = 2.0
+        v.X, v.Y = 100.0, 100.0
+        doc.recompute()
+        return doc, page, v
+
+    def test_balloon_geometry_follows_the_view_scale_and_the_font_metrics(self):
+        import DxfAnnotations as DA
+
+        doc, page, v = self.make_view_doc("DxfBalloon")
+        try:
+            b = doc.addObject("TechDraw::DrawViewBalloon", "Bal")
+            page.addView(b)
+            b.SourceView = v
+            b.BubbleShape = "Circular"
+            b.Text = "12"
+            b.X, b.Y, b.OriginX, b.OriginY = 10.0, -5.0, 3.0, 4.0
+            b.KinkLength = 5.0
+            b.EndType = "Open arrow"
+            doc.recompute()
+            path = os.path.join(self.tmp, "bal.dxf")
+            rep = DX.write(page, path, "ISO")
+            d = self.ezdxf.readfile(path)
+            ents = [e for e in d.modelspace() if e.dxf.layer == "BALLOONS"]
+            circle = [e for e in ents if e.dxftype() == "CIRCLE"][0]
+            self.assertAlmostEqual(circle.dxf.center.x, 120.0, 6)  # view position + (X, Y) times the view scale
+            self.assertAlmostEqual(circle.dxf.center.y, 90.0, 6)
+            W, H, approx = DA.text_box("12", "osifont", DA.default_format(0.35)["Fontsize"])
+            self.assertFalse(approx)
+            self.assertAlmostEqual(circle.dxf.radius, math.hypot(H / 2, W / 2) * 0.1, 6)
+            line = [e for e in ents if e.dxftype() == "LWPOLYLINE"][0]
+            pts = [tuple(p[:2]) for p in line.get_points()]
+            self.assertAlmostEqual(pts[-1][0], 106.0, 6)  # arrow tip: view position + (OriginX, OriginY) times the scale
+            self.assertAlmostEqual(pts[-1][1], 108.0, 6)
+            self.assertEqual(len(pts), 3)  # bubble side, kink, tip
+            self.assertAlmostEqual(abs(pts[1][0] - pts[0][0]), 5.0, 6)
+            mt = [e for e in ents if e.dxftype() == "MTEXT"][0]
+            self.assertEqual((mt.text, mt.dxf.attachment_point), ("12", 5))
+            self.assertEqual(rep["approximate"], [])
+            self.assertEqual(rep["skipped"], [])
+            self.assertEqual(open(path, "rb").read(), open(self.rewrite(page, "bal2.dxf"), "rb").read())  # deterministic
+        finally:
+            App.closeDocument(doc.Name)
+
+    def rewrite(self, page, name):
+        path = os.path.join(self.tmp, name)
+        DX.write(page, path, "ISO")
+        return path
+
+    def test_font_not_bundled_is_approximate(self):
+        import DxfAnnotations as DA
+
+        self.assertFalse(DA.text_box("1", "osifont", 5.0)[2])
+        self.assertTrue(DA.text_box("1", "Arial", 5.0)[2])
+        w1, h1, _ = DA.text_box("1", "osifont", 5.0)
+        w2, h2, _ = DA.text_box("1", "osifont", 10.0)
+        self.assertGreater(w2, w1)
+        self.assertGreater(h2, h1)
+
+    def test_balloon_without_a_source_view_and_leader_without_a_parent_are_named(self):
+        doc, page, v = self.make_view_doc("DxfOrphans")
+        try:
+            b = doc.addObject("TechDraw::DrawViewBalloon", "Orphan")
+            page.addView(b)
+            l = doc.addObject("TechDraw::DrawLeaderLine", "Lone")
+            page.addView(l)
+            l.WayPoints = [V(0, 0, 0), V(10, 5, 0)]
+            doc.recompute()
+            rep = DX.write(page, os.path.join(self.tmp, "orph.dxf"), "ISO")
+            self.assertEqual(sorted(s["name"] for s in rep["skipped"]), ["Lone", "Orphan"])
+        finally:
+            App.closeDocument(doc.Name)
+
+    def make_leader(self, doc, page, v, **kw):
+        l = doc.addObject("TechDraw::DrawLeaderLine", "Leader%d" % len(doc.Objects))
+        page.addView(l)
+        l.LeaderParent = v
+        l.WayPoints = [V(0, 0, 0), V(10, 5, 0)]
+        l.X, l.Y = 0.0, 0.0
+        l.StartSymbol = "None"
+        l.EndSymbol = "None"
+        for k, val in kw.items():
+            setattr(l, k, val)
+        doc.recompute()
+        return l
+
+    def leader_points(self, page, name):
+        path = os.path.join(self.tmp, name + ".dxf")
+        rep = DX.write(page, path, "ISO")
+        d = self.ezdxf.readfile(path)
+        lines = [e for e in d.modelspace() if e.dxf.layer == "LEADERS"]
+        return rep, d, lines
+
+    def test_leader_waypoints_y_down_scale_and_auto_horizontal(self):
+        doc, page, v = self.make_view_doc("DxfLeader")
+        try:
+            self.make_leader(doc, page, v, AutoHorizontal=False, Scalable=True)
+            rep, d, lines = self.leader_points(page, "l1")
+            pts = [tuple(p[:2]) for p in lines[0].get_points()] if lines[0].dxftype() == "LWPOLYLINE" else [tuple(lines[0].dxf.start)[:2], tuple(lines[0].dxf.end)[:2]]
+            self.assertEqual([(round(x, 6), round(y, 6)) for x, y in pts], [(100.0, 100.0), (120.0, 90.0)])  # +Y of a waypoint is down; Scalable: times 2
+            self.assertEqual(rep["skipped"], [])
+            doc2, page2, v2 = self.make_view_doc("DxfLeader2")
+            try:
+                self.make_leader(doc2, page2, v2, AutoHorizontal=True, Scalable=False)
+                _r, _d, ls = self.leader_points(page2, "l2")
+                pts = [tuple(ls[0].dxf.start)[:2], tuple(ls[0].dxf.end)[:2]] if ls[0].dxftype() == "LINE" else [tuple(p[:2]) for p in ls[0].get_points()]
+                self.assertAlmostEqual(pts[1][1], pts[0][1], 6)  # the last segment is horizontal, with the same length
+                self.assertAlmostEqual(pts[1][0] - pts[0][0], math.hypot(10, 5), 6)
+            finally:
+                App.closeDocument(doc2.Name)
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_leader_start_symbol_trims_the_line_and_writes_a_solid_arrow(self):
+        doc, page, v = self.make_view_doc("DxfLeaderArrow")
+        try:
+            self.make_leader(doc, page, v, AutoHorizontal=False, Scalable=True, StartSymbol="Filled arrow")
+            rep, d, ents = self.leader_points(page, "l3")
+            line = [e for e in ents if e.dxftype() in ("LWPOLYLINE", "LINE")][0]
+            first = tuple(line.dxf.start)[:2] if line.dxftype() == "LINE" else tuple(line.get_points()[0][:2])
+            self.assertAlmostEqual(math.hypot(first[0] - 100.0, first[1] - 100.0), 0.175, 4)  # 0.5 x 3.5 scene units
+            solid = [e for e in ents if e.dxftype() == "SOLID"]
+            self.assertEqual(len(solid), 1)
+            tip = tuple(solid[0].dxf.vtx0)[:2]
+            self.assertAlmostEqual(tip[0], 100.0, 6)
+            self.assertAlmostEqual(tip[1], 100.0, 6)
+        finally:
+            App.closeDocument(doc.Name)
