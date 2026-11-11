@@ -433,8 +433,7 @@ class _BodyParser(html.parser.HTMLParser):
             self.cur = []
             self.paras.append(self.cur)
         elif tag in ("td", "th"):
-            if self.cur:
-                self.cur.append(" ")
+            pass  # ruling 81: other tags are removed and add nothing (cells of one row join as written)
         elif tag == "br":
             self._para().append("\n")
 
@@ -747,7 +746,12 @@ def _write_annotation(run, msp, view):
     if not lines:
         return
     text = left_aligned("\\P".join(lines))
-    attribs = {"layer": "TEXT", "style": TEXT_STYLE, "char_height": _text_height(view.TextSize), "rotation": _val(view.Rotation)}
+    attribs = {"layer": "TEXT", "style": TEXT_STYLE, "char_height": _text_height(view.TextSize)}
+    angle = _val(view.Rotation)
+    if abs(angle) > 1e-12:
+        # rotation as the text direction (group 11), not group 50: both are valid DXF, and libredwg rejects group 50 on MTEXT
+        rad = math.radians(angle)
+        attribs["text_direction"] = (math.cos(rad), math.sin(rad), 0.0)
     rgb = _rgb(tuple(view.TextColor))
     if rgb is not None:
         attribs["true_color"] = rgb

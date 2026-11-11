@@ -589,7 +589,8 @@ class DxfExportTest(unittest.TestCase):
         self.assertEqual(mt.dxf.attachment_point, 5)  # middle centre
         self.assertTrue(close(mt.dxf.insert.x, 60.0) and close(mt.dxf.insert.y, 30.0))
         self.assertTrue(close(mt.dxf.char_height, 5.0))
-        self.assertTrue(close(mt.dxf.rotation, 30.0))
+        self.assertTrue(close(mt.get_rotation(), 30.0))
+        self.assertFalse(mt.dxf.hasattr("rotation"))  # direction vector (group 11), not group 50
         self.assertIn("\\pxql;", mt.text)  # left-aligned paragraphs
 
     def test_annotation_second_line_and_escapes(self):
@@ -617,7 +618,7 @@ class DxfExportTest(unittest.TestCase):
         self.assertEqual(DX.rich_text_to_mtext(qt), "First paragraph \u2300 16 \u00b1 0.1 \u00b0\\PSecond paragraph\\Pafter a break <tag> & more")
         self.assertEqual(DX.rich_text_to_mtext("hand written <b>bold</b> &amp; text"), "hand written bold & text")
         tbl = '<table border="1"><tr><td><span style="font-family:\'Y14.5-FreeCAD\';">&#184;</span></td><td><span>0.05</span></td></tr></table>'
-        self.assertEqual(DX.rich_text_to_mtext(tbl), "\u00b8 0.05")
+        self.assertEqual(DX.rich_text_to_mtext(tbl), "\u00b80.05")
 
     def test_pmi_frames_are_named_and_the_text_still_written(self):
         ra = self.doc.addObject("TechDraw::DrawRichAnno", "PmiFrame")
