@@ -326,17 +326,29 @@ def scale_for(box_w, box_h, area):
     return best or 0.01
 
 
+def _flat_normal(unfold):
+    """The normal of the largest planar face of ``unfold``'s shape (a flat pattern's two big faces), as a Vector."""
+    faces = [f for f in unfold.Shape.Faces if f.Surface.isPlanar()] if not unfold.Shape.isNull() else []
+    if not faces:
+        raise ValueError("%s has no planar face to look along" % unfold.Label)
+    n = max(faces, key=lambda f: f.Area).normalAt(0, 0)
+    return Vector(n.x, n.y, n.z)
+
+
 def flat_view(page, unfold):
     """Make the view of a flat pattern a bend table reads: along the bend data's normal, x axis the DXF frame's, ruling 32's scale and place.
 
-    -> the ``DrawViewPart`` (``Source = [unfold]``, ``Direction`` the normal, ``XDirection`` ``Frame2D(normal).ex``).
+    -> the ``DrawViewPart`` (``Source = [unfold]``, ``Direction`` the normal, ``XDirection`` ``Frame2D(normal).ex``).  An unfold with
+    no bend data (the V2 unfolder) gets the largest planar face's normal and a console warning; ``make`` on that view gives the empty table.
     """
     import SheetMetalFlatPattern as FP
 
     doc = page.Document
     flat, normal, problem = FP.bends_and_problem_from_json(getattr(unfold, "BendData", ""))
     if normal is None:
-        raise ValueError("%s has no V1 bend data" % unfold.Label)
+        # a V2 unfold stores no bend data: look along the largest planar face's normal, which shows the flat, and say the table is unavailable
+        normal = _flat_normal(unfold)
+        App.Console.PrintWarning("BendTable: no bend data on %s; the flat view is drawn along its largest planar face and a bend table on it stays empty\n" % unfold.Label)
     own = HT.begin(doc, "Flat pattern view")
     try:
         v = doc.addObject("TechDraw::DrawViewPart", "FlatView")
