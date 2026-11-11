@@ -39,6 +39,7 @@ Y14.2 element and line definitions, ``LineGroup.csv`` widths) and FreeCAD's stoc
 """
 
 import codecs
+import errno
 import html.parser
 import math
 import os
@@ -414,6 +415,16 @@ def mtext_escape(s):
     return s.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
 
 
+_PERCENT_CODE = re.compile(r"%%[A-Za-z0-9]")
+
+
+def percent_codes(text):
+    """The ``%%x`` codes in ``text``: CAD readers (and FreeCAD's importer) turn ``%%c``, ``%%d``, ``%%p`` into ⌀, ° and ± in
+    any text, and ``\\U+0025`` does not survive ezdxf or FreeCAD (run 096 probe), so such texts are named in the report
+    (ruling 93's fallback) and written as typed."""
+    return _PERCENT_CODE.findall(text)
+
+
 def annotation_lines(view):
     """The lines of a DrawViewAnnotation as the GUI draws them (legacy ``\\x`` escapes decoded as the C++ does)."""
     out = []
@@ -571,6 +582,7 @@ class _Run:
         self.thick = self.group["thick"]
         self.skipped = []
         self.notes = [SMOOTH_NOTE]
+        self.percent = []
         self.counts = {}
         self.dups = 0
         self.edges = {"VISIBLE": 0, "HIDDEN": 0, "COSMETIC": 0, "CENTER": 0}
@@ -864,11 +876,27 @@ def _page_size(page):
         return None
 
 
+def _view_texts(v):
+    if _is(v, "TechDraw::DrawViewAnnotation"):
+        return list(v.Text)
+    if _is(v, "TechDraw::DrawRichAnno"):
+        return [v.AnnoText]
+    if _is(v, "TechDraw::DrawViewDimension"):
+        return [v.getText()]
+    if _is(v, "TechDraw::DrawViewBalloon"):
+        return [v.Text]
+    return []
+
+
 def _classify(run, msp, types, views, group_of):
     dedupe_by_view = {}
     names = {v.Name for v in views}
     for v in views:
         tid = v.TypeId
+        for t in _view_texts(v):
+            codes = percent_codes(t)
+            if codes:
+                run.percent.append({"name": v.Name, "label": v.Label, "codes": sorted(set(codes))})
         if tid == "TechDraw::DrawProjGroup":
             continue
         if _is(v, "TechDraw::DrawViewPart"):
@@ -943,6 +971,20 @@ def _warn(msg):
     App.Console.PrintWarning(msg + "\n")
 
 
+def _check_target(path):
+    """Ruling 92: refuse a target that cannot be written, with an ``OSError`` that names ``path`` (never the ``.tmp`` file)."""
+    path = str(path)
+    folder = os.path.dirname(os.path.abspath(path))
+    if os.path.isdir(path):
+        raise IsADirectoryError(errno.EISDIR, "the target is a folder", path)
+    if not os.path.isdir(folder):
+        raise FileNotFoundError(errno.ENOENT, "the target's folder does not exist", path)
+    if os.path.lexists(path) and not os.access(path, os.W_OK):
+        raise PermissionError(errno.EACCES, "the target exists and is read-only", path)
+    if not os.access(folder, os.W_OK | os.X_OK):
+        raise PermissionError(errno.EACCES, "the target's folder is not writable", path)
+
+
 def write(page, path, standard=None):
     """Write ``page`` as a layered DXF R2013 file at ``path``; returns the report (a dict, ``report["skipped"]`` the list of
     objects not written, each with ``name`` and ``reason``)."""
@@ -951,6 +993,7 @@ def write(page, path, standard=None):
     std = str(standard or line_standard()).upper()
     if std not in standard_names():
         raise ValueError("standard must be one of %s, not %r" % (", ".join(sorted(standard_names())), standard))
+    _check_target(path)
     run = _Run(page, std)
     # A file must be a function of the page alone: fixed dates, GUIDs and metadata, restored afterwards so no ezdxf global
     # outlives this call.
@@ -964,9 +1007,15 @@ def write(page, path, standard=None):
         _extents(doc, msp, page)
         _order_classes(doc)
         tmp = str(path) + ".tmp"
-        doc.saveas(tmp)
-        _drop_3p_arc_point(tmp)
-        os.replace(tmp, str(path))
+        try:
+            doc.saveas(tmp)
+            _drop_3p_arc_point(tmp)
+            os.replace(tmp, str(path))
+        except OSError as ex:
+            raise type(ex)(ex.errno, ex.strerror or str(ex), str(path)) from None
+        finally:
+            if os.path.lexists(tmp):
+                os.remove(tmp)
     finally:
         ezdxf.options.write_fixed_meta_data_for_testing = previous
     report = {
@@ -979,7 +1028,11 @@ def write(page, path, standard=None):
         "duplicates_dropped": run.dups,
         "skipped": run.skipped,
         "notes": run.notes,
+        "percent_codes": run.percent,
     }
+    if run.percent:
+        _warn("DXF export of %s: text with %%%% codes (%s) is written as typed; CAD readers show them as symbols" % (
+            page.Name, ", ".join("%s: %s" % (p["name"], " ".join(p["codes"])) for p in run.percent)))
     if run.skipped:
         seen, items = set(), []
         for s in run.skipped:
@@ -1011,7 +1064,11 @@ def export_page(page, path):
         except ImportError:
             why = "ezdxf is not installed"
     if why is None:
-        return write(page, path)
+        try:
+            return write(page, path)
+        except OSError as ex:
+            App.Console.PrintError("DXF export of %s failed: %s: %s\n" % (page.Name, ex.strerror or ex, ex.filename or path))
+            return False
     _warn("DXF export of %s: %s, so the stock writer was used (no line types or layers by role, hidden edges as visible)" % (page.Name, why))
     TechDraw.writeDXFPage(page, path)
     return None

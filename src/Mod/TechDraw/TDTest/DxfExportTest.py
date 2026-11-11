@@ -774,6 +774,82 @@ class DxfExportTest(unittest.TestCase):
         self.assertEqual(DX.standard_files(), stems)
         self.assertEqual([DX.standard_body(s) for s in stems], ["ANSI", "ASME", "ISO"])
 
+    # -- ruling 92: bad targets ----------------------------------------------------------------------------------------
+
+    def test_bad_targets_raise_oserror_naming_the_target_and_leave_no_tmp(self):
+        import stat
+
+        folder = os.path.join(self.tmp, "ro_folder")
+        os.makedirs(folder, exist_ok=True)
+        target = os.path.join(self.tmp, "ro_target.dxf")
+        DX.write(self.page, target, "ISO")
+        before = open(target, "rb").read()
+        os.chmod(target, stat.S_IRUSR)
+        os.chmod(folder, stat.S_IRUSR | stat.S_IXUSR)
+        try:
+            cases = (
+                (os.path.join(folder, "a.dxf"), PermissionError),
+                (os.path.join(self.tmp, "no_such_folder", "a.dxf"), FileNotFoundError),
+                (target, PermissionError),
+                (self.tmp, OSError),
+            )
+            for path, kind in cases:
+                with self.assertRaises(kind) as cm:
+                    DX.write(self.page, path, "ISO")
+                self.assertEqual(cm.exception.filename, path)
+                self.assertNotIn(".tmp", str(cm.exception))
+                self.assertFalse(os.path.exists(path + ".tmp"), path)
+            self.assertEqual(open(target, "rb").read(), before)  # the read-only file is unchanged
+        finally:
+            os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)
+            os.chmod(folder, stat.S_IRWXU)
+
+    def test_failed_save_leaves_no_tmp_and_names_the_target(self):
+        path = os.path.join(self.tmp, "fail.dxf")
+
+        def boom(self_, name, *a, **k):
+            open(name, "w").write("partial")
+            raise OSError(28, "No space left on device", name)
+
+        with mock.patch.object(self.ezdxf.document.Drawing, "saveas", boom):
+            with self.assertRaises(OSError) as cm:
+                DX.write(self.page, path, "ISO")
+        self.assertEqual(cm.exception.filename, path)
+        self.assertFalse(os.path.exists(path + ".tmp"))
+        self.assertFalse(os.path.exists(path))
+
+    def test_export_page_shows_one_error_line_and_returns_false(self):
+        errors = []
+        with mock.patch.object(DX.App.Console, "PrintError", errors.append):
+            ok = DX.export_page(self.page, os.path.join(self.tmp, "no_such_folder", "a.dxf"))
+        self.assertIs(ok, False)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("no_such_folder", errors[0])
+        self.assertNotIn(".tmp", errors[0])
+        self.assertNotIn("Traceback", errors[0])
+
+    # -- ruling 93: %% codes (fallback: named, written as typed) -----------------------------------------------------
+
+    def test_percent_codes_are_named_and_written_as_typed(self):
+        doc = App.newDocument("DxfPct")
+        try:
+            page = createPageWithSVGTemplate(doc)
+            an = doc.addObject("TechDraw::DrawViewAnnotation", "Pct")
+            page.addView(an)
+            an.Text = ["Dia %%c16 %%d %%p", "plain 50%"]
+            an.X, an.Y = 50, 50
+            doc.recompute()
+            path = os.path.join(self.tmp, "pct.dxf")
+            rep = DX.write(page, path, "ISO")
+            self.assertEqual(rep["percent_codes"], [{"name": "Pct", "label": an.Label, "codes": ["%%c", "%%d", "%%p"]}])
+            # neither ezdxf's plain_text (which shows ⌀ ° ±) nor FreeCAD's importer reads `\\U+0025` back as a percent sign
+            # (run 096 probe), so ruling 93's fallback applies: the file keeps the text as typed
+            texts = [e.text for e in self.ezdxf.readfile(path).modelspace() if e.dxftype() == "MTEXT"]
+            self.assertEqual(texts, ["\\pxql;Dia %%c16 %%d %%p\\Pplain 50%"])
+        finally:
+            App.closeDocument(doc.Name)
+        self.assertEqual(DX.percent_codes("a%%c %%1 100%% done"), ["%%c", "%%1"])
+
     def test_center_line_follows_line_style_center(self):
         fake = mock.Mock()
         fake.GetInt = lambda key, default: 2 if key == "LineStyleCenter" else default
