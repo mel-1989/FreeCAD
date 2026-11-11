@@ -102,7 +102,7 @@ def _rects(svg):
 # -- the title block's text, read from the template ---------------------------------------------
 
 TITLE_PAD_MM = 2.0  # text boxes closer than this belong to one title-block cluster
-MARKER_BAND_MM = 8.0  # template text this close to the drawing area's right edge (zone letters between a double frame) pulls the edge in
+MARKER_BAND_MM = 15.0  # template text this close to an edge of the drawing area (zone letters between a double frame, or inside the frame) pulls that edge in
 NOMINAL_EDIT_CHARS = 6  # an editable field is empty in the template: give it the width of this many characters
 ASCENT, DESCENT = 1.0, 0.25  # of the font size, above and below a text's baseline
 
@@ -216,25 +216,31 @@ def clip_box(t, area):
 
 
 def inset_for_markers(texts, area, title):
-    """``area`` with its right edge pulled in past template text (zone letters between a double frame) that sits within ``MARKER_BAND_MM``
-    of it and outside the title block.  Only the right edge: tables are anchored to it, and the other edges stay what the frame says."""
-    x1 = area[2]
+    """``area`` with each edge pulled in past template text (zone letters and the like) that sits within ``MARKER_BAND_MM`` of it and
+    outside the title block, so no table can cover a template text element."""
+    x0, y0, x1, y1 = area
     for b, _ in (clip_box(t, area) for t in texts):
         if (title and _near(title, b, 0.0)) or b[2] <= b[0] or b[3] <= b[1]:
             continue
-        if b[2] > area[2] - MARKER_BAND_MM and b[0] > area[2] - MARKER_BAND_MM:
+        if b[2] < area[0] + MARKER_BAND_MM:
+            x0 = max(x0, b[2] + 1.0)
+        elif b[0] > area[2] - MARKER_BAND_MM:
             x1 = min(x1, b[0] - 1.0)
-    return (area[0], area[1], x1, area[3])
+        if b[3] < area[1] + MARKER_BAND_MM:
+            y0 = max(y0, b[3] + 1.0)
+        elif b[1] > area[3] - MARKER_BAND_MM:
+            y1 = min(y1, b[1] - 1.0)
+    return (x0, y0, x1, y1)
 
 
 def title_cluster(texts, area, seed, W, H):
-    """The box (page mm, y up) around the title block's text: the editable fields in the page's bottom right quarter, grown over every
+    """The box (page mm, y up) around the title block's text: the editable fields in the bottom 40 % of the page, anywhere along its width, grown over every
     text box inside ``area`` closer than ``TITLE_PAD_MM`` to the cluster; ``seed`` is a box the template names as its title block.
     ``texts`` are boxes in page mm, y up, with the editable name or None."""
     inside = [clip_box(t, area) for t in texts if area[0] - 1 <= (t[0][0] + t[0][2]) / 2 <= area[2] + 1 and area[1] - 1 <= (t[0][1] + t[0][3]) / 2 <= area[3] + 1]
     box = tuple(seed) if seed else None
     for b, name in inside:
-        if name is not None and (b[0] + b[2]) / 2 > 0.4 * W and (b[1] + b[3]) / 2 < 0.4 * H:
+        if name is not None and (b[1] + b[3]) / 2 < 0.4 * H:
             box = b if box is None else (min(box[0], b[0]), min(box[1], b[1]), max(box[2], b[2]), max(box[3], b[3]))
     if box is None:
         return None
@@ -301,8 +307,10 @@ def page_areas(page):
                     grown = (min(grown[0], c[0]), min(grown[1], c[1]), max(grown[2], c[2]), max(grown[3], c[3]))
             title = grown
         area = inset_for_markers(texts, area, title)
-    except Exception:
-        pass
+    except OSError:
+        pass  # no template file to read: the inset page stands
+    except Exception as e:  # a template this reader cannot parse: say so, keep what was found before it
+        App.Console.PrintWarning("PartsList.page_areas: %s: %s (%s)\n" % (type(e).__name__, e, getattr(t, "Template", "")))
     return area, title
 
 

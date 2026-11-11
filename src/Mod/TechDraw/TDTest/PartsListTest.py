@@ -223,7 +223,11 @@ class PartsListTest(unittest.TestCase):
             page = self.page(tpl)
             W, H = page.Template.Width.Value, page.Template.Height.Value
             area, title = PL.page_areas(page)
-            self.assertEqual(tuple(round(v, 6) for v in area), (10.0, 10.0, round(W - 10.0, 6), round(H - 10.0, 6)), tpl)
+            inset = (10.0, 10.0, round(W - 10.0, 6), round(H - 10.0, 6))
+            if title is None:  # no text at all: exactly the inset page
+                self.assertEqual(tuple(round(v, 6) for v in area), inset, tpl)
+            else:  # edges are pulled in past template text near them (zone letters), never out
+                self.assertTrue(area[0] >= 10.0 and area[1] >= 10.0 and area[2] <= inset[2] and area[3] <= inset[3], (tpl, area))
             # R7: the two templates that carry title-block fields now report a title block (they named no rectangle for one)
             self.assertEqual(title is not None, tpl in (os.path.join("ASME", "ANSIA_Landscape.svg"), os.path.join("ISO", "A4_Landscape_TD.svg")), tpl)
             self.doc.removeObject(page.Name)
@@ -246,6 +250,11 @@ class PartsListTest(unittest.TestCase):
         os.path.join("ISO", "localized", "fi", "A4_Landscape_SFS_ISO.svg"),
         os.path.join("ISO", "localized", "zh-CN", "landscape", "A4_Landscape_CN_CLIP.svg"),
         os.path.join("ISO", "localized", "ru", "Leading", "Landscape_A4_NotInGOST.svg"),
+        # title blocks at the left or in the middle of the bottom band, and zone letters inside the frame (verifier 1, M2)
+        os.path.join("ISO", "localized", "es-AR", "A4.svg"),
+        os.path.join("ASME", "ANSIA_Portrait.svg"),
+        os.path.join("ASME", "Arch_A_Portrait.svg"),
+        os.path.join("ISO", "localized", "de", "A4_Portrait_ISO7200_DE.svg"),
     )
 
     def template_text_boxes(self, page, template):
@@ -266,7 +275,7 @@ class PartsListTest(unittest.TestCase):
             area, title = PL.page_areas(page)
             self.assertIsNotNone(title, tpl)
             boxes = self.template_text_boxes(page, tpl)
-            fields = [b for b in boxes if b[4] is not None and area[0] <= (b[0] + b[2]) / 2 <= area[2] and area[1] <= (b[1] + b[3]) / 2 <= area[3] and b[0] > 0.4 * page.Template.Width.Value and b[1] < 0.4 * page.Template.Height.Value]
+            fields = [b for b in boxes if b[4] is not None and area[0] <= (b[0] + b[2]) / 2 <= area[2] and area[1] <= (b[1] + b[3]) / 2 <= area[3] and b[1] < 0.4 * page.Template.Height.Value]
             self.assertGreaterEqual(len(fields), 3, tpl)
             for b in fields:  # an empty field has only a nominal width: judge it where it meets the frame
                 self.assertGreaterEqual(b[0], title[0] - 0.01, (tpl, b))
