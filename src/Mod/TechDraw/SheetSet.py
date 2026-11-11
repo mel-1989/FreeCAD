@@ -224,7 +224,9 @@ def model_values(source):
     weight = None
     try:
         shape = source.Shape
-        if not shape.isNull():
+        if not shape.isNull() and no_solid(source):
+            weight = None  # R8: a face or wire has no volume; "0.000 kg" would be a wrong weight, so the field is left alone
+        elif not shape.isNull():
             # PhysicalProperties of the property's own copy; getPhysicalValue on it would leave the source object Touched
             dens = mat.PhysicalProperties.get("Density") if hasattr(mat.PhysicalProperties, "get") else None
             if dens is None:  # a card that inherits its density: the library's own copy knows it
@@ -238,6 +240,15 @@ def model_values(source):
     except Exception:
         weight = None
     return name, weight
+
+
+def no_solid(source):
+    """True when the source has a shape but no solid volume to weigh (a face, a wire, an empty compound)."""
+    try:
+        shape = source.Shape
+        return (not shape.isNull()) and (not shape.Solids or shape.Volume <= 0)
+    except Exception:
+        return False
 
 
 def newest_revision(page):
@@ -398,6 +409,8 @@ class SheetSetDriver:
         pn = getattr(source, "PartNumber", None) if source is not None else None
         shared["drawing_number"] = fields.get("drawing_number", pn if isinstance(pn, str) and pn else None)
         mat, weight = model_values(source)
+        if mat is not None and "weight" not in fields and no_solid(source):
+            warnings.append("%s has no solid volume: the weight field is left as it is" % (source.Label or source.Name))
         shared["material"] = fields.get("material", mat)
         shared["weight"] = fields.get("weight", weight)
         for c in ("subtitle", "checker", "document_type", "tolerance"):
@@ -468,6 +481,11 @@ def make(doc, pages=None, source=None, fields=None):
     A page belongs to one set only: pages already in another set raise ``ValueError`` and nothing is made."""
     taken = {p.Name: d for d in drivers(doc) for p in d.Pages if p is not None}
     mine = list(pages) if pages is not None else list(doc.findObjects("TechDraw::DrawPage"))
+    seen = set()
+    for p in mine:
+        if p.Name in seen:
+            raise ValueError("make: page %s is listed twice; a page appears once in a set" % p.Label)
+        seen.add(p.Name)
     clash = [p for p in mine if p.Name in taken]
     if clash:
         raise ValueError("make: %s already belong to the sheet set %s; a page is in one set only" % (", ".join(p.Label for p in clash), taken[clash[0].Name].Label))
