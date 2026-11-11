@@ -323,11 +323,14 @@ def load_template_root(path, editable=None):
     for text in root.iter(NS + "text"):
         name = text.get("fcEditable")
         if name and name in editable:
-            for tspan in text.findall(NS + "tspan"):
-                for child in list(tspan):
-                    tspan.remove(child)
-                tspan.text = str(editable[name])
-                tspan.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+            # XMLQuery.cpp processElements takes only ``firstChildElement()`` of the text (whatever its tag);
+            # a later tspan keeps the template's own content (ASME ``Weight`` has a second, empty one)
+            first = next(iter(text), None)
+            if first is not None:
+                for child in list(first):
+                    first.remove(child)
+                first.text = str(editable[name])
+                first.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
     return root
 
 

@@ -953,6 +953,16 @@ class DxfFrameTest(unittest.TestCase):
         fl = DT.flatten_template(p)
         self.assertEqual((len(fl.shapes), fl.filled, len(fl.texts)), (1, 1, 0))  # fill-only shape as its outline; blank text dropped
 
+    def test_editable_value_fills_only_the_first_child_element(self):
+        import DxfTemplate as DT
+
+        p = os.path.join(self.tmp, "two.svg")
+        with open(p, "w") as f:
+            f.write('<svg xmlns="http://www.w3.org/2000/svg" xmlns:freecad="http://www.freecadweb.org/wiki/index.php?title=Svg_Namespace" width="100mm" height="50mm">'
+                    '<text x="1" y="10" freecad:editable="Weight"><tspan x="1" y="10">Weight</tspan> <tspan x="1" y="14"/></text></svg>')
+        fl = DT.flatten_template(p, {"Weight": "12 kg"})
+        self.assertEqual([t["text"] for t in fl.texts], ["12 kg"])  # XMLQuery.cpp processElements: firstChildElement() only
+
     def make_template_page(self, name):
         doc = App.newDocument(name)
         page = doc.addObject("TechDraw::DrawPage", "Page")
