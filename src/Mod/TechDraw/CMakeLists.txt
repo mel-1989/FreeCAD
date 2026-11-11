@@ -19,6 +19,8 @@ set(TechDraw_Scripts
     HoleTable.py
     BendTable.py
     RevisionTable.py
+    SheetSet.py
+    TitleBlockKeys.json
 )
 
 if(BUILD_GUI)
@@ -205,6 +207,7 @@ SET(TDTest_SRCS
     TDTest/HoleTableTest.py
     TDTest/BendTableTest.py
     TDTest/RevisionTableTest.py
+    TDTest/SheetSetTest.py
     TDTest/PmiDrawingGuiTest.py
 )
 
