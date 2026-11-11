@@ -843,6 +843,9 @@ def _classify(run, msp, types, views, group_of):
     run.dups = sum(d.dropped for dd in dedupe_by_view.values() for d in dd.values())
 
 
+EXTENTS_MARGIN = 1.0  # mm
+
+
 def _extents(doc, msp, page):
     from ezdxf import bbox
 
@@ -857,8 +860,10 @@ def _extents(doc, msp, page):
             box.extend([part.extmin, part.extmax])
     if box.has_data:
         lo, hi = box.extmin, box.extmax
-        lo = (lo.x, lo.y, 0.0)
-        hi = (hi.x, hi.y, 0.0)
+        # 1 mm beyond the drawn box: LibreOffice's DXF import clips a line lying exactly on $EXTMAX (run 095, a
+        # rectangle's right edge vanished); the extents still enclose the drawing, which is all the DXF Reference asks
+        lo = (lo.x - EXTENTS_MARGIN, lo.y - EXTENTS_MARGIN, 0.0)
+        hi = (hi.x + EXTENTS_MARGIN, hi.y + EXTENTS_MARGIN, 0.0)
     else:
         lo, hi = (0.0, 0.0, 0.0), (_val(page.PageWidth), _val(page.PageHeight), 0.0)
     if lo == (0.0, 0.0, 0.0):  # ezdxf treats an extmin of exactly (0, 0, 0) as unset

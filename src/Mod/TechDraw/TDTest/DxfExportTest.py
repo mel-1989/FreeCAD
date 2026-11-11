@@ -299,6 +299,8 @@ class DxfExportTest(unittest.TestCase):
         self.assertLessEqual(lo[1], min(ys) + 1e-6)
         self.assertGreaterEqual(hi[0], max(xs) - 1e-6)
         self.assertGreaterEqual(hi[1], max(ys) - 1e-6)
+        self.assertLessEqual(lo[0], min(xs) - 1.0 + 1e-6)  # the 1 mm margin beyond the drawing (LibreOffice clips at the extents)
+        self.assertGreaterEqual(hi[0], max(xs) + 1.0 - 1e-6)
         self.assertLess(hi[0] - lo[0], 1000)  # the page's size, not ezdxf's +-1e20
         self.assertLess(hi[1] - lo[1], 1000)
 
