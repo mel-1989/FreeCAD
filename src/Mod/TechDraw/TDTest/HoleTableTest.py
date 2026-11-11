@@ -122,12 +122,12 @@ class HoleTableTest(unittest.TestCase):
         self.doc.recompute()
         return v
 
-    def plate_page(self, holes):
+    def plate_page(self, holes, template=A4):
         """holes: [(kind, x, y)]; -> (plate, page, view)."""
         plate = Plate(self.doc)
         for kind, x, y in holes:
             plate.hole([(x, y)], **dict(KINDS[kind][0]))
-        page = self.page()
+        page = self.page(template)
         return plate, page, self.view(page, plate.body)
 
     def untouched(self):
@@ -849,7 +849,8 @@ class HoleTableTest(unittest.TestCase):
             self.assertTrue(b[0] >= a[2] or b[3] <= a[1], "block %s not after %s" % (b, a))
 
     def test_tags_follow_when_an_edit_grows_the_table_into_more_blocks(self):
-        plate, page, view = self.plate_page([("through", 20 + 6 * i, 15 + 6 * j) for i in range(5) for j in range(5)])
+        # A3: since R7 the title block of ISO A4 minimal is 12 mm taller, and 28 rows no longer find free space beside the plate there
+        plate, page, view = self.plate_page([("through", 20 + 6 * i, 15 + 6 * j) for i in range(5) for j in range(5)], os.path.join("ISO", "A3_Landscape_ISO5457_minimal.svg"))
         tbl = HT.make(page, view)
         n0 = len(HT.blocks_of(tbl))
         for k in range(3):
