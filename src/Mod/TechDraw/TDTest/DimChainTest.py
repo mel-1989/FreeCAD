@@ -566,6 +566,8 @@ class DimChainTest(unittest.TestCase):
         self.assertEqual(ys, [(80.0, 235.0, "0"), (110.0, 235.0, "20"), (110.0, 235.0, "20")])
         for e in ords:
             self.assertEqual(e.dxf.layer, "DIMENSIONS")
+            for m in doc.blocks.get(e.dxf.geometry).query("MTEXT"):  # libredwg's dxf2dwg rejects group 50 on MTEXT
+                self.assertFalse(m.dxf.hasattr("rotation"))
         self.assertEqual(o.Kind, "ordinate")
 
 

@@ -807,6 +807,7 @@ def _write_ordinate(run, msp, sym, drv):
         try:
             ov = make((fx, fy), (ex - fx, ey - fy), origin=e["datum"], text=e["text"], dimstyle=DIM_STYLE, override=override, dxfattribs={"layer": "DIMENSIONS"})
             ov.render()
+            _mtext_direction(msp.doc.blocks.get(ov.dimension.dxf.geometry))  # libredwg rejects group 50 on MTEXT (run 095 verifier)
         except Exception as ex_:
             for x in list(msp)[before:]:
                 msp.delete_entity(x)
