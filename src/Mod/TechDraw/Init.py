@@ -29,18 +29,25 @@ FreeCAD.__unit_test__ += ["TestTechDrawApp", "TestTechDrawPmi"]
 
 
 # G04 slice 5a: a dimension-set driver (DimChain.py) that stable FreeCAD re-saved comes back without its Proxy; give it back when
-# the Proxy property is restored.  The module is imported only when such a feature is met.
+# the document becomes active after opening, or before its next recompute.  Document-level slots only: a per-property observer
+# (slotChangedObject) ran Python on every property change in every process and crashed AgentCore's close-race test.  The module is
+# imported only when such a feature is met.
 class _DimChainRehome:
-    def slotChangedObject(self, obj, prop):
-        if prop != "Proxy":
-            return
+    def _scan(self, doc):
         try:
-            if obj.TypeId == "App::FeaturePython" and obj.Proxy is None and "Vertices" in obj.PropertiesList and obj.getGroupOfProperty("Vertices") == "DimChain":
-                import DimChain
+            for obj in doc.Objects:
+                if obj.TypeId == "App::FeaturePython" and obj.Proxy is None and "Vertices" in obj.PropertiesList and obj.getGroupOfProperty("Vertices") == "DimChain":
+                    import DimChain
 
-                DimChain.reattach(obj)
+                    DimChain.reattach(obj)
         except Exception:
             pass
+
+    def slotActivateDocument(self, doc):
+        self._scan(doc)
+
+    def slotBeforeRecomputeDocument(self, doc):
+        self._scan(doc)
 
 
 FreeCAD.addDocumentObserver(_DimChainRehome())
