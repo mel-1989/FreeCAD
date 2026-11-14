@@ -206,6 +206,8 @@ class DimChainTest(unittest.TestCase):
 
     def test_baseline_spacing_follows_the_preference(self):
         grp = App.ParamGet(DC.PARAMS)
+        had = "CascadeSpacing" in grp.GetFloats()
+        old = grp.GetFloat("CascadeSpacing")
         grp.SetFloat("CascadeSpacing", 9.0)
         try:
             p = self.plate()
@@ -213,7 +215,10 @@ class DimChainTest(unittest.TestCase):
             ys = sorted(x.Y.Value for x in members(d))
             self.assertAlmostEqual(ys[1] - ys[0], 9.0, places=3)
         finally:
-            grp.RemFloat("CascadeSpacing")
+            if had:
+                grp.SetFloat("CascadeSpacing", old)
+            else:
+                grp.RemFloat("CascadeSpacing")
 
     def test_baseline_datum_on_the_right_and_above(self):
         p = self.plate()
