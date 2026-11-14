@@ -16,6 +16,7 @@ set(TechDraw_Scripts
     TestTechDrawPmi.py
     PmiDrawing.py
     PartsList.py
+    DimChain.py
     HoleTable.py
     BendTable.py
     RevisionTable.py
@@ -208,6 +209,7 @@ SET(TDTest_SRCS
     TDTest/TechDrawTestUtilities.py
     TDTest/PmiDrawingTest.py
     TDTest/PartsListTest.py
+    TDTest/DimChainTest.py
     TDTest/HoleTableTest.py
     TDTest/BendTableTest.py
     TDTest/RevisionTableTest.py
