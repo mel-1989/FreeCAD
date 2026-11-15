@@ -630,12 +630,52 @@ def _attach(doc, page, assembly, bom, view=None):
     return view
 
 
+def _is(o, type_id):
+    try:
+        return o is not None and bool(o.isDerivedFrom(type_id))
+    except Exception:
+        return False
+
+
+def _what(o):
+    if o is None:
+        return "None"
+    return getattr(o, "TypeId", None) or type(o).__name__
+
+
+def check_document(doc, who):
+    """Raise ``TypeError`` (one sentence naming the argument) unless ``doc`` is a document."""
+    if not isinstance(doc, App.Document):
+        raise TypeError("%s: doc must be a document, got %s" % (who, _what(doc)))
+
+
+def check_page(page, who):
+    """Raise ``TypeError`` unless ``page`` is a TechDraw page and ``ValueError`` when it has no template (the sentence names the argument)."""
+    if not _is(page, "TechDraw::DrawPage"):
+        raise TypeError("%s: page must be a TechDraw page, got %s" % (who, _what(page)))
+    if page.Template is None:
+        raise ValueError("%s: page %s has no template; give it one first" % (who, page.Label))
+
+
+def check_view(view, who):
+    """Raise ``TypeError`` unless ``view`` is a TechDraw part view."""
+    if not _is(view, "TechDraw::DrawViewPart"):
+        raise TypeError("%s: view must be a TechDraw part view, got %s" % (who, _what(view)))
+
+
+def check_assembly(assembly, who):
+    if not _is(assembly, "Assembly::AssemblyObject"):
+        raise TypeError("%s: assembly must be an assembly, got %s" % (who, _what(assembly)))
+
+
 def make(page, assembly, columns=None):
     """Put the assembly's parts list on ``page`` and return the ``TechDraw::DrawViewSpreadsheet``.
 
     One undo transaction.  Calling it again for the same assembly on the same page returns the view that is there; when its
     BOM or helper has been deleted, the same view is rebuilt in place (no second table).
     """
+    check_page(page, "PartsList.make")
+    check_assembly(assembly, "PartsList.make")
     import HoleTable as HT  # HoleTable imports this module at load time, so the helpers are fetched here
 
     doc = page.Document

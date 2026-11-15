@@ -40,6 +40,7 @@ import re
 import FreeCAD as App
 
 import HoleTable as HT
+import PartsList as PL
 
 CANONICAL = (
     "title",
@@ -475,10 +476,19 @@ def drivers(doc):
     return [o for o in doc.Objects if o.TypeId == "App::FeaturePython" and isinstance(getattr(o, "Proxy", None), SheetSetDriver)]
 
 
+def _check_set(sset, who):
+    if not isinstance(getattr(sset, "Proxy", None), SheetSetDriver):
+        raise TypeError("%s: sset must be a sheet set, got %s" % (who, PL._what(sset)))
+
+
 def make(doc, pages=None, source=None, fields=None):
     """Make a sheet set of ``pages`` (default: every page of the document, in document order); -> the driver.  One undo step.
 
     A page belongs to one set only: pages already in another set raise ``ValueError`` and nothing is made."""
+    PL.check_document(doc, "SheetSet.make")
+    for p in pages if pages is not None else []:
+        if not PL._is(p, "TechDraw::DrawPage"):
+            raise TypeError("SheetSet.make: pages must hold TechDraw pages only, got %s" % PL._what(p))
     taken = {p.Name: d for d in drivers(doc) for p in d.Pages if p is not None}
     mine = list(pages) if pages is not None else list(doc.findObjects("TechDraw::DrawPage"))
     seen = set()
@@ -510,6 +520,7 @@ def make(doc, pages=None, source=None, fields=None):
 
 def add_sheet(sset, template=None, label=None):
     """Add a page on ``template`` (default: the file of the last sheet) at the end of the set; -> the page.  One undo step."""
+    _check_set(sset, "SheetSet.add_sheet")
     doc = sset.Document
     if template is None:
         last = [p for p in sset.Pages if p is not None and p.Template is not None]
@@ -537,6 +548,11 @@ def add_sheet(sset, template=None, label=None):
 
 def remove_sheet(sset, page):
     """Delete ``page`` as stock does (and its template) and take it out of the set.  One undo step."""
+    _check_set(sset, "SheetSet.remove_sheet")
+    if not PL._is(page, "TechDraw::DrawPage"):
+        raise TypeError("SheetSet.remove_sheet: page must be a TechDraw page, got %s" % PL._what(page))
+    if page not in [p for p in sset.Pages if p is not None]:
+        raise ValueError("SheetSet.remove_sheet: page %s is not in the sheet set %s" % (page.Label, sset.Label))
     doc = sset.Document
     own = HT.begin(doc, "Remove sheet")
     try:

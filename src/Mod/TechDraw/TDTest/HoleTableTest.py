@@ -324,6 +324,42 @@ class HoleTableTest(unittest.TestCase):
         self.doc.redo()
         self.assertEqual(len(HT.tags_of(self.doc.getObject(tbl.Name))), 2)
 
+    def refused(self, doc, fn, *a, **k):
+        """R17: the call raises ValueError or TypeError, one sentence without a traceback, and leaves objects and undo stack as they were."""
+        n_obj, n_undo = len(doc.Objects), doc.UndoCount
+        with self.assertRaises((ValueError, TypeError)) as cm:
+            fn(*a, **k)
+        msg = str(cm.exception)
+        self.assertTrue(msg and "Traceback" not in msg and "\n" not in msg, msg)
+        self.assertEqual(len(doc.Objects), n_obj, msg)
+        self.assertEqual(doc.UndoCount, n_undo, msg)
+        self.assertIsNone(App.getActiveTransaction())
+
+    def test_r17_bad_arguments_are_refused_before_anything_is_made(self):
+        plate, page, view = self.plate_page([("through", 20, 15)])
+        box = self.doc.addObject("Part::Box", "Box")
+        bare = self.doc.addObject("TechDraw::DrawPage", "Bare")
+        self.doc.recompute()
+        self.refused(self.doc, HT.make, None, view)
+        self.refused(self.doc, HT.make, box, view)
+        self.refused(self.doc, HT.make, bare, view)
+        self.refused(self.doc, HT.make, page, None)
+        self.refused(self.doc, HT.make, page, box)
+        self.refused(self.doc, HT.make, page, page)
+
+    def test_r17_a_repeat_make_adds_no_undo_step_but_a_new_origin_does(self):
+        plate, page, view = self.plate_page([("through", 20, 15)])
+        HT.make(page, view)
+        n = self.doc.UndoCount
+        HT.make(page, view)
+        self.assertEqual(self.doc.UndoCount, n)
+        HT.make(page, view, origin=(1, 2, 0))
+        self.assertEqual(self.doc.UndoCount, n + 1)
+        HT.make(page, view, origin=(1, 2, 0))
+        self.assertEqual(self.doc.UndoCount, n + 1)
+        HT.make(page, view)
+        self.assertEqual(self.doc.UndoCount, n + 2)
+
     def test_make_twice_returns_the_same_table(self):
         plate, page, view = self.plate_page([("through", 20, 15)])
         a = HT.make(page, view)

@@ -206,7 +206,11 @@ def _settle(doc, drv):
 
 def make(page):
     """Put a revision table (header only) on ``page`` and return its view; one undo transaction; returns the existing one if there is."""
+    PL.check_page(page, "RevisionTable.make")
     doc = page.Document
+    old = drivers_on(page)
+    if old and doc.getObject(old[0].ViewName) is not None:  # nothing to change: no transaction, so no empty undo step
+        return doc.getObject(old[0].ViewName)
     own = HT.begin(doc, "Revision table")
     try:
         drv = _make(page)
@@ -220,6 +224,10 @@ def make(page):
 
 def add(page, rev, description, date, approved, zone=""):
     """Append a revision row (newest last) and update the table and the template fields; one undo transaction; -> the view."""
+    PL.check_page(page, "RevisionTable.add")
+    for name, val in (("rev", rev), ("description", description), ("date", date), ("approved", approved), ("zone", zone)):
+        if not isinstance(val, str):
+            raise TypeError("RevisionTable.add: %s must be text, got %s" % (name, "None" if val is None else type(val).__name__))
     doc = page.Document
     own = HT.begin(doc, "Add revision")
     try:
