@@ -735,6 +735,9 @@ double DrawView::prefScale()
 void DrawView::requestPaint()
 {
 //    Base::Console().message("DV::requestPaint() - {}\n", getNameInDocument());
+    if (m_suppressPaint) {
+        return;
+    }
     signalGuiPaint(this);
 }
 

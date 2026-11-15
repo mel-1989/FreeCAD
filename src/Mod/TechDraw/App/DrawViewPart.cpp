@@ -450,7 +450,17 @@ void DrawViewPart::onHlrFinished()
     }
     m_hlrGeomCached = false;
 
-    postHlrTasks();//application level tasks that depend on HLR/GO being complete
+    {
+        //a hit that brings its faces paints once, from postFaceExtractionTasks below; the paint
+        //before the faces would draw the same view twice
+        struct PaintGuard
+        {
+            DrawView* view;
+            ~PaintGuard() { view->suppressPaint(false); }
+        } guard {this};
+        suppressPaint(facesFromCache);
+        postHlrTasks();//application level tasks that depend on HLR/GO being complete
+    }
 
     if (facesFromCache) {
         //the faces came with the cached geometry
