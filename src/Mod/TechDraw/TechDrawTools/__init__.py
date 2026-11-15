@@ -41,6 +41,7 @@ from .CommandVertexCreations import CommandVertexCreationGroup
 from .CommandHoleShaftFit import CommandHoleShaftFit
 from .CommandFillTemplateFields import CommandFillTemplateFields
 from .CommandDimSet import CommandDimSetChain, CommandDimSetBaseline, CommandDimSetOrdinate, CommandDimSetEdit
+from .CommandDrawingTables import CommandPartsListInsert, CommandHoleTableInsert, CommandBendTableInsert, CommandRevisionAdd, CommandSheetSetMake, CommandSheetSetAddSheet
 from .TaskShareView import TaskShareView
 from .TaskMoveView import TaskMoveView
 from .TaskHoleShaftFit import TaskHoleShaftFit

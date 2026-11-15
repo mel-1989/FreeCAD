@@ -40,12 +40,14 @@ set(TechDraw_ToolsScripts
     TechDrawTools/CommandPositionSectionView.py
     TechDrawTools/CommandFillTemplateFields.py
     TechDrawTools/CommandDimSet.py
+    TechDrawTools/CommandDrawingTables.py
     TechDrawTools/CommandVertexCreations.py
     TechDrawTools/CommandHoleShaftFit.py
     TechDrawTools/TaskMoveView.py
     TechDrawTools/TaskShareView.py
     TechDrawTools/TaskFillTemplateFields.py
     TechDrawTools/TaskDimSet.py
+    TechDrawTools/TaskRevisionAdd.py
     TechDrawTools/TaskHoleShaftFit.py
     TechDrawTools/TaskAddOffsetVertex.py
     TechDrawTools/TDToolsUtil.py
@@ -220,6 +222,7 @@ SET(TDTest_SRCS
     TDTest/DxfExportTest.py
     TDTest/PmiDrawingGuiTest.py
     TDTest/DimSetGuiTest.py
+    TDTest/DrawingTablesGuiTest.py
 )
 
 SET(TDTestFile_SRCS

@@ -41,6 +41,7 @@ using namespace TechDrawGui;
     qApp->translate("Workbench", "Centerlines/Threading");
     qApp->translate("Workbench", "Format/Organize Dimensions");
     qApp->translate("Workbench", "Dimension sets");
+    qApp->translate("Workbench", "Tables and sheets");
     qApp->translate("Workbench", "Annotations");
     qApp->translate("Workbench", "Stacking");
     qApp->translate("Workbench", "Add Lines");
@@ -58,6 +59,7 @@ using namespace TechDrawGui;
     qApp->translate("Workbench", "TechDraw File Access");
     qApp->translate("Workbench", "TechDraw Pages");
     qApp->translate("Workbench", "TechDraw Stacking");
+    qApp->translate("Workbench", "TechDraw Tables");
     qApp->translate("Workbench", "TechDraw Tool Attributes");
     qApp->translate("Workbench", "TechDraw Views");
     qApp->translate("Workbench", "Views From Other Workbenches");
@@ -108,6 +110,17 @@ Gui::MenuItem* Workbench::setupMenuBar() const
     *dimsets << "TechDraw_DimSetEdit";
     *dimensions << "Separator";
     *dimensions << dimsets;
+
+    // tables and sheet sets (parts list, hole, bend and revision tables made by the Python table modules)
+    Gui::MenuItem* tables = new Gui::MenuItem;
+    tables->setCommand("Tables and sheets");
+    *tables << "TechDraw_PartsListInsert";
+    *tables << "TechDraw_HoleTableInsert";
+    *tables << "TechDraw_BendTableInsert";
+    *tables << "TechDraw_RevisionAdd";
+    *tables << "Separator";
+    *tables << "TechDraw_SheetSetMake";
+    *tables << "TechDraw_SheetSetAddSheet";
 
     // extension: attributes and modifications
     Gui::MenuItem* toolattrib = new Gui::MenuItem;
@@ -280,6 +293,8 @@ Gui::MenuItem* Workbench::setupMenuBar() const
     *draw << "Separator";
     *draw << dimensions;
     *draw << "Separator";
+    *draw << tables;
+    *draw << "Separator";
     *draw << hatch;
     *draw << "Separator";
     *draw << symbols;
@@ -364,6 +379,15 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
     *dimsets << "TechDraw_DimSetBaseline";
     *dimsets << "TechDraw_DimSetOrdinate";
     *dimsets << "TechDraw_DimSetEdit";
+
+    Gui::ToolBarItem* tables = new Gui::ToolBarItem(root);
+    tables->setCommand("TechDraw Tables");
+    *tables << "TechDraw_PartsListInsert";
+    *tables << "TechDraw_HoleTableInsert";
+    *tables << "TechDraw_BendTableInsert";
+    *tables << "TechDraw_RevisionAdd";
+    *tables << "TechDraw_SheetSetMake";
+    *tables << "TechDraw_SheetSetAddSheet";
 
     Gui::ToolBarItem* extattribs = new Gui::ToolBarItem(root);
     extattribs->setCommand("TechDraw Attributes");
@@ -471,6 +495,15 @@ Gui::ToolBarItem* Workbench::setupCommandBars() const
     *dimsets << "TechDraw_DimSetBaseline";
     *dimsets << "TechDraw_DimSetOrdinate";
     *dimsets << "TechDraw_DimSetEdit";
+
+    Gui::ToolBarItem* tables = new Gui::ToolBarItem(root);
+    tables->setCommand("TechDraw Tables");
+    *tables << "TechDraw_PartsListInsert";
+    *tables << "TechDraw_HoleTableInsert";
+    *tables << "TechDraw_BendTableInsert";
+    *tables << "TechDraw_RevisionAdd";
+    *tables << "TechDraw_SheetSetMake";
+    *tables << "TechDraw_SheetSetAddSheet";
 
     Gui::ToolBarItem* extattribs = new Gui::ToolBarItem(root);
     extattribs->setCommand("TechDraw Attributes");

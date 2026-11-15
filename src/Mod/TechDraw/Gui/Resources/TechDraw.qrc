@@ -36,6 +36,12 @@
         <file>icons/actions/TechDraw_DimSetBaseline.svg</file>
         <file>icons/actions/TechDraw_DimSetOrdinate.svg</file>
         <file>icons/actions/TechDraw_DimSetEdit.svg</file>
+        <file>icons/actions/TechDraw_PartsListInsert.svg</file>
+        <file>icons/actions/TechDraw_HoleTableInsert.svg</file>
+        <file>icons/actions/TechDraw_BendTableInsert.svg</file>
+        <file>icons/actions/TechDraw_RevisionAdd.svg</file>
+        <file>icons/actions/TechDraw_SheetSetMake.svg</file>
+        <file>icons/actions/TechDraw_SheetSetAddSheet.svg</file>
         <file>icons/actions/TechDraw_HoleShaftFit.svg</file>
         <file>icons/actions/TechDraw_Multiview.svg</file>
         <file>icons/actions/TechDraw_PageDefault.svg</file>
