@@ -56,6 +56,7 @@ LINE_OFFSET_SLOPE = 0.63333
 STOCK_FONT_MM = 5.0  # TechDraw's own default when the preference is not set (Preferences::DefaultFontSizeInMM)
 MIN_SPAN_MM = 1e-4  # chain and baseline make no member for a span shorter than this in model units (ruling 109)
 TAG = "DimChainDriver"
+PARKED = "DimChainParked"  # a parked member carries this instead of TAG, so nothing else counts it as part of the set
 PARAMS = "User parameter:BaseApp/Preferences/Mod/TechDraw/Dimensions"
 
 
@@ -171,7 +172,7 @@ class _Settle:
         self.removing = True
         try:
             for o in list(doc.Objects):
-                if getattr(o, TAG, None) == name:
+                if name in (getattr(o, TAG, None), getattr(o, PARKED, None)):
                     try:
                         doc.removeObject(o.Name)
                     except Exception:
@@ -378,17 +379,9 @@ class DimChainDriver:
         A parked member is never deleted: deleting an object the undo stack knows opens an undo step of its own ("Delete") outside the
         model edit's, so one undo of the edit would no longer restore the set (check 125, GUI).
         """
-        doc = obj.Document
-        page = doc.getObject(obj.PageName) if obj.PageName else None
-        on = {o.Name for o in page.Views} if page is not None else None
+        key = PARKED if parked else TAG
         return sorted(
-            (
-                o
-                for o in doc.Objects
-                if o.TypeId == "TechDraw::DrawViewDimension"
-                and getattr(o, TAG, "") == obj.Name
-                and (on is None or (o.Name in on) != parked)
-            ),
+            (o for o in obj.Document.Objects if o.TypeId == "TechDraw::DrawViewDimension" and getattr(o, key, "") == obj.Name),
             key=lambda o: o.Name,
         )
 
@@ -543,11 +536,22 @@ def _has_member(drv, a, b):
     return any(set(DimChainDriver.pair(m) or ()) == {a, b} for m in DimChainDriver.members(drv))
 
 
+def _park(m, drv, page):
+    page.removeView(m)
+    if PARKED not in m.PropertiesList:
+        m.addProperty("App::PropertyString", PARKED, "DimChain", "Driver that will take this dimension back when its vertices return")
+        m.setEditorMode(PARKED, 1)
+    setattr(m, PARKED, drv.Name)
+    setattr(m, TAG, "")
+
+
 def _ensure_member(drv, page, view, p, q):
     """Put the member for (p, q) on the page: a parked one when there is one, else a new one."""
     for m in DimChainDriver.members(drv, parked=True):
         if set(DimChainDriver.pair(m) or ()) == {p, q}:
             page.addView(m)
+            setattr(m, TAG, drv.Name)
+            setattr(m, PARKED, "")
             m.touch()
             return m
     return new_member(drv, page, view, p, q, drv.Direction)
@@ -586,7 +590,7 @@ def _sync(drv):
         p = DimChainDriver.pair(m)
         if p and (not ok(p) or (drv.Kind == "chain" and frozenset(p) not in adj)):
             gone.update(p)
-            page.removeView(m)
+            _park(m, drv, page)
             changed = True
     have = set()
     for m in DimChainDriver.members(drv):
