@@ -87,6 +87,7 @@
 #include "DrawViewDimension.h"
 #include <App/FeaturePythonPyImp.h>
 #include "DrawViewPart.h"
+#include "HlrCache.h"
 #include "DrawViewPartPy.h"// generated from DrawViewPartPy.xml
 #include "DrawViewSection.h"
 #include "EdgeWalker.h"
@@ -169,6 +170,7 @@ DrawViewPart::~DrawViewPart()
         m_faceFuture.waitForFinished();
     }
     removeAllReferencesFromGeom();
+    HlrCache::dropView(this);
 }
 
 //! returns a compound of all the shapes from the DocumentObjects in the Source &
@@ -279,6 +281,17 @@ short DrawViewPart::mustExecute() const
 
 void DrawViewPart::onChanged(const App::Property* prop)
 {
+    // every property the HLR or face-finding threads read while they run (the cache stores a
+    // result only if none of them changed, even if it was changed back)
+    if (prop == &Direction || prop == &XDirection || prop == &Scale || prop == &ScaleType
+        || prop == &Rotation || prop == &IsoCount || prop == &Perspective || prop == &Focus
+        || prop == &ScrubCount || prop == &SmoothVisible || prop == &SeamVisible
+        || prop == &IsoVisible || prop == &HardHidden || prop == &SmoothHidden
+        || prop == &SeamHidden || prop == &IsoHidden || prop == &CoarseView || prop == &Source
+        || prop == &XSource) {
+        m_hlrChange++;
+    }
+
     // If the user has set PropertyVector Direction to zero, set it along the default value instead (Front View).
     // Otherwise bad things will happen because there'll be a normalization for direction calculations later.
     Base::Vector3d dir = Direction.getValue();
@@ -300,6 +313,26 @@ void DrawViewPart::partExec(TopoDS_Shape& shape)
     if (waitingForHlr()) {
         //finish what we are already doing before starting a new cycle
         return;
+    }
+
+    //the key of the previous pass must never be attached to this pass
+    m_hlrKey.reset();
+    m_hlrGeomCached = false;
+    m_hlrKeyChange = m_hlrChange;
+    if (!m_inAutoScale && !waitingForFaces() && HlrCache::eligible(*this)) {
+        HlrCacheKeyPtr key = HlrCache::makeKey(*this, shape);
+        HlrCacheHit hit;
+        if (HlrCache::lookup(*this, key, hit)) {
+            //the result is applied synchronously, with no thread, as for CoarseView
+            m_saveCentroid = hit.saveCentroid;
+            m_saveShape = hit.saveShape;
+            m_tempGeometryObject = hit.geometry;
+            m_hlrKey = key;  //the geometry is cached, a face set may still be added
+            m_hlrGeomCached = true;
+            onHlrFinished();
+            return;
+        }
+        m_hlrKey = key;
     }
 
     //we need to keep using the old geometryObject until the new one is fully populated
@@ -414,10 +447,45 @@ void DrawViewPart::onHlrFinished()
     QObject::disconnect(connectHlrWatcher);
     showProgressMessage(getNameInDocument(), "has finished finding hidden lines");
 
-    postHlrTasks();//application level tasks that depend on HLR/GO being complete
+    //keep the pure HLR result before cosmetic geometry is added to it
+    bool hitPass = m_hlrGeomCached;
+    if (m_hlrKey && (!HlrCache::paramsUnchanged(*this, *m_hlrKey) || m_hlrChange != m_hlrKeyChange)) {
+        m_hlrKey.reset();  //a key input changed while the threads worked
+    }
+    if (m_hlrKey && !hitPass) {
+        HlrCache::storeGeometry(*this, m_hlrKey, *geometryObject, m_saveShape, m_saveCentroid);
+    }
+    m_hlrGeomCached = false;
+
+    {
+        //a hit paints once, from postFaceExtractionTasks below, not before the faces are there
+        struct PaintGuard
+        {
+            DrawView* view;
+            ~PaintGuard() { view->suppressPaint(false); }
+        } guard {this};
+        suppressPaint(hitPass && handleFaces());
+        postHlrTasks();//application level tasks that depend on HLR/GO being complete
+    }
 
     //start face finding in a separate thread.  We don't find faces when using the polygon
     //HLR method.
+
+    m_hlrFacesKey = m_hlrKey;
+    m_hlrFacesGeometry = geometryObject.get();
+    m_hlrFacesChange = m_hlrChange;
+    if (m_hlrKey && handleFaces()) {
+        //cosmetic edges and the like are now in the geometry: faces are reused only if the
+        //face finder would read exactly the edges it read when they were stored
+        m_hlrFacesSig = HlrCache::faceInputSignature(*geometryObject, SmoothVisible.getValue(),
+                                                     SeamVisible.getValue());
+        if (HlrCache::takeFaces(*this, m_hlrKey, m_hlrFacesSig, *geometryObject)) {
+            m_hlrFacesKey.reset();
+            m_hlrFacesGeometry = nullptr;
+            onFacesFinished();
+            return;
+        }
+    }
 
     if (handleFaces() && !DU::isGuiUp()) {
         extractFaces();
@@ -475,7 +543,9 @@ void DrawViewPart::postHlrTasks()
     if (ScaleType.isValue("Automatic") && !checkFit()) {
         double newScale = autoScale();
         Scale.setValue(newScale);
+        m_inAutoScale = true;
         partExec(m_saveShape);
+        m_inAutoScale = false;
     }
 
     overrideKeepUpdated(false);
@@ -811,11 +881,24 @@ void DrawViewPart::onFacesFinished()
     waitingForFaces(false);
     QObject::disconnect(connectFaceWatcher);
     showProgressMessage(getNameInDocument(), "has finished extracting faces");
+    storeFacesInCache();
 
     // Now we can recompute Dimensions and do other tasks possibly depending on Face extraction
     postFaceExtractionTasks();
 
     requestPaint();
+}
+
+//! add the faces just found to the cache entry of the geometry they were found for
+void DrawViewPart::storeFacesInCache()
+{
+    if (m_hlrFacesKey && geometryObject && geometryObject.get() == m_hlrFacesGeometry
+        && handleFaces() && m_hlrChange == m_hlrFacesChange
+        && HlrCache::paramsUnchanged(*this, *m_hlrFacesKey)) {
+        HlrCache::attachFaces(*this, m_hlrFacesKey, *geometryObject, m_hlrFacesSig);
+    }
+    m_hlrFacesKey.reset();
+    m_hlrFacesGeometry = nullptr;
 }
 
 void DrawViewPart::assignFaceRepresentations(const std::vector<TechDraw::FacePtr>& faces,
@@ -1378,6 +1461,7 @@ void DrawViewPart::unsetupObject()
 {
 //    Base::Console().message("DVP::unsetupObject()\n");
     nowUnsetting = true;
+    HlrCache::dropView(this);  //also when undo keeps the object alive
     App::Document* doc = getDocument();
     std::string docName = doc->getName();
 

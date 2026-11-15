@@ -54,6 +54,8 @@ class Part;
 
 namespace TechDraw
 {
+class HlrCacheKey;  // HlrCache.h, the in-memory hidden-line cache
+
 class GeometryObject;
 using GeometryObjectPtr = std::shared_ptr<GeometryObject>;
 class Vertex;
@@ -286,6 +288,19 @@ protected:
     std::vector<TechDraw::VertexPtr> m_referenceVerts;
 
 private:
+    //HLR cache state (HlrCache.h).  m_hlrKey is the key of the pass in progress, m_hlrFacesKey
+    //and m_hlrFacesGeometry say which geometry the running face finder belongs to.
+    std::shared_ptr<const HlrCacheKey> m_hlrKey;
+    std::shared_ptr<const HlrCacheKey> m_hlrFacesKey;
+    const TechDraw::GeometryObject* m_hlrFacesGeometry {nullptr};
+    std::array<std::uint8_t, 32> m_hlrFacesSig {};
+    unsigned m_hlrChange {0};      //!< bumped when a property the HLR threads read is changed
+    unsigned m_hlrKeyChange {0};   //!< m_hlrChange when the pass in progress began
+    unsigned m_hlrFacesChange {0}; //!< m_hlrChange when face finding began
+    bool m_hlrGeomCached {false};
+    bool m_inAutoScale {false};
+    void storeFacesInCache();
+
     bool nowUnsetting;
     bool m_waitingForFaces;
     bool m_waitingForHlr;

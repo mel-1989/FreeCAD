@@ -30,6 +30,7 @@
 
 #include <Mod/TechDraw/TechDrawGlobal.h>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -102,6 +103,11 @@ public:
     double getFocus() { return m_focus; }
     void setScrubCount(int count) { m_scrubCount = count; }
 
+
+    //the ten HLR compounds, in the order visHard, visOutline, visSmooth, visSeam, visIso,
+    //hidHard, hidOutline, hidSmooth, hidSeam, hidIso (used by the HLR cache)
+    std::array<TopoDS_Shape, 10> getHlrCompounds() const;
+    void setHlrCompounds(const std::array<TopoDS_Shape, 10>& compounds);
 
     void pruneVertexGeom(Base::Vector3d center, double radius);
 

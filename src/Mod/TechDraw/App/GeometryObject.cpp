@@ -138,6 +138,26 @@ void GeometryObject::clear()
     edgeGeom.clear();
 }
 
+std::array<TopoDS_Shape, 10> GeometryObject::getHlrCompounds() const
+{
+    return {visHard, visOutline, visSmooth, visSeam, visIso,
+            hidHard, hidOutline, hidSmooth, hidSeam, hidIso};
+}
+
+void GeometryObject::setHlrCompounds(const std::array<TopoDS_Shape, 10>& c)
+{
+    visHard = c[0];
+    visOutline = c[1];
+    visSmooth = c[2];
+    visSeam = c[3];
+    visIso = c[4];
+    hidHard = c[5];
+    hidOutline = c[6];
+    hidSmooth = c[7];
+    hidSeam = c[8];
+    hidIso = c[9];
+}
+
 HLRAlgo_Projector GeometryObject::getProjector(const gp_Ax2& viewAxis) const
 {
     if (m_isPersp) {

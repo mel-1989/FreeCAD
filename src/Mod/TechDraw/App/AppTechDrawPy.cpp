@@ -69,6 +69,7 @@
 #include "DrawViewPartPy.h"
 #include "EdgeWalker.h"
 #include "Geometry.h"
+#include "HlrCache.h"
 #include "GeometryObject.h"
 #include "ProjectionAlgos.h"
 #include "TechDrawExport.h"
@@ -200,6 +201,14 @@ public:
         add_varargs_method("scrubEdges", &Module::scrubEdges,
             "scrubbedEdges = scrubEdges(edgeList) -- remove duplicate edges. Also converts partial overlaps into 3 edges as in: "
              "scrubEdges([A, B]) = [a shortened A, an edge for overlap region, a shortened B]."
+        );
+
+        add_varargs_method("hlrCacheStats", &Module::hlrCacheStats,
+            "hlrCacheStats() -- counters of the in-memory hidden-line cache as a dict: hits, misses, stores, "
+            "evictions, entries, bytes, capBytes, enabled."
+        );
+        add_varargs_method("clearHlrCache", &Module::clearHlrCache,
+            "clearHlrCache() -- empty the in-memory hidden-line cache (the counters of hits and misses are kept)."
         );
 
         initialize("This is a module for making drawings"); // register with Python
@@ -484,6 +493,33 @@ private:
         return dxfReturn;
     }
 
+
+    Py::Object hlrCacheStats(const Py::Tuple& args)
+    {
+        if (!PyArg_ParseTuple(args.ptr(), "")) {
+            throw Py::TypeError("expected no arguments");
+        }
+        TechDraw::HlrCacheStats st = TechDraw::HlrCache::stats();
+        Py::Dict result;
+        result.setItem("hits", Py::Long(static_cast<unsigned long long>(st.hits)));
+        result.setItem("misses", Py::Long(static_cast<unsigned long long>(st.misses)));
+        result.setItem("stores", Py::Long(static_cast<unsigned long long>(st.stores)));
+        result.setItem("evictions", Py::Long(static_cast<unsigned long long>(st.evictions)));
+        result.setItem("entries", Py::Long(static_cast<unsigned long long>(st.entries)));
+        result.setItem("bytes", Py::Long(static_cast<unsigned long long>(st.bytes)));
+        result.setItem("capBytes", Py::Long(static_cast<unsigned long long>(st.capBytes)));
+        result.setItem("enabled", Py::Boolean(TechDraw::HlrCache::enabled()));
+        return result;
+    }
+
+    Py::Object clearHlrCache(const Py::Tuple& args)
+    {
+        if (!PyArg_ParseTuple(args.ptr(), "")) {
+            throw Py::TypeError("expected no arguments");
+        }
+        TechDraw::HlrCache::clear();
+        return Py::None();
+    }
 
     Py::Object viewPartAsSvg(const Py::Tuple& args)
     {

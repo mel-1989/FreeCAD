@@ -108,6 +108,8 @@ public:
     fastsignals::signal<void (const DrawView*)> signalGuiPaint;
     fastsignals::signal<void (const DrawView*, std::string, std::string)> signalProgressMessage;
     void requestPaint(void);
+    //! while set, requestPaint does nothing (the caller paints once afterwards)
+    void suppressPaint(bool state) { m_suppressPaint = state; }
     void showProgressMessage(std::string featureName, std::string text);
 
     virtual double getScale(void) const;
@@ -147,6 +149,7 @@ protected:
     void touchTreeOwner(App::DocumentObject *owner) const;
 
 private:
+    bool m_suppressPaint {false};
     static const char* ScaleTypeEnums[];
     static const char* CaptionSnapEnums[];
     static App::PropertyFloatConstraint::Constraints scaleRange;

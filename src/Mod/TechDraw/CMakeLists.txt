@@ -215,6 +215,7 @@ SET(TDTest_SRCS
     TDTest/PmiDrawingTest.py
     TDTest/PartsListTest.py
     TDTest/DimChainTest.py
+    TDTest/HlrCacheTest.py
     TDTest/HoleTableTest.py
     TDTest/BendTableTest.py
     TDTest/RevisionTableTest.py
