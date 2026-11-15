@@ -636,24 +636,26 @@ def make(page, assembly, columns=None):
     One undo transaction.  Calling it again for the same assembly on the same page returns the view that is there; when its
     BOM or helper has been deleted, the same view is rebuilt in place (no second table).
     """
+    import HoleTable as HT  # HoleTable imports this module at load time, so the helpers are fetched here
+
     doc = page.Document
-    doc.openTransaction("Parts list")
+    own = HT.begin(doc, "Parts list")  # a caller's open transaction is joined: its macro stays one undo step
     try:
         bom = _bom(assembly, columns)
         mine = [v for v in views_on(page) if getattr(v, "PartsListAssembly", None) == assembly.Name or assembly_of(v) is assembly]
         view = None
         for v in mine:
             if v.Source == bom and fit_of(v) is not None and fit_of(v).Source == bom:
-                doc.commitTransaction()
+                HT.end(doc, own)
                 return v
             if view is None:
                 view = v
         view = _attach(doc, page, assembly, bom, view)
         doc.recompute([view])
     except Exception:
-        doc.abortTransaction()
+        HT.fail(doc, own)
         raise
-    doc.commitTransaction()
+    HT.end(doc, own)
     return view
 
 

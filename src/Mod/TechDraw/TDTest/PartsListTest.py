@@ -361,6 +361,29 @@ class PartsListTest(unittest.TestCase):
         self.assertEqual({o.Name for o in self.doc.Objects}, before)
         self.assertEqual(len(page.Views), 0)
 
+    def test_r16_make_joins_a_callers_transaction(self):
+        b = self.case("sub_assembly_child")
+        page = self.page()
+        before = len(self.doc.Objects)
+        n = self.doc.UndoCount
+        self.doc.openTransaction("Caller macro")
+        PL.make(page, b.asm)
+        self.doc.commitTransaction()
+        self.assertEqual(self.doc.UndoCount, n + 1)
+        self.assertGreater(len(self.doc.Objects), before)
+        self.doc.undo()
+        self.assertEqual(len(self.doc.Objects), before)
+        self.assertEqual(self.doc.UndoCount, n)
+
+    def test_r16_a_failing_make_in_a_callers_transaction_leaves_the_caller_open(self):
+        b = self.case("sub_assembly_child")
+        page = self.page()
+        self.doc.openTransaction("Caller macro")
+        with self.assertRaises(Exception):
+            PL.make(page, b.asm, columns=5)
+        self.assertIsNotNone(App.getActiveTransaction())
+        self.doc.abortTransaction()
+
     def test_make_twice_returns_the_same_view(self):
         b = self.case("three_configs")
         page = self.page()
