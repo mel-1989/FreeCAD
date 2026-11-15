@@ -101,6 +101,10 @@ PyObject* DrawViewPy::findParentPage(PyObject *args) const
 
     DrawView* dv = getDrawViewPtr();
     DrawPage* parent = dv->findParentPage();
+    if (!parent) {
+        // a view on no page (made with addObject, never added to a page) has no parent page
+        Py_RETURN_NONE;
+    }
 
     return Py::new_reference_to(parent->getPyObject());
 }

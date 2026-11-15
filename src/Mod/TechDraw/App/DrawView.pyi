@@ -38,7 +38,7 @@ class DrawView(DocumentObject):
     @constmethod
     def findParentPage(self) -> Any:
         """
-        DrawPage parent = findParentPage().  Returns the parent page that contains this view.
+        DrawPage parent = findParentPage().  Returns the parent page that contains this view, or None when the view is on no page.
         """
         ...
 
