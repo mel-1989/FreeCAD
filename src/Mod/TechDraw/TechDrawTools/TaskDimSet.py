@@ -213,7 +213,22 @@ class TaskDimSet:
         text = " ".join(str(e).split()) or e.__class__.__name__
         return text if text.endswith(".") else text + "."
 
+    def _gone(self):
+        """True when the panel's view or set was deleted while the panel was open."""
+        for obj in (self.view, self.driver if self.edit else None):
+            if obj is None:
+                continue
+            try:
+                if obj.Document.getObject(obj.Name) is None:
+                    return True
+            except Exception:  # a deleted object raises on attribute access
+                return True
+        return self.edit and getattr(self.driver, "View", None) is None
+
     def _apply(self):
+        if (self.view is not None or self.edit) and self._gone():
+            self.set_message("The view or the dimension set was deleted while this panel was open; press Cancel.")
+            return False
         if self.view is None:
             self.set_message("Select at least two vertices of a view first; there is no view to dimension yet.")
             return False

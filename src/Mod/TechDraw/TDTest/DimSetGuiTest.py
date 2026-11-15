@@ -271,6 +271,25 @@ class DimSetGuiTest(unittest.TestCase):
 
     # ---- edit
 
+    def test_ok_after_the_view_was_deleted_gives_a_sentence(self):
+        p = self.p
+        d = DC.make(p.page, p.view, [p.corner(), p.hole(0), p.hole(1)], "chain")
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(self.doc.Name, members(d)[0].Name)
+        self.cmd("edit")
+        self.assertIsNotNone(panel())
+        lw = child(QtWidgets.QListWidget, "dimsetVertices")
+        lw.setCurrentRow(listed().index(p.hole(1)))
+        child(QtWidgets.QPushButton, "dimsetRemove").click()
+        self.doc.removeObject(p.view.Name)
+        pump(0.2)
+        press(QtWidgets.QDialogButtonBox.Ok)
+        self.assertIsNotNone(panel())
+        self.assertIn("deleted while this panel was open", message())
+        self.assertNotIn("NoneType", message())
+        press(QtWidgets.QDialogButtonBox.Cancel)
+        self.assertIsNone(panel())
+
     def test_edit_equals_api_and_double_click_opens_it(self):
         p = self.p
         for kind in KINDS:
