@@ -126,7 +126,9 @@ class DimChainTest(unittest.TestCase):
         return Plate(self.doc, **kw)
 
     def settled(self):
-        return [o.Name for o in self.doc.Objects if "Touched" in o.State or "Invalid" in o.State]
+        on = {v.Name for p in self.doc.findObjects(Type="TechDraw::DrawPage") for v in p.Views}
+        # a member dimension parked off the page (its vertex is gone) keeps its error state, and is not drawn
+        return [o.Name for o in self.doc.Objects if ("Touched" in o.State or "Invalid" in o.State) and not (o.TypeId == "TechDraw::DrawViewDimension" and o.Name not in on)]
 
     # ---- value format
 

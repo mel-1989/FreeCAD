@@ -325,12 +325,81 @@ class DimSetGuiTest(unittest.TestCase):
         import TechDrawTools.CommandDimSet as C
 
         self.assertTrue(C.install_tree_hook() >= 0)
-        trees = [w for w in Gui.getMainWindow().findChildren(QtWidgets.QTreeWidget) if w.metaObject().className() == "Gui::TreeWidget"]
-        self.assertTrue(trees)
-        C.on_tree_double_click()  # what the tree's itemDoubleClicked signal calls, with the driver selected
-        pump(0.2)
-        self.assertIsNotNone(panel())
-        press(QtWidgets.QDialogButtonBox.Cancel)
+
+    def _tree(self):
+        for w in Gui.getMainWindow().findChildren(QtWidgets.QTreeWidget):
+            if w.metaObject().className() == "Gui::TreeWidget":
+                if w.isVisible() or True:
+                    yield w
+
+    def _item_of(self, tree, label):
+        from PySide import QtCore
+
+        found = tree.findItems(label, QtCore.Qt.MatchExactly | QtCore.Qt.MatchRecursive)
+        return found[0] if found else None
+
+    def test_real_double_click_in_the_tree_opens_the_edit_panel(self):
+        from PySide6 import QtTest
+        from PySide import QtCore
+
+        p = self.p
+        d = DC.make(p.page, p.view, [p.corner(), p.hole(0), p.hole(1)], "chain")
+        e = DC.make(p.page, p.view, [p.corner(), p.hole(0), p.hole(1)], "ordinate")
+        for drv in (d, e):
+            opened = False
+            for tree in self._tree():
+                it = self._item_of(tree, drv.Label)
+                if it is None:
+                    continue
+                tree.show()
+                pump(0.3)
+                for t in range(5):  # the tree rebuilds its items now and then: look the item up afresh just before the click
+                    it = self._item_of(tree, drv.Label)
+                    try:
+                        par = it.parent()
+                        while par is not None:
+                            par.setExpanded(True)
+                            par = par.parent()
+                        Gui.Selection.clearSelection()
+                        it = self._item_of(tree, drv.Label)
+                        rect = tree.visualItemRect(it)
+                        break
+                    except RuntimeError:
+                        pump(0.2)
+                self.assertFalse(rect.isEmpty())
+                QtTest.QTest.mouseDClick(tree.viewport(), QtCore.Qt.LeftButton, QtCore.Qt.NoModifier, rect.center())
+                pump(0.3)
+                if panel() is not None:
+                    opened = True
+                    self.assertEqual(child(QtWidgets.QLabel, "dimsetKind").text(), drv.Kind)
+                    press(QtWidgets.QDialogButtonBox.Cancel)
+                    break
+            self.assertTrue(opened, drv.Kind)
+
+    def test_undo_of_a_model_edit_restores_the_dropped_vertex(self):
+        p = self.p
+        for kind in KINDS:
+            names = [p.corner(), p.hole(0), p.hole(2)]
+            d = DC.make(p.page, p.view, names, kind)
+            before = self.snapshot(d)
+            self.doc.openTransaction("drop hole")
+            p.view.Source = [self.doc.getObject("Cut1")]
+            self.doc.recompute()
+            self.doc.commitTransaction()
+            for _ in range(60):  # the view's edges arrive from a worker thread; the timer relays the set
+                pump(0.1)
+            self.assertEqual(list(d.Vertices), names[:2], kind)
+            self.doc.undo()
+            self.doc.recompute()
+            for _ in range(60):
+                pump(0.1)
+            self.assertEqual(self.snapshot(d)[:4], before[:4], kind)
+            self.assertEqual(self.snapshot(d), before, kind)
+            self.doc.removeObject(d.Name)
+            self.doc.recompute()
+            p.view.Source = [p.top]
+            self.doc.recompute()
+            pump(1.0)
 
     # ---- screenshots
 
