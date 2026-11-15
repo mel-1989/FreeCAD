@@ -123,6 +123,9 @@ public:
     //! build the key for a view and the source shape the view is about to project
     static HlrCacheKeyPtr makeKey(const DrawViewPart& view, const TopoDS_Shape& source);
 
+    //! true when every non-shape term of the key still has the value it was built with
+    static bool paramsUnchanged(const DrawViewPart& view, const HlrCacheKey& key);
+
     //! on a hit, fills hit with deep copies and counts a hit; otherwise counts a miss
     static bool lookup(DrawViewPart& view, const HlrCacheKeyPtr& key, HlrCacheHit& hit);
 

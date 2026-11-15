@@ -442,6 +442,9 @@ void DrawViewPart::onHlrFinished()
     //keep the pure HLR result before cosmetic geometry is added to it
     bool facesFromCache = m_hlrFacesFromCache;
     m_hlrFacesFromCache = false;
+    if (m_hlrKey && !HlrCache::paramsUnchanged(*this, *m_hlrKey)) {
+        m_hlrKey.reset();  //a flag or preference changed while the threads worked
+    }
     if (m_hlrKey && !facesFromCache && !m_hlrGeomCached) {
         HlrCache::storeGeometry(*this, m_hlrKey, *geometryObject, m_saveShape, m_saveCentroid);
     }
@@ -867,7 +870,7 @@ void DrawViewPart::onFacesFinished()
 void DrawViewPart::storeFacesInCache()
 {
     if (m_hlrFacesKey && geometryObject && geometryObject.get() == m_hlrFacesGeometry
-        && handleFaces()) {
+        && handleFaces() && HlrCache::paramsUnchanged(*this, *m_hlrFacesKey)) {
         HlrCache::attachFaces(*this, m_hlrFacesKey, *geometryObject);
     }
     m_hlrFacesKey.reset();
@@ -1434,6 +1437,7 @@ void DrawViewPart::unsetupObject()
 {
 //    Base::Console().message("DVP::unsetupObject()\n");
     nowUnsetting = true;
+    HlrCache::dropView(this);  //also when undo keeps the object alive
     App::Document* doc = getDocument();
     std::string docName = doc->getName();
 

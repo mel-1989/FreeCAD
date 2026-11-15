@@ -345,6 +345,41 @@ class HlrCacheTest(unittest.TestCase):
 
     # ---- projection group items -----------------------------------------------------------------
 
+    def testDeletingAViewDropsItsEntriesWithUndoOn(self):
+        self.doc.UndoMode = 1
+        other = self.doc.addObject("TechDraw::DrawViewPart", "Other")
+        self.page.addView(other)
+        other.Source = [self.blk]
+        other.Direction = V(0, -1, 0)
+        other.ScaleType = "Custom"
+        other.Scale = 1.0
+        self.doc.recompute()
+        entries = stats()["entries"]
+        self.doc.openTransaction("delete view")
+        self.page.removeView(other)
+        self.doc.removeObject(other.Name)
+        self.doc.commitTransaction()
+        self.doc.recompute()
+        self.assertLess(stats()["entries"], entries)
+
+    def testRealUndoAndRedoHit(self):
+        self.doc.UndoMode = 1
+        first = snapshot(self.view)
+        self.doc.openTransaction("move view")
+        self.view.X = self.view.X.Value + 10
+        self.doc.recompute()
+        self.doc.commitTransaction()
+        moved = snapshot(self.view)
+        self.assertEqual(moved, first)
+        hits, misses = self.recompute_counting(lambda: self.doc.undo())
+        self.assertGreaterEqual(hits, 1)
+        self.assertEqual(misses, 0)
+        self.assertEqual(snapshot(self.view), first)
+        hits, misses = self.recompute_counting(lambda: self.doc.redo())
+        self.assertGreaterEqual(hits, 1)
+        self.assertEqual(misses, 0)
+        self.assertEqual(snapshot(self.view), first)
+
     def testProjectionGroupItemsHit(self):
         group = self.doc.addObject("TechDraw::DrawProjGroup", "Group")
         self.page.addView(group)

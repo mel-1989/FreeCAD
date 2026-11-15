@@ -207,7 +207,7 @@ std::uint64_t estimateGeomBytes(const BaseGeomPtrVector& edges)
 {
     std::uint64_t n = 0;
     for (auto& g : edges) {
-        n += 2500;  // the TechDraw geometry plus the OCC edge it keeps
+        n += 2000;  // the TechDraw geometry plus the OCC edge it keeps (calibrated on RSS)
         if (auto bs = std::dynamic_pointer_cast<BSpline>(g)) {
             n += 400 * bs->segments.size();
         }
@@ -221,7 +221,7 @@ std::uint64_t estimateFaceBytes(const std::vector<FacePtr>& faces)
     for (auto& f : faces) {
         n += 200;
         for (auto* w : f->wires) {
-            n += 2500 * w->geoms.size();
+            n += 1000 * w->geoms.size();
         }
     }
     return n;
@@ -326,6 +326,35 @@ GeometryObjectPtr buildGeometry(DrawViewPart& view, const Entry& e, bool withFac
     return go;
 }
 
+void fillParams(const DrawViewPart& view, HlrCacheKey& keyRef)
+{
+    HlrCacheKey* key = &keyRef;
+    gp_Ax2 cs = view.getProjectionCS();
+    key->cs = {cs.Location().X(), cs.Location().Y(), cs.Location().Z(),
+               cs.Direction().X(), cs.Direction().Y(), cs.Direction().Z(),
+               cs.XDirection().X(), cs.XDirection().Y(), cs.XDirection().Z()};
+    key->scale = view.getScale();
+    key->rotation = view.Rotation.getValue();
+    key->isoCount = view.IsoCount.getValue();
+    key->perspective = view.Perspective.getValue();
+    key->focus = view.Focus.getValue();
+    key->classFlags = {view.SmoothVisible.getValue(), view.SeamVisible.getValue(),
+                       view.IsoVisible.getValue(),    view.HardHidden.getValue(),
+                       view.SmoothHidden.getValue(),  view.SeamHidden.getValue(),
+                       view.IsoHidden.getValue()};
+    key->scrubCount = view.ScrubCount.getValue();
+
+    auto general = Preferences::getPreferenceGroup("General");
+    key->handleFaces = general->GetBool("HandleFaces", true);
+    key->identifyVoids = general->GetBool("IdentifyVoids", true);
+    key->faceFinderVersion = static_cast<int>(Preferences::faceFinderVersion());
+    key->faceFinderPref = general->GetInt("FaceFinderVersion", -1);
+    key->newFaceFinderPref = general->GetBool("NewFaceFinder", true);
+    key->checkShapes = general->GetBool("CheckShapesBeforeUse", false);
+    key->scrubPref = general->GetInt("ScrubCount", 1);
+    key->allowCrazyEdge = Preferences::getPreferenceGroup("debug")->GetBool("allowCrazyEdge", false);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------
@@ -428,31 +457,17 @@ HlrCacheKeyPtr HlrCache::makeKey(const DrawViewPart& view, const TopoDS_Shape& s
         key->tolSum += BRep_Tool::Tolerance(v);
     }
 
-    gp_Ax2 cs = view.getProjectionCS();
-    key->cs = {cs.Location().X(), cs.Location().Y(), cs.Location().Z(),
-               cs.Direction().X(), cs.Direction().Y(), cs.Direction().Z(),
-               cs.XDirection().X(), cs.XDirection().Y(), cs.XDirection().Z()};
-    key->scale = view.getScale();
-    key->rotation = view.Rotation.getValue();
-    key->isoCount = view.IsoCount.getValue();
-    key->perspective = view.Perspective.getValue();
-    key->focus = view.Focus.getValue();
-    key->classFlags = {view.SmoothVisible.getValue(), view.SeamVisible.getValue(),
-                       view.IsoVisible.getValue(),    view.HardHidden.getValue(),
-                       view.SmoothHidden.getValue(),  view.SeamHidden.getValue(),
-                       view.IsoHidden.getValue()};
-    key->scrubCount = view.ScrubCount.getValue();
-
-    auto general = Preferences::getPreferenceGroup("General");
-    key->handleFaces = general->GetBool("HandleFaces", true);
-    key->identifyVoids = general->GetBool("IdentifyVoids", true);
-    key->faceFinderVersion = static_cast<int>(Preferences::faceFinderVersion());
-    key->faceFinderPref = general->GetInt("FaceFinderVersion", -1);
-    key->newFaceFinderPref = general->GetBool("NewFaceFinder", true);
-    key->checkShapes = general->GetBool("CheckShapesBeforeUse", false);
-    key->scrubPref = general->GetInt("ScrubCount", 1);
-    key->allowCrazyEdge = Preferences::getPreferenceGroup("debug")->GetBool("allowCrazyEdge", false);
+    fillParams(view, *key);
     return key;
+}
+
+bool HlrCache::paramsUnchanged(const DrawViewPart& view, const HlrCacheKey& key)
+{
+    // the worker threads of a view read the class flags and preferences after the key was built;
+    // a result computed while one of them changed must not be stored under the old key
+    HlrCacheKey now = key;
+    fillParams(view, now);
+    return now == key;
 }
 
 bool HlrCache::lookup(DrawViewPart& view, const HlrCacheKeyPtr& key, HlrCacheHit& hit)
@@ -502,7 +517,7 @@ void HlrCache::storeGeometry(const DrawViewPart& view, const HlrCacheKeyPtr& key
         nFaces++;
     }
     e.bytes = estimateGeomBytes(e.edges) * 2  // the converted geometry and the HLR compounds
-              + 400 * e.vertices.size() + 6000ULL * nFaces + 1024;
+              + 400 * e.vertices.size() + 3500ULL * nFaces + 1024;
     s.lru.push_front(std::move(e));
     s.stats.bytes += s.lru.front().bytes;
     s.stats.stores++;
