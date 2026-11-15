@@ -228,6 +228,21 @@ class DrawingTablesGuiTest(unittest.TestCase):
 
         self.check_equivalent("hole", "hole", lambda w: [w.view], lambda w, d: HT.make(w.page, w.view), setup=setup)
 
+    def test_hole_table_on_a_projection_group_item(self):
+        """A view inside a projection group is on the group's page (verifier MEDIUM 1, run 099): the page's Views list only the group."""
+
+        def setup(d):
+            w = Plate(d)
+            grp = d.addObject("TechDraw::DrawProjGroup", "ProjGroup")
+            w.page.addView(grp)
+            grp.Source = [w.top]
+            grp.addProjection("Front")
+            d.recompute()
+            w.item = next(o for o in grp.Views if o.Type == "Front")
+            return w
+
+        self.check_equivalent("holegrp", "hole", lambda w: [w.item], lambda w, d: HT.make(w.page, w.item), setup=setup)
+
     def test_bend_table_equals_api(self):
         from TDTest.BendTableTest import Built
 

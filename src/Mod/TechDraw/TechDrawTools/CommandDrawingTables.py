@@ -97,7 +97,18 @@ def _split(objs):
 
 def _page_of(doc, view):
     """-> the page that shows ``view``, or None.  Scans the pages: ``view.findParentPage()`` crashes FreeCAD for a view that is on no page."""
-    return next((p for p in _pages(doc) if any(v is not None and v.Name == view.Name for v in p.Views)), None)
+    def shows(views, depth=0):
+        for v in views:
+            if v is None:
+                continue
+            if v.Name == view.Name:
+                return True
+            # a projection group lists its items in its own Views, not in the page's
+            if depth < 4 and v.isDerivedFrom("TechDraw::DrawProjGroup") and shows(getattr(v, "Views", []) or [], depth + 1):
+                return True
+        return False
+
+    return next((p for p in _pages(doc) if shows(p.Views)), None)
 
 
 def _active_page(doc):
