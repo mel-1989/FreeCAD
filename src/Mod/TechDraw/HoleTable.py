@@ -1962,6 +1962,7 @@ def make(page, view, origin=None):
     """
     PL.check_page(page, "HoleTable.make")
     PL.check_view(view, "HoleTable.make")
+    PL.check_view_on_page(view, page, "HoleTable.make")
     doc = page.Document
     old = next((d for d in drivers_on(page) if d.View == view), None)
     if old is not None and HoleTableDriver.blocks(old):

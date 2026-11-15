@@ -663,6 +663,20 @@ def check_view(view, who):
         raise TypeError("%s: view must be a TechDraw part view, got %s" % (who, _what(view)))
 
 
+def check_view_on_page(view, page, who):
+    """Raise ``ValueError`` ("view X is not on page Y") unless ``view`` is on ``page``, directly or inside a projection group of it."""
+    for v in page.Views:
+        if v == view or (_is(v, "TechDraw::DrawProjGroup") and any(i == view for i in v.Views)):
+            return
+    raise ValueError("%s: view %s is not on page %s" % (who, view.Label, page.Label))
+
+
+def check_sequence(value, name, who):
+    """Raise ``TypeError`` (one sentence naming the argument) unless ``value`` is a list or tuple."""
+    if not isinstance(value, (list, tuple)):
+        raise TypeError("%s: %s must be a list, got %s" % (who, name, type(value).__name__))
+
+
 def check_assembly(assembly, who):
     if not _is(assembly, "Assembly::AssemblyObject"):
         raise TypeError("%s: assembly must be an assembly, got %s" % (who, _what(assembly)))
@@ -676,6 +690,8 @@ def make(page, assembly, columns=None):
     """
     check_page(page, "PartsList.make")
     check_assembly(assembly, "PartsList.make")
+    if columns is not None:
+        check_sequence(columns, "columns", "PartsList.make")
     import HoleTable as HT  # HoleTable imports this module at load time, so the helpers are fetched here
 
     doc = page.Document

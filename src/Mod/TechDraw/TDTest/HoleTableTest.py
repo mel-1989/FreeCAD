@@ -347,6 +347,19 @@ class HoleTableTest(unittest.TestCase):
         self.refused(self.doc, HT.make, page, box)
         self.refused(self.doc, HT.make, page, page)
 
+    def other_page(self, doc, page):
+        p2 = doc.addObject("TechDraw::DrawPage", "OtherPage")
+        t2 = doc.addObject("TechDraw::DrawSVGTemplate", "OtherTemplate")
+        t2.Template = page.Template.Template
+        p2.Template = t2
+        doc.recompute()
+        return p2
+
+    def test_r19_a_view_that_is_not_on_the_page_is_refused(self):
+        plate, page, view = self.plate_page([("through", 20, 15)])
+        other = self.other_page(self.doc, page)
+        self.refused(self.doc, HT.make, other, view)
+
     def test_r17_a_repeat_make_adds_no_undo_step_but_a_new_origin_does(self):
         plate, page, view = self.plate_page([("through", 20, 15)])
         HT.make(page, view)

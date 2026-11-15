@@ -486,6 +486,10 @@ def make(doc, pages=None, source=None, fields=None):
 
     A page belongs to one set only: pages already in another set raise ``ValueError`` and nothing is made."""
     PL.check_document(doc, "SheetSet.make")
+    if pages is not None:
+        PL.check_sequence(pages, "pages", "SheetSet.make")
+        if not pages:
+            raise ValueError("SheetSet.make: a sheet set needs at least one page")
     for p in pages if pages is not None else []:
         if not PL._is(p, "TechDraw::DrawPage"):
             raise TypeError("SheetSet.make: pages must hold TechDraw pages only, got %s" % PL._what(p))

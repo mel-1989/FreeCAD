@@ -394,6 +394,7 @@ def make(page, view):
     """
     PL.check_page(page, "BendTable.make")
     PL.check_view(view, "BendTable.make")
+    PL.check_view_on_page(view, page, "BendTable.make")
     doc = page.Document
     old = next((d for d in drivers_on(page) if d.View == view), None)
     if old is not None and BendTableDriver.blocks(old):  # nothing to change: no transaction, so no empty undo step

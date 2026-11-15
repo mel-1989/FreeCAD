@@ -408,6 +408,12 @@ class PartsListTest(unittest.TestCase):
         self.refused(self.doc, PL.make, page, None)
         self.refused(self.doc, PL.make, page, box)
 
+    def test_r19_columns_must_be_a_list(self):
+        b = self.case("sub_assembly_child")
+        page = self.page()
+        self.refused(self.doc, PL.make, page, b.asm, columns=5)
+        self.refused(self.doc, PL.make, page, b.asm, columns="Name")
+
     def test_make_twice_returns_the_same_view(self):
         b = self.case("three_configs")
         page = self.page()

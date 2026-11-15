@@ -161,6 +161,11 @@ class SheetSetTest(unittest.TestCase):
         self.refused(m, SS.remove_sheet, m.set, stray)
         self.assertIn(stray, m.doc.Objects)
 
+    def test_r19_pages_must_be_a_non_empty_list(self):
+        m = self.corpus(["iso", "ansi"])
+        self.refused(m, SS.make, m.doc, pages=m.pages[0])
+        self.refused(m, SS.make, m.doc, pages=[])
+
     def add_page(self, m, fam):
         return m.page(fam)
 
