@@ -87,6 +87,7 @@
 #include "DrawViewDimension.h"
 #include <App/FeaturePythonPyImp.h>
 #include "DrawViewPart.h"
+#include "HlrCache.h"
 #include "DrawViewPartPy.h"// generated from DrawViewPartPy.xml
 #include "DrawViewSection.h"
 #include "EdgeWalker.h"
@@ -169,6 +170,7 @@ DrawViewPart::~DrawViewPart()
         m_faceFuture.waitForFinished();
     }
     removeAllReferencesFromGeom();
+    HlrCache::dropView(this);
 }
 
 //! returns a compound of all the shapes from the DocumentObjects in the Source &
@@ -302,6 +304,29 @@ void DrawViewPart::partExec(TopoDS_Shape& shape)
         return;
     }
 
+    //the key of the previous pass must never be attached to this pass
+    m_hlrKey.reset();
+    m_hlrFacesFromCache = false;
+    m_hlrGeomCached = false;
+    if (!m_inAutoScale && !waitingForFaces() && HlrCache::eligible(*this)) {
+        HlrCacheKeyPtr key = HlrCache::makeKey(*this, shape);
+        HlrCacheHit hit;
+        if (HlrCache::lookup(*this, key, hit)) {
+            //the result is applied synchronously, with no thread, as for CoarseView
+            m_saveCentroid = hit.saveCentroid;
+            m_saveShape = hit.saveShape;
+            m_tempGeometryObject = hit.geometry;
+            m_hlrFacesFromCache = hit.hasFaces && handleFaces();
+            if (!hit.hasFaces) {
+                m_hlrKey = key;  //geometry is cached, the faces will be added when found
+                m_hlrGeomCached = true;
+            }
+            onHlrFinished();
+            return;
+        }
+        m_hlrKey = key;
+    }
+
     //we need to keep using the old geometryObject until the new one is fully populated
     m_tempGeometryObject = makeGeometryForShape(shape);
     if (CoarseView.getValue() ||
@@ -414,10 +439,27 @@ void DrawViewPart::onHlrFinished()
     QObject::disconnect(connectHlrWatcher);
     showProgressMessage(getNameInDocument(), "has finished finding hidden lines");
 
+    //keep the pure HLR result before cosmetic geometry is added to it
+    bool facesFromCache = m_hlrFacesFromCache;
+    m_hlrFacesFromCache = false;
+    if (m_hlrKey && !facesFromCache && !m_hlrGeomCached) {
+        HlrCache::storeGeometry(*this, m_hlrKey, *geometryObject, m_saveShape, m_saveCentroid);
+    }
+    m_hlrGeomCached = false;
+
     postHlrTasks();//application level tasks that depend on HLR/GO being complete
+
+    if (facesFromCache) {
+        //the faces came with the cached geometry
+        onFacesFinished();
+        return;
+    }
 
     //start face finding in a separate thread.  We don't find faces when using the polygon
     //HLR method.
+
+    m_hlrFacesKey = m_hlrKey;
+    m_hlrFacesGeometry = geometryObject.get();
 
     if (handleFaces() && !DU::isGuiUp()) {
         extractFaces();
@@ -475,7 +517,9 @@ void DrawViewPart::postHlrTasks()
     if (ScaleType.isValue("Automatic") && !checkFit()) {
         double newScale = autoScale();
         Scale.setValue(newScale);
+        m_inAutoScale = true;
         partExec(m_saveShape);
+        m_inAutoScale = false;
     }
 
     overrideKeepUpdated(false);
@@ -811,11 +855,23 @@ void DrawViewPart::onFacesFinished()
     waitingForFaces(false);
     QObject::disconnect(connectFaceWatcher);
     showProgressMessage(getNameInDocument(), "has finished extracting faces");
+    storeFacesInCache();
 
     // Now we can recompute Dimensions and do other tasks possibly depending on Face extraction
     postFaceExtractionTasks();
 
     requestPaint();
+}
+
+//! add the faces just found to the cache entry of the geometry they were found for
+void DrawViewPart::storeFacesInCache()
+{
+    if (m_hlrFacesKey && geometryObject && geometryObject.get() == m_hlrFacesGeometry
+        && handleFaces()) {
+        HlrCache::attachFaces(*this, m_hlrFacesKey, *geometryObject);
+    }
+    m_hlrFacesKey.reset();
+    m_hlrFacesGeometry = nullptr;
 }
 
 void DrawViewPart::assignFaceRepresentations(const std::vector<TechDraw::FacePtr>& faces,

@@ -40,6 +40,7 @@ from TDTest.RevisionTableTest import RevisionTableTest  # noqa: F401
 from TDTest.SheetSetTest import SheetSetTest  # noqa: F401
 from TDTest.DimChainTest import DimChainTest  # noqa: F401
 from TDTest.OrphanViewTest import OrphanViewTest  # noqa: F401
+from TDTest.HlrCacheTest import HlrCacheTest  # noqa: F401
 
 from TDTest.SvgFontsTest import SvgFontsTest  # noqa: F401
 from TDTest.DxfExportTest import DxfExportTest, DxfFrameTest  # noqa: F401
