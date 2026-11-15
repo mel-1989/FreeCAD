@@ -98,6 +98,9 @@ DrawViewDimension* DrawDimHelper::makeExtentDim(DrawViewPart* dvp, std::vector<s
     }
 
     DrawPage* page = dvp->findParentPage();
+    if (!page) {
+        return nullptr;
+    }
     std::string pageName = page->getNameInDocument();
 
     App::Document* doc = dvp->getDocument();
@@ -160,6 +163,9 @@ void DrawDimHelper::makeExtentDim3d(DrawViewPart* dvp, ReferenceVector reference
     }
 
     DrawPage* page = dvp->findParentPage();
+    if (!page) {
+        return;
+    }
     std::string pageName = page->getNameInDocument();
 
     App::Document* doc = dvp->getDocument();
@@ -430,6 +436,9 @@ DrawDimHelper::makeDistDim(DrawViewPart* dvp, std::string dimType,
     //                            DrawUtil::formatVector(inMin),
     //                            DrawUtil::formatVector(inMax));
     TechDraw::DrawPage* page = dvp->findParentPage();
+    if (!page) {
+        return nullptr;
+    }
     std::string pageName = page->getNameInDocument();
 
     TechDraw::DrawViewDimension* dim = nullptr;

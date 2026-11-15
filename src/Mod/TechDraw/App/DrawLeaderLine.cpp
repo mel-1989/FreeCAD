@@ -308,7 +308,11 @@ DrawLeaderLine* DrawLeaderLine::makeLeader(DrawViewPart* parent, std::vector<Bas
     const std::string objectName{"LeaderLine"};
     const std::string leaderType = "TechDraw::DrawLeaderLine";
     std::string leaderName = parent->getDocument()->getUniqueObjectName(objectName.c_str());
-    std::string pageName = parent->findParentPage()->getNameInDocument();
+    DrawPage* parentPage = parent->findParentPage();
+    if (!parentPage) {
+        throw Base::RuntimeError("DrawLeaderLine::makeLeader - parent is on no page");
+    }
+    std::string pageName = parentPage->getNameInDocument();
     std::string parentName = parent->getNameInDocument();
 
     Base::Interpreter().runStringArg("App.activeDocument().addObject('%s', '%s')",

@@ -73,3 +73,19 @@ class OrphanViewTest(unittest.TestCase):
         self.assertIsNone(item.findParentPage())
         grp.touch()
         self.doc.recompute()
+
+    def test_dimension_and_leader_helpers_refuse_a_view_on_no_page(self):
+        # Run 100 verifier finding: makeExtentDim, makeDistanceDim and makeLeader dereferenced the null page.
+        import TechDraw
+        orphan = self.orphan()
+        before = len(self.doc.Objects)
+        calls = (
+            lambda: TechDraw.makeExtentDim(orphan, [], 0),
+            lambda: TechDraw.makeDistanceDim(orphan, "Distance", App.Vector(0, 0, 0), App.Vector(5, 5, 0)),
+            lambda: TechDraw.makeDistanceDim3d(orphan, "Distance", App.Vector(0, 0, 0), App.Vector(5, 5, 0)),
+            lambda: TechDraw.makeLeader(orphan, [App.Vector(0, 0, 0), App.Vector(10, 10, 0)], 0, 0),
+        )
+        for call in calls:
+            with self.assertRaisesRegex(RuntimeError, "is on no page"):
+                call()
+        self.assertEqual(len(self.doc.Objects), before)
