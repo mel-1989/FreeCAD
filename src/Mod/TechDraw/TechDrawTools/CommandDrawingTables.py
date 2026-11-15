@@ -376,6 +376,10 @@ class CommandSheetSetMake(_Base):
         import SheetSet
 
         pages, views, asms, others = _split(_selected(doc))
+        if others and not (pages or views or asms):
+            sets = {d.Name: d for d in SheetSet.drivers(doc)}
+            if all(o.Name in sets for o in others):  # the command selects the set it made, so a second press lands here
+                raise _Refuse("%s already has its pages; %s selected" % (", ".join(o.Label for o in others), "it is" if len(others) == 1 else "they are"))
         if views or asms or others:
             raise _Refuse("select pages only, or nothing to take every page")
         chosen = pages if pages else _pages(doc)

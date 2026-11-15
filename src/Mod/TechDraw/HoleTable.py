@@ -1513,6 +1513,13 @@ App.addDocumentObserver(SETTLE)
 # ------------------------------------------------------------------------------------------------
 
 
+def report_warning(obj, before):
+    """Write ``obj.Warning`` to the console once, only when a recompute changed it (a settle pass that repeats it stays silent)."""
+    now = obj.Warning
+    if now and now != before:
+        App.Console.PrintWarning(now + "\n")
+
+
 class HoleTableDriver:
     """Python feature between a view and its hole table: lists the holes, writes the sheet, keeps tags and table blocks.
 
@@ -1576,6 +1583,14 @@ class HoleTableDriver:
     # -- the work ---------------------------------------------------------------------------------
 
     def execute(self, obj):
+        """Recompute; the one console line for what the table could not avoid is written when ``Warning`` changed (ruling 124)."""
+        before = obj.Warning
+        try:
+            self._execute(obj)
+        finally:
+            report_warning(obj, before)
+
+    def _execute(self, obj):
         view, sheet = obj.View, obj.Sheet
         doc = obj.Document
         page = doc.getObject(obj.PageName) if obj.PageName else None
@@ -1620,7 +1635,6 @@ class HoleTableDriver:
             short.append("a %s hole at X %s Y %s is not listed because less than half of its rim is visible" % ("Ø" + fmt(gd), fmt(gx - org[0]), fmt(gy - org[1])))
         if short:
             note = "HoleTable: " + "; ".join(short)
-            App.Console.PrintWarning(note + "\n")
             obj.Warning = (obj.Warning + " | " if obj.Warning else "") + note
         obj.HoleCount = len(ordered)
 
@@ -1715,7 +1729,6 @@ class HoleTableDriver:
         note = ""
         if conflicts:
             note = "HoleTable: no clean tag layout found; left over: " + "; ".join(conflicts)
-            App.Console.PrintWarning(note + "\n")
         obj.Warning = (obj.Warning + " | " if obj.Warning and note else obj.Warning) + note
         for h, it, (centre, tip) in zip(holes, items, plan):
             t = h["tagobj"]
@@ -1819,8 +1832,6 @@ class HoleTableDriver:
                 placed = [box]
                 break
         obj.Warning = warning
-        if warning:
-            App.Console.PrintWarning(warning + "\n")
         old_total = int(obj.Rows)
         changed = write_cells(sheet, sheet_rows, old_total)
         obj.Rows = len(sheet_rows)

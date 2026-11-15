@@ -278,6 +278,20 @@ class DrawingTablesGuiTest(unittest.TestCase):
 
         self.check_equivalent("ss0", "set", lambda w: [], lambda w, d: SS.make(d), setup=setup, expect_selected=False)
 
+    def test_a_second_sheet_set_press_with_the_set_selected_says_it_already_has_its_pages(self):
+        d = self.newdoc("SetTwice")
+        pages = [self.add_page(d, "P1"), self.add_page(d, "P2")]
+        self.assertEqual(self.press_cmd("set", *pages, doc=d), [])
+        sset = SS.drivers(d)[0]
+        self.assertEqual([o.Name for o in Gui.Selection.getSelection()], [sset.Name])
+        n, u = len(d.Objects), self.depth(d)
+        got = []
+        for _ in range(2):  # the driver stays selected, so the press can repeat
+            got = self.press_cmd("set", sset, doc=d)
+            self.one_line(got, "set")
+            self.assertIn("%s already has its pages; it is selected" % sset.Label, got[0])
+            self.assertEqual((len(d.Objects), self.depth(d)), (n, u))
+
     def test_add_sheet_equals_api(self):
         def setup(d):
             pages = [self.add_page(d, "P1"), self.add_page(d, "P2")]
