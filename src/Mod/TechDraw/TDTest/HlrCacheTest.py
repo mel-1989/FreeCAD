@@ -228,6 +228,110 @@ class HlrCacheTest(unittest.TestCase):
         self.assertEqual(len(self.view.getVisibleVertexes()), nv)
         self.assertEqual(snapshot(self.view), first)
 
+    # ---- faces follow the geometry the face finder reads; m_saveCentroid; HandleFaces ----------
+
+    def centre_line_geometry(self, view):
+        # the end points of a centre line on a face depend on the faces the view found
+        import tempfile
+        fd, name = tempfile.mkstemp(suffix=".dxf")
+        os.close(fd)
+        try:
+            TechDraw.writeDXFView(view, name)
+            lines = open(name).read().split("\n")
+        finally:
+            os.remove(name)
+        found = []
+        for i, ln in enumerate(lines):
+            if ln == "LINE" and lines[i - 1].strip() == "0":
+                vals = {}
+                chunk = lines[i:i + 40]
+                for j in range(1, len(chunk) - 1, 2):
+                    if chunk[j].strip() in ("10", "20", "11", "21"):
+                        vals[chunk[j].strip()] = round(float(chunk[j + 1]), 3)
+                found.append((vals.get("10"), vals.get("20"), vals.get("11"), vals.get("21")))
+        return sorted(found)
+
+    def testFacesFollowCosmeticEdges(self):
+        box = self.doc.addObject("Part::Box", "FBox")
+        box.Length, box.Width, box.Height = 40, 30, 20
+        view = self.doc.addObject("TechDraw::DrawViewPart", "FView")
+        self.page.addView(view)
+        view.Source = [box]
+        view.Direction = V(0, 0, 1)
+        view.ScaleType = "Custom"
+        view.Scale = 1.0
+        self.doc.recompute()
+        steps = []
+
+        def check(label):
+            self.doc.recompute()
+            on = self.centre_line_geometry(view)
+            os.environ["CADFORK_HLR_CACHE"] = "0"
+            try:
+                view.touch()
+                self.doc.recompute()
+                off = self.centre_line_geometry(view)
+            finally:
+                del os.environ["CADFORK_HLR_CACHE"]
+            self.assertEqual(on, off, label)
+            steps.append(label)
+
+        check("build")
+        line = view.makeCosmeticLine(V(-30, 0, 0), V(30, 0, 0))
+        check("cosmetic line added")
+        tag = view.makeCenterLine(["Face0"], 0)
+        check("centre line on the split face")
+        view.removeCosmeticEdge(line)
+        check("cosmetic line removed")
+        view.removeCenterLine(tag)
+        line = view.makeCosmeticLine(V(-30, 0, 0), V(30, 0, 0))
+        check("cosmetic line again")
+        view.removeCosmeticEdge(line)
+        tag = view.makeCenterLine(["Face0"], 0)
+        check("centre line on the unsplit face")
+        # hits really happened in this sequence
+        before = stats()["hits"]
+        view.touch()
+        self.doc.recompute()
+        self.assertGreater(stats()["hits"], before)
+
+    def testCentroidIsRestoredOnAHit(self):
+        far = self.doc.addObject("Part::Feature", "Far")
+        far.Shape = Part.makeBox(5, 5, 5, V(400, 300, 200))
+        self.doc.recompute()
+
+        def probe():
+            tag = self.view.makeCosmeticVertex3d(V(5, 5, 5))
+            point = tuple(self.view.getCosmeticVertex(tag).Point)
+            self.view.removeCosmeticVertex(tag)
+            self.doc.recompute()
+            return point, tuple(self.view.getGeometricCenter())
+
+        reference = probe()
+        self.view.Source = [far]
+        self.doc.recompute()
+        self.assertNotEqual(probe(), reference)
+        before = stats()["hits"]
+        self.view.Source = [self.blk, self.link]
+        self.doc.recompute()
+        self.assertGreater(stats()["hits"], before)
+        self.assertEqual(probe(), reference)
+
+    def testHandleFacesPreferenceIsAKeyTerm(self):
+        grp = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/TechDraw/General")
+        try:
+            grp.SetBool("HandleFaces", False)
+            hits, misses = self.recompute_counting(lambda: self.view.touch())
+            self.assertEqual(hits, 0)
+            self.assertGreaterEqual(misses, 1)
+            hits, misses = self.recompute_counting(lambda: self.view.touch())
+            self.assertGreaterEqual(hits, 1)
+            grp.SetBool("HandleFaces", True)
+            hits, misses = self.recompute_counting(lambda: self.view.touch())
+            self.assertGreaterEqual(hits, 1)  # the entry with faces from setUp is still there
+        finally:
+            grp.SetBool("HandleFaces", True)
+
     # ---- switches, exclusions -----------------------------------------------------------------
 
     def testOffSwitch(self):

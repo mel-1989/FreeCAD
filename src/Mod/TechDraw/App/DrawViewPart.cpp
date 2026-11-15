@@ -281,6 +281,17 @@ short DrawViewPart::mustExecute() const
 
 void DrawViewPart::onChanged(const App::Property* prop)
 {
+    // every property the HLR or face-finding threads read while they run (the cache stores a
+    // result only if none of them changed, even if it was changed back)
+    if (prop == &Direction || prop == &XDirection || prop == &Scale || prop == &ScaleType
+        || prop == &Rotation || prop == &IsoCount || prop == &Perspective || prop == &Focus
+        || prop == &ScrubCount || prop == &SmoothVisible || prop == &SeamVisible
+        || prop == &IsoVisible || prop == &HardHidden || prop == &SmoothHidden
+        || prop == &SeamHidden || prop == &IsoHidden || prop == &CoarseView || prop == &Source
+        || prop == &XSource) {
+        m_hlrChange++;
+    }
+
     // If the user has set PropertyVector Direction to zero, set it along the default value instead (Front View).
     // Otherwise bad things will happen because there'll be a normalization for direction calculations later.
     Base::Vector3d dir = Direction.getValue();
@@ -306,8 +317,8 @@ void DrawViewPart::partExec(TopoDS_Shape& shape)
 
     //the key of the previous pass must never be attached to this pass
     m_hlrKey.reset();
-    m_hlrFacesFromCache = false;
     m_hlrGeomCached = false;
+    m_hlrKeyChange = m_hlrChange;
     if (!m_inAutoScale && !waitingForFaces() && HlrCache::eligible(*this)) {
         HlrCacheKeyPtr key = HlrCache::makeKey(*this, shape);
         HlrCacheHit hit;
@@ -316,11 +327,8 @@ void DrawViewPart::partExec(TopoDS_Shape& shape)
             m_saveCentroid = hit.saveCentroid;
             m_saveShape = hit.saveShape;
             m_tempGeometryObject = hit.geometry;
-            m_hlrFacesFromCache = hit.hasFaces && handleFaces();
-            if (!hit.hasFaces) {
-                m_hlrKey = key;  //geometry is cached, the faces will be added when found
-                m_hlrGeomCached = true;
-            }
+            m_hlrKey = key;  //the geometry is cached, a face set may still be added
+            m_hlrGeomCached = true;
             onHlrFinished();
             return;
         }
@@ -440,32 +448,24 @@ void DrawViewPart::onHlrFinished()
     showProgressMessage(getNameInDocument(), "has finished finding hidden lines");
 
     //keep the pure HLR result before cosmetic geometry is added to it
-    bool facesFromCache = m_hlrFacesFromCache;
-    m_hlrFacesFromCache = false;
-    if (m_hlrKey && !HlrCache::paramsUnchanged(*this, *m_hlrKey)) {
-        m_hlrKey.reset();  //a flag or preference changed while the threads worked
+    bool hitPass = m_hlrGeomCached;
+    if (m_hlrKey && (!HlrCache::paramsUnchanged(*this, *m_hlrKey) || m_hlrChange != m_hlrKeyChange)) {
+        m_hlrKey.reset();  //a key input changed while the threads worked
     }
-    if (m_hlrKey && !facesFromCache && !m_hlrGeomCached) {
+    if (m_hlrKey && !hitPass) {
         HlrCache::storeGeometry(*this, m_hlrKey, *geometryObject, m_saveShape, m_saveCentroid);
     }
     m_hlrGeomCached = false;
 
     {
-        //a hit that brings its faces paints once, from postFaceExtractionTasks below; the paint
-        //before the faces would draw the same view twice
+        //a hit paints once, from postFaceExtractionTasks below, not before the faces are there
         struct PaintGuard
         {
             DrawView* view;
             ~PaintGuard() { view->suppressPaint(false); }
         } guard {this};
-        suppressPaint(facesFromCache);
+        suppressPaint(hitPass && handleFaces());
         postHlrTasks();//application level tasks that depend on HLR/GO being complete
-    }
-
-    if (facesFromCache) {
-        //the faces came with the cached geometry
-        onFacesFinished();
-        return;
     }
 
     //start face finding in a separate thread.  We don't find faces when using the polygon
@@ -473,6 +473,19 @@ void DrawViewPart::onHlrFinished()
 
     m_hlrFacesKey = m_hlrKey;
     m_hlrFacesGeometry = geometryObject.get();
+    m_hlrFacesChange = m_hlrChange;
+    if (m_hlrKey && handleFaces()) {
+        //cosmetic edges and the like are now in the geometry: faces are reused only if the
+        //face finder would read exactly the edges it read when they were stored
+        m_hlrFacesSig = HlrCache::faceInputSignature(*geometryObject, SmoothVisible.getValue(),
+                                                     SeamVisible.getValue());
+        if (HlrCache::takeFaces(*this, m_hlrKey, m_hlrFacesSig, *geometryObject)) {
+            m_hlrFacesKey.reset();
+            m_hlrFacesGeometry = nullptr;
+            onFacesFinished();
+            return;
+        }
+    }
 
     if (handleFaces() && !DU::isGuiUp()) {
         extractFaces();
@@ -880,8 +893,9 @@ void DrawViewPart::onFacesFinished()
 void DrawViewPart::storeFacesInCache()
 {
     if (m_hlrFacesKey && geometryObject && geometryObject.get() == m_hlrFacesGeometry
-        && handleFaces() && HlrCache::paramsUnchanged(*this, *m_hlrFacesKey)) {
-        HlrCache::attachFaces(*this, m_hlrFacesKey, *geometryObject);
+        && handleFaces() && m_hlrChange == m_hlrFacesChange
+        && HlrCache::paramsUnchanged(*this, *m_hlrFacesKey)) {
+        HlrCache::attachFaces(*this, m_hlrFacesKey, *geometryObject, m_hlrFacesSig);
     }
     m_hlrFacesKey.reset();
     m_hlrFacesGeometry = nullptr;

@@ -236,8 +236,13 @@ struct Entry
     // the stored HLR result, never handed out, only cloned
     BaseGeomPtrVector edges;
     std::vector<VertexPtr> vertices;
-    std::vector<FacePtr> faces;
-    bool hasFaces {false};
+    struct FaceSet
+    {
+        std::array<std::uint8_t, 32> signature;
+        std::vector<FacePtr> faces;
+        std::uint64_t bytes;
+    };
+    std::vector<FaceSet> faceSets;  // newest last, at most four
     std::array<TopoDS_Shape, 10> compounds;
     TopoDS_Shape saveShape;
     Base::Vector3d saveCentroid;
@@ -307,7 +312,7 @@ std::list<Entry>::iterator findEntry(State& s, const DrawViewPart* view,
     return s.lru.end();
 }
 
-GeometryObjectPtr buildGeometry(DrawViewPart& view, const Entry& e, bool withFaces)
+GeometryObjectPtr buildGeometry(DrawViewPart& view, const Entry& e)
 {
     auto go = std::make_shared<GeometryObject>(view.getNameInDocument(), &view);
     go->setIsoCount(view.IsoCount.getValue());
@@ -318,11 +323,6 @@ GeometryObjectPtr buildGeometry(DrawViewPart& view, const Entry& e, bool withFac
     go->setHlrCompounds(e.compounds);
     go->setEdgeGeometry(cloneEdges(e.edges));
     go->setVertexGeometry(cloneVertices(e.vertices));
-    if (withFaces) {
-        for (auto& f : cloneFaces(e.faces)) {
-            go->addFaceGeom(f);
-        }
-    }
     return go;
 }
 
@@ -482,8 +482,8 @@ bool HlrCache::lookup(DrawViewPart& view, const HlrCacheKeyPtr& key, HlrCacheHit
     s.stats.hits++;
     s.lru.splice(s.lru.begin(), s.lru, it);  // most recently used
     const Entry& e = s.lru.front();
-    hit.hasFaces = e.hasFaces;
-    hit.geometry = buildGeometry(view, e, e.hasFaces);
+    hit.hasFaces = !e.faceSets.empty();
+    hit.geometry = buildGeometry(view, e);
     hit.saveShape = e.saveShape;
     hit.saveCentroid = e.saveCentroid;
     return true;
@@ -525,22 +525,73 @@ void HlrCache::storeGeometry(const DrawViewPart& view, const HlrCacheKeyPtr& key
     evict(s, &keep);
 }
 
+std::array<std::uint8_t, 32> HlrCache::faceInputSignature(const GeometryObject& go, bool smooth,
+                                                          bool seam)
+{
+    HashBuf buf;
+    std::ostream os(&buf);
+    for (auto& e : go.getVisibleFaceEdges(smooth, seam)) {
+        // exact: every edge as the face finder gets it (raw doubles of the BRep edge)
+        TopoDS_Edge edge = e->getOCCEdge();
+        if (edge.IsNull()) {
+            os.put('N');
+            continue;
+        }
+        BinTools::Write(edge, os, false, false, BinTools_FormatVersion_CURRENT);
+    }
+    os.flush();
+    return buf.result();
+}
+
 void HlrCache::attachFaces(const DrawViewPart& view, const HlrCacheKeyPtr& key,
-                           const GeometryObject& go)
+                           const GeometryObject& go, const std::array<std::uint8_t, 32>& sig)
 {
     State& s = state();
     std::lock_guard<std::mutex> lock(s.mutex);
     auto it = findEntry(s, &view, key, key->hash());
-    if (it == s.lru.end() || it->hasFaces) {
+    if (it == s.lru.end()) {
         return;
     }
-    it->faces = cloneFaces(go.getFaceGeometry());
-    it->hasFaces = true;
-    std::uint64_t extra = estimateFaceBytes(it->faces);
-    it->bytes += extra;
-    s.stats.bytes += extra;
+    for (auto& fs : it->faceSets) {
+        if (fs.signature == sig) {
+            return;
+        }
+    }
+    Entry::FaceSet fs;
+    fs.signature = sig;
+    fs.faces = cloneFaces(go.getFaceGeometry());
+    fs.bytes = estimateFaceBytes(fs.faces);
+    if (it->faceSets.size() >= 4) {
+        it->bytes -= it->faceSets.front().bytes;
+        s.stats.bytes -= it->faceSets.front().bytes;
+        it->faceSets.erase(it->faceSets.begin());
+    }
+    it->bytes += fs.bytes;
+    s.stats.bytes += fs.bytes;
+    it->faceSets.push_back(std::move(fs));
     auto keep = it;
     evict(s, &keep);
+}
+
+bool HlrCache::takeFaces(const DrawViewPart& view, const HlrCacheKeyPtr& key,
+                         const std::array<std::uint8_t, 32>& sig, GeometryObject& go)
+{
+    State& s = state();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    auto it = findEntry(s, &view, key, key->hash());
+    if (it == s.lru.end()) {
+        return false;
+    }
+    for (auto& fs : it->faceSets) {
+        if (fs.signature == sig) {
+            go.clearFaceGeom();
+            for (auto& f : cloneFaces(fs.faces)) {
+                go.addFaceGeom(f);
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 void HlrCache::dropView(const DrawViewPart* view)

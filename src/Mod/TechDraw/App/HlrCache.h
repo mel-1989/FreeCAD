@@ -93,10 +93,10 @@ using HlrCacheKeyPtr = std::shared_ptr<const HlrCacheKey>;
 //! What a lookup returns: a private deep copy the caller may mutate freely.
 struct HlrCacheHit
 {
-    GeometryObjectPtr geometry;       //!< HLR edges and vertices, and the faces when hasFaces
+    GeometryObjectPtr geometry;       //!< HLR edges and vertices (faces come from takeFaces)
     TopoDS_Shape saveShape;           //!< the centred copy of the source (m_saveShape)
     Base::Vector3d saveCentroid;      //!< centroid before centring (m_saveCentroid)
-    bool hasFaces {false};            //!< faces are present in geometry (face finding is done)
+    bool hasFaces {false};            //!< some face set was stored for this key
 };
 
 struct HlrCacheStats
@@ -134,9 +134,20 @@ public:
                               const GeometryObject& geometry, const TopoDS_Shape& saveShape,
                               const Base::Vector3d& saveCentroid);
 
-    //! add the faces found for the stored geometry to its entry
+    //! SHA-256 of the exact geometry the face finder is about to read from the geometry object:
+    //! the visible HARD and OUTLINE edges (and smooth and seam ones when asked), cosmetic edges
+    //! included, in order.  Faces are valid only for the same signature.
+    static std::array<std::uint8_t, 32> faceInputSignature(const GeometryObject& geometry,
+                                                           bool smooth, bool seam);
+
+    //! add the faces found for the stored geometry, with the signature of their input
     static void attachFaces(const DrawViewPart& view, const HlrCacheKeyPtr& key,
-                            const GeometryObject& geometry);
+                            const GeometryObject& geometry,
+                            const std::array<std::uint8_t, 32>& signature);
+
+    //! if a face set stored for this key has this input signature, put copies of it in geometry
+    static bool takeFaces(const DrawViewPart& view, const HlrCacheKeyPtr& key,
+                          const std::array<std::uint8_t, 32>& signature, GeometryObject& geometry);
 
     static void dropView(const DrawViewPart* view);
     static void dropDocument(const App::Document* doc);

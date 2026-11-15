@@ -293,7 +293,10 @@ private:
     std::shared_ptr<const HlrCacheKey> m_hlrKey;
     std::shared_ptr<const HlrCacheKey> m_hlrFacesKey;
     const TechDraw::GeometryObject* m_hlrFacesGeometry {nullptr};
-    bool m_hlrFacesFromCache {false};
+    std::array<std::uint8_t, 32> m_hlrFacesSig {};
+    unsigned m_hlrChange {0};      //!< bumped when a property the HLR threads read is changed
+    unsigned m_hlrKeyChange {0};   //!< m_hlrChange when the pass in progress began
+    unsigned m_hlrFacesChange {0}; //!< m_hlrChange when face finding began
     bool m_hlrGeomCached {false};
     bool m_inAutoScale {false};
     void storeFacesInCache();
