@@ -30,4 +30,4 @@ from TDTest.DrawViewDetailTest import DrawViewDetailTest  # noqa: F401
 from TDTest.DrawViewDimensionTest import DrawViewDimensionTest  # noqa: F401
 from TDTest.TechDrawTaskTest import TechDrawTaskTest  # noqa: F401
 from TDTest.PmiDrawingGuiTest import PmiDrawingSceneTest  # noqa: F401
-
+from TDTest.DimSetGuiTest import DimSetGuiTest  # noqa: F401

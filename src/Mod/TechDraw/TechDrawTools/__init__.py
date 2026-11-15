@@ -40,6 +40,7 @@ from .CommandPositionSectionView import CommandPositionSectionView
 from .CommandVertexCreations import CommandVertexCreationGroup
 from .CommandHoleShaftFit import CommandHoleShaftFit
 from .CommandFillTemplateFields import CommandFillTemplateFields
+from .CommandDimSet import CommandDimSetChain, CommandDimSetBaseline, CommandDimSetOrdinate, CommandDimSetEdit
 from .TaskShareView import TaskShareView
 from .TaskMoveView import TaskMoveView
 from .TaskHoleShaftFit import TaskHoleShaftFit

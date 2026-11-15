@@ -32,6 +32,10 @@
         <file>icons/actions/TechDraw_AxoLengthDimension.svg</file>
         <file>icons/actions/TechDraw_AddOffsetVertex.svg</file>
         <file>icons/actions/TechDraw_FillTemplateFields.svg</file>
+        <file>icons/actions/TechDraw_DimSetChain.svg</file>
+        <file>icons/actions/TechDraw_DimSetBaseline.svg</file>
+        <file>icons/actions/TechDraw_DimSetOrdinate.svg</file>
+        <file>icons/actions/TechDraw_DimSetEdit.svg</file>
         <file>icons/actions/TechDraw_HoleShaftFit.svg</file>
         <file>icons/actions/TechDraw_Multiview.svg</file>
         <file>icons/actions/TechDraw_PageDefault.svg</file>

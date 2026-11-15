@@ -54,7 +54,9 @@ ORD_CHAR_W = 0.62  # text box length per character in font sizes (an upper bound
 # and 3.5 mm (run 097); QGIViewDimension.cpp l.1242-1251 is the code that does it.
 LINE_OFFSET_SLOPE = 0.63333
 STOCK_FONT_MM = 5.0  # TechDraw's own default when the preference is not set (Preferences::DefaultFontSizeInMM)
+MIN_SPAN_MM = 1e-4  # chain and baseline make no member for a span shorter than this in model units (ruling 109)
 TAG = "DimChainDriver"
+PARKED = "DimChainParked"  # a parked member carries this instead of TAG, so nothing else counts it as part of the set
 PARAMS = "User parameter:BaseApp/Preferences/Mod/TechDraw/Dimensions"
 
 
@@ -141,6 +143,8 @@ class _Settle:
         self.timers = {}
         self.ticks = {}
         self.removing = False
+        self.pages = set()  # pages whose views changed in a sync and need a recompute of their own
+        self.sync = set()  # drivers whose members need a look after the recompute (a vanished vertex, a zero span, a vertex without member)
 
     def arm(self, doc):
         self.docs.add(doc.Uid)
@@ -155,6 +159,7 @@ class _Settle:
             if owner and not self.removing:  # a member or symbol the user deleted: the set lays itself out again at the next recompute
                 drv = doc.getObject(owner)
                 if drv is not None and _is_driver(drv):
+                    self._drop_uncovered(drv, obj)
                     drv.touch()
                 return
             if obj.TypeId != "App::FeaturePython" or not isinstance(getattr(obj, "Proxy", None), DimChainDriver):
@@ -167,7 +172,7 @@ class _Settle:
         self.removing = True
         try:
             for o in list(doc.Objects):
-                if getattr(o, TAG, None) == name:
+                if name in (getattr(o, TAG, None), getattr(o, PARKED, None)):
                     try:
                         doc.removeObject(o.Name)
                     except Exception:
@@ -175,9 +180,47 @@ class _Settle:
         finally:
             self.removing = False
 
+    @staticmethod
+    def _drop_uncovered(drv, gone):
+        """A deleted member takes with it each vertex of its pair that no other member uses (the set no longer holds it)."""
+        try:
+            if drv.Kind == "ordinate" or gone.TypeId != "TechDraw::DrawViewDimension":
+                return
+            pr = DimChainDriver.pair(gone)
+            if not pr:
+                return
+            covered = set()
+            for m in DimChainDriver.members(drv):
+                if m.Name != gone.Name:
+                    covered.update(DimChainDriver.pair(m) or ())
+            cur = list(drv.Vertices)
+            datum = cur[0] if drv.Kind == "baseline" and cur else None
+            new = [v for v in cur if not (v in pr and v not in covered and v != datum)]
+            if new != cur:
+                drv.Vertices = new
+        except Exception:
+            pass
+
     def slotRecomputedDocument(self, doc):
         if doc.Uid not in self.docs:
             return
+        for drv in [o for o in doc.Objects if _is_driver(o)]:
+            if drv.Name in self.sync:
+                self.sync.discard(drv.Name)
+                try:
+                    self.removing = True
+                    try:
+                        changed = _sync(drv)
+                    finally:
+                        self.removing = False
+                    if changed:
+                        drv.touch()
+                        drv.recompute()
+                        if "Touched" in drv.State:
+                            drv.purgeTouched()
+                        self.pages.add(drv.PageName)
+                except Exception as e:
+                    App.Console.PrintWarning("Dimension set %s: could not tidy its dimensions (%s)\n" % (drv.Label, e))
         for drv in [o for o in doc.Objects if _is_driver(o)]:
             for o in drv.Proxy.owned(drv):
                 if "Touched" in o.State:
@@ -190,6 +233,19 @@ class _Settle:
                             o.purgeTouched()
                         except Exception:
                             pass
+        for name in list(self.pages):
+            self.pages.discard(name)
+            pg = doc.getObject(name)
+            if pg is not None and "Touched" in pg.State:
+                try:
+                    pg.recompute()
+                except Exception:
+                    pass
+                if "Touched" in pg.State:
+                    try:
+                        pg.purgeTouched()
+                    except Exception:
+                        pass
 
     def poll(self, doc):
         """GUI only: a view's edges arrive from a worker thread after the recompute; lay the sets out again once they differ."""
@@ -317,8 +373,17 @@ class DimChainDriver:
     # -- objects the driver keeps ---------------------------------------------------------------
 
     @staticmethod
-    def members(obj):
-        return sorted((o for o in obj.Document.Objects if o.TypeId == "TechDraw::DrawViewDimension" and getattr(o, TAG, "") == obj.Name), key=lambda o: o.Name)
+    def members(obj, parked=False):
+        """The member dimensions on the page; ``parked=True``: the ones taken off the page (a vertex gone or a zero span) that wait to return.
+
+        A parked member is never deleted: deleting an object the undo stack knows opens an undo step of its own ("Delete") outside the
+        model edit's, so one undo of the edit would no longer restore the set (check 125, GUI).
+        """
+        key = PARKED if parked else TAG
+        return sorted(
+            (o for o in obj.Document.Objects if o.TypeId == "TechDraw::DrawViewDimension" and getattr(o, key, "") == obj.Name),
+            key=lambda o: o.Name,
+        )
 
     @staticmethod
     def symbols(obj):
@@ -326,6 +391,27 @@ class DimChainDriver:
 
     def owned(self, obj):
         return self.members(obj) + self.symbols(obj)
+
+    @staticmethod
+    def _dropped(obj):
+        if "Dropped" not in obj.PropertiesList:
+            return []
+        out = []
+        for e in obj.Dropped:
+            n, _, i = e.partition("@")
+            out.append((n, int(i) if i.isdigit() else 0))
+        return out
+
+    @staticmethod
+    def _set_dropped(obj, entries):
+        if "Dropped" not in obj.PropertiesList:
+            if not entries:
+                return
+            obj.addProperty("App::PropertyStringList", "Dropped", "DimChain", "Vertices that left the view, with their place, so an undo of the model edit brings them back")
+            obj.setEditorMode("Dropped", 2)
+        new = ["%s@%d" % e for e in entries]
+        if list(obj.Dropped) != new:
+            obj.Dropped = new
 
     def stale(self, obj):
         v = obj.View
@@ -355,6 +441,8 @@ class DimChainDriver:
         direction, side, kind = obj.Direction, obj.Side, obj.Kind
         mem = self.members(obj)
         names = set(obj.Vertices)
+        dropped = self._dropped(obj)
+        names.update(n for n, _ in dropped)
         for m in mem:
             p = self.pair(m)
             if p:
@@ -362,37 +450,62 @@ class DimChainDriver:
         frame = Frame(view, names)
         if not frame.ok:
             return
+        # R14 (ruling 108): a vertex that is no longer in the view
+        cur = list(obj.Vertices)
+        # a vertex dropped earlier that is in the view again (an undo of the model edit, or an edit that brings the feature back)
+        # returns at its old place; the Dropped list is what makes the drop undoable even when it happened outside the edit's transaction
+        back = [(n, i) for n, i in dropped if n in frame.pts and n not in cur]
+        for n, i in sorted(back, key=lambda ni: ni[1]):
+            cur.insert(min(i, len(cur)), n)
+        if kind != "chain" and cur and cur[0] not in frame.pts:
+            raise RuntimeError("datum %s of %s is no longer in %s; pick a new datum or delete the set" % (cur[0], obj.Label, view.Label))
+        lost = [n for n in cur if n not in frame.pts]
+        for n in lost:
+            App.Console.PrintWarning("Dimension set %s: vertex %s is no longer in %s and was dropped from the set\n" % (obj.Label, n, view.Label))
+        keep = [(n, i) for n, i in dropped if n not in frame.pts]
+        keep += [(n, cur.index(n)) for n in lost]
+        self._set_dropped(obj, keep)
+        base = [n for n in cur if n in frame.pts]
         obj.Signature = frame.sig
         if kind == "ordinate":
+            if base != list(obj.Vertices):
+                obj.Vertices = base
             self._ordinate(obj, view, page, frame)
             return
         a = _axis(direction)
         edge, sign = _outside(frame, direction, side)
-        # a member the user deleted has left the set; a member whose vertex is gone is left where it is
-        live = [(m, self.pair(m)) for m in mem]
-        live = [(m, p) for m, p in live if p and p[0] in frame.pts and p[1] in frame.pts]
-        keep = []
+        # a member the user deleted has left the set; a member whose vertex is gone or whose span is under 1e-4 mm is not drawn (the
+        # observer removes it after the recompute); a vertex without member stays in the set, so the member returns when it moves apart
+        allm = [(m, self.pair(m)) for m in mem]
+        live = [(m, p) for m, p in allm if p and p[0] in frame.pts and p[1] in frame.pts]
+        live = [(m, p) for m, p in live if abs(frame.pts[p[1]][a] - frame.pts[p[0]][a]) >= MIN_SPAN_MM]
+        covered = set()
+        for _, p in live:
+            covered.update(p)
+        todo = len(live) != len(allm) or any(n not in covered for n in base) or bool(self.members(obj, parked=True))
+        if kind == "chain":  # a member that spans a vertex of the set (a bridge made while that vertex was away) is replaced
+            order = sorted(base, key=lambda n: (frame.pts[n][a], _idx(n)))
+            adj = {frozenset(x) for x in zip(order[:-1], order[1:])}
+            todo = todo or any(frozenset(p) not in adj for _, p in live)
         if kind == "baseline":
-            datum = obj.Vertices[0] if len(obj.Vertices) else None
-            for m, p in live:
-                keep.append(p[1])
+            datum = base[0] if base else None
+            span = lambda n: abs(frame.pts[n][a] - frame.pts[datum][a])  # noqa: E731
             order = sorted(live, key=lambda mp: (abs(frame.pts[mp[1][1]][a] - frame.pts[mp[1][0]][a]), mp[1][1]))
             sp = cascade_spacing()
             for k, (m, p) in enumerate(order):
                 line = edge + sign * (FIRST_MM + k * sp)
                 self._place(m, frame, a, line, 0.5 * (frame.page(p[0])[a] + frame.page(p[1])[a]))
-            obj.Vertices = ([datum] if datum else []) + [v for v in [p[1] for _, p in order]]
+            rest = sorted(set(base[1:]) | {p[1] for _, p in order}, key=lambda n: (span(n), n))
+            new = ([datum] if datum else []) + rest
         else:
             line = edge + sign * FIRST_MM
             for m, p in live:
                 self._place(m, frame, a, line, 0.5 * (frame.page(p[0])[a] + frame.page(p[1])[a]))
-            seen = []
-            for _, p in sorted(live, key=lambda mp: min(frame.pts[mp[1][0]][a], frame.pts[mp[1][1]][a])):
-                for v in p:
-                    if v not in seen:
-                        seen.append(v)
-            if seen:
-                obj.Vertices = seen
+            new = sorted(set(base) | covered, key=lambda n: (frame.pts[n][a], _idx(n)))
+        if new and new != list(obj.Vertices):
+            obj.Vertices = new
+        if todo:
+            SETTLE.sync.add(obj.Name)
 
     def _place(self, dim, frame, a, line, along):
         """Put the label of ``dim`` on the line ``line`` (page coordinate on the other axis) at ``along`` (page, on the measuring axis)."""
@@ -417,6 +530,83 @@ class DimChainDriver:
             sym.Symbol = svg
         HT.set_if(sym, "X", float(cx), 1e-6)
         HT.set_if(sym, "Y", float(cy), 1e-6)
+
+
+def _has_member(drv, a, b):
+    return any(set(DimChainDriver.pair(m) or ()) == {a, b} for m in DimChainDriver.members(drv))
+
+
+def _park(m, drv, page):
+    page.removeView(m)
+    if PARKED not in m.PropertiesList:
+        m.addProperty("App::PropertyString", PARKED, "DimChain", "Driver that will take this dimension back when its vertices return")
+        m.setEditorMode(PARKED, 1)
+    setattr(m, PARKED, drv.Name)
+    setattr(m, TAG, "")
+
+
+def _ensure_member(drv, page, view, p, q):
+    """Put the member for (p, q) on the page: a parked one when there is one, else a new one."""
+    for m in DimChainDriver.members(drv, parked=True):
+        if set(DimChainDriver.pair(m) or ()) == {p, q}:
+            page.addView(m)
+            setattr(m, TAG, drv.Name)
+            setattr(m, PARKED, "")
+            m.touch()
+            return m
+    return new_member(drv, page, view, p, q, drv.Direction)
+
+
+def _sync(drv):
+    """Bring a chain or baseline's members in line with its vertices after a recompute (R14, R15); -> True when it changed any.
+
+    Takes a member off the page ("parks" it) when its vertex vanished from the view or its span is under MIN_SPAN_MM, or when it spans
+    another vertex of a chain; puts a parked member back, or makes one, when a vertex without member is owed one.  Nothing is deleted.
+    """
+    view, doc = drv.View, drv.Document
+    page = doc.getObject(drv.PageName)
+    if view is None or page is None or drv.Kind == "ordinate":
+        return False
+    a = _axis(drv.Direction)
+    names = set(drv.Vertices)
+    for m in DimChainDriver.members(drv) + DimChainDriver.members(drv, parked=True):
+        names.update(DimChainDriver.pair(m) or ())
+    frame = Frame(view, names)
+    if not frame.ok:
+        return False
+    pts = frame.pts
+
+    def span(p, q):
+        return abs(pts[q][a] - pts[p][a])
+
+    def ok(p):
+        return p and p[0] in pts and p[1] in pts and span(*p) >= MIN_SPAN_MM
+
+    base = [n for n in drv.Vertices if n in pts]
+    order = sorted(base, key=lambda n: (pts[n][a], _idx(n)))
+    adj = {frozenset(x) for x in zip(order[:-1], order[1:])}
+    changed, gone = False, set()
+    for m in DimChainDriver.members(drv):
+        p = DimChainDriver.pair(m)
+        if p and (not ok(p) or (drv.Kind == "chain" and frozenset(p) not in adj)):
+            gone.update(p)
+            _park(m, drv, page)
+            changed = True
+    have = set()
+    for m in DimChainDriver.members(drv):
+        have.update(DimChainDriver.pair(m) or ())
+    if drv.Kind == "baseline":
+        for n in base[1:]:
+            if not _has_member(drv, base[0], n) and span(base[0], n) >= MIN_SPAN_MM:
+                _ensure_member(drv, page, view, base[0], n)
+                changed = True
+    else:
+        touched = gone | {n for n in base if n not in have}
+        for p, q in zip(order[:-1], order[1:]):
+            if (p in touched or q in touched) and span(p, q) >= MIN_SPAN_MM and not _has_member(drv, p, q):
+                _ensure_member(drv, page, view, p, q)
+                changed = True
+    return changed
 
 
 def new_symbol(drv, page):
@@ -651,12 +841,15 @@ def make(page, view, vertices, kind, direction="horizontal", side=None):
         drv.Kind, drv.Direction, drv.Side = kind, direction, side
         drv.Vertices = names
         if kind == "baseline":
+            a = _axis(direction)
             for n in names[1:]:
-                new_member(drv, page, view, names[0], n, direction)
+                if _long_enough(view, names[0], n, a):
+                    new_member(drv, page, view, names[0], n, direction)
         elif kind == "chain":
             a = _axis(direction)
             for p, q in _chain_pairs(view, names, a):
-                new_member(drv, page, view, p, q, direction)
+                if _long_enough(view, p, q, a):
+                    new_member(drv, page, view, p, q, direction)
         else:
             new_symbol(drv, page)
         SETTLE.arm(doc)
@@ -669,6 +862,11 @@ def make(page, view, vertices, kind, direction="horizontal", side=None):
         raise
     HT.end(doc, own)
     return drv
+
+
+def _long_enough(view, p, q, a):
+    """Ruling 109: a span under MIN_SPAN_MM gets no member."""
+    return abs(vertex_point(view, q)[a] - vertex_point(view, p)[a]) >= MIN_SPAN_MM
 
 
 def _chain_pairs(view, names, a):
@@ -699,7 +897,8 @@ def add(driver, vertex):
     own = HT.begin(doc, "Add to dimension set")
     try:
         if kind == "baseline":
-            new_member(driver, page, view, cur[0], vertex, direction)
+            if _long_enough(view, cur[0], vertex, a):
+                new_member(driver, page, view, cur[0], vertex, direction)
             driver.Vertices = cur + [vertex]
         elif kind == "ordinate":
             driver.Vertices = cur + [vertex]
@@ -712,12 +911,15 @@ def add(driver, vertex):
             hi = order[i + 1] if i + 1 < len(order) else None
             if lo is not None and hi is not None and frozenset((lo, hi)) in by:
                 doc.removeObject(by[frozenset((lo, hi))].Name)
-                new_member(driver, page, view, lo, vertex, direction)
-                new_member(driver, page, view, vertex, hi, direction)
+                for p, q in ((lo, vertex), (vertex, hi)):
+                    if _long_enough(view, p, q, a):
+                        new_member(driver, page, view, p, q, direction)
             elif lo is not None:
-                new_member(driver, page, view, lo, vertex, direction)
+                if _long_enough(view, lo, vertex, a):
+                    new_member(driver, page, view, lo, vertex, direction)
             elif hi is not None:
-                new_member(driver, page, view, vertex, hi, direction)
+                if _long_enough(view, vertex, hi, a):
+                    new_member(driver, page, view, vertex, hi, direction)
             driver.Vertices = order
         driver.touch()
         doc.recompute()
@@ -767,7 +969,7 @@ def remove(driver, vertex):
             for k, m in list(by.items()):
                 if vertex in k:
                     doc.removeObject(m.Name)
-            if both:
+            if both and _long_enough(view, lo, hi, a):
                 new_member(driver, page, view, lo, hi, direction)
             driver.Vertices = [n for n in cur if n != vertex]
         driver.touch()
@@ -779,6 +981,44 @@ def remove(driver, vertex):
         raise
     HT.end(doc, own)
     return driver
+
+
+def set_side(driver, side):
+    """Move the set to the other side of the view (below or above, left or right) and lay it out again; one undo step.
+
+    ValueError when ``side`` is not a side of the set's direction.
+    """
+    doc = driver.Document
+    if side not in SIDES[driver.Direction]:
+        raise ValueError("unknown side %r for a %s set (use %s)" % (side, driver.Direction, " or ".join(SIDES[driver.Direction])))
+    if driver.Side == side:
+        return driver
+    own = HT.begin(doc, "Dimension set side")
+    try:
+        driver.Side = side
+        driver.touch()
+        doc.recompute()
+        if any("Touched" in o.State for o in driver.Proxy.owned(driver)):
+            doc.recompute()
+    except Exception:
+        HT.fail(doc, own)
+        raise
+    HT.end(doc, own)
+    return driver
+
+
+def driver_of(obj):
+    """-> the dimension set driver that ``obj`` is, or that owns ``obj`` (a member dimension or the ordinate symbol); None otherwise."""
+    if obj is None:
+        return None
+    if _is_driver(obj):
+        return obj
+    owner = getattr(obj, TAG, "") if hasattr(obj, "PropertiesList") else ""
+    if owner:
+        drv = obj.Document.getObject(owner)
+        if drv is not None and _is_driver(drv):
+            return drv
+    return None
 
 
 def drivers_on(page):

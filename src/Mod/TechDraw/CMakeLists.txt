@@ -39,11 +39,13 @@ set(TechDraw_ToolsScripts
     TechDrawTools/CommandAxoLengthDimension.py
     TechDrawTools/CommandPositionSectionView.py
     TechDrawTools/CommandFillTemplateFields.py
+    TechDrawTools/CommandDimSet.py
     TechDrawTools/CommandVertexCreations.py
     TechDrawTools/CommandHoleShaftFit.py
     TechDrawTools/TaskMoveView.py
     TechDrawTools/TaskShareView.py
     TechDrawTools/TaskFillTemplateFields.py
+    TechDrawTools/TaskDimSet.py
     TechDrawTools/TaskHoleShaftFit.py
     TechDrawTools/TaskAddOffsetVertex.py
     TechDrawTools/TDToolsUtil.py
@@ -217,6 +219,7 @@ SET(TDTest_SRCS
     TDTest/SvgFontsTest.py
     TDTest/DxfExportTest.py
     TDTest/PmiDrawingGuiTest.py
+    TDTest/DimSetGuiTest.py
 )
 
 SET(TDTestFile_SRCS

@@ -126,7 +126,9 @@ class DimChainTest(unittest.TestCase):
         return Plate(self.doc, **kw)
 
     def settled(self):
-        return [o.Name for o in self.doc.Objects if "Touched" in o.State or "Invalid" in o.State]
+        on = {v.Name for p in self.doc.findObjects(Type="TechDraw::DrawPage") for v in p.Views}
+        # a member dimension parked off the page (its vertex is gone) keeps its error state, and is not drawn
+        return [o.Name for o in self.doc.Objects if ("Touched" in o.State or "Invalid" in o.State) and not (o.TypeId == "TechDraw::DrawViewDimension" and o.Name not in on)]
 
     # ---- value format
 
@@ -176,8 +178,8 @@ class DimChainTest(unittest.TestCase):
         self.assertEqual(ys, {round(30.0 + 10.0 + OFF, 3)})  # outline top at +30, 10 mm above, label OFF above the line
         self.assertEqual(sorted(round(x.getRawValue(), 3) for x in members(d)), [30.0, 35.0])
         v = DC.make(p.page, p.view, [p.corner(), p.hole(0), p.hole(1)], "chain", direction="vertical")
-        self.assertEqual(len(members(v)), 2)
-        # vertical: holes share y, so the corner (y 0) to the holes is 20 each way; the line is 10 mm left of the outline (x -75 - 10)
+        self.assertEqual(len(members(v)), 1)  # R15 (ruling 109): the holes share y, so there is no member between them (it was one of 0.0 in 5a)
+        # vertical: the corner (y 0) to the holes is 20; the line is 10 mm left of the outline (x -75 - 10)
         for x in members(v):
             self.assertEqual(x.Type, "DistanceY")
             self.assertAlmostEqual(x.X.Value, -85.0 - OFF, places=3)
@@ -561,6 +563,143 @@ class DimChainTest(unittest.TestCase):
             DC.make(p.page, p.view, good, "chain")
         self.assertIn("rotated", str(cm.exception))
         self.assertEqual(len(self.doc.Objects), n)
+
+    # ---- R14: a vertex that vanishes from the view after a model edit (ruling 108)
+
+    def _drop_last_hole(self, p):
+        """The model edit: the plate loses its last hole (the view re-points at Cut1), inside one undo transaction."""
+        self.doc.openTransaction("drop hole")
+        p.view.Source = [self.doc.getObject("Cut1")]
+        self.doc.recompute()
+        self.doc.commitTransaction()
+
+    class _Warnings:
+        def __enter__(self):
+            self.got = []
+            self.old = App.Console.PrintWarning
+            App.Console.PrintWarning = lambda text: self.got.append(text)
+            return self.got
+
+        def __exit__(self, *a):
+            App.Console.PrintWarning = self.old
+
+    def test_r14_ordinate_datum_vanishes(self):
+        p = self.plate()
+        names = [p.hole(2), p.corner(), p.hole(0)]
+        d = DC.make(p.page, p.view, names, "ordinate")
+        before = d.Proxy.symbols(d)[0].Symbol
+        self._drop_last_hole(p)  # no exception reaches us
+        self.assertIn("Invalid", d.State)
+        self.assertEqual(
+            d.getStatusString(), "datum %s of %s is no longer in %s; pick a new datum or delete the set" % (names[0], d.Label, p.view.Label)
+        )
+        self.assertEqual(list(d.Vertices), names)  # nothing was dropped or redrawn: the user decides
+        self.assertEqual(d.Proxy.symbols(d)[0].Symbol, before)
+        self.doc.undo()
+        self.doc.recompute()
+        self.assertEqual(self.settled(), [])
+        self.assertEqual(list(d.Vertices), names)
+
+    def test_r14_ordinate_non_datum_vanishes(self):
+        p = self.plate()
+        names = [p.corner(), p.hole(0), p.hole(2)]
+        d = DC.make(p.page, p.view, names, "ordinate")
+        with self._Warnings() as got:
+            self._drop_last_hole(p)
+        self.assertEqual(len([g for g in got if names[2] in g]), 1, got)
+        self.assertEqual(list(d.Vertices), names[:2])
+        self.assertEqual(self.settled(), [])
+        texts = [t[0] for t in svg_items(d.Proxy.symbols(d)[0])[2]]
+        self.assertEqual(sorted(texts), ["0", "20"])
+        self.doc.undo()
+        self.doc.recompute()
+        self.assertEqual(list(d.Vertices), names)
+        self.assertEqual(sorted(t[0] for t in svg_items(d.Proxy.symbols(d)[0])[2]), ["0", "20", "85"])
+
+    def test_r14_baseline_feature_vanishes(self):
+        p = self.plate()
+        names = [p.corner(), p.hole(0), p.hole(1), p.hole(2)]
+        d = DC.make(p.page, p.view, names, "baseline")
+        with self._Warnings() as got:
+            self._drop_last_hole(p)
+            self.doc.recompute()
+        self.assertEqual(len([g for g in got if names[3] in g]), 1, got)
+        self.assertEqual(list(d.Vertices), names[:3])
+        self.assertEqual(len(members(d)), 2)
+        self.assertEqual(self.settled(), [])
+        vals = sorted(round(m.getRawValue(), 3) for m in members(d))
+        self.assertEqual(vals, [20.0, 50.0])
+        edge, sign = DC._outside(DC.Frame(p.view, names[:3]), "horizontal", "below")
+        ys = sorted(m.Y.Value + p.view.Y.Value - DC.line_offset() for m in members(d))
+        self.assertAlmostEqual(ys[1], p.outline()[1] - 10.0, places=3)  # re-packed: the first line is still 10 mm out
+        self.assertAlmostEqual(ys[0], p.outline()[1] - 17.0, places=3)
+        self.doc.undo()
+        self.doc.recompute()
+        self.assertEqual(list(d.Vertices), names)
+        self.assertEqual(len(members(d)), 3)
+        self.assertEqual(self.settled(), [])
+
+    def test_r14_chain_feature_vanishes(self):
+        p = self.plate()
+        names = [p.corner(), p.hole(0), p.hole(1), p.hole(2)]
+        d = DC.make(p.page, p.view, names, "chain")
+        with self._Warnings() as got:
+            self._drop_last_hole(p)
+            self.doc.recompute()
+        self.assertEqual(len([g for g in got if names[3] in g]), 1, got)
+        self.assertEqual(list(d.Vertices), names[:3])
+        self.assertEqual(sorted(round(m.getRawValue(), 3) for m in members(d)), [20.0, 30.0])
+        self.assertEqual(self.settled(), [])
+        self.doc.undo()
+        self.doc.recompute()
+        self.assertEqual(list(d.Vertices), names)
+        self.assertEqual(len(members(d)), 3)
+        self.assertEqual(self.settled(), [])
+
+    def test_r14_chain_middle_vanishes_is_bridged(self):
+        p = self.plate()
+        names = [p.corner(), p.hole(0), p.hole(1), p.hole(2)]
+        d = DC.make(p.page, p.view, names, "chain")
+        # the hole in the middle of the chain goes: a shorter chain is bridged over the gap (indices after it shift)
+        gone = names[2]
+        self.doc.openTransaction("edit")
+        self.doc.getObject("Cut1").Tool = self.doc.getObject("H0")  # Cut1 no longer cuts H1: Cut2 = Cut1 minus H2
+        self.doc.recompute()
+        self.doc.commitTransaction()
+        self.assertEqual(self.settled(), [])
+        self.assertEqual(len(members(d)), len(d.Vertices) - 1)
+        self.assertNotIn("Invalid", [o.State for o in members(d)])
+
+    # ---- R15: no member for a span under 1e-4 mm (ruling 109)
+
+    def test_r15_zero_span_makes_no_member_and_returns_when_features_part(self):
+        for kind in ("chain", "baseline"):
+            doc = App.newDocument("R15" + kind)
+            doc.UndoMode = 1
+            try:
+                p = Plate(doc)
+                names = [p.hole(0), p.hole(1), p.hole(2)]  # all three centres lie on y = 20
+                d = DC.make(p.page, p.view, names, kind, direction="vertical")
+                self.assertEqual(len(members(d)), 0, kind)
+                self.assertEqual(sorted(d.Vertices), sorted(names))
+                self.assertEqual([o.Name for o in doc.Objects if "Invalid" in o.State], [])
+                doc.getObject("H1").Placement.Base = V(50, 25, 0)  # the middle hole moves 5 mm up
+                doc.recompute()
+                self.assertEqual(len(members(d)), 1, kind)
+                self.assertAlmostEqual(members(d)[0].getRawValue(), 5.0, places=6)
+                self.assertEqual(sorted(d.Vertices), sorted(names))
+                doc.getObject("H1").Placement.Base = V(50, 20, 0)  # and back
+                doc.recompute()
+                self.assertEqual(len(members(d)), 0, kind)
+                self.assertEqual(sorted(d.Vertices), sorted(names))
+            finally:
+                App.closeDocument(doc.Name)
+
+    def test_r15_ordinate_keeps_entries_at_one_coordinate(self):
+        p = self.plate()
+        d = DC.make(p.page, p.view, [p.hole(0), p.hole(1), p.hole(2)], "ordinate", direction="vertical")
+        texts = [t[0] for t in svg_items(d.Proxy.symbols(d)[0])[2]]
+        self.assertEqual(sorted(texts), ["0", "0", "0"])
 
     # ---- DXF
 
