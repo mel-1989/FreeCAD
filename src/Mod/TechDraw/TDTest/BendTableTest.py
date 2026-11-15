@@ -592,6 +592,33 @@ class BendTableTest(unittest.TestCase):
             b.close()
             self.built.remove(b)
 
+    def refused(self, doc, fn, *a, **k):
+        """R17: the call raises ValueError or TypeError, one sentence without a traceback, and leaves objects and undo stack as they were."""
+        n_obj, n_undo = len(doc.Objects), doc.UndoCount
+        with self.assertRaises((ValueError, TypeError)) as cm:
+            fn(*a, **k)
+        msg = str(cm.exception)
+        self.assertTrue(msg and "Traceback" not in msg and "\n" not in msg, msg)
+        self.assertEqual(len(doc.Objects), n_obj, msg)
+        self.assertEqual(doc.UndoCount, n_undo, msg)
+        self.assertIsNone(App.getActiveTransaction())
+
+    def test_r17_bad_arguments_are_refused_and_a_repeat_make_adds_no_undo_step(self):
+        b = self.build("g01")
+        doc, page, view = b.doc, b.page, b.view
+        box = doc.addObject("Part::Box", "Box")
+        bare = doc.addObject("TechDraw::DrawPage", "Bare")
+        doc.recompute()
+        self.refused(doc, BT.make, None, view)
+        self.refused(doc, BT.make, box, view)
+        self.refused(doc, BT.make, bare, view)
+        self.refused(doc, BT.make, page, None)
+        self.refused(doc, BT.make, page, box)
+        n = doc.UndoCount
+        again = BT.make(page, view)
+        self.assertEqual(again.Name, b.table.Name)
+        self.assertEqual(doc.UndoCount, n)
+
     # -- speed --------------------------------------------------------------------------------
 
     def test_speed(self):

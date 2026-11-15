@@ -61,6 +61,34 @@ class RevisionTableTest(unittest.TestCase):
     def rows(self, page):
         return RT.read_rows(RT.drivers_on(page)[0].Sheet)
 
+    def refused(self, fn, *a, **k):
+        """R17: ValueError or TypeError, one sentence, nothing made, undo stack unchanged."""
+        n_obj, n_undo = len(self.doc.Objects), self.doc.UndoCount
+        with self.assertRaises((ValueError, TypeError)) as cm:
+            fn(*a, **k)
+        msg = str(cm.exception)
+        self.assertTrue(msg and "Traceback" not in msg and "\n" not in msg, msg)
+        self.assertEqual(len(self.doc.Objects), n_obj, msg)
+        self.assertEqual(self.doc.UndoCount, n_undo, msg)
+        self.assertIsNone(App.getActiveTransaction())
+
+    def test_r17_bad_arguments_are_refused_and_a_repeat_make_adds_no_undo_step(self):
+        page = self.page(os.path.join("ISO", "A4_Landscape_ISO5457_minimal.svg"))
+        box = self.doc.addObject("Part::Box", "Box")
+        bare = self.doc.addObject("TechDraw::DrawPage", "Bare")
+        self.doc.recompute()
+        self.refused(RT.make, None)
+        self.refused(RT.make, box)
+        self.refused(RT.make, bare)
+        self.refused(RT.add, None, "A", "x", "2026-01-01", "MS")
+        self.refused(RT.add, bare, "A", "x", "2026-01-01", "MS")
+        self.refused(RT.add, page, None, "x", "2026-01-01", "MS")
+        self.refused(RT.add, page, "A", "x", 20260101, "MS")
+        v = RT.make(page)
+        n = self.doc.UndoCount
+        self.assertEqual(RT.make(page).Name, v.Name)
+        self.assertEqual(self.doc.UndoCount, n)
+
     def test_add_rows_template_fields_and_drawn_text(self):
         for tpl, keys in (
             (os.path.join("ISO", "A4_Landscape_ISO5457_minimal.svg"), ("revision_index", "date_of_issue")),

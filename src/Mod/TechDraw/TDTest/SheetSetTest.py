@@ -134,6 +134,36 @@ class SheetSetTest(unittest.TestCase):
         m.fam_of[page.Name] = fam
         return page
 
+    def refused(self, m, fn, *a, **k):
+        """R17: ValueError or TypeError, one sentence, nothing made or deleted, undo stack unchanged."""
+        n_obj, n_undo = len(m.doc.Objects), m.doc.UndoCount
+        with self.assertRaises((ValueError, TypeError)) as cm:
+            fn(*a, **k)
+        msg = str(cm.exception)
+        self.assertTrue(msg and "Traceback" not in msg and "\n" not in msg, msg)
+        self.assertEqual(len(m.doc.Objects), n_obj, msg)
+        self.assertEqual(m.doc.UndoCount, n_undo, msg)
+        self.assertIsNone(App.getActiveTransaction())
+
+    def test_r17_bad_arguments_are_refused_before_anything_is_made_or_deleted(self):
+        m = self.corpus(["iso", "ansi"])
+        box = m.doc.addObject("Part::Box", "Spare")
+        stray = self.add_page(m, "iso")
+        m.doc.recompute()
+        self.refused(m, SS.make, None)
+        self.refused(m, SS.make, box)
+        self.refused(m, SS.make, m.doc, pages=[box])
+        self.refused(m, SS.add_sheet, None)
+        self.refused(m, SS.add_sheet, box)
+        self.refused(m, SS.remove_sheet, None, m.pages[0])
+        self.refused(m, SS.remove_sheet, m.set, box)
+        self.refused(m, SS.remove_sheet, m.set, None)
+        self.refused(m, SS.remove_sheet, m.set, stray)
+        self.assertIn(stray, m.doc.Objects)
+
+    def add_page(self, m, fam):
+        return m.page(fam)
+
     def assertSheets(self, m, vals, msg=""):
         """Every sheet of the set shows exactly the corpus value for each key its family has, in set order, and nothing is Touched."""
         pages = list(m.set.Pages)

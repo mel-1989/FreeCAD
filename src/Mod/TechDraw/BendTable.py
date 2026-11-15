@@ -392,7 +392,12 @@ def make(page, view):
     One undo transaction.  Calling it again for the same view returns the table that is there.  Afterwards a plain
     ``doc.recompute()`` follows edits of the model.
     """
+    PL.check_page(page, "BendTable.make")
+    PL.check_view(view, "BendTable.make")
     doc = page.Document
+    old = next((d for d in drivers_on(page) if d.View == view), None)
+    if old is not None and BendTableDriver.blocks(old):  # nothing to change: no transaction, so no empty undo step
+        return BendTableDriver.blocks(old)[0]
     HT.wait_for_geometry(view)
     own = HT.begin(doc, "Bend table")
     try:

@@ -390,7 +390,7 @@ class DimChainDriver:
         return sorted((o for o in obj.Document.Objects if o.TypeId == "TechDraw::DrawViewSymbol" and getattr(o, TAG, "") == obj.Name), key=lambda o: o.Name)
 
     def owned(self, obj):
-        return self.members(obj) + self.symbols(obj)
+        return self.members(obj) + self.members(obj, parked=True) + self.symbols(obj)  # a parked member left the tag, not the set: tidy it too
 
     @staticmethod
     def _dropped(obj):

@@ -1960,7 +1960,14 @@ def make(page, view, origin=None):
     view's visible edges.  One undo transaction.  Calling it again for the same view returns the table that is there (a new
     ``origin`` is applied).  Afterwards a plain ``doc.recompute()`` follows edits of the model.
     """
+    PL.check_page(page, "HoleTable.make")
+    PL.check_view(view, "HoleTable.make")
     doc = page.Document
+    old = next((d for d in drivers_on(page) if d.View == view), None)
+    if old is not None and HoleTableDriver.blocks(old):
+        same = (not old.HasOrigin) if origin is None else (old.HasOrigin and old.Origin == (Vector(*origin) if not isinstance(origin, Vector) else origin))
+        if same:  # nothing to change: no transaction, so no empty undo step
+            return HoleTableDriver.blocks(old)[0]
     wait_for_geometry(view)
     own = begin(doc, "Hole table")
     try:

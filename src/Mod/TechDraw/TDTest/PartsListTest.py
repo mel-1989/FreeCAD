@@ -361,6 +361,53 @@ class PartsListTest(unittest.TestCase):
         self.assertEqual({o.Name for o in self.doc.Objects}, before)
         self.assertEqual(len(page.Views), 0)
 
+    def test_r16_make_joins_a_callers_transaction(self):
+        b = self.case("sub_assembly_child")
+        page = self.page()
+        before = len(self.doc.Objects)
+        n = self.doc.UndoCount
+        self.doc.openTransaction("Caller macro")
+        PL.make(page, b.asm)
+        self.doc.commitTransaction()
+        self.assertEqual(self.doc.UndoCount, n + 1)
+        self.assertGreater(len(self.doc.Objects), before)
+        self.doc.undo()
+        self.assertEqual(len(self.doc.Objects), before)
+        self.assertEqual(self.doc.UndoCount, n)
+
+    def test_r16_a_failing_make_in_a_callers_transaction_leaves_the_caller_open(self):
+        b = self.case("sub_assembly_child")
+        page = self.page()
+        self.doc.openTransaction("Caller macro")
+        with self.assertRaises(Exception):
+            PL.make(page, b.asm, columns=5)
+        self.assertIsNotNone(App.getActiveTransaction())
+        self.doc.abortTransaction()
+
+    def refused(self, doc, fn, *a, **k):
+        """R17: the call raises ValueError or TypeError, one sentence without a traceback, and leaves objects and undo stack as they were."""
+        n_obj, n_undo = len(doc.Objects), doc.UndoCount
+        with self.assertRaises((ValueError, TypeError)) as cm:
+            fn(*a, **k)
+        msg = str(cm.exception)
+        self.assertTrue(msg and "Traceback" not in msg and "\n" not in msg, msg)
+        self.assertEqual(len(doc.Objects), n_obj, msg)
+        self.assertEqual(doc.UndoCount, n_undo, msg)
+        self.assertIsNone(App.getActiveTransaction())
+
+    def test_r17_bad_arguments_are_refused_before_anything_is_made(self):
+        b = self.case("sub_assembly_child")
+        page = self.page()
+        box = self.doc.addObject("Part::Box", "Box")
+        bare = self.doc.addObject("TechDraw::DrawPage", "Bare")
+        self.doc.recompute()
+        self.refused(self.doc, PL.make, None, b.asm)
+        self.refused(self.doc, PL.make, box, b.asm)
+        self.refused(self.doc, PL.make, self.doc, b.asm)
+        self.refused(self.doc, PL.make, bare, b.asm)
+        self.refused(self.doc, PL.make, page, None)
+        self.refused(self.doc, PL.make, page, box)
+
     def test_make_twice_returns_the_same_view(self):
         b = self.case("three_configs")
         page = self.page()
