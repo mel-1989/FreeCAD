@@ -73,6 +73,7 @@ class TaskDimSet:
         self.kind = driver.Kind if self.edit else kind
         self.view = driver.View if self.edit else None
         self.done = False
+        self.datum_chosen = False  # Make datum was pressed on a row
         self._build()
         if self.edit:
             self.direction.setCurrentIndex(self.direction.findText(driver.Direction))
@@ -80,7 +81,8 @@ class TaskDimSet:
             for n in driver.Vertices:
                 self.vertices.addItem(n)
             self.original = list(driver.Vertices)
-            self.make_datum.setEnabled(False)
+            if "Invalid" in driver.State:  # R14: a model edit removed the datum; the panel is the way to pick another
+                self.set_message("%s. To keep the set, make another vertex the datum, then press OK." % driver.getStatusString().rstrip(". "))
         else:
             self.original = []
             self._fill_sides(None)
@@ -189,6 +191,7 @@ class TaskDimSet:
             it = self.vertices.takeItem(r)
             self.vertices.insertItem(0, it)
             self.vertices.setCurrentRow(0)
+            self.datum_chosen = True
             self.set_message("")
 
     # -- task dialog protocol -------------------------------------------------------------------
@@ -212,6 +215,13 @@ class TaskDimSet:
     def _sentence(e):
         text = " ".join(str(e).split()) or e.__class__.__name__
         return text if text.endswith(".") else text + "."
+
+    def _alive(self, name):
+        try:
+            DimChain.vertex_point(self.driver.View, name)
+            return True
+        except ValueError:
+            return False
 
     def _gone(self):
         """True when the panel's view or set was deleted while the panel was open."""
@@ -238,7 +248,13 @@ class TaskDimSet:
             cur = list(self.driver.Vertices)
             gone = [n for n in cur if n not in names]
             new = [n for n in names if n not in cur]
-            if not gone and not new and side == self.driver.Side:
+            datum = None
+            if names and cur and self.kind != "chain" and names[0] != cur[0]:
+                # Make datum was pressed, or the datum's own row is dead and was removed (the next row then takes over); removing
+                # a live datum's row alone still gives the "is the datum and cannot be removed" sentence
+                if self.datum_chosen or not self._alive(cur[0]):
+                    datum = names[0]
+            if not gone and not new and datum is None and side == self.driver.Side:
                 self.set_message("")
                 self.done = True
                 return True
@@ -250,10 +266,14 @@ class TaskDimSet:
         doc.openTransaction("Dimension set" if not self.edit else "Edit dimension set")
         try:
             if self.edit:
+                if datum is not None:  # first, so the old datum is no longer the datum when it is removed (or is already gone, when dead)
+                    DimChain.set_datum(self.driver, datum)
                 for n in gone:
-                    DimChain.remove(self.driver, n)
+                    if n in list(self.driver.Vertices):  # a dead old datum left the set with set_datum
+                        DimChain.remove(self.driver, n)
                 for n in new:
-                    DimChain.add(self.driver, n)
+                    if n not in list(self.driver.Vertices):  # the new datum is in the set already
+                        DimChain.add(self.driver, n)
                 if side != self.driver.Side:
                     DimChain.set_side(self.driver, side)
             else:

@@ -729,6 +729,23 @@ class DimChainTest(unittest.TestCase):
             for m in DC.DimChainDriver.members(d, parked=True):  # a parked member waits Up-to-date off the page
                 self.assertNotIn("Touched", m.State, label)
 
+    def test_set_datum_on_a_vertex_that_is_not_yet_in_the_set_adds_it(self):
+        for kind in ("baseline", "ordinate"):
+            p = self.plate()
+            d = DC.make(p.page, p.view, [p.corner(), p.hole(0), p.hole(1)], kind)
+            DC.set_datum(d, p.hole(2))
+            self.assertEqual(self.settled(), [], kind)
+            self.assertEqual(sorted(d.Vertices), sorted([p.corner(), p.hole(0), p.hole(1), p.hole(2)]), kind)
+            self.assertEqual(d.Vertices[0], p.hole(2), kind)
+            fresh = DC.make(p.page, p.view, list(d.Vertices), kind)
+            if kind == "baseline":
+                self.assertEqual(self.baseline_state(d), self.baseline_state(fresh))
+            else:
+                self.assertEqual(self.ordinate_texts(d), self.ordinate_texts(fresh))
+            App.closeDocument(self.doc.Name)
+            self.doc = App.newDocument("DimChainTest")
+            self.doc.UndoMode = 1
+
     def test_set_datum_baseline_undo_redo_save_reopen_and_relay(self):
         for dead in (False, True):
             App.closeDocument(self.doc.Name)
