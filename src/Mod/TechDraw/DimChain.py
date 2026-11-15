@@ -1007,6 +1007,54 @@ def set_side(driver, side):
     return driver
 
 
+def set_datum(driver, vertex):
+    """Make ``vertex`` (a ``"VertexN"`` string of the set's view) the datum of an ordinate or baseline set; one undo step; -> the driver.
+
+    The old datum may be live (the origin moves; the old datum stays in the set as an ordinary vertex) or dead (a model edit removed
+    it, see the R14 sentence; it leaves the set).  The result equals ``make`` of the same kind on the same view with ``vertex`` first.
+    ``ValueError``, nothing changed and no undo step: a chain has no datum, ``vertex`` is not a vertex of the view, or fewer than 2
+    vertices would remain.  ``vertex`` already the datum is a no-op.
+    """
+    doc, view = driver.Document, driver.View
+    vertex = str(vertex)
+    if driver.Kind == "chain":
+        raise ValueError("a chain has no datum")
+    vertex_point(view, vertex)
+    cur = list(driver.Vertices)
+    old = cur[0] if cur else None
+    if vertex == old:
+        return driver
+    alive = old is not None and old in Frame(view, cur + [vertex]).pts
+    rest = [n for n in cur[1:] if n != vertex]
+    new = [vertex] + ([old] if alive else []) + rest
+    if len(new) < 2:
+        raise ValueError("a set keeps at least 2 vertices")
+    own = HT.begin(doc, "Set datum")
+    try:
+        if driver.Kind == "baseline":
+            page = doc.getObject(driver.PageName)
+            for m in DimChainDriver.members(driver):  # the members measure from the datum: point each one at the new datum, in place
+                pair = DimChainDriver.pair(m)
+                if not pair or pair[0] != old:
+                    continue
+                if pair[1] != vertex:
+                    m.References2D = [(view, vertex), (view, pair[1])]
+                elif alive:  # the member that joined the old and the new datum now runs from the new datum to the old one
+                    m.References2D = [(view, vertex), (view, old)]
+                else:  # its far end was the dead datum: nothing is left to measure
+                    _park(m, driver, page)
+        driver.Vertices = new
+        driver.touch()
+        doc.recompute()
+        if any("Touched" in o.State for o in driver.Proxy.owned(driver)):
+            doc.recompute()
+    except Exception:
+        HT.fail(doc, own)
+        raise
+    HT.end(doc, own)
+    return driver
+
+
 def driver_of(obj):
     """-> the dimension set driver that ``obj`` is, or that owns ``obj`` (a member dimension or the ordinate symbol); None otherwise."""
     if obj is None:

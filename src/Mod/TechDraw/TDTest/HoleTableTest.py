@@ -347,6 +347,19 @@ class HoleTableTest(unittest.TestCase):
         self.refused(self.doc, HT.make, page, box)
         self.refused(self.doc, HT.make, page, page)
 
+    def other_page(self, doc, page):
+        p2 = doc.addObject("TechDraw::DrawPage", "OtherPage")
+        t2 = doc.addObject("TechDraw::DrawSVGTemplate", "OtherTemplate")
+        t2.Template = page.Template.Template
+        p2.Template = t2
+        doc.recompute()
+        return p2
+
+    def test_r19_a_view_that_is_not_on_the_page_is_refused(self):
+        plate, page, view = self.plate_page([("through", 20, 15)])
+        other = self.other_page(self.doc, page)
+        self.refused(self.doc, HT.make, other, view)
+
     def test_r17_a_repeat_make_adds_no_undo_step_but_a_new_origin_does(self):
         plate, page, view = self.plate_page([("through", 20, 15)])
         HT.make(page, view)
@@ -870,6 +883,29 @@ class HoleTableTest(unittest.TestCase):
             b = self.tag_box(t)
             self.assertTrue(b[0] >= area[0] - 0.01 and b[2] <= area[2] + 0.01 and b[1] >= area[1] - 0.01 and b[3] <= area[3] + 0.01, t.Text)
         self.assertIn("no clean tag layout", HT.warning_of(tbl))
+
+    def test_r20_the_named_fault_is_written_to_the_console_once_and_a_clean_table_writes_nothing(self):
+        lines = []
+        real = App.Console.PrintWarning
+        App.Console.PrintWarning = lambda text: lines.append(text)
+        try:
+            box = Part.makeBox(56, 46, 10)
+            for i in range(10):
+                for j in range(8):
+                    box = box.cut(Part.makeCylinder(1.0, 30, V(6 + i * 5, 6 + j * 5, -5)))
+            obj, page, view = self.solid_page(box)
+            tbl = HT.make(page, view)
+            self.doc.recompute()
+            self.assertEqual(len(lines), 1, lines)
+            self.assertIn("no clean tag layout", lines[0])
+            self.assertEqual(lines[0], HT.warning_of(tbl) + "\n")
+            del lines[:]
+            plate, page2, view2 = self.plate_page([("through", 20, 15)])
+            HT.make(page2, view2)
+            self.doc.recompute()
+            self.assertEqual(lines, [])
+        finally:
+            App.Console.PrintWarning = real
 
     def test_blocks_stand_side_by_side_in_reading_order(self):
         box = Part.makeBox(60, 40, 10)

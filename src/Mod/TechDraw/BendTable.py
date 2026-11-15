@@ -204,6 +204,13 @@ class BendTableDriver(HT.HoleTableDriver):
         obj.setEditorMode("Lines", 2)
 
     def execute(self, obj):
+        before = obj.Warning
+        try:
+            self._execute(obj)
+        finally:
+            HT.report_warning(obj, before)
+
+    def _execute(self, obj):
         view, sheet = obj.View, obj.Sheet
         doc = obj.Document
         page = doc.getObject(obj.PageName) if obj.PageName else None
@@ -231,8 +238,6 @@ class BendTableDriver(HT.HoleTableDriver):
         if len(bends) > LONG_TABLE:
             notes.append("BendTable: %d bends listed, the table is long" % len(bends))
         if notes:
-            for n in notes:
-                App.Console.PrintWarning(n + "\n")
             obj.Warning = " | ".join(([obj.Warning] if obj.Warning else []) + notes)
         obj.BendCount = len(bends)
         wanted = _lines_wanted(bends)
@@ -267,7 +272,6 @@ class BendTableDriver(HT.HoleTableDriver):
         note = ""
         if conflicts:
             note = "BendTable: no clean tag layout found; left over: " + "; ".join(conflicts)
-            App.Console.PrintWarning(note + "\n")
         obj.Warning = (obj.Warning + " | " if obj.Warning and note else obj.Warning) + note
         for b, it, (centre, tip) in zip(bends, items, plan):
             t = b["tagobj"]
@@ -394,6 +398,7 @@ def make(page, view):
     """
     PL.check_page(page, "BendTable.make")
     PL.check_view(view, "BendTable.make")
+    PL.check_view_on_page(view, page, "BendTable.make")
     doc = page.Document
     old = next((d for d in drivers_on(page) if d.View == view), None)
     if old is not None and BendTableDriver.blocks(old):  # nothing to change: no transaction, so no empty undo step

@@ -89,6 +89,13 @@ class RevisionTableTest(unittest.TestCase):
         self.assertEqual(RT.make(page).Name, v.Name)
         self.assertEqual(self.doc.UndoCount, n)
 
+    def test_r19_an_empty_or_formula_rev_and_an_empty_description_are_refused(self):
+        page = self.page(os.path.join("ISO", "A4_Landscape_ISO5457_minimal.svg"))
+        for rev in ("", "  ", "=1", "+1", "-1", "@A"):
+            self.refused(RT.add, page, rev, "x", "2026-01-01", "MS")
+        self.refused(RT.add, page, "A", "", "2026-01-01", "MS")
+        self.refused(RT.add, page, "A", " ", "2026-01-01", "MS")
+
     def test_add_rows_template_fields_and_drawn_text(self):
         for tpl, keys in (
             (os.path.join("ISO", "A4_Landscape_ISO5457_minimal.svg"), ("revision_index", "date_of_issue")),

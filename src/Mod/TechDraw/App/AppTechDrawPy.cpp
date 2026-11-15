@@ -903,6 +903,9 @@ private:
             throw Py::Exception(Part::PartExceptionOCCError, e.GetMessageString());
         }
 
+        if (!dvp->findParentPage()) {
+            throw Py::RuntimeError(std::string(dvp->getNameInDocument()) + " is on no page; add it to a page first");
+        }
         DrawViewDimension* dvde =
         DrawDimHelper::makeExtentDim(dvp,
                                      edgeList,
@@ -948,6 +951,9 @@ private:
         if (PyObject_TypeCheck(pTo, &(Base::VectorPy::Type))) {
             to = static_cast<Base::VectorPy*>(pTo)->value();
         }
+        if (!dvp->findParentPage()) {
+            throw Py::RuntimeError(std::string(dvp->getNameInDocument()) + " is on no page; add it to a page first");
+        }
         DrawViewDimension* dvd =
         DrawDimHelper::makeDistDim(dvp,
                                    dimType,
@@ -992,6 +998,9 @@ private:
         //3d points are not scaled
         from = DrawUtil::invertY(dvp->projectPoint(from));
         to   = DrawUtil::invertY(dvp->projectPoint(to));
+        if (!dvp->findParentPage()) {
+            throw Py::RuntimeError(std::string(dvp->getNameInDocument()) + " is on no page; add it to a page first");
+        }
         //DrawViewDimension* =
         DrawDimHelper::makeDistDim(dvp,
                                    dimType,
@@ -1351,6 +1360,9 @@ private:
         }
         catch (Standard_Failure& e) {
             throw Py::Exception(Part::PartExceptionOCCError, e.GetMessageString());
+        }
+        if (!dvp->findParentPage()) {
+            throw Py::RuntimeError(std::string(dvp->getNameInDocument()) + " is on no page; add it to a page first");
         }
         auto newLeader = DrawLeaderLine::makeLeader(dvp, pointList, iStartSymbol, iEndSymbol);
 

@@ -165,7 +165,9 @@ void DrawView::touchTreeOwner(App::DocumentObject *owner) const
     }
     else { // If no owner is specified, touch all parent pages
         for (auto page : findAllParentPages()) {
-            page->touch();
+            if (page) {
+                page->touch();
+            }
         }
     }
 }
@@ -415,7 +417,9 @@ std::vector<DrawPage*> DrawView::findAllParentPages() const
         }
         else if (parent->isDerivedFrom<DrawViewCollection>()) {
             auto* collection = static_cast<TechDraw::DrawViewCollection*>(parent);
-            pages.emplace_back(collection->findParentPage());
+            if (auto* collectionPage = collection->findParentPage()) {  // a collection on no page has none
+                pages.emplace_back(collectionPage);
+            }
         }
     }
 
@@ -494,6 +498,9 @@ DrawViewCollection *DrawView::getCollection() const
 double DrawView::autoScale() const
 {
     auto page = findParentPage();
+    if (!page) {
+        return getScale();  // on no page there is nothing to fit to
+    }
     double w = page->getPageWidth();
     double h = page->getPageHeight();
     return autoScale(w, h);
@@ -521,6 +528,9 @@ bool DrawView::checkFit() const
 {
 //    Base::Console().message("DV::checkFit() - {}\n", getNameInDocument());
     auto page = findParentPage();
+    if (!page) {
+        return true;  // on no page nothing can overflow
+    }
     return checkFit(page);
 }
 

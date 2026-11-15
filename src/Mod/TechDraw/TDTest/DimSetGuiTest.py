@@ -395,6 +395,107 @@ class DimSetGuiTest(unittest.TestCase):
                     break
             self.assertTrue(opened, drv.Kind)
 
+    # ---- slice 10: Make datum in edit mode
+
+    def drop_last_hole(self, doc, plate):
+        doc.openTransaction("drop hole")
+        plate.view.Source = [doc.getObject("Cut1")]
+        doc.recompute()
+        doc.commitTransaction()
+        for _ in range(60):  # the view's edges arrive from a worker thread; the timer relays the set
+            pump(0.1)
+
+    def datum_reference(self, kind, names, dead, new):
+        """The API's answer on a second, identical document."""
+        ref = App.newDocument("RefDatum")
+        try:
+            q = Plate(ref)
+            HT.wait_for_geometry(q.view)
+            r = DC.make(q.page, q.view, names, kind)
+            if dead:
+                self.drop_last_hole(ref, q)
+            DC.set_datum(r, new)
+            for _ in range(20):
+                pump(0.1)
+            return self.snapshot(r)
+        finally:
+            App.closeDocument(ref.Name)
+
+    def open_edit(self, d):
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(self.doc.Name, (DC.symbol_of(d) or members(d)[0]).Name)
+        self.cmd("edit")
+        self.assertIsNotNone(panel())
+
+    def check_edit_make_datum(self, kind, dead):
+        p = self.p
+        mk = child  # alias for readability below
+        label = "%s %s" % (kind, "dead" if dead else "live")
+        names = [p.hole(2), p.corner(), p.hole(0)] if dead else [p.corner(), p.hole(0), p.hole(1)]
+        new = p.corner() if dead else p.hole(1)
+        want = self.datum_reference(kind, names, dead, new)
+        d = DC.make(p.page, p.view, names, kind)
+        if dead:
+            self.drop_last_hole(self.doc, p)
+            self.assertIn("Invalid", d.State, label)
+        self.open_edit(d)
+        btn = mk(QtWidgets.QPushButton, "dimsetMakeDatum")
+        self.assertTrue(btn.isEnabled(), label)
+        if dead:
+            self.assertIn("is no longer in", message(), label)
+            self.assertIn("make another vertex the datum", message(), label)
+        else:
+            self.assertEqual(message(), "", label)
+        # Cancel after Make datum changes nothing
+        u0 = self.undo_depth()
+        verts = list(d.Vertices)
+        lw = mk(QtWidgets.QListWidget, "dimsetVertices")
+        lw.setCurrentRow(listed().index(new))
+        btn.click()
+        self.assertEqual(listed()[0], new, label)
+        press(QtWidgets.QDialogButtonBox.Cancel)
+        self.assertEqual((self.undo_depth(), list(d.Vertices)), (u0, verts), label)
+        self.open_edit(d)
+        lw = mk(QtWidgets.QListWidget, "dimsetVertices")
+        lw.setCurrentRow(listed().index(new))
+        mk(QtWidgets.QPushButton, "dimsetMakeDatum").click()
+        if dead:  # leave the dead row out
+            lw.setCurrentRow(listed().index(names[0]))
+            mk(QtWidgets.QPushButton, "dimsetRemove").click()
+        press(QtWidgets.QDialogButtonBox.Ok)
+        self.assertFalse(Gui.Control.activeDialog(), message() if panel() else label)
+        for _ in range(10):
+            pump(0.1)
+        self.assertNotIn("Invalid", d.State, label)
+        self.assertEqual(self.undo_depth(), u0 + 1, "one OK is one undo step: " + label)
+        self.assertEqual(self.snapshot(d), want, label)
+        self.assertEqual(d.Vertices[0], new, label)
+        self.doc.undo()
+        self.doc.recompute()
+        for _ in range(10):
+            pump(0.1)
+        self.assertEqual(list(d.Vertices), verts, label)
+
+    def test_edit_make_datum_baseline_live(self):
+        self.check_edit_make_datum("baseline", False)
+
+    def test_edit_make_datum_baseline_dead(self):
+        self.check_edit_make_datum("baseline", True)
+
+    def test_edit_make_datum_ordinate_live(self):
+        self.check_edit_make_datum("ordinate", False)
+
+    def test_edit_make_datum_ordinate_dead(self):
+        self.check_edit_make_datum("ordinate", True)
+
+    def test_edit_keeps_make_datum_off_for_a_chain_and_removing_a_live_datum_row_alone_still_refuses(self):
+        p = self.p
+        chain = DC.make(p.page, p.view, [p.corner(), p.hole(0), p.hole(1)], "chain")
+        self.open_edit(chain)
+        self.assertFalse(child(QtWidgets.QPushButton, "dimsetMakeDatum").isEnabled())
+        self.assertEqual(message(), "")
+        press(QtWidgets.QDialogButtonBox.Cancel)
+
     def test_undo_of_a_model_edit_restores_the_dropped_vertex(self):
         p = self.p
         for kind in KINDS:

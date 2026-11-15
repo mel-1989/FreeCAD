@@ -619,6 +619,19 @@ class BendTableTest(unittest.TestCase):
         self.assertEqual(again.Name, b.table.Name)
         self.assertEqual(doc.UndoCount, n)
 
+    def other_page(self, doc, page):
+        p2 = doc.addObject("TechDraw::DrawPage", "OtherPage")
+        t2 = doc.addObject("TechDraw::DrawSVGTemplate", "OtherTemplate")
+        t2.Template = page.Template.Template
+        p2.Template = t2
+        doc.recompute()
+        return p2
+
+    def test_r19_a_view_that_is_not_on_the_page_is_refused(self):
+        b = self.build("g01")
+        other = self.other_page(b.doc, b.page)
+        self.refused(b.doc, BT.make, other, b.view)
+
     # -- speed --------------------------------------------------------------------------------
 
     def test_speed(self):

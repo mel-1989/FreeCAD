@@ -616,6 +616,235 @@ class DimChainTest(unittest.TestCase):
         self.assertEqual(list(d.Vertices), names)
         self.assertEqual(sorted(t[0] for t in svg_items(d.Proxy.symbols(d)[0])[2]), ["0", "20", "85"])
 
+    # ---- set_datum (slice 10)
+
+    def ordinate_texts(self, d):
+        return sorted((t[0], round(t[1], 3), round(t[2], 3)) for t in svg_items(d.Proxy.symbols(d)[0])[2])
+
+    def datum_cases(self):
+        """-> [(label, new datum, start names, dead?)] on a fresh plate each time: dead and live datums, a hole centre and an outline corner."""
+        return [
+            ("dead, to the corner", lambda p: p.corner(), lambda p: [p.hole(2), p.corner(), p.hole(0)], True),
+            ("dead, to a hole centre", lambda p: p.hole(0), lambda p: [p.hole(2), p.corner(), p.hole(0)], True),
+            ("live, to a hole centre", lambda p: p.hole(1), lambda p: [p.corner(), p.hole(0), p.hole(1), p.hole(2)], False),
+            ("live, to the far corner", lambda p: p.corner(right=True), lambda p: [p.corner(), p.hole(0), p.hole(1), p.corner(right=True)], False),
+        ]
+
+    def test_set_datum_ordinate_equals_a_fresh_make_and_moves_the_dxf_origin(self):
+        for label, target, start, dead in self.datum_cases():
+            p = self.plate()
+            names = start(p)
+            d = DC.make(p.page, p.view, names, "ordinate")
+            if dead:
+                self._drop_last_hole(p)
+                self.assertIn("Invalid", d.State, label)
+            new = target(p)
+            n_undo = self.doc.UndoCount
+            self.assertIs(DC.set_datum(d, new), d)
+            self.assertEqual(self.doc.UndoCount, n_undo + 1, label)
+            self.assertEqual(d.Vertices[0], new, label)
+            self.assertEqual(self.settled(), [], label)
+            self.assertNotIn("Invalid", d.State, label)
+            after = list(d.Vertices)
+            old = names[0]
+            self.assertEqual(old in after, not dead, label)  # a live old datum stays as an ordinary vertex; a dead one leaves
+            fresh = DC.make(p.page, p.view, after, "ordinate")
+            self.assertEqual(self.ordinate_texts(d), self.ordinate_texts(fresh), label)
+            self.assertEqual(d.Proxy.symbols(d)[0].Symbol, fresh.Proxy.symbols(fresh)[0].Symbol, label)
+            axis, entries = DC.ordinate_dxf_entries(d)
+            self.assertEqual(len(entries), len(after), label)
+            frame = DC.Frame(p.view, after)
+            want = frame.page(new)
+            for e in entries:
+                self.assertAlmostEqual(e["datum"][0], want[0], delta=0.001, msg=label)
+                self.assertAlmostEqual(e["datum"][1], want[1], delta=0.001, msg=label)
+            self.assertEqual([e["name"] for e in entries if e["is_datum"]], [new], label)
+            App.closeDocument(self.doc.Name)
+            self.doc = App.newDocument("DimChainTest")
+            self.doc.UndoMode = 1
+
+    def test_set_datum_ordinate_values_follow_the_new_datum(self):
+        p = self.plate()
+        d = DC.make(p.page, p.view, [p.corner(), p.hole(0), p.hole(1), p.hole(2)], "ordinate")
+        DC.set_datum(d, p.hole(1))
+        self.assertEqual(sorted(t[0] for t in svg_items(d.Proxy.symbols(d)[0])[2]), ["0", "30", "35", "50"])
+
+    def baseline_state(self, d):
+        """{(datum, far end): (value, X, Y)} of the members on the page."""
+        return {tuple(refs(m)): (round(m.getRawValue(), 3), round(m.X.Value, 3), round(m.Y.Value, 3)) for m in members(d)}
+
+    def baseline_cases(self):
+        """-> [(label, direction, side, dead, start(p), target(p))]: dead and live datums, both sides, horizontal and vertical."""
+        h = lambda p: [p.corner(), p.hole(0), p.hole(1), p.hole(2)]
+        hd = lambda p: [p.hole(2), p.corner(), p.hole(0), p.hole(1)]
+        v = lambda p: [p.corner(), p.hole(0), p.corner(top=True)]
+        vd = lambda p: [p.hole(2), p.corner(), p.corner(top=True)]
+        return [
+            ("live, horizontal, below", "horizontal", "below", False, h, lambda p: p.hole(1)),
+            ("live, horizontal, above", "horizontal", "above", False, h, lambda p: p.hole(2)),
+            ("dead, horizontal, below", "horizontal", "below", True, hd, lambda p: p.corner()),
+            ("dead, horizontal, above", "horizontal", "above", True, hd, lambda p: p.hole(0)),
+            ("live, vertical, left", "vertical", "left", False, v, lambda p: p.hole(0)),
+            ("live, vertical, right", "vertical", "right", False, v, lambda p: p.corner(top=True)),
+            ("dead, vertical, left", "vertical", "left", True, vd, lambda p: p.corner(top=True)),
+            ("dead, vertical, right", "vertical", "right", True, vd, lambda p: p.corner()),
+        ]
+
+    def test_set_datum_baseline_equals_a_fresh_make_with_no_retarget(self):
+        for label, direction, side, dead, start, target in self.baseline_cases():
+            App.closeDocument(self.doc.Name)
+            self.doc = App.newDocument("DimChainTest")
+            self.doc.UndoMode = 1
+            p = self.plate()
+            names = start(p)
+            d = DC.make(p.page, p.view, names, "baseline", direction, side)
+            if dead:
+                self._drop_last_hole(p)
+                self.assertIn("Invalid", d.State, label)
+            new = target(p)
+            old = names[0]
+            n_undo = self.doc.UndoCount
+            self.assertIs(DC.set_datum(d, new), d)
+            self.assertEqual(self.doc.UndoCount, n_undo + 1, label)
+            self.assertEqual(self.settled(), [], label)
+            self.assertNotIn("Invalid", d.State, label)
+            self.assertEqual(d.Vertices[0], new, label)
+            self.assertEqual(old in d.Vertices, not dead, label)
+            ms = members(d)
+            self.assertGreaterEqual(len(ms), 1, label)
+            a = 0 if direction == "horizontal" else 1
+            for m in ms:
+                r = refs(m)
+                self.assertEqual(r[0], new, label + ": every member measures from the new datum")
+                self.assertNotIn("Invalid", m.State, label)
+                c = [(p.view.getVertexByIndex(int(n[6:])).X, p.view.getVertexByIndex(int(n[6:])).Y)[a] for n in r]
+                self.assertAlmostEqual(m.getRawValue(), abs(c[0] - c[1]), delta=0.001, msg=label)
+            self.assertEqual(sorted(refs(m)[1] for m in ms), sorted(n for n in d.Vertices if n != new), label)
+            fresh = DC.make(p.page, p.view, list(d.Vertices), "baseline", direction, side)
+            mine, want = self.baseline_state(d), self.baseline_state(fresh)
+            self.assertEqual(sorted(mine), sorted(want), label)
+            for k in mine:
+                for x, y in zip(mine[k], want[k]):
+                    self.assertAlmostEqual(x, y, delta=0.001, msg="%s %s" % (label, k))
+            for m in DC.DimChainDriver.members(d, parked=True):  # a parked member waits Up-to-date off the page
+                self.assertNotIn("Touched", m.State, label)
+
+    def test_set_datum_on_a_vertex_that_is_not_yet_in_the_set_adds_it(self):
+        for kind in ("baseline", "ordinate"):
+            p = self.plate()
+            d = DC.make(p.page, p.view, [p.corner(), p.hole(0), p.hole(1)], kind)
+            DC.set_datum(d, p.hole(2))
+            self.assertEqual(self.settled(), [], kind)
+            self.assertEqual(sorted(d.Vertices), sorted([p.corner(), p.hole(0), p.hole(1), p.hole(2)]), kind)
+            self.assertEqual(d.Vertices[0], p.hole(2), kind)
+            fresh = DC.make(p.page, p.view, list(d.Vertices), kind)
+            if kind == "baseline":
+                self.assertEqual(self.baseline_state(d), self.baseline_state(fresh))
+            else:
+                self.assertEqual(self.ordinate_texts(d), self.ordinate_texts(fresh))
+            App.closeDocument(self.doc.Name)
+            self.doc = App.newDocument("DimChainTest")
+            self.doc.UndoMode = 1
+
+    def test_set_datum_baseline_undo_redo_save_reopen_and_relay(self):
+        for dead in (False, True):
+            App.closeDocument(self.doc.Name)
+            self.doc = App.newDocument("DimChainTest")
+            self.doc.UndoMode = 1
+            p = self.plate()
+            names = [p.hole(2), p.corner(), p.hole(0), p.hole(1)] if dead else [p.corner(), p.hole(0), p.hole(1), p.hole(2)]
+            d = DC.make(p.page, p.view, names, "baseline")
+            if dead:
+                self._drop_last_hole(p)
+            start_v, start = list(d.Vertices), self.baseline_state(d)
+            new = p.corner() if dead else p.hole(1)
+            DC.set_datum(d, new)
+            after_v, after = list(d.Vertices), self.baseline_state(d)
+            self.assertNotEqual(after, start)
+            self.doc.undo()
+            self.doc.recompute()
+            self.assertEqual(list(d.Vertices), start_v, dead)
+            self.assertEqual(self.baseline_state(d), start, dead)  # pairs, values and positions exactly as before
+            self.doc.redo()
+            self.doc.recompute()
+            self.assertEqual(list(d.Vertices), after_v, dead)
+            self.assertEqual(self.baseline_state(d), after, dead)
+            path, name = os.path.join(self.tmp, "sdb%d.FCStd" % dead), d.Name
+            self.doc.saveAs(path)
+            App.closeDocument(self.doc.Name)
+            self.doc = App.openDocument(path)
+            self.doc.UndoMode = 1
+            d = self.doc.getObject(name)
+            self.assertEqual(list(d.Vertices), after_v, dead)
+            self.assertEqual(self.baseline_state(d), after, dead)  # a reopened document has its dimensions touched until the first recompute
+            self.doc.Plate.Length = 115.0  # a further model edit relays the set, still from the new datum
+            self.doc.recompute()
+            self.assertEqual(self.settled(), [], dead)
+            self.assertEqual(d.Vertices[0], new, dead)
+            self.assertTrue(all(refs(m)[0] == new for m in members(d)), dead)
+
+    def test_set_datum_is_one_undo_step_and_survives_undo_redo_save_and_reopen(self):
+        p = self.plate()
+        names = [p.corner(), p.hole(0), p.hole(1), p.hole(2)]
+        d = DC.make(p.page, p.view, names, "ordinate")
+        sym0 = d.Proxy.symbols(d)[0].Symbol
+        DC.set_datum(d, p.hole(1))
+        sym1 = d.Proxy.symbols(d)[0].Symbol
+        v1 = list(d.Vertices)
+        self.assertNotEqual(sym0, sym1)
+        self.doc.undo()
+        self.doc.recompute()
+        self.assertEqual(list(d.Vertices), names)
+        self.assertEqual(d.Proxy.symbols(d)[0].Symbol, sym0)
+        self.doc.redo()
+        self.doc.recompute()
+        self.assertEqual(list(d.Vertices), v1)
+        self.assertEqual(d.Proxy.symbols(d)[0].Symbol, sym1)
+        path, name = os.path.join(self.tmp, "sd.FCStd"), d.Name
+        self.doc.saveAs(path)
+        App.closeDocument(self.doc.Name)
+        self.doc = App.openDocument(path)
+        self.doc.UndoMode = 1
+        d = self.doc.getObject(name)
+        self.assertEqual(list(d.Vertices), v1)
+        self.assertEqual(d.Proxy.symbols(d)[0].Symbol, sym1)
+        self.assertEqual(self.settled(), [])
+        # a further model edit relays the set from the new datum
+        box = self.doc.Plate
+        box.Length = 115.0
+        self.doc.recompute()
+        self.assertEqual(self.settled(), [])
+        self.assertEqual(d.Vertices[0], v1[0])
+        self.assertEqual(sorted(t[0] for t in svg_items(d.Proxy.symbols(d)[0])[2]), ["0", "30", "35", "50"])
+
+    def test_set_datum_refusals_change_nothing_and_a_repeat_is_a_no_op(self):
+        p = self.plate()
+        ordinate = DC.make(p.page, p.view, [p.corner(), p.hole(0), p.hole(1)], "ordinate")
+        chain = DC.make(p.page, p.view, [p.hole(0), p.hole(1), p.hole(2)], "chain")
+        n_obj, n_undo = len(self.doc.Objects), self.doc.UndoCount
+        before = list(ordinate.Vertices)
+        for drv, vertex, text in ((chain, p.hole(0), "a chain has no datum"), (ordinate, "Vertex999", "Vertex999 is not a vertex of")):
+            with self.assertRaises(ValueError) as cm:
+                DC.set_datum(drv, vertex)
+            self.assertIn(text, str(cm.exception))
+            self.assertNotIn("\n", str(cm.exception))
+        self.assertIs(DC.set_datum(ordinate, p.corner()), ordinate)  # already the datum
+        self.assertEqual((len(self.doc.Objects), self.doc.UndoCount, list(ordinate.Vertices)), (n_obj, n_undo, before))
+        self.assertIsNone(App.getActiveTransaction())
+        # a dead datum and one other vertex: making the other the datum would leave one vertex
+        App.closeDocument(self.doc.Name)
+        self.doc = App.newDocument("DimChainTest")
+        self.doc.UndoMode = 1
+        q = self.plate()
+        stored = [q.hole(2), q.corner()]
+        two = DC.make(q.page, q.view, stored, "ordinate")
+        self._drop_last_hole(q)
+        n_obj, n_undo = len(self.doc.Objects), self.doc.UndoCount
+        with self.assertRaises(ValueError) as cm:
+            DC.set_datum(two, stored[1])
+        self.assertEqual(str(cm.exception), "a set keeps at least 2 vertices")
+        self.assertEqual((len(self.doc.Objects), self.doc.UndoCount, list(two.Vertices)), (n_obj, n_undo, stored))
+
     def test_r14_baseline_feature_vanishes(self):
         p = self.plate()
         names = [p.corner(), p.hole(0), p.hole(1), p.hole(2)]

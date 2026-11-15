@@ -228,6 +228,12 @@ def add(page, rev, description, date, approved, zone=""):
     for name, val in (("rev", rev), ("description", description), ("date", date), ("approved", approved), ("zone", zone)):
         if not isinstance(val, str):
             raise TypeError("RevisionTable.add: %s must be text, got %s" % (name, "None" if val is None else type(val).__name__))
+    if not rev.strip():
+        raise ValueError("RevisionTable.add: rev must not be empty")
+    if rev.lstrip()[0] in "=+-@":
+        raise ValueError("RevisionTable.add: rev must not start with = + - or @ (a spreadsheet would read it as a formula)")
+    if not description.strip():
+        raise ValueError("RevisionTable.add: description must not be empty")
     doc = page.Document
     own = HT.begin(doc, "Add revision")
     try:
