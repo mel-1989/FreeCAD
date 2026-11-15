@@ -665,8 +665,12 @@ def check_view(view, who):
 
 def check_view_on_page(view, page, who):
     """Raise ``ValueError`` ("view X is not on page Y") unless ``view`` is on ``page``, directly or inside a projection group of it."""
+    def same(a, b):
+        # by name: the object DrawProjGroup.addProjection returns is a different wrapper that does not compare equal
+        return a == b or (getattr(a, "Document", None) == getattr(b, "Document", None) and getattr(a, "Name", None) == getattr(b, "Name", 0))
+
     for v in page.Views:
-        if v == view or (_is(v, "TechDraw::DrawProjGroup") and any(i == view for i in v.Views)):
+        if same(v, view) or (_is(v, "TechDraw::DrawProjGroup") and any(same(i, view) for i in v.Views)):
             return
     raise ValueError("%s: view %s is not on page %s" % (who, view.Label, page.Label))
 

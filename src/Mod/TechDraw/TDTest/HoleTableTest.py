@@ -360,6 +360,18 @@ class HoleTableTest(unittest.TestCase):
         other = self.other_page(self.doc, page)
         self.refused(self.doc, HT.make, other, view)
 
+    def test_r19_the_item_addProjection_returns_is_on_the_page(self):
+        # Run 100 verifier LOW: the wrapper addProjection returns does not compare equal to the group's item.
+        plate, page, view = self.plate_page([("through", 20, 15)])
+        grp = self.doc.addObject("TechDraw::DrawProjGroup", "Grp")
+        page.addView(grp)
+        grp.Source = view.Source
+        self.doc.recompute()
+        item = grp.addProjection("Front")
+        self.doc.recompute()
+        table = HT.make(page, item)
+        self.assertIsNotNone(table)
+
     def test_r17_a_repeat_make_adds_no_undo_step_but_a_new_origin_does(self):
         plate, page, view = self.plate_page([("through", 20, 15)])
         HT.make(page, view)
