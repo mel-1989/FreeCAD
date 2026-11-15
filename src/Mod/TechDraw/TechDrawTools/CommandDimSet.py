@@ -103,7 +103,7 @@ class CommandDimSetEdit:
             "MenuText": QT_TRANSLATE_NOOP("TechDraw_DimSetEdit", "Edit dimension set"),
             "ToolTip": QT_TRANSLATE_NOOP(
                 "TechDraw_DimSetEdit",
-                "Changes the side of the selected set or adds and removes its vertices",
+                "Changes the side of the selected set, or takes vertices in and out of it",
             ),
             "StatusTip": QT_TRANSLATE_NOOP("TechDraw_DimSetEdit", "Select a dimension set, one of its dimensions or its ordinate symbol, then edit it"),
         }
