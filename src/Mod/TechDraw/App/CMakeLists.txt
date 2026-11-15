@@ -168,6 +168,8 @@ SET(Geometry_SRCS
     Geometry.cpp
     Geometry.h
     GeometryObject.cpp
+    HlrCache.cpp
+    HlrCache.h
     GeometryObject.h
     ShapeUtils.cpp
     ShapeUtils.h

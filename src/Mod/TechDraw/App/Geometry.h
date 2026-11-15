@@ -135,6 +135,7 @@ class TechDrawExport BaseGeom : public std::enable_shared_from_this<BaseGeom>, p
         static TopoDS_Edge completeEdge(const TopoDS_Edge &edge);
         bool closed();
         virtual BaseGeomPtr copy();
+        void renewTag() { createNewTag(); }       //give a cloned geometry its own identity
         std::string dump();
         virtual std::string toString() const;
         std::vector<Base::Vector3d> intersection(TechDraw::BaseGeomPtr geom2);
