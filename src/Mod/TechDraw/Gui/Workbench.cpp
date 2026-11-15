@@ -40,6 +40,7 @@ using namespace TechDrawGui;
     qApp->translate("Workbench", "Attributes/Modifications");
     qApp->translate("Workbench", "Centerlines/Threading");
     qApp->translate("Workbench", "Format/Organize Dimensions");
+    qApp->translate("Workbench", "Dimension sets");
     qApp->translate("Workbench", "Annotations");
     qApp->translate("Workbench", "Stacking");
     qApp->translate("Workbench", "Add Lines");
@@ -52,6 +53,7 @@ using namespace TechDrawGui;
     qApp->translate("Workbench", "TechDraw Centerlines");
     qApp->translate("Workbench", "TechDraw Decoration");
     qApp->translate("Workbench", "TechDraw Dimensions");
+    qApp->translate("Workbench", "TechDraw Dimension Sets");
     qApp->translate("Workbench", "TechDraw Extend Dimensions");
     qApp->translate("Workbench", "TechDraw File Access");
     qApp->translate("Workbench", "TechDraw Pages");
@@ -95,6 +97,17 @@ Gui::MenuItem* Workbench::setupMenuBar() const
     *dimensions << "TechDraw_HorizontalExtentDimension";
     *dimensions << "TechDraw_VerticalExtentDimension";
     *dimensions << "TechDraw_DimensionRepair";
+
+    // dimension sets (chain, baseline and ordinate drivers made by DimChain.py)
+    Gui::MenuItem* dimsets = new Gui::MenuItem;
+    dimsets->setCommand("Dimension sets");
+    *dimsets << "TechDraw_DimSetChain";
+    *dimsets << "TechDraw_DimSetBaseline";
+    *dimsets << "TechDraw_DimSetOrdinate";
+    *dimsets << "Separator";
+    *dimsets << "TechDraw_DimSetEdit";
+    *dimensions << "Separator";
+    *dimensions << dimsets;
 
     // extension: attributes and modifications
     Gui::MenuItem* toolattrib = new Gui::MenuItem;
@@ -345,6 +358,13 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
     *dims << "TechDraw_AxoLengthDimension";
     *dims << "TechDraw_DimensionRepair";
 
+    Gui::ToolBarItem* dimsets = new Gui::ToolBarItem(root);
+    dimsets->setCommand("TechDraw Dimension Sets");
+    *dimsets << "TechDraw_DimSetChain";
+    *dimsets << "TechDraw_DimSetBaseline";
+    *dimsets << "TechDraw_DimSetOrdinate";
+    *dimsets << "TechDraw_DimSetEdit";
+
     Gui::ToolBarItem* extattribs = new Gui::ToolBarItem(root);
     extattribs->setCommand("TechDraw Attributes");
     *extattribs << "TechDraw_ExtensionSelectLineAttributes";
@@ -444,6 +464,13 @@ Gui::ToolBarItem* Workbench::setupCommandBars() const
     *dims << "TechDraw_AxoLengthDimension";
     *dims << "TechDraw_LandmarkDimension";
     *dims << "TechDraw_DimensionRepair";
+
+    Gui::ToolBarItem* dimsets = new Gui::ToolBarItem(root);
+    dimsets->setCommand("TechDraw Dimension Sets");
+    *dimsets << "TechDraw_DimSetChain";
+    *dimsets << "TechDraw_DimSetBaseline";
+    *dimsets << "TechDraw_DimSetOrdinate";
+    *dimsets << "TechDraw_DimSetEdit";
 
     Gui::ToolBarItem* extattribs = new Gui::ToolBarItem(root);
     extattribs->setCommand("TechDraw Attributes");
