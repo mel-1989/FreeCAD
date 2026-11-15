@@ -656,6 +656,22 @@ class DimChainTest(unittest.TestCase):
         self.assertEqual(len(members(d)), 3)
         self.assertEqual(self.settled(), [])
 
+    def test_r18_parked_members_are_up_to_date_after_the_recompute_that_parks_them(self):
+        for kind, ix in (("chain", 3), ("baseline", 3)):
+            p = self.plate()
+            names = [p.corner(), p.hole(0), p.hole(1), p.hole(2)]
+            d = DC.make(p.page, p.view, names, kind)
+            self._drop_last_hole(p)
+            self.doc.recompute()
+            parked = DC.DimChainDriver.members(d, parked=True)
+            self.assertGreaterEqual(len(parked), 1, kind)
+            for m in parked:
+                self.assertEqual([s for s in m.State if s in ("Touched", "Invalid")], [], "%s %s" % (kind, m.Name))
+            self.assertIn(parked[0], d.Proxy.owned(d), kind)
+            App.closeDocument(self.doc.Name)
+            self.doc = App.newDocument("DimChainTest")
+            self.doc.UndoMode = 1
+
     def test_r14_chain_middle_vanishes_is_bridged(self):
         p = self.plate()
         names = [p.corner(), p.hole(0), p.hole(1), p.hole(2)]
