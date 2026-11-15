@@ -669,6 +669,103 @@ class DimChainTest(unittest.TestCase):
         DC.set_datum(d, p.hole(1))
         self.assertEqual(sorted(t[0] for t in svg_items(d.Proxy.symbols(d)[0])[2]), ["0", "30", "35", "50"])
 
+    def baseline_state(self, d):
+        """{(datum, far end): (value, X, Y)} of the members on the page."""
+        return {tuple(refs(m)): (round(m.getRawValue(), 3), round(m.X.Value, 3), round(m.Y.Value, 3)) for m in members(d)}
+
+    def baseline_cases(self):
+        """-> [(label, direction, side, dead, start(p), target(p))]: dead and live datums, both sides, horizontal and vertical."""
+        h = lambda p: [p.corner(), p.hole(0), p.hole(1), p.hole(2)]
+        hd = lambda p: [p.hole(2), p.corner(), p.hole(0), p.hole(1)]
+        v = lambda p: [p.corner(), p.hole(0), p.corner(top=True)]
+        vd = lambda p: [p.hole(2), p.corner(), p.corner(top=True)]
+        return [
+            ("live, horizontal, below", "horizontal", "below", False, h, lambda p: p.hole(1)),
+            ("live, horizontal, above", "horizontal", "above", False, h, lambda p: p.hole(2)),
+            ("dead, horizontal, below", "horizontal", "below", True, hd, lambda p: p.corner()),
+            ("dead, horizontal, above", "horizontal", "above", True, hd, lambda p: p.hole(0)),
+            ("live, vertical, left", "vertical", "left", False, v, lambda p: p.hole(0)),
+            ("live, vertical, right", "vertical", "right", False, v, lambda p: p.corner(top=True)),
+            ("dead, vertical, left", "vertical", "left", True, vd, lambda p: p.corner(top=True)),
+            ("dead, vertical, right", "vertical", "right", True, vd, lambda p: p.corner()),
+        ]
+
+    def test_set_datum_baseline_equals_a_fresh_make_with_no_retarget(self):
+        for label, direction, side, dead, start, target in self.baseline_cases():
+            App.closeDocument(self.doc.Name)
+            self.doc = App.newDocument("DimChainTest")
+            self.doc.UndoMode = 1
+            p = self.plate()
+            names = start(p)
+            d = DC.make(p.page, p.view, names, "baseline", direction, side)
+            if dead:
+                self._drop_last_hole(p)
+                self.assertIn("Invalid", d.State, label)
+            new = target(p)
+            old = names[0]
+            n_undo = self.doc.UndoCount
+            self.assertIs(DC.set_datum(d, new), d)
+            self.assertEqual(self.doc.UndoCount, n_undo + 1, label)
+            self.assertEqual(self.settled(), [], label)
+            self.assertNotIn("Invalid", d.State, label)
+            self.assertEqual(d.Vertices[0], new, label)
+            self.assertEqual(old in d.Vertices, not dead, label)
+            ms = members(d)
+            self.assertGreaterEqual(len(ms), 1, label)
+            a = 0 if direction == "horizontal" else 1
+            for m in ms:
+                r = refs(m)
+                self.assertEqual(r[0], new, label + ": every member measures from the new datum")
+                self.assertNotIn("Invalid", m.State, label)
+                c = [(p.view.getVertexByIndex(int(n[6:])).X, p.view.getVertexByIndex(int(n[6:])).Y)[a] for n in r]
+                self.assertAlmostEqual(m.getRawValue(), abs(c[0] - c[1]), delta=0.001, msg=label)
+            self.assertEqual(sorted(refs(m)[1] for m in ms), sorted(n for n in d.Vertices if n != new), label)
+            fresh = DC.make(p.page, p.view, list(d.Vertices), "baseline", direction, side)
+            mine, want = self.baseline_state(d), self.baseline_state(fresh)
+            self.assertEqual(sorted(mine), sorted(want), label)
+            for k in mine:
+                for x, y in zip(mine[k], want[k]):
+                    self.assertAlmostEqual(x, y, delta=0.001, msg="%s %s" % (label, k))
+            for m in DC.DimChainDriver.members(d, parked=True):  # a parked member waits Up-to-date off the page
+                self.assertNotIn("Touched", m.State, label)
+
+    def test_set_datum_baseline_undo_redo_save_reopen_and_relay(self):
+        for dead in (False, True):
+            App.closeDocument(self.doc.Name)
+            self.doc = App.newDocument("DimChainTest")
+            self.doc.UndoMode = 1
+            p = self.plate()
+            names = [p.hole(2), p.corner(), p.hole(0), p.hole(1)] if dead else [p.corner(), p.hole(0), p.hole(1), p.hole(2)]
+            d = DC.make(p.page, p.view, names, "baseline")
+            if dead:
+                self._drop_last_hole(p)
+            start_v, start = list(d.Vertices), self.baseline_state(d)
+            new = p.corner() if dead else p.hole(1)
+            DC.set_datum(d, new)
+            after_v, after = list(d.Vertices), self.baseline_state(d)
+            self.assertNotEqual(after, start)
+            self.doc.undo()
+            self.doc.recompute()
+            self.assertEqual(list(d.Vertices), start_v, dead)
+            self.assertEqual(self.baseline_state(d), start, dead)  # pairs, values and positions exactly as before
+            self.doc.redo()
+            self.doc.recompute()
+            self.assertEqual(list(d.Vertices), after_v, dead)
+            self.assertEqual(self.baseline_state(d), after, dead)
+            path, name = os.path.join(self.tmp, "sdb%d.FCStd" % dead), d.Name
+            self.doc.saveAs(path)
+            App.closeDocument(self.doc.Name)
+            self.doc = App.openDocument(path)
+            self.doc.UndoMode = 1
+            d = self.doc.getObject(name)
+            self.assertEqual(list(d.Vertices), after_v, dead)
+            self.assertEqual(self.baseline_state(d), after, dead)  # a reopened document has its dimensions touched until the first recompute
+            self.doc.Plate.Length = 115.0  # a further model edit relays the set, still from the new datum
+            self.doc.recompute()
+            self.assertEqual(self.settled(), [], dead)
+            self.assertEqual(d.Vertices[0], new, dead)
+            self.assertTrue(all(refs(m)[0] == new for m in members(d)), dead)
+
     def test_set_datum_is_one_undo_step_and_survives_undo_redo_save_and_reopen(self):
         p = self.plate()
         names = [p.corner(), p.hole(0), p.hole(1), p.hole(2)]

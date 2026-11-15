@@ -1032,7 +1032,17 @@ def set_datum(driver, vertex):
     own = HT.begin(doc, "Set datum")
     try:
         if driver.Kind == "baseline":
-            raise ValueError("a baseline set cannot change its datum yet")
+            page = doc.getObject(driver.PageName)
+            for m in DimChainDriver.members(driver):  # the members measure from the datum: point each one at the new datum, in place
+                pair = DimChainDriver.pair(m)
+                if not pair or pair[0] != old:
+                    continue
+                if pair[1] != vertex:
+                    m.References2D = [(view, vertex), (view, pair[1])]
+                elif alive:  # the member that joined the old and the new datum now runs from the new datum to the old one
+                    m.References2D = [(view, vertex), (view, old)]
+                else:  # its far end was the dead datum: nothing is left to measure
+                    _park(m, driver, page)
         driver.Vertices = new
         driver.touch()
         doc.recompute()
