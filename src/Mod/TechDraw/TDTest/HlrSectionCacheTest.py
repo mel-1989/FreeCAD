@@ -182,6 +182,30 @@ class HlrSectionCacheTest(unittest.TestCase):
         self.assertEqual(snap(self.det), moved)
         self.assertEqual(self.fresh(self.det), moved)
 
+    def testSectionOfASectionRecomputesOnceAfterAHit(self):
+        # R25 (ruling 142): the busy flag of a section is cleared on the main thread when its cut is
+        # handled, never on the cut's worker thread.  Headless the cut runs synchronously, and
+        # waitingForCut is not exposed to Python, so what this reaches is the result: after a hit
+        # of the parent, its section of a section (uncached) is up to date, is not touched again
+        # by a second recompute, and still follows a later change of the parent.
+        first = snap(self.sos)
+        self.assertTrue(first[0])
+        hits, misses = self.run_only_section()
+        self.assertEqual((hits, misses), (1, 0))
+        self.assertNotIn("Touched", self.sos.State)
+        self.assertEqual(snap(self.sos), first)
+        self.assertEqual(self.doc.recompute(), 0)
+        self.assertEqual(snap(self.sos), first)
+        self.assertEqual(self.fresh(self.sos), first)
+        self.sec.FuseBeforeCut = True
+        self.doc.recompute()
+        moved = snap(self.sos)
+        hits, misses = self.run_only_section()
+        self.assertEqual((hits, misses), (1, 0))
+        self.assertNotIn("Touched", self.sos.State)
+        self.assertEqual(snap(self.sos), moved)
+        self.assertEqual(self.fresh(self.sos), moved)
+
     def testCosmeticsDoNotLeak(self):
         first = snap(self.sec)
         n = len(self.sec.getVisibleEdges())

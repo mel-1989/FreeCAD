@@ -660,8 +660,6 @@ void DrawViewSection::makeSectionCut(const TopoDS_Shape& baseShape)
                                 Label.getValue());
         return;
     }
-
-    waitingForCut(false);
 }
 
 //! position, scale and rotate shape for buildGeometryObject
@@ -734,6 +732,9 @@ void DrawViewSection::onSectionCutFinished()
         dropDetachedResult();
         return;
     }
+    //the flag stays set from sectionExec until the main thread handles the finished event
+    //(QFutureWatcher delivers finished on the watcher's thread), not from the worker thread
+    waitingForCut(false);
     if (DU::isGuiUp()) {
         QObject::disconnect(connectCutWatcher);
         showProgressMessage(getNameInDocument(), "has finished making section cut");
