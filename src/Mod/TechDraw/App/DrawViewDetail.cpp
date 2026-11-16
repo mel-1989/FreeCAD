@@ -231,6 +231,9 @@ void DrawViewDetail::detailExec(TopoDS_Shape& shape, DrawViewPart* dvp, DrawView
         makeDetailShape(shape, dvp, dvs);
         onMakeDetailFinished();
         waitingForDetail(false);
+        return;  //headless: the result is final.  Falling through started a second makeDetailShape in
+                 //a thread that nothing waits for and left waitingForDetail set, so a later recompute
+                 //returned at the top of this function and the detail never followed its base again
     }
 
     //note that &m_detailWatcher in the third parameter is not strictly required, but using the
