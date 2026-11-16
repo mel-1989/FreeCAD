@@ -425,6 +425,12 @@ App::DocumentObjectExecReturn* DrawViewSection::execute()
         return new App::DocumentObjectExecReturn("BaseView object not found");
     }
 
+    auto* baseSection = freecad_cast<DrawViewSection*>(BaseView.getValue());
+    if (baseSection && baseSection->waitingForCut()) {
+        //the base's cut is still running: its postSectionCutTasks executes this view against the new cut
+        return DrawView::execute();     //NOLINT
+    }
+
     if (waitingForCut() || waitingForHlr()) {
         return DrawView::execute();     //NOLINT
     }
@@ -577,8 +583,6 @@ void DrawViewSection::makeSectionCut(const TopoDS_Shape& baseShape)
                                 Label.getValue());
         return;
     }
-
-    waitingForCut(false);
 }
 
 //! position, scale and rotate shape for buildGeometryObject
@@ -651,6 +655,9 @@ void DrawViewSection::onSectionCutFinished()
         dropDetachedResult();
         return;
     }
+    //the flag stays set from sectionExec until the main thread handles the finished event
+    //(QFutureWatcher delivers finished on the watcher's thread), not from the worker thread
+    waitingForCut(false);
     if (DU::isGuiUp()) {
         QObject::disconnect(connectCutWatcher);
         showProgressMessage(getNameInDocument(), "has finished making section cut");

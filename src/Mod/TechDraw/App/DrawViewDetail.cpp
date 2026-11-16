@@ -208,11 +208,18 @@ App::DocumentObjectExecReturn* DrawViewDetail::execute()
     }
 
     DrawViewPart* dvp = static_cast<DrawViewPart*>(baseObj);
-    TopoDS_Shape shape3d = dvp->getShapeForDetail();
     DrawViewSection* dvs = nullptr;
     if (dvp->isDerivedFrom<TechDraw::DrawViewSection>()) {
         dvs = static_cast<TechDraw::DrawViewSection*>(dvp);
     }
+
+    if (dvs && dvs->waitingForCut()) {
+        //the base's cut is still running: starting now would use the old cut and be dropped when
+        //the cut finishes.  The base's postSectionCutTasks executes this view against the new cut.
+        return DrawView::execute();
+    }
+
+    TopoDS_Shape shape3d = dvp->getShapeForDetail();
 
     if (shape3d.IsNull()) {
         return DrawView::execute();
