@@ -30,7 +30,9 @@
 #include <string>
 #include <vector>
 
+#include <TopoDS_Compound.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Ax2.hxx>
 
 #include <Base/Vector3D.h>
 
@@ -47,6 +49,29 @@ class Document;
 namespace TechDraw
 {
 class DrawViewPart;
+class DrawViewSection;
+
+//! Slice 8c (G04): what a plain DrawViewSection holds after its cut, besides the geometry object,
+//! and a hit has to put back (ruling 136).  The shapes are immutable OCC handles and are shared.
+struct HlrSectionExtras
+{
+    double shapeSize {0.0};         //!< m_shapeSize
+    bool originInBox {true};        //!< SectionOrigin was inside the box of the base shape
+    TopoDS_Shape cutPieces;         //!< m_cutPieces
+    TopoDS_Shape cutShapeRaw;       //!< m_cutShapeRaw
+    TopoDS_Shape cutShape;          //!< m_cutShape
+    TopoDS_Shape preparedShape;     //!< m_preparedShape
+    gp_Ax2 projectionCS;            //!< m_projectionCS
+};
+
+//! The section faces of a view once its face thread has finished: m_sectionTopoDSFaces,
+//! m_tdSectionFaces and unprojectedSectionFaces.  Stored with each face set.
+struct HlrSectionFaces
+{
+    TopoDS_Compound topoFaces;
+    TopoDS_Compound unprojected;
+    std::vector<FacePtr> tdFaces;
+};
 
 //! The exact and complete cache key (ruling 128 of the G04 brief).
 class TechDrawExport HlrCacheKey
@@ -68,6 +93,18 @@ public:
     double tolSum {0.0};
     // the projection coordinate system, Ax2: location, main direction, x direction
     std::array<double, 9> cs {};
+    // slice 8c: the extra terms of a plain DrawViewSection (ruling 135); empty for other views
+    bool section {false};
+    std::array<double, 9> sectionCS {};  //!< getSectionCS(): location, normal, x direction
+    std::array<double, 3> sectionNormal {};
+    std::array<double, 3> sectionOrigin {};
+    std::array<double, 3> direction {};
+    std::array<double, 3> xDirection {};
+    int sectionDirection {0};
+    bool fuseBeforeCut {false};
+    bool trimAfterCut {false};
+    bool usePreviousCut {false};
+    double fuzzy {0.0};  //!< the boolean fuzzy value of the Part module
     double scale {0.0};
     double rotation {0.0};
     int isoCount {0};
@@ -97,6 +134,7 @@ struct HlrCacheHit
     TopoDS_Shape saveShape;           //!< the centred copy of the source (m_saveShape)
     Base::Vector3d saveCentroid;      //!< centroid before centring (m_saveCentroid)
     bool hasFaces {false};            //!< some face set was stored for this key
+    std::shared_ptr<HlrSectionExtras> section;  //!< set for a section entry, a private copy
 };
 
 struct HlrCacheStats
@@ -120,6 +158,11 @@ public:
     //! DrawProjGroupItem, no CoarseView, no Python getExplodedShape hook on a source.
     static bool eligible(const DrawViewPart& view);
 
+    //! true when this section view may use the cache (ruling 134): a plain DrawViewSection (not
+    //! complex, not Python) on a base that is neither a section nor a detail, with a Custom or Page
+    //! scale, no CoarseView and no Python getExplodedShape hook on a source of the base.
+    static bool eligibleSection(const DrawViewSection& view);
+
     //! build the key for a view and the source shape the view is about to project
     static HlrCacheKeyPtr makeKey(const DrawViewPart& view, const TopoDS_Shape& source);
 
@@ -132,7 +175,8 @@ public:
     //! store the HLR geometry of a view (before cosmetic geometry is added to it)
     static void storeGeometry(const DrawViewPart& view, const HlrCacheKeyPtr& key,
                               const GeometryObject& geometry, const TopoDS_Shape& saveShape,
-                              const Base::Vector3d& saveCentroid);
+                              const Base::Vector3d& saveCentroid,
+                              const HlrSectionExtras* section = nullptr);
 
     //! SHA-256 of the exact geometry the face finder is about to read from the geometry object:
     //! the visible HARD and OUTLINE edges (and smooth and seam ones when asked), cosmetic edges
@@ -143,11 +187,14 @@ public:
     //! add the faces found for the stored geometry, with the signature of their input
     static void attachFaces(const DrawViewPart& view, const HlrCacheKeyPtr& key,
                             const GeometryObject& geometry,
-                            const std::array<std::uint8_t, 32>& signature);
+                            const std::array<std::uint8_t, 32>& signature,
+                            const HlrSectionFaces* sectionFaces = nullptr);
 
     //! if a face set stored for this key has this input signature, put copies of it in geometry
+    //! for a section the face set carries the section faces too; they are returned in sectionFaces
     static bool takeFaces(const DrawViewPart& view, const HlrCacheKeyPtr& key,
-                          const std::array<std::uint8_t, 32>& signature, GeometryObject& geometry);
+                          const std::array<std::uint8_t, 32>& signature, GeometryObject& geometry,
+                          std::shared_ptr<HlrSectionFaces>* sectionFaces = nullptr);
 
     static void dropView(const DrawViewPart* view);
     static void dropDocument(const App::Document* doc);

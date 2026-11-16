@@ -55,6 +55,8 @@ class Part;
 namespace TechDraw
 {
 class HlrCacheKey;  // HlrCache.h, the in-memory hidden-line cache
+struct HlrSectionExtras;
+struct HlrSectionFaces;
 
 class GeometryObject;
 using GeometryObjectPtr = std::shared_ptr<GeometryObject>;
@@ -255,6 +257,11 @@ public Q_SLOTS:
 protected:
     bool checkXDirection() const;
     void dropDetachedResult();
+    void countHlrChange(const App::Property* prop);
+    //! slice 8c: a section view hands its cut state to the cache and takes it back on a hit
+    virtual std::shared_ptr<HlrSectionExtras> hlrSectionExtras() const { return nullptr; }
+    virtual std::shared_ptr<HlrSectionFaces> hlrSectionFaces() const { return nullptr; }
+    virtual void hlrRestoreSectionFaces(const HlrSectionFaces&) {}
 
     TechDraw::GeometryObjectPtr geometryObject;
     TechDraw::GeometryObjectPtr m_tempGeometryObject;//holds the new GO until hlr is completed
@@ -288,8 +295,7 @@ protected:
 
     std::vector<TechDraw::VertexPtr> m_referenceVerts;
 
-private:
-    //HLR cache state (HlrCache.h).  m_hlrKey is the key of the pass in progress, m_hlrFacesKey
+    //HLR cache state (HlrCache.h), also used by DrawViewSection.  m_hlrKey is the key of the pass in progress, m_hlrFacesKey
     //and m_hlrFacesGeometry say which geometry the running face finder belongs to.
     std::shared_ptr<const HlrCacheKey> m_hlrKey;
     std::shared_ptr<const HlrCacheKey> m_hlrFacesKey;
@@ -299,6 +305,8 @@ private:
     unsigned m_hlrKeyChange {0};   //!< m_hlrChange when the pass in progress began
     unsigned m_hlrFacesChange {0}; //!< m_hlrChange when face finding began
     bool m_hlrGeomCached {false};
+
+private:
     bool m_inAutoScale {false};
     void storeFacesInCache();
 

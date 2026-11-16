@@ -351,7 +351,8 @@ class HlrCacheTest(unittest.TestCase):
             del os.environ["CADFORK_HLR_CACHE"]
         self.assertEqual(self.fresh(), off)
 
-    def testSectionNeverUsesTheCache(self):
+    def testPlainSectionMayHitAndDetailAndComplexSectionNeverDo(self):
+        # slice 8c: a plain section uses the cache (HlrSectionCacheTest); a detail never does
         section = self.doc.addObject("TechDraw::DrawViewSection", "Section")
         self.page.addView(section)
         section.BaseView = self.view
@@ -362,10 +363,19 @@ class HlrCacheTest(unittest.TestCase):
         section.ScaleType = "Custom"
         section.Scale = 1.0
         self.doc.recompute()
-        before = stats()
-        section.touch()
+        detail = self.doc.addObject("TechDraw::DrawViewDetail", "Detail")
+        self.page.addView(detail)
+        detail.BaseView = self.view
+        detail.Source = [self.blk, self.link]
+        detail.AnchorPoint = V(0, 0, 0)
+        detail.Radius = 8.0
+        detail.ScaleType = "Custom"
+        detail.Scale = 2.0
         self.doc.recompute()
-        section.Scale = 0.5
+        before = stats()
+        detail.touch()
+        self.doc.recompute()
+        detail.Scale = 3.0
         self.doc.recompute()
         after = stats()
         self.assertEqual(after["hits"], before["hits"])

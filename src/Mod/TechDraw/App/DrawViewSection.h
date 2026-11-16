@@ -37,6 +37,7 @@
 #include <Mod/TechDraw/TechDrawGlobal.h>
 
 #include "DrawViewPart.h"
+#include "HlrCache.h"
 
 class Bnd_Box;
 class gp_Pln;
@@ -188,6 +189,14 @@ protected:
     TopoDS_Compound m_sectionTopoDSFaces;//needed for hatching
     std::vector<LineSet> m_lineSets;
     std::vector<TechDraw::FacePtr> m_tdSectionFaces;
+
+    //slice 8c: the hidden-line cache of a plain section (HlrCache.h)
+    std::shared_ptr<HlrSectionExtras> hlrSectionExtras() const override;
+    std::shared_ptr<HlrSectionFaces> hlrSectionFaces() const override;
+    void hlrRestoreSectionFaces(const HlrSectionFaces& faces) override;
+    void postFaceExtractionTasks() override;
+    void restoreFromHlrCache(const HlrCacheHit& hit, const HlrCacheKeyPtr& key);
+    bool m_originInBox {true};   //!< SectionOrigin was inside the box of the base shape
 
     virtual gp_Pln getSectionPlane() const;
     virtual TopoDS_Compound findSectionPlaneIntersections(const TopoDS_Shape& shape);

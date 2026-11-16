@@ -45,6 +45,7 @@
 #include <App/Document.h>
 #include <App/PropertyPythonObject.h>
 #include <Base/Interpreter.h>
+#include <Mod/Part/App/FuzzyHelper.h>
 
 #include "HlrCache.h"
 #include "DrawProjGroupItem.h"
@@ -203,6 +204,15 @@ std::vector<FacePtr> cloneFaces(const std::vector<FacePtr>& in)
     return out;
 }
 
+std::shared_ptr<HlrSectionFaces> cloneSectionFaces(const HlrSectionFaces& in)
+{
+    auto out = std::make_shared<HlrSectionFaces>();
+    out->topoFaces = in.topoFaces;      // immutable OCC handles
+    out->unprojected = in.unprojected;
+    out->tdFaces = cloneFaces(in.tdFaces);
+    return out;
+}
+
 std::uint64_t estimateGeomBytes(const BaseGeomPtrVector& edges)
 {
     std::uint64_t n = 0;
@@ -240,12 +250,14 @@ struct Entry
     {
         std::array<std::uint8_t, 32> signature;
         std::vector<FacePtr> faces;
+        std::shared_ptr<HlrSectionFaces> section;  // section views only
         std::uint64_t bytes;
     };
     std::vector<FaceSet> faceSets;  // newest last, at most four
     std::array<TopoDS_Shape, 10> compounds;
     TopoDS_Shape saveShape;
     Base::Vector3d saveCentroid;
+    std::shared_ptr<HlrSectionExtras> section;  // section views only
     std::uint64_t bytes {0};
 };
 
@@ -353,6 +365,25 @@ void fillParams(const DrawViewPart& view, HlrCacheKey& keyRef)
     key->checkShapes = general->GetBool("CheckShapesBeforeUse", false);
     key->scrubPref = general->GetInt("ScrubCount", 1);
     key->allowCrazyEdge = Preferences::getPreferenceGroup("debug")->GetBool("allowCrazyEdge", false);
+
+    if (key->section) {
+        // slice 8c, ruling 135: what else the cut, the section faces and the projection read
+        const auto* dvs = dynamic_cast<const DrawViewSection*>(&view);
+        auto vec3 = [](const Base::Vector3d& v) { return std::array<double, 3> {v.x, v.y, v.z}; };
+        gp_Ax2 scs = dvs->getSectionCS();
+        key->sectionCS = {scs.Location().X(), scs.Location().Y(), scs.Location().Z(),
+                          scs.Direction().X(), scs.Direction().Y(), scs.Direction().Z(),
+                          scs.XDirection().X(), scs.XDirection().Y(), scs.XDirection().Z()};
+        key->sectionNormal = vec3(dvs->SectionNormal.getValue());
+        key->sectionOrigin = vec3(dvs->SectionOrigin.getValue());
+        key->direction = vec3(dvs->Direction.getValue());
+        key->xDirection = vec3(dvs->XDirection.getValue());
+        key->sectionDirection = dvs->SectionDirection.getValue();
+        key->fuseBeforeCut = dvs->FuseBeforeCut.getValue();
+        key->trimAfterCut = dvs->TrimAfterCut.getValue();
+        key->usePreviousCut = dvs->UsePreviousCut.getValue();
+        key->fuzzy = Part::FuzzyHelper::getBooleanFuzzy();
+    }
 }
 
 }  // namespace
@@ -370,12 +401,31 @@ bool HlrCacheKey::operator==(const HlrCacheKey& o) const
         || identifyVoids != o.identifyVoids || faceFinderVersion != o.faceFinderVersion
         || faceFinderPref != o.faceFinderPref || newFaceFinderPref != o.newFaceFinderPref
         || checkShapes != o.checkShapes || scrubPref != o.scrubPref
-        || allowCrazyEdge != o.allowCrazyEdge) {
+        || allowCrazyEdge != o.allowCrazyEdge || section != o.section) {
         return false;
     }
     for (size_t i = 0; i < cs.size(); i++) {
         if (!same(cs[i], o.cs[i])) {
             return false;
+        }
+    }
+    if (section) {
+        if (sectionDirection != o.sectionDirection || fuseBeforeCut != o.fuseBeforeCut
+            || trimAfterCut != o.trimAfterCut || usePreviousCut != o.usePreviousCut
+            || !same(fuzzy, o.fuzzy)) {
+            return false;
+        }
+        for (size_t i = 0; i < sectionCS.size(); i++) {
+            if (!same(sectionCS[i], o.sectionCS[i])) {
+                return false;
+            }
+        }
+        for (size_t i = 0; i < 3; i++) {
+            if (!same(sectionNormal[i], o.sectionNormal[i])
+                || !same(sectionOrigin[i], o.sectionOrigin[i]) || !same(direction[i], o.direction[i])
+                || !same(xDirection[i], o.xDirection[i])) {
+                return false;
+            }
         }
     }
     return true;
@@ -405,6 +455,26 @@ std::uint64_t HlrCacheKey::hash() const
                + checkShapes * 5 + allowCrazyEdge * 11 + newFaceFinderPref * 13);
     mix(h, static_cast<std::uint64_t>(faceFinderVersion + 5) * 17 + (faceFinderPref + 5) * 19
                + scrubPref);
+    if (section) {
+        mix(h, static_cast<std::uint64_t>(sectionDirection) * 3 + fuseBeforeCut * 5
+                   + trimAfterCut * 7 + usePreviousCut * 11 + 1);
+        mix(h, bitsOf(fuzzy));
+        for (double d : sectionCS) {
+            mix(h, bitsOf(d));
+        }
+        for (double d : sectionNormal) {
+            mix(h, bitsOf(d));
+        }
+        for (double d : sectionOrigin) {
+            mix(h, bitsOf(d));
+        }
+        for (double d : direction) {
+            mix(h, bitsOf(d));
+        }
+        for (double d : xDirection) {
+            mix(h, bitsOf(d));
+        }
+    }
     return h;
 }
 
@@ -441,9 +511,39 @@ bool HlrCache::eligible(const DrawViewPart& view)
     return true;
 }
 
+bool HlrCache::eligibleSection(const DrawViewSection& view)
+{
+    if (!enabled() || view.CoarseView.getValue() || view.ScaleType.isValue("Automatic")) {
+        return false;
+    }
+    // exactly a DrawViewSection: DrawComplexSection (every strategy) and Python sections keep stock
+    // behaviour
+    if (view.getTypeId() != DrawViewSection::getClassTypeId()) {
+        return false;
+    }
+    // a section of a section or of a detail cuts a derived shape (UsePreviousCut, the detail shape)
+    auto* base = dynamic_cast<DrawViewPart*>(view.BaseView.getValue());
+    if (!base || dynamic_cast<DrawViewSection*>(base) || dynamic_cast<DrawViewDetail*>(base)) {
+        return false;
+    }
+    // a Python getExplodedShape hook on a source of the base replaces the shape with arbitrary code
+    Base::PyGILStateLocker lock;
+    for (auto* obj : base->getAllSources()) {
+        if (!obj) {
+            continue;
+        }
+        auto* proxy = dynamic_cast<App::PropertyPythonObject*>(obj->getPropertyByName("Proxy"));
+        if (proxy && proxy->getValue().hasAttr("getExplodedShape")) {
+            return false;
+        }
+    }
+    return true;
+}
+
 HlrCacheKeyPtr HlrCache::makeKey(const DrawViewPart& view, const TopoDS_Shape& source)
 {
     auto key = std::make_shared<HlrCacheKey>();
+    key->section = dynamic_cast<const DrawViewSection*>(&view) != nullptr;
     digestShape(source, *key);
 
     // fingerprint of the located source: vertex count, coordinate sum, tolerance sum
@@ -486,12 +586,16 @@ bool HlrCache::lookup(DrawViewPart& view, const HlrCacheKeyPtr& key, HlrCacheHit
     hit.geometry = buildGeometry(view, e);
     hit.saveShape = e.saveShape;
     hit.saveCentroid = e.saveCentroid;
+    if (e.section) {
+        hit.section = std::make_shared<HlrSectionExtras>(*e.section);
+    }
     return true;
 }
 
 void HlrCache::storeGeometry(const DrawViewPart& view, const HlrCacheKeyPtr& key,
                              const GeometryObject& go, const TopoDS_Shape& saveShape,
-                             const Base::Vector3d& saveCentroid)
+                             const Base::Vector3d& saveCentroid,
+                             const HlrSectionExtras* section)
 {
     State& s = state();
     std::lock_guard<std::mutex> lock(s.mutex);
@@ -515,6 +619,16 @@ void HlrCache::storeGeometry(const DrawViewPart& view, const HlrCacheKeyPtr& key
     int nFaces = 0;
     for (TopExp_Explorer ex(saveShape, TopAbs_FACE); ex.More(); ex.Next()) {
         nFaces++;
+    }
+    if (section) {
+        e.section = std::make_shared<HlrSectionExtras>(*section);
+        // the cut result and its moved, scaled and rotated copies
+        for (const TopoDS_Shape* sh : {&section->cutPieces, &section->cutShapeRaw,
+                                       &section->cutShape, &section->preparedShape}) {
+            for (TopExp_Explorer ex(*sh, TopAbs_FACE); ex.More(); ex.Next()) {
+                nFaces++;
+            }
+        }
     }
     e.bytes = estimateGeomBytes(e.edges) * 2  // the converted geometry and the HLR compounds
               + 400 * e.vertices.size() + 3500ULL * nFaces + 1024;
@@ -544,7 +658,8 @@ std::array<std::uint8_t, 32> HlrCache::faceInputSignature(const GeometryObject& 
 }
 
 void HlrCache::attachFaces(const DrawViewPart& view, const HlrCacheKeyPtr& key,
-                           const GeometryObject& go, const std::array<std::uint8_t, 32>& sig)
+                           const GeometryObject& go, const std::array<std::uint8_t, 32>& sig,
+                           const HlrSectionFaces* sectionFaces)
 {
     State& s = state();
     std::lock_guard<std::mutex> lock(s.mutex);
@@ -561,6 +676,10 @@ void HlrCache::attachFaces(const DrawViewPart& view, const HlrCacheKeyPtr& key,
     fs.signature = sig;
     fs.faces = cloneFaces(go.getFaceGeometry());
     fs.bytes = estimateFaceBytes(fs.faces);
+    if (sectionFaces) {
+        fs.section = cloneSectionFaces(*sectionFaces);
+        fs.bytes += estimateFaceBytes(fs.section->tdFaces) + 3500ULL * 2;
+    }
     if (it->faceSets.size() >= 4) {
         it->bytes -= it->faceSets.front().bytes;
         s.stats.bytes -= it->faceSets.front().bytes;
@@ -574,7 +693,8 @@ void HlrCache::attachFaces(const DrawViewPart& view, const HlrCacheKeyPtr& key,
 }
 
 bool HlrCache::takeFaces(const DrawViewPart& view, const HlrCacheKeyPtr& key,
-                         const std::array<std::uint8_t, 32>& sig, GeometryObject& go)
+                         const std::array<std::uint8_t, 32>& sig, GeometryObject& go,
+                         std::shared_ptr<HlrSectionFaces>* sectionFaces)
 {
     State& s = state();
     std::lock_guard<std::mutex> lock(s.mutex);
@@ -587,6 +707,9 @@ bool HlrCache::takeFaces(const DrawViewPart& view, const HlrCacheKeyPtr& key,
             go.clearFaceGeom();
             for (auto& f : cloneFaces(fs.faces)) {
                 go.addFaceGeom(f);
+            }
+            if (sectionFaces) {
+                *sectionFaces = fs.section ? cloneSectionFaces(*fs.section) : nullptr;
             }
             return true;
         }

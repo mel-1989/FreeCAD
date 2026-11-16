@@ -289,6 +289,16 @@ short DrawViewSection::mustExecute() const
 
 void DrawViewSection::onChanged(const App::Property* prop)
 {
+    // the cut, hidden-line and face threads read these; a result computed while one changed must
+    // not be cached, even if it was changed back (this function does not reach
+    // DrawViewPart::onChanged outside of restore)
+    countHlrChange(prop);
+    if (prop == &SectionNormal || prop == &SectionOrigin || prop == &SectionDirection
+        || prop == &BaseView || prop == &FuseBeforeCut || prop == &TrimAfterCut
+        || prop == &UsePreviousCut) {
+        m_hlrChange++;
+    }
+
     if (isRestoring()) {
         DrawViewPart::onChanged(prop);
         return;
@@ -421,21 +431,7 @@ App::DocumentObjectExecReturn* DrawViewSection::execute()
         return DrawView::execute();     //NOLINT
     }
 
-    // is SectionOrigin valid?
-    Bnd_Box centerBox;
-    BRepBndLib::AddOptimal(baseShape, centerBox);
-    centerBox.SetGap(0.0);
-    Base::Vector3d orgPnt = SectionOrigin.getValue();
-
-    if (!isReallyInBox(gp_Pnt(orgPnt.x, orgPnt.y, orgPnt.z), centerBox)) {
-        Base::Console().warning("DVS: SectionOrigin doesn't intersect part in {}\n",
-                                getNameInDocument());
-    }
-
-    // save important info for later use
-    m_shapeSize = sqrt(centerBox.SquareExtent());
-    m_saveShape = baseShape;
-
+    // XDirection is a term of the cache key (ruling 135), so it is settled before the lookup
     bool haveX = checkXDirection();
     if (!haveX) {
         // block touch/onChanged stuff
@@ -445,9 +441,111 @@ App::DocumentObjectExecReturn* DrawViewSection::execute()
                                   // unblock
     }
 
+    // slice 8c (rulings 134 to 136): the result of the cut, the hidden-line pass and the faces is a
+    // function of the key; a hit skips the bounding boxes, the cut and the projection
+    m_hlrKey.reset();  //the key of the previous pass must never be attached to this pass
+    m_hlrGeomCached = false;
+    m_hlrKeyChange = m_hlrChange;
+    if (!waitingForFaces() && HlrCache::eligibleSection(*this)) {
+        HlrCacheKeyPtr key = HlrCache::makeKey(*this, baseShape);
+        HlrCacheHit hit;
+        if (HlrCache::lookup(*this, key, hit) && hit.section) {
+            restoreFromHlrCache(hit, key);
+            return DrawView::execute();     //NOLINT
+        }
+        m_hlrKey = key;
+    }
+
+    // is SectionOrigin valid?
+    Bnd_Box centerBox;
+    BRepBndLib::AddOptimal(baseShape, centerBox);
+    centerBox.SetGap(0.0);
+    Base::Vector3d orgPnt = SectionOrigin.getValue();
+
+    m_originInBox = isReallyInBox(gp_Pnt(orgPnt.x, orgPnt.y, orgPnt.z), centerBox);
+    if (!m_originInBox) {
+        Base::Console().warning("DVS: SectionOrigin doesn't intersect part in {}\n",
+                                getNameInDocument());
+    }
+
+    // save important info for later use
+    m_shapeSize = sqrt(centerBox.SquareExtent());
+    m_saveShape = baseShape;
+
     sectionExec(baseShape);
 
     return DrawView::execute();     //NOLINT
+}
+
+//! a hit: put back every member a miss sets on the way, then run what follows the cut as a miss
+//! does (the dependent details and sections, the cosmetics of postHlrTasks, the faces)
+void DrawViewSection::restoreFromHlrCache(const HlrCacheHit& hit, const HlrCacheKeyPtr& key)
+{
+    const HlrSectionExtras& x = *hit.section;
+    m_shapeSize = x.shapeSize;
+    m_originInBox = x.originInBox;
+    if (!m_originInBox) {
+        Base::Console().warning("DVS: SectionOrigin doesn't intersect part in {}\n",
+                                getNameInDocument());
+    }
+    m_saveShape = hit.saveShape;
+    m_saveCentroid = hit.saveCentroid;
+    m_cutPieces = x.cutPieces;
+    m_cutShapeRaw = x.cutShapeRaw;
+    m_cutShape = x.cutShape;
+    m_preparedShape = x.preparedShape;
+    m_projectionCS = x.projectionCS;
+    waitingForCut(false);
+    if (debugSection()) {
+        BRepTools::Write(m_cutShape, "DVSCutShape.brep");
+        BRepTools::Write(m_preparedShape, "DVSPreparedShape.brep");
+    }
+
+    postSectionCutTasks();
+
+    //the result is applied synchronously, with no thread, as for a hit of DrawViewPart
+    m_tempGeometryObject = hit.geometry;
+    m_hlrKey = key;
+    m_hlrGeomCached = true;
+    onHlrFinished();
+}
+
+std::shared_ptr<HlrSectionExtras> DrawViewSection::hlrSectionExtras() const
+{
+    auto x = std::make_shared<HlrSectionExtras>();
+    x->shapeSize = m_shapeSize;
+    x->originInBox = m_originInBox;
+    x->cutPieces = m_cutPieces;
+    x->cutShapeRaw = m_cutShapeRaw;
+    x->cutShape = m_cutShape;
+    x->preparedShape = m_preparedShape;
+    x->projectionCS = m_projectionCS;
+    return x;
+}
+
+std::shared_ptr<HlrSectionFaces> DrawViewSection::hlrSectionFaces() const
+{
+    auto f = std::make_shared<HlrSectionFaces>();
+    f->topoFaces = m_sectionTopoDSFaces;
+    f->unprojected = unprojectedSectionFaces;
+    f->tdFaces = m_tdSectionFaces;
+    return f;
+}
+
+void DrawViewSection::hlrRestoreSectionFaces(const HlrSectionFaces& faces)
+{
+    m_sectionTopoDSFaces = faces.topoFaces;
+    unprojectedSectionFaces = faces.unprojected;
+    m_tdSectionFaces = faces.tdFaces;
+}
+
+//! the section faces are final once the faces are found
+void DrawViewSection::postFaceExtractionTasks()
+{
+    DrawViewPart::postFaceExtractionTasks();
+    if (debugSection()) {
+        BRepTools::Write(m_sectionTopoDSFaces, "DVSFinalSectionFaces.brep");// debug
+    }
 }
 
 bool DrawViewSection::isBaseValid() const

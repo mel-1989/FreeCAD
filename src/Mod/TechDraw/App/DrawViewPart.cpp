@@ -279,10 +279,10 @@ short DrawViewPart::mustExecute() const
     return TechDraw::DrawView::mustExecute();
 }
 
-void DrawViewPart::onChanged(const App::Property* prop)
+//! every property the HLR or face-finding threads read while they run (the cache stores a
+//! result only if none of them changed, even if it was changed back)
+void DrawViewPart::countHlrChange(const App::Property* prop)
 {
-    // every property the HLR or face-finding threads read while they run (the cache stores a
-    // result only if none of them changed, even if it was changed back)
     if (prop == &Direction || prop == &XDirection || prop == &Scale || prop == &ScaleType
         || prop == &Rotation || prop == &IsoCount || prop == &Perspective || prop == &Focus
         || prop == &ScrubCount || prop == &SmoothVisible || prop == &SeamVisible
@@ -291,6 +291,11 @@ void DrawViewPart::onChanged(const App::Property* prop)
         || prop == &XSource) {
         m_hlrChange++;
     }
+}
+
+void DrawViewPart::onChanged(const App::Property* prop)
+{
+    countHlrChange(prop);
 
     // If the user has set PropertyVector Direction to zero, set it along the default value instead (Front View).
     // Otherwise bad things will happen because there'll be a normalization for direction calculations later.
@@ -473,7 +478,9 @@ void DrawViewPart::onHlrFinished()
         m_hlrKey.reset();  //a key input changed while the threads worked
     }
     if (m_hlrKey && !hitPass) {
-        HlrCache::storeGeometry(*this, m_hlrKey, *geometryObject, m_saveShape, m_saveCentroid);
+        auto extras = hlrSectionExtras();
+        HlrCache::storeGeometry(*this, m_hlrKey, *geometryObject, m_saveShape, m_saveCentroid,
+                                extras.get());
     }
     m_hlrGeomCached = false;
 
@@ -499,7 +506,12 @@ void DrawViewPart::onHlrFinished()
         //face finder would read exactly the edges it read when they were stored
         m_hlrFacesSig = HlrCache::faceInputSignature(*geometryObject, SmoothVisible.getValue(),
                                                      SeamVisible.getValue());
-        if (HlrCache::takeFaces(*this, m_hlrKey, m_hlrFacesSig, *geometryObject)) {
+        std::shared_ptr<HlrSectionFaces> sectionFaces;
+        if (HlrCache::takeFaces(*this, m_hlrKey, m_hlrFacesSig, *geometryObject, &sectionFaces)) {
+            if (sectionFaces) {
+                //the face thread would have set the section faces: put back what it set
+                hlrRestoreSectionFaces(*sectionFaces);
+            }
             m_hlrFacesKey.reset();
             m_hlrFacesGeometry = nullptr;
             onFacesFinished();
@@ -920,7 +932,9 @@ void DrawViewPart::storeFacesInCache()
     if (m_hlrFacesKey && geometryObject && geometryObject.get() == m_hlrFacesGeometry
         && handleFaces() && m_hlrChange == m_hlrFacesChange
         && HlrCache::paramsUnchanged(*this, *m_hlrFacesKey)) {
-        HlrCache::attachFaces(*this, m_hlrFacesKey, *geometryObject, m_hlrFacesSig);
+        auto sectionFaces = hlrSectionFaces();
+        HlrCache::attachFaces(*this, m_hlrFacesKey, *geometryObject, m_hlrFacesSig,
+                              sectionFaces.get());
     }
     m_hlrFacesKey.reset();
     m_hlrFacesGeometry = nullptr;
