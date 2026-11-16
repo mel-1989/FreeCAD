@@ -514,7 +514,17 @@ void DrawViewPart::onHlrFinished()
             }
             m_hlrFacesKey.reset();
             m_hlrFacesGeometry = nullptr;
-            onFacesFinished();
+            {
+                //a full hit is applied from execute(), whose DrawView::execute paints the finished
+                //view; the two paints of onFacesFinished would redraw the same state
+                struct PaintGuard
+                {
+                    DrawView* view;
+                    ~PaintGuard() { view->suppressPaint(false); }
+                } guard {this};
+                suppressPaint(hitPass);
+                onFacesFinished();
+            }
             return;
         }
     }
