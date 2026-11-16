@@ -628,6 +628,14 @@ TopoDS_Shape DrawViewSection::makeCuttingTool(double shapeSize)
 
 void DrawViewSection::onSectionCutFinished()
 {
+    if (!isAttachedToDocument()) {
+        //deleted (inside a transaction) while the cut thread ran: drop the result, as in
+        //DrawViewPart::onHlrFinished
+        waitingForCut(false);
+        QObject::disconnect(connectCutWatcher);
+        dropDetachedResult();
+        return;
+    }
     if (DU::isGuiUp()) {
         QObject::disconnect(connectCutWatcher);
         showProgressMessage(getNameInDocument(), "has finished making section cut");
