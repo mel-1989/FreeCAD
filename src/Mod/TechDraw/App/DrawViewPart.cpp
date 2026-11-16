@@ -423,9 +423,29 @@ TechDraw::GeometryObjectPtr DrawViewPart::buildGeometryObject(const TopoDS_Shape
     return go;
 }
 
+//! forget the state of a pass whose result arrives for a view that is no longer in a document.
+//! Undo of the delete restores the view's properties and touches it, so it recomputes.
+void DrawViewPart::dropDetachedResult()
+{
+    m_hlrKey.reset();
+    m_hlrGeomCached = false;
+    m_hlrFacesKey.reset();
+    m_hlrFacesGeometry = nullptr;
+}
+
 //! continue processing after hlr thread completes
 void DrawViewPart::onHlrFinished()
 {
+    if (!isAttachedToDocument()) {
+        //the view was deleted (inside a transaction, so undo keeps it alive) while its thread ran:
+        //its queued result must not run the code below on a view that has no document
+        dropDetachedResult();
+        waitingForHlr(false);
+        QObject::disconnect(connectHlrWatcher);
+        m_tempGeometryObject = nullptr;
+        return;
+    }
+
     //now that the new GeometryObject is fully populated, we can replace the old one
     if (m_tempGeometryObject) {
         geometryObject = m_tempGeometryObject;//replace with new
@@ -880,6 +900,11 @@ void DrawViewPart::onFacesFinished()
     //    Base::Console().message("DVP::onFacesFinished() - {}\n", getNameInDocument());
     waitingForFaces(false);
     QObject::disconnect(connectFaceWatcher);
+    if (!isAttachedToDocument()) {
+        //deleted while the face thread ran, see onHlrFinished
+        dropDetachedResult();
+        return;
+    }
     showProgressMessage(getNameInDocument(), "has finished extracting faces");
     storeFacesInCache();
 

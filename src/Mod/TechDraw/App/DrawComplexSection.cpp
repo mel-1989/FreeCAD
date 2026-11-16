@@ -297,6 +297,14 @@ void DrawComplexSection::onSectionCutFinished()
         return;
     }
 
+    if (!isAttachedToDocument()) {
+        //deleted (inside a transaction) while the cut threads ran
+        waitingForAlign(false);
+        QObject::disconnect(connectAlignWatcher);
+        DrawViewSection::onSectionCutFinished();  //clears its own state and returns
+        return;
+    }
+
     DrawViewSection::onSectionCutFinished();
 
     QObject::disconnect(connectAlignWatcher);

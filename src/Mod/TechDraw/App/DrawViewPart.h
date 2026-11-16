@@ -254,6 +254,7 @@ public Q_SLOTS:
 
 protected:
     bool checkXDirection() const;
+    void dropDetachedResult();
 
     TechDraw::GeometryObjectPtr geometryObject;
     TechDraw::GeometryObjectPtr m_tempGeometryObject;//holds the new GO until hlr is completed

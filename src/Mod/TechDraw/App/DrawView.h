@@ -111,6 +111,8 @@ public:
     //! while set, requestPaint does nothing (the caller paints once afterwards)
     void suppressPaint(bool state) { m_suppressPaint = state; }
     void showProgressMessage(std::string featureName, std::string text);
+    //! a view removed from its document (kept alive by the undo stack) has no name: say nothing
+    void showProgressMessage(const char* featureName, std::string text);
 
     virtual double getScale(void) const;
     virtual int getScaleType() const { return ScaleType.getValue(); };

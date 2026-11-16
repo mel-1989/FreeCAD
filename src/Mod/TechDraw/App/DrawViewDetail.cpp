@@ -461,6 +461,12 @@ void DrawViewDetail::onMakeDetailFinished(void)
 {
     waitingForDetail(false);
     QObject::disconnect(connectDetailWatcher);
+    if (!isAttachedToDocument()) {
+        //deleted (inside a transaction) while the detail thread ran: drop the result
+        dropDetachedResult();
+        m_tempGeometryObject = nullptr;
+        return;
+    }
 
     m_tempGeometryObject = buildGeometryObject(getShapeForGeometryBuild(), m_viewAxis);
     if (!DU::isGuiUp()) {
