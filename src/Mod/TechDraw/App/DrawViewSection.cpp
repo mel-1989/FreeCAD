@@ -57,6 +57,8 @@
 #include <BRep_Builder.hxx>
 #include <Bnd_Box.hxx>
 #include <QtConcurrentRun>
+#include <cstdlib>
+#include <string>
 #include <ShapeAnalysis.hxx>
 #include <ShapeFix_Shape.hxx>
 #include <TopExp.hxx>
@@ -96,6 +98,18 @@
 #include <App/FeaturePythonPyImp.h>
 #include "DrawViewSection.h"
 #include "DrawViewPartPy.h"
+
+//CADFORK_TD_TRACE=1: one log line per started cut, HLR, face or detail thread (G04 repair R26, ruling 149)
+static void traceThreadStartSection(const char* kind, const char* viewName)
+{
+    static const bool enabled = [] {
+        const char* v = std::getenv("CADFORK_TD_TRACE");
+        return v && std::string(v) == "1";
+    }();
+    if (enabled) {
+        Base::Console().log("CADFORK_TD_TRACE start {} {}\n", kind, viewName ? viewName : "");
+    }
+}
 
 using namespace TechDraw;
 
@@ -491,6 +505,7 @@ void DrawViewSection::sectionExec(TopoDS_Shape& baseShape)
         // This is important because this variable might be local to the calling
         // function and might get destructed before the parallel processing finishes.
         auto lambda = [this, baseShape]{this->makeSectionCut(baseShape);};
+        traceThreadStartSection("cut", getNameInDocument());
         m_cutFuture = QtConcurrent::run(std::move(lambda));
         m_cutWatcher.setFuture(m_cutFuture);
         waitingForCut(true);

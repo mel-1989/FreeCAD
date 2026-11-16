@@ -51,6 +51,8 @@
 #include <Bnd_Box.hxx>
 #include <HLRAlgo_Projector.hxx>
 #include <QtConcurrentRun>
+#include <cstdlib>
+#include <string>
 #include <ShapeAnalysis.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -96,6 +98,18 @@
 #include "ShapeExtractor.h"
 #include "Preferences.h"
 #include "ShapeUtils.h"
+
+//CADFORK_TD_TRACE=1: one log line per started cut, HLR, face or detail thread (G04 repair R26, ruling 149)
+static void traceThreadStartPart(const char* kind, const char* viewName)
+{
+    static const bool enabled = [] {
+        const char* v = std::getenv("CADFORK_TD_TRACE");
+        return v && std::string(v) == "1";
+    }();
+    if (enabled) {
+        Base::Console().log("CADFORK_TD_TRACE start {} {}\n", kind, viewName ? viewName : "");
+    }
+}
 
 using namespace TechDraw;
 using DU = DrawUtil;
@@ -416,6 +430,7 @@ TechDraw::GeometryObjectPtr DrawViewPart::buildGeometryObject(const TopoDS_Shape
     // This is important because those variables might be local to the calling
     // function and might get destructed before the parallel processing finishes.
     auto lambda = [go, shape, viewAxis]{go->projectShape(shape, viewAxis);};
+    traceThreadStartPart("hlr", getNameInDocument());
     m_hlrFuture = QtConcurrent::run(std::move(lambda));
     m_hlrWatcher.setFuture(m_hlrFuture);
     waitingForHlr(true);
@@ -523,6 +538,7 @@ void DrawViewPart::onHlrFinished()
                                  [this] { this->onFacesFinished(); });
 
             auto lambda = [this]{this->extractFaces();};
+            traceThreadStartPart("face", getNameInDocument());
             m_faceFuture = QtConcurrent::run(std::move(lambda));
             m_faceWatcher.setFuture(m_faceFuture);
             waitingForFaces(true);

@@ -34,6 +34,8 @@
 #include <BRep_Builder.hxx>
 #include <Bnd_Box.hxx>
 #include <QtConcurrentRun>
+#include <cstdlib>
+#include <string>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
@@ -65,6 +67,18 @@
 #include "GeometryObject.h"
 #include "Preferences.h"
 #include "ShapeUtils.h"
+
+//CADFORK_TD_TRACE=1: one log line per started cut, HLR, face or detail thread (G04 repair R26, ruling 149)
+static void traceThreadStartDetail(const char* kind, const char* viewName)
+{
+    static const bool enabled = [] {
+        const char* v = std::getenv("CADFORK_TD_TRACE");
+        return v && std::string(v) == "1";
+    }();
+    if (enabled) {
+        Base::Console().log("CADFORK_TD_TRACE start {} {}\n", kind, viewName ? viewName : "");
+    }
+}
 
 
 using namespace TechDraw;
@@ -248,6 +262,7 @@ void DrawViewDetail::detailExec(TopoDS_Shape& shape, DrawViewPart* dvp, DrawView
     // function and might get destructed before the parallel processing finishes.
     // TODO: What about dvp and dvs? Do they live past makeDetailShape?
     auto lambda = [this, shape, dvp, dvs]{this->makeDetailShape(shape, dvp, dvs);};
+    traceThreadStartDetail("detail", getNameInDocument());
     m_detailFuture = QtConcurrent::run(std::move(lambda));
     m_detailWatcher.setFuture(m_detailFuture);
     waitingForDetail(true);
