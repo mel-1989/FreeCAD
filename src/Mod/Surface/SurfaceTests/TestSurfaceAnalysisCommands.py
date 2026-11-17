@@ -529,6 +529,65 @@ class TestSurfaceAnalysisCommands(unittest.TestCase):
             self.assertFalse(FreeCADGui.Control.activeDialog())
             self.assertEqual(self.ufs.getNumChildren(), self.base)
 
+    # ---- repair R113: undo brings a deleted target back
+    def test_undo_of_deleted_target_redraws_overlay_and_summary(self):
+        for command in (CURVATURE, DRAFT, ZEBRA):
+            for button in ("OK", "Cancel"):
+                self._open(command, [(self.box, "")])
+                status = self._w("G09_AnalysisStatus")
+                before = status.text()
+                self.assertIn("target", before)
+                self.doc.openTransaction("delete box")
+                self.doc.removeObject(self.box.Name)
+                self.doc.commitTransaction()
+                _pump()
+                self.assertEqual(self._overlays(), [])
+                self.assertIn("deleted", status.text())
+                self.doc.undo()
+                _pump()
+                box = self.doc.getObject("Box")
+                self.assertIsNotNone(box)
+                self.assertEqual(len(self._overlays()), 1, (command, button))
+                self.assertEqual(status.text(), before)
+                pts = self._overlay_points(self._panel_overlay())
+                self.assertGreater(len(pts), 0)
+                for pt in pts:
+                    self.assertLess(Part.Vertex(pt).distToShape(box.Shape)[0], 1e-6)
+                self._button(button).click()
+                _pump()
+                self.assertFalse(FreeCADGui.Control.activeDialog())
+                if button == "Cancel":
+                    self.assertEqual(self._overlays(), [])
+                SG.clear(self.view)
+                self.assertEqual(self.ufs.getNumChildren(), self.base)
+                self.box = box
+
+    def test_undo_restores_two_nested_owners_only_when_both_are_back(self):
+        part, box = self._nested_box()
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.doc.Name, part.Name, "NBox.Face6")
+        FreeCADGui.runCommand(CURVATURE)
+        _pump()
+        status = self._w("G09_AnalysisStatus")
+        before = status.text()
+        for name in (part.Name, "NBox"):
+            self.doc.openTransaction("delete " + name)
+            self.doc.removeObject(name)
+            self.doc.commitTransaction()
+        _pump()
+        self.assertEqual(self._overlays(), [])
+        self.doc.undo()
+        _pump()
+        self.assertEqual(self._overlays(), [])
+        self.assertIn("deleted", status.text())
+        self.doc.undo()
+        _pump()
+        self.assertEqual(len(self._overlays()), 1)
+        self.assertEqual(status.text(), before)
+        self._button("Cancel").click()
+        _pump()
+        self.assertEqual(self.ufs.getNumChildren(), self.base)
+
     def test_failed_show_dialog_leaves_nothing_behind(self):
         FreeCADGui.Selection.addSelection(self.doc.Name, self.sphere.Name, "")
         before = self.ufs.getNumChildren()
