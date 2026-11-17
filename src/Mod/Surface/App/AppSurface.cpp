@@ -38,6 +38,7 @@
 #include "FeatureSections.h"
 #include "FeatureSewing.h"
 
+#include "Gordon.h"
 #include "Measure.h"
 
 
@@ -49,10 +50,23 @@ public:
     Module()
         : Py::ExtensionModule<Module>("Surface")
     {
+        add_keyword_method(
+            "makeGordon",
+            &Module::makeGordon,
+            "makeGordon(profiles, guides, tolerance=1e-4, approximate=False) -> dict\n"
+            "Gordon surface through a network of profile and guide curves (bounded Part.Curve,\n"
+            "Part.Edge or Part.Wire). Returns {'surface', 'approximate', 'max_contact_gap',\n"
+            "'max_profile_deviation', 'max_guide_deviation'}. Raises ValueError starting with the\n"
+            "failure status (InvalidInput, IntersectionFailed, DeviationExceeded, ...)."
+        );
         initialize("This module is the Surface module.");  // register with Python
     }
 
 private:
+    Py::Object makeGordon(const Py::Tuple& args, const Py::Dict& kwds)
+    {
+        return Surface::makeGordon(args, kwds);
+    }
 };
 
 PyObject* initModule()
