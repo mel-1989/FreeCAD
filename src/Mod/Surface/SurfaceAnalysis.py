@@ -31,8 +31,9 @@ Units: distances in mm, angles in degrees, curvatures in 1/mm.
 Conventions
 -----------
 Curvature sign
-    Curvature is signed against the face's outward normal, the vector
-    ``face.normalAt`` returns. A convex face seen from outside is positive: the
+    Curvature is signed against the face normal, the vector ``face.normalAt``
+    returns (outward on the faces of a solid; a loose face whose normal points
+    inward reads negative on a convex shape). A convex face seen from outside is positive: the
     outer face of a solid sphere of radius R has ``mean == kmax == kmin ==
     +1/R`` and ``gauss == +1/R**2``. OCCT itself signs curvature against the
     bare surface normal and ignores face orientation, so this module flips the
@@ -58,7 +59,8 @@ Edge continuity
     Evaluated at ``samples`` points evenly spaced and strictly inside the edge
     (``first + (i + 1) (last - first) / (samples + 1)``). Four maxima are
     reported: ``gap`` (distance between the two faces' points), ``angle``
-    (between the two outward normals, 0 on a smooth shell), ``curvature_jump``
+    (between the two face normals, 0 on a smooth join only when the two faces
+    are consistently oriented; opposed orientations read 180), ``curvature_jump``
     (relative difference of normal curvature, taken along the edge tangent, the
     across-edge direction and their bisector, each projected into the face's
     tangent plane; floor 1e-3 per mm) and ``g3_jump`` (relative difference of
@@ -477,9 +479,17 @@ def edge_continuity(shape, edge, samples=11, faces=None, tol=None):
     faces). ``tol`` overrides any of ``gap`` (1e-4 mm), ``angle`` (0.05 deg),
     ``curvature`` (0.01) and ``g3`` (0.05).
 
-    Raises ``ValueError`` when the edge is not in the shape, has one adjacent
-    face, has more than two, or is a seam (one face on both sides).
+    Raises ``ValueError`` when the edge is not an edge, is not in the shape,
+    has one adjacent face, has more than two, or is a seam (one face on both
+    sides).
+
+    Limit: the curvature floors (1e-3 per mm and per mm squared) and the gap
+    tolerance are absolute, so on very large parts the labels depend on size:
+    a plane-to-fillet join of radius 1e5 mm or more reads G2 or G3, not G1.
+    Pass ``tol`` scaled to the part, or read the measured values.
     """
+    if not isinstance(edge, Part.Edge):
+        raise ValueError("edge must be a Part.Edge")
     limits = dict(_DEFAULT_TOL)
     if tol:
         limits.update(tol)
