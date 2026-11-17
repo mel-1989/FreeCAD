@@ -223,6 +223,8 @@ App::DocumentObjectExecReturn* DrawViewDetail::execute()
 //if there are no solids/shells in shape, use the edges in shape
 void DrawViewDetail::detailExec(TopoDS_Shape& shape, DrawViewPart* dvp, DrawViewSection* dvs)
 {
+    //the face task of the previous cycle reads m_scaledShape, which the detail task started here rewrites
+    waitForFaceThread();
     if (waitingForHlr() || waitingForDetail()) {
         return;
     }

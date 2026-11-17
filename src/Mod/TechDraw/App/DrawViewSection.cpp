@@ -458,6 +458,8 @@ bool DrawViewSection::isBaseValid() const
 
 void DrawViewSection::sectionExec(TopoDS_Shape& baseShape)
 {
+    //the face task of the previous cycle reads the section face members this cycle rewrites
+    waitForFaceThread();
     if (waitingForHlr() || waitingForCut()) {
         return;
     }

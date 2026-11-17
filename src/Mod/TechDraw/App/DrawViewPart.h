@@ -236,6 +236,13 @@ public:
     virtual void postFaceExtractionTasks(void);
     bool waitingForFaces() const { return m_waitingForFaces; }
     void waitingForFaces(bool s) { m_waitingForFaces = s; }
+    //! block until a running face-finding task has finished (it reads members the next cycle writes)
+    void waitForFaceThread()
+    {
+        if (m_faceFuture.isRunning()) {
+            m_faceFuture.waitForFinished();
+        }
+    }
     bool waitingForHlr() const { return m_waitingForHlr; }
     void waitingForHlr(bool s) { m_waitingForHlr = s; }
     virtual bool waitingForResult() const;
