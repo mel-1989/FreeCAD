@@ -62,6 +62,7 @@ INTENT_SCHEMES = ("intent", "intent_offset", "intent_origin")
 
 _TOL = 1e-7
 NEAR_AXIS = 0.03
+MAX_PAIRWISE = 60  # larger sketches skip the proposals that compare every pair of elements
 
 # Priority of each proposal kind per scheme (lower first).  A kind that is
 # missing from a table goes last, in generation order.
@@ -266,6 +267,8 @@ def _nested_ids(model):
     piece's bounding box close to its edges (a wall, a frame, an offset
     loop): such a piece is sized and placed from the piece around it."""
     els = [m for m in _drawn(model) if m.kind == 'line' and m.d is not None]
+    if len(els) > MAX_PAIRWISE:
+        return set()
     parent = {m.i: m.i for m in els}
 
     def find(k):
@@ -309,6 +312,8 @@ def _offset_proposals(model, flip, curves, nested_only=False):
     alignment, which a relation already gives)."""
     els = [m for m in _drawn(model) if m.pts]
     if len(els) < 2:
+        return []
+    if len(els) > MAX_PAIRWISE and not nested_only:
         return []
     movers = set(m.i for m in els if curves or m.kind in ("line", "point"))
     if nested_only:
@@ -376,7 +381,7 @@ def _gap_proposals(model):
     scale = _scale(model)
     tol = 1e-6 * scale
     els = [m for m in _drawn(model) if m.kind in ("line", "arc")]
-    if len(els) < 2 or len(els) > 60:
+    if len(els) < 2 or len(els) > MAX_PAIRWISE:
         return []
     parent = {m.i: m.i for m in els}
 
