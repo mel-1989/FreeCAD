@@ -628,7 +628,7 @@ def _dimension_proposals(model, accepted, scheme):
     if scheme in _Intent.INTENT_SCHEMES:
         # design-intent order first; the baseline order after it as the verified fallback
         out, seen = [], set()
-        for spec in _Intent.proposals(model, scheme, accepted) + _dimension_proposals(model, accepted, "baseline"):
+        for spec in _Intent.proposals(model, scheme, accepted) + [_Intent._round_spec(sp) for sp in _dimension_proposals(model, accepted, "baseline")]:
             key = _Intent._norm_key(spec)
             if key not in seen:
                 seen.add(key)

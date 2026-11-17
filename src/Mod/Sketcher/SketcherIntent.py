@@ -75,6 +75,7 @@ PRIORITY = {
         "extent_origin": 3,
         "angle_nb": 4,
         "offset": 5,
+        "pitch": 5.5,
         "length": 6,
         "angle_axis": 7,
         "arcspan": 8,
@@ -207,7 +208,7 @@ def _arc_reaches(m, axis, lo, hi, tol):
     return False
 
 
-def _extent_proposals(model, flip, els=None, line_form=False):
+def _extent_proposals(model, flip, els=None, line_form=False, axis_edges_only=False):
     """Overall width and height of the outline.  `flip` swaps which of the
     equally good end points and edges is used."""
     out = []
@@ -220,6 +221,12 @@ def _extent_proposals(model, flip, els=None, line_form=False):
         other = 1 - axis
         # a single edge that spans the whole extent carries the size
         span = [m for m in (_drawn(model) if els is None else els) if _is_line(m) and _is_hv(m) and abs(m.pts[1][other] - m.pts[2][other]) <= _TOL and min(m.pts[1][axis], m.pts[2][axis]) <= lo + 1e-6 * scale and max(m.pts[1][axis], m.pts[2][axis]) >= hi - 1e-6 * scale]
+        if axis_edges_only:
+            # only where the edge that spans the extent lies on an axis: such an edge is a datum,
+            # the overall size is taken between the extreme features instead
+            if not span or any(abs(m.pts[1][other]) > 1e-6 * scale for m in span):
+                continue
+            span = []
         if span:
             span.sort(key=lambda m: (m.pts[1][other], m.i))  # axis 0: bottom first; axis 1: left first
             if axis == 0:
@@ -233,8 +240,9 @@ def _extent_proposals(model, flip, els=None, line_form=False):
             low = [(g, p, xy) for g, p, xy in lop if g == m.i]
             low = low[0] if low else lop[0]
         else:
-            lop.sort(key=lambda t: (_kind_order(model, t[0]), t[0], t[1]))
-            hip.sort(key=lambda t: (_kind_order(model, t[0]), t[0], t[1]))
+            # off the axes first (a point on an axis is placed by the datum anyway), then start points, then drawing order
+            lop.sort(key=lambda t: (_kind_order(model, t[0]), -round(abs(t[2][other]), 6), t[1], t[0]))
+            hip.sort(key=lambda t: (_kind_order(model, t[0]), -round(abs(t[2][other]), 6), t[1], t[0]))
             a = lop[-1] if flip else lop[0]
             b = hip[-1] if flip else hip[0]
             if a[0] == b[0] and a[1] == b[1]:
@@ -341,7 +349,7 @@ def _offset_proposals(model, flip, curves, nested_only=False):
         for g, p, xy in pts_of(m):
             for h, q, zy in (t for e in placed for t in pts_of(e)):
                 d = math.hypot(xy[0] - zy[0], xy[1] - zy[1])
-                key = (round(d, 9), (-h if flip else h), q, g, p)
+                key = (round(d, 9), 0 if q == p else 1, (-h if flip else h), q, g, p)
                 if best is None or key < best[0]:
                     best = (key, (g, p, xy), (h, q, zy))
         return best
@@ -422,6 +430,22 @@ def _gap_proposals(model):
     return out
 
 
+def _pitch_proposals(model):
+    """Hole centres are spaced from one another: each circle is placed from the
+    nearest circle drawn before it (the first is placed from the origin by the
+    ordinary position proposals)."""
+    circles = [m for m in _drawn(model) if m.kind == "circle"]
+    scale = _scale(model)
+    out = []
+    for k, m in enumerate(circles[1:], 1):
+        prev = min(circles[:k], key=lambda q: (round(math.hypot(m.c[0] - q.c[0], m.c[1] - q.c[1]), 7), q.i))
+        for ax, kind in ((0, "DistanceX"), (1, "DistanceY")):
+            v = m.c[ax] - prev.c[ax]
+            if abs(v) > 1e-6 * scale:
+                out.append(("pitch", _signed(kind, prev.i, 3, m.i, 3, v)))
+    return out
+
+
 def _angle_value(a, pa, b, pb):
     """The value FreeCAD's four-argument angle constraint takes for lines `a`
     and `b` at the end points `pa`, `pb`: the counter-clockwise angle from the
@@ -497,10 +521,54 @@ def _angle_axis_proposals(model, accepted):
     return out
 
 
+_SNAP = 9  # decimals; the proposals must not depend on float noise in the solved coordinates
+
+
+def _snap(model):
+    """A copy of `model` with coordinates, radii and lengths rounded to 1e-9, so that a
+    copy of the same sketch (another document, another solve) gives the same proposals."""
+    out = []
+    for m in model:
+        c = _Clone(m)
+        c.pts = {p: (round(xy[0], _SNAP) + 0.0, round(xy[1], _SNAP) + 0.0) for p, xy in m.pts.items()}
+        if m.c is not None:
+            c.c = (round(m.c[0], _SNAP) + 0.0, round(m.c[1], _SNAP) + 0.0)
+        c.r = round(m.r, _SNAP)
+        if m.kind == "line" and m.d is not None:
+            (x1, y1), (x2, y2) = c.pts[1], c.pts[2]
+            c.length = math.hypot(x2 - x1, y2 - y1)
+            c.d = ((x2 - x1) / c.length, (y2 - y1) / c.length) if c.length > 0 else None
+            c.a = c.pts[1]
+        out.append(c)
+    return out
+
+
+class _Clone:
+    def __init__(self, m):
+        for k in ("i", "kind", "construction", "pts", "c", "r", "a", "d", "length", "internal", "tid"):
+            setattr(self, k, getattr(m, k, None))
+
+
+def _roundness(v):
+    """How many decimals a value needs, up to 3: designers dimension round
+    values, so of two equally good lengths the rounder one is the likelier
+    choice.  Values that need more than 3 decimals tie."""
+    for k in range(4):
+        if abs(v - round(v, k)) <= 1e-6 * max(1.0, abs(v)):
+            return k
+    return 4
+
+
+def _round_spec(spec):
+    v = round(spec[-1], 10) + 0.0
+    return spec[:-1] + (v,)
+
+
 def proposals(model, scheme, accepted=()):
     """The ranked dimension specs for an intent scheme.  `accepted` are the
     relation specs already on the copy; of a group of equal elements only one
     is sized."""
+    model = _snap(model)
     flip = scheme == "intent_offset"
     parent = list(range(len(model)))
 
@@ -537,7 +605,8 @@ def proposals(model, scheme, accepted=()):
             pool.append(("carrier", _length_spec(m, scheme == "intent_origin")))
     if scheme != "intent":
         pool += _extent_proposals(model, flip, None, scheme == "intent_origin")
-    else:
+    if scheme == "intent":
+        pool += [(k, sp) for k, sp in _extent_proposals(model, flip, None, False, True) if k == "extent"]
         nested = _nested_ids(model)
         if nested:
             # a frame or wall profile: the surrounding outline gets its overall width and height
@@ -548,9 +617,11 @@ def proposals(model, scheme, accepted=()):
     else:
         pool += _angle_neighbour_proposals(model, flip)
     pool += _gap_proposals(model)
+    if scheme == "intent":
+        pool += _pitch_proposals(model)
     pool += _offset_proposals(model, flip, scheme != "intent", scheme == "intent")
     # remaining line lengths, longest first
-    for m in sorted((m for m in drawn if _is_line(m)), key=lambda m: m.i):
+    for m in sorted((m for m in drawn if _is_line(m)), key=lambda m: (_roundness(m.length), m.i)):
         if first(m):
             pool.append(("length", _length_spec(m, scheme == "intent_origin")))
     # origin placements of every feature anchor
@@ -561,11 +632,13 @@ def proposals(model, scheme, accepted=()):
     seen = set()
     out = []
     for _kind, spec in rank(pool, scheme):
+        if scheme == "intent" and _kind == "extent_origin":
+            continue
         key = _norm_key(spec)
         if key in seen:
             continue
         seen.add(key)
-        out.append(spec)
+        out.append(_round_spec(spec))
     return out
 
 

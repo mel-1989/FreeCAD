@@ -336,11 +336,16 @@ class TestSketchIntent(unittest.TestCase):
             self.assertEqual(len(sizes), 3, (scheme, sizes))
 
     def test_proposals_hold_no_dimension_twice(self):
-        model = AD._model(self.frame())
+        sk = self.sketch()
+        _loop(sk, 0, 0, 100.0 / 3, 70.0 / 9)
+        _loop(sk, 1.0 / 7, 1.0 / 7, 100.0 / 3 - 1.0 / 7, 70.0 / 9 - 1.0 / 7)
+        sk.solve()
+        model = AD._model(sk)
         for scheme in Intent.INTENT_SCHEMES:
             specs = Intent.proposals(model, scheme)
             keys = [Intent._norm_key(s) for s in specs]
             self.assertEqual(len(keys), len(set(keys)), scheme)
+            self.assertTrue(all(s[-1] == round(s[-1], 10) for s in specs), scheme)
 
     def test_construction_geometry_is_not_part_of_the_outline(self):
         sk = self.sketch()
@@ -355,6 +360,62 @@ class TestSketchIntent(unittest.TestCase):
                     self.assertEqual(_ids(d), {c}, "a drawn edge is offset from a construction line: %s" % (d,))
         top = _dims(res["candidates"][0])
         self.assertFalse([d for d in top if len(d) == 3], top)
+
+    def test_same_sketch_in_two_documents_gives_identical_candidates(self):
+        # float noise in a copied sketch's solved coordinates (1e-16) must not change a value or a tie
+        sk = self.sketch()
+        a = _line(sk, 0, 0, 3.4641016151377544, 2.0)
+        b = _line(sk, 3.4641016151377544, 2.0, 3.4641016151377544, -0.7)
+        c = _line(sk, 3.4641016151377544, -0.7, 0, 0)
+        sk.addConstraint(Sketcher.Constraint("Coincident", a, 2, b, 1))
+        sk.addConstraint(Sketcher.Constraint("Coincident", b, 2, c, 1))
+        sk.addConstraint(Sketcher.Constraint("Coincident", c, 2, a, 1))
+        sk.addConstraint(Sketcher.Constraint("Vertical", b))
+        sk.solve()
+
+        def run(s):
+            res = AD.propose(s, keep=list(range(len(s.Constraints))))
+            return [(x["scheme"], [(k["type"], tuple(k["args"])) for k in x["constraints"]]) for x in res["candidates"]]
+
+        first = run(sk)
+        other = FreeCAD.newDocument("IntentOther")
+        try:
+            copy = other.addObject("Sketcher::SketchObject", "C")
+            copy.restorePropertyContent("Geometry", sk.dumpPropertyContent("Geometry"))
+            copy.Constraints = list(sk.Constraints)
+            copy.solve()
+            # the copy's coordinates differ in the last digits
+            copy.Geometry = [Part.LineSegment(V(g.StartPoint.x + 4e-16, g.StartPoint.y - 3e-16, 0), V(g.EndPoint.x - 2e-16, g.EndPoint.y + 4e-16, 0)) for g in copy.Geometry]
+            copy.solve()
+            self.assertEqual(first, run(copy))
+        finally:
+            FreeCAD.closeDocument(other.Name)
+
+    def test_holes_are_spaced_from_each_other(self):
+        sk = self.sketch()
+        for x in (0, 30, 75):
+            sk.addGeometry(Part.Circle(V(x, 10, 0), V(0, 0, 1), 3.0 + x / 100.0), False)
+        sk.solve()
+        top = _dims(self.propose(sk)["candidates"][0])
+        pairs = [d for d in top if len(d) == 6 and d[0] == "DistanceX" and d[2] == 3 and d[4] == 3]
+        self.assertEqual(sorted((d[1], d[3]) for d in pairs), [(0, 1), (1, 2)], top)
+
+    def test_overall_height_between_extreme_points_when_the_spanning_edge_is_on_an_axis(self):
+        sk = self.sketch()
+        pts = [(0, 40), (0, 0), (5, 0), (5, 25), (3, 25), (3, 40)]
+        for k in range(6):
+            (x1, y1), (x2, y2) = pts[k], pts[(k + 1) % 6]
+            _line(sk, x1, y1, x2, y2)
+        for k in range(6):
+            sk.addConstraint(Sketcher.Constraint("Coincident", k, 2, (k + 1) % 6, 1))
+        for k in range(6):
+            (x1, y1), (x2, y2) = pts[k], pts[(k + 1) % 6]
+            sk.addConstraint(Sketcher.Constraint("Horizontal" if y1 == y2 else "Vertical", k))
+        sk.solve()
+        top = _dims(self.propose(sk)["candidates"][0])
+        tall = [d for d in top if d[0] == "DistanceY" and len(d) == 6 and abs(d[5] - 40) < 1e-6]
+        self.assertEqual(len(tall), 1, top)
+        self.assertNotEqual(tall[0][1], tall[0][3], top)
 
     def test_norm_key_merges_orientation_spellings(self):
         a = ("DistanceX", 1, 2, 3, 1, 5.0)

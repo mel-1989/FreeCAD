@@ -60,8 +60,11 @@ mutant("equal_group_sized_twice", "every member of an equal group is sized", "  
 mutant("angle_sign_flipped", "the neighbour angle is measured the other way round", "    return v\n\n\ndef _angle_neighbour", "    return -v\n\n\ndef _angle_neighbour")
 mutant("angle_never_offered", "no angle against a neighbouring line", "    for m in lines:\n        if _is_hv(m):\n            continue\n        best = None", "    for m in []:\n        best = None")
 mutant("extent_wrong_axis", "the overall height is measured along x", '    for axis, kind in ((0, "DistanceX"), (1, "DistanceY")):\n        ext = _extent_points', '    for axis, kind in ((0, "DistanceX"), (1, "DistanceX")):\n        ext = _extent_points')
-mutant("duplicates_kept", "the same dimension in two spellings is proposed twice", "        if key in seen:\n            continue\n        seen.add(key)\n        out.append(spec)", "        out.append(spec)")
+mutant("duplicates_kept", "the same dimension in two spellings is proposed twice", "        if key in seen:\n            continue\n        seen.add(key)\n        out.append(_round_spec(spec))", "        out.append(_round_spec(spec))")
 mutant("construction_dimensioned_as_drawn", "construction geometry counts as drawn geometry", "    return [m for m in model if not m.construction and m.pts and not m.internal]", "    return [m for m in model if m.pts and not m.internal]")
+mutant("no_float_snapping", "the proposals use the raw solved coordinates and values", "    model = _snap(model)\n", "    pass\n")
+mutant("values_not_rounded", "dimension values keep their float noise", "    v = round(spec[-1], 10) + 0.0", "    v = spec[-1]")
+mutant("holes_placed_from_origin_only", "hole centres get no spacing proposals", "        pool += _pitch_proposals(model)", "        pass")
 
 RUNNER = """
 import sys, unittest, json
