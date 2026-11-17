@@ -102,6 +102,7 @@ class GordonPanel:
         self.document = document
         self.profiles = []
         self.guides = []
+        self._deleted = 0  # inputs found deleted since the last OK
         self.feature = None
         form = QtWidgets.QWidget()
         form.setObjectName("G09_GordonPanel")
@@ -145,10 +146,30 @@ class GordonPanel:
         obj, sub = entry
         return "%s.%s" % (obj.Label, sub) if sub else obj.Label
 
+    @staticmethod
+    def _alive(entry):
+        try:
+            return entry[0].Document is not None and entry[0].Document.getObject(entry[0].Name) is not None
+        except Exception:  # ReferenceError: the object was deleted
+            return False
+
+    def _prune(self):
+        """Drop the entries whose object was deleted; returns how many went."""
+        gone = 0
+        for entries, widget in ((self.profiles, self.profile_list), (self.guides, self.guide_list)):
+            for row in reversed(range(len(entries))):
+                if not self._alive(entries[row]):
+                    del entries[row]
+                    widget.takeItem(row)
+                    gone += 1
+        self._deleted += gone
+        return gone
+
     def _same(self, a, b):
         return a[0] is b[0] and a[1] == b[1] or (a[0].Name == b[0].Name and a[1] == b[1])
 
     def _add(self, entries, listwidget, selected=None):
+        self._prune()
         for entry in selected if selected is not None else selected_edge_entries():
             if any(self._same(entry, e) for e in entries):
                 continue
@@ -194,6 +215,11 @@ class GordonPanel:
             doc = Gui.ActiveDocument.Document if Gui.ActiveDocument is not None else App.ActiveDocument
         if doc is None:
             self.say(_tr("InvalidInput: no document is open"))
+            return False
+        self._prune()
+        gone, self._deleted = self._deleted, 0
+        if gone:
+            self.say(_tr("InputDeleted: %d listed input(s) were deleted and are removed from the lists") % gone)
             return False
         try:
             # the network is tried before anything is created, so a failure leaves no transaction

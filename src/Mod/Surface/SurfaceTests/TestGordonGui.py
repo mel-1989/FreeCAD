@@ -37,6 +37,13 @@ class TestGordonGui(unittest.TestCase):
         self.g = self._objects("G", guides)
         self.doc.recompute()
 
+    @classmethod
+    def tearDownClass(cls):
+        # no task dialog may outlive this class: the analysis command tests that follow need the task view free
+        if FreeCADGui.Control.activeDialog():
+            FreeCADGui.Control.closeDialog()
+        _pump()
+
     def tearDown(self):
         self._close()
         FreeCADGui.Selection.clearSelection()
@@ -59,6 +66,10 @@ class TestGordonGui(unittest.TestCase):
         if FreeCADGui.Control.activeDialog():
             self._button("Cancel").click()
             _pump()
+        for _ in range(50):  # the dialog goes at once, but its widgets may take another event-loop turn
+            if not FreeCADGui.Control.activeDialog():
+                break
+            _pump(1)
 
     def _button(self, text):
         for b in self.mw.findChildren(QtWidgets.QPushButton):
@@ -226,3 +237,29 @@ class TestGordonGui(unittest.TestCase):
         self.assertTrue(feat.isValid())
         self.assertGreater(feat.Shape.Area, 100)
         self.assertEqual(feat.ViewObject.Proxy.getIcon(), ":/icons/Surface_Gordon.svg")
+
+    def test_deleted_input_reports_inputdeleted(self):
+        self._open()
+        self._fill()
+        self.doc.removeObject(self.g[2].Name)
+        undo = self.doc.UndoCount
+        count = len(self.doc.Objects)
+        self._button("OK").click()
+        _pump()
+        self.assertTrue(FreeCADGui.Control.activeDialog())
+        self.assertTrue(self._status().startswith("InputDeleted"), self._status())
+        self.assertEqual(self._w("G09_GordonGuides").count(), 3)
+        self.assertEqual(self._w("G09_GordonProfiles").count(), 4)
+        self.assertEqual(len(self.doc.Objects), count)
+        self.assertEqual(self.doc.UndoCount, undo)
+        self.assertEqual(self._features(), [])
+
+    def test_add_selected_survives_a_dead_entry(self):
+        self._open()
+        self._add("Profiles", [(self.p[0], "Edge1"), (self.p[1], "Edge1")])
+        self.doc.removeObject(self.p[0].Name)
+        self._add("Profiles", [(self.p[2], "Edge1")])  # must not raise on the dead first entry
+        self.assertEqual(self._w("G09_GordonProfiles").count(), 2)
+        self._button("OK").click()
+        _pump()
+        self.assertTrue(self._status().startswith("InputDeleted"), self._status())
