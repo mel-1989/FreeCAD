@@ -9,6 +9,7 @@ endif(BUILD_GUI)
 
 set(Surface_Scripts
     Init.py
+    SurfaceAnalysis.py
     TestSurfaceApp.py
 )
 
@@ -16,6 +17,7 @@ set(Surface_TestScripts
     SurfaceTests/__init__.py
     SurfaceTests/TestBlendCurve.py
     SurfaceTests/TestReferenceErrors.py
+    SurfaceTests/TestSurfaceAnalysis.py
 )
 
 if(BUILD_GUI)
