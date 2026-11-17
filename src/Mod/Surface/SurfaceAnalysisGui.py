@@ -55,7 +55,7 @@ import Part
 
 import SurfaceAnalysis as SA
 
-__all__ = ["show_curvature", "show_draft", "show_zebra", "remove", "clear", "Overlay"]
+__all__ = ["show_curvature", "show_draft", "show_zebra", "remove", "clear", "Overlay", "placed_shape"]
 
 _PREFIX = "G09_OVERLAY_"
 _LEGEND_PREFIX = "G09_LEGEND_"
@@ -151,11 +151,47 @@ def _percentile(values, q):
     return vals[lo] + (pos - lo) * (vals[hi] - vals[lo])
 
 
+def parent_placement(obj):
+    """The product of the placements of the containers (``App::Part``, ``PartDesign::Body`` and other
+    geometry feature groups) that hold ``obj``, outermost first, or ``None`` when it has no container.
+    Only ancestors count: a feature's own ``Shape`` already carries its own placement, and a Body's
+    placement is counted once, as the Body's own ancestors are walked from the Body upwards."""
+    chain = None
+    cur = obj
+    for _ in range(64):  # containers cannot nest forever; the bound only guards a corrupt document
+        try:
+            parent = cur.getParentGeoFeatureGroup()
+        except Exception:
+            return chain
+        if parent is None:
+            return chain
+        pl = parent.Placement
+        chain = pl if chain is None else pl.multiply(chain)
+        cur = parent
+    return chain
+
+
+def placed_shape(obj):
+    """The shape of a document object where it is shown: its own ``Shape`` (own placement and link
+    transform included) with the placements of all its containers applied. An object with no container
+    gives its ``Shape`` untouched. Source: FreeCAD's ``GeoFeature.getParentGeoFeatureGroup`` and
+    ``Part.getShape`` bindings."""
+    shape = getattr(obj, "Shape", None)
+    if not isinstance(shape, Part.Shape) or shape.isNull():
+        return shape
+    chain = parent_placement(obj)
+    if chain is None:
+        return shape
+    placed = shape.copy()
+    placed.Placement = chain.multiply(shape.Placement)
+    return placed
+
+
 def _shape_of(target):
     if isinstance(target, Part.Shape):
         shape = target
     else:
-        shape = getattr(target, "Shape", None)
+        shape = placed_shape(target)
         if not isinstance(shape, Part.Shape):
             raise ValueError("target must be a document object with a Shape, a Part.Shape or a Part.Face")
     if shape.isNull():

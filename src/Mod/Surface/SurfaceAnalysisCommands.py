@@ -26,7 +26,7 @@ from PySide import QtCore, QtWidgets
 
 import SurfaceAnalysisGui as SG
 
-__all__ = ["AnalysisPanel", "selected_targets"]
+__all__ = ["AnalysisPanel", "selected_targets", "selected_subshapes"]
 
 CURVATURE, DRAFT, ZEBRA = "curvature", "draft", "zebra"
 _TYPES = ((CURVATURE, "Curvature"), (DRAFT, "Draft"), (ZEBRA, "Zebra stripes"))
@@ -63,35 +63,102 @@ def _object_shape(obj):
     return None
 
 
-def selected_targets():
-    """The analysis targets of the selection: a list of document objects (the whole object) and
-    ``Part.Face`` (selected faces), in selection order. Objects without a usable shape are skipped."""
+def _sub_type(subname):
+    """``"object"`` for a path that ends in ``.``, else the element type from the last name: ``"Face"``,
+    ``"Edge"``, ``"Vertex"`` or ``""``."""
+    last = subname.rsplit(".", 1)[-1]
+    if not last:
+        return "object"
+    for kind in ("Face", "Edge", "Vertex"):
+        if last.startswith(kind):
+            return kind
+    return ""
+
+
+def _owner_names(top, subname):
+    """The (document, object) names along a selection path: the top object, then each container down
+    to the leaf, so the panel can notice when any of them is deleted."""
+    names = [(top.Document.Name, top.Name)]
+    try:
+        for owner in top.getSubObjectList(subname):
+            names.append((owner.Document.Name, owner.Name))
+    except Exception:
+        pass
+    return names
+
+
+def selected_subshapes(types=("Face", "object")):
+    """The selection resolved to the shapes the 3D view shows, as a list of dicts with keys ``type``
+    (``"Face"``, ``"Edge"``, ``"Vertex"`` or ``"object"``), ``object`` (the top selected object),
+    ``subname`` (the dotted path, ``""`` for a whole-object entry), ``shape`` (a ``Part.Shape`` with every
+    placement on the path applied, or the object itself for a whole-object entry) and ``owners`` (the
+    ``(document, object)`` names along the path).
+
+    Each selection entry is read unresolved (the top object and its dotted sub-names) and each sub-name
+    goes through ``Part.getShape(top, subname, needSubElement=True)``, which applies the placement of
+    every container on the path. ``types`` filters the result. An entry without sub-names is the top
+    object (``type "object"``, ``shape`` ``None``: the caller gets the object itself)."""
     out = []
     try:
         selection = Gui.Selection.getSelectionEx("", 0)
     except Exception:
         return out
     for sel in selection:
-        obj = sel.Object
-        shape = _object_shape(obj)
-        if shape is None:
+        top = sel.Object
+        names = [n for n in sel.SubElementNames if n]
+        if not names:
+            if "object" in types and _object_shape(top) is not None:
+                out.append({"type": "object", "object": top, "subname": "", "shape": None,
+                            "owners": [(top.Document.Name, top.Name)]})
             continue
-        faces = []
-        for name in sel.SubElementNames:
-            if name.startswith("Face"):
-                try:
-                    faces.append(shape.getElement(name))
-                except Exception:
-                    pass
-        out.extend(faces if faces else [obj])
+        for name in names:
+            kind = _sub_type(name)
+            if kind not in types:
+                continue
+            try:
+                if kind == "object":
+                    shape = Part.getShape(top, name, needSubElement=False, transform=True)
+                else:
+                    shape = Part.getShape(top, name, needSubElement=True)
+            except Exception:
+                continue
+            if shape is None or shape.isNull():
+                continue
+            if kind == "object" and not shape.Faces:
+                continue
+            if kind != "object" and shape.ShapeType != kind:
+                continue
+            out.append({"type": kind, "object": top, "subname": name, "shape": shape,
+                        "owners": _owner_names(top, name)})
+    return out
+
+
+def selected_targets():
+    """The analysis targets of the selection: a document object (an entry without sub-names), a
+    ``Part.Face`` (a picked face) or a ``Part.Shape`` (a named sub-object), in selection order, every
+    shape with the placements of its containers applied. Edges and vertices are ignored."""
+    return [t for t, _owners in _selected_entries()]
+
+
+def _selected_entries():
+    out = []
+    for item in selected_subshapes():
+        target = item["object"] if item["shape"] is None else item["shape"]
+        out.append((target, item["owners"]))
     return out
 
 
 def _has_analysable_selection():
     try:
-        for obj in Gui.Selection.getSelection("", 0):
-            if _object_shape(obj) is not None:
-                return True
+        for sel in Gui.Selection.getSelectionEx("", 0):
+            names = [n for n in sel.SubElementNames if n]
+            if not names:
+                if _object_shape(sel.Object) is not None:
+                    return True
+                continue
+            for name in names:
+                if _sub_type(name) in ("Face", "object"):
+                    return True
     except Exception:
         pass
     return False
@@ -101,7 +168,7 @@ def _one_target(targets):
     """One argument for the 2a API: the target itself, or a compound of several."""
     if len(targets) == 1:
         return targets[0]
-    shapes = [t if isinstance(t, Part.Shape) else t.Shape for t in targets]
+    shapes = [t if isinstance(t, Part.Shape) else SG.placed_shape(t) for t in targets]
     return Part.makeCompound(shapes)
 
 
@@ -153,9 +220,17 @@ class AnalysisPanel:
     """
 
     def __init__(self, analysis=CURVATURE, targets=None, view=None):
-        self.targets = list(targets) if targets is not None else selected_targets()
+        if targets is not None:
+            self.targets = list(targets)
+            self._owners = [n for t in self.targets if not isinstance(t, Part.Shape) for n in [(t.Document.Name, t.Name)]]
+        else:
+            entries = _selected_entries()
+            self.targets = [t for t, _o in entries]
+            self._owners = [n for _t, owners in entries for n in owners]
         self.view = view
         self.handle = None
+        self._gone = False
+        self._observer = None
         self.error = ""
         self._busy = True
 
@@ -248,6 +323,7 @@ class AnalysisPanel:
             QtCore.QObject.connect(widget, QtCore.SIGNAL("valueChanged(double)"), self._relay, QtCore.SLOT("changed()"))
 
         self._busy = False
+        self._watch_owners()
         self.refresh()
 
     # ---- widget helpers
@@ -326,6 +402,7 @@ class AnalysisPanel:
             self.refresh()
 
     def _release_wrappers(self):
+        self._unwatch_owners()
         import shiboken6
 
         try:
@@ -338,10 +415,61 @@ class AnalysisPanel:
             SG.remove(self.handle)
             self.handle = None
 
+    # ---- deleted targets
+    def _watch_owners(self):
+        if not self._owners:
+            return
+        panel = self
+
+        class _Observer:
+            def slotDeletedObject(self, obj):
+                try:
+                    key = (obj.Document.Name, obj.Name)
+                except Exception:
+                    return
+                if key in panel._owners:
+                    panel._target_gone()
+
+            def slotDeletedDocument(self, doc):
+                try:
+                    name = doc.Name
+                except Exception:
+                    return
+                if any(d == name for d, _o in panel._owners):
+                    panel._target_gone()
+
+        self._observer = _Observer()
+        App.addDocumentObserver(self._observer)
+
+    def _unwatch_owners(self):
+        if self._observer is not None:
+            try:
+                App.removeDocumentObserver(self._observer)
+            except Exception:
+                pass
+            self._observer = None
+
+    def _owners_alive(self):
+        for doc_name, obj_name in self._owners:
+            doc = App.getDocument(doc_name) if doc_name in App.listDocuments() else None
+            if doc is None or doc.getObject(obj_name) is None:
+                return False
+        return True
+
+    def _target_gone(self):
+        """A target object was deleted: drop the overlay, forget the targets and say so."""
+        self._gone = True
+        self._drop()
+        self.error = ""
+        self._say(_tr("The target was deleted; there is nothing left to analyse."))
+
     def refresh(self):
         """Replace the panel's overlay with one built from the current widgets."""
         self._drop()
         self.error = ""
+        if self._gone or not self._owners_alive():
+            self._target_gone()
+            return
         if not self.targets:
             self._say(_tr("Select a shape or faces first."))
             return
@@ -374,10 +502,12 @@ class AnalysisPanel:
         return True
 
     def accept(self):
+        self._unwatch_owners()
         self.handle = None  # the overlay and its legend stay in the view
         return True
 
     def reject(self):
+        self._unwatch_owners()
         self._drop()
         return True
 
@@ -411,7 +541,11 @@ class _AnalysisCommand:
 
     def Activated(self):
         panel = AnalysisPanel(self.analysis)
-        Gui.Control.showDialog(panel)
+        try:
+            Gui.Control.showDialog(panel)
+        except Exception:
+            panel.reject()  # no overlay, legend or observer outlives a dialog that never opened
+            raise
 
 
 class _CurvatureCommand(_AnalysisCommand):

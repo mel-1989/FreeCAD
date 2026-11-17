@@ -386,3 +386,170 @@ class TestSurfaceAnalysisCommands(unittest.TestCase):
             self.assertEqual(cols[2 * k], _ramp(k / 4.0))
         self.assertGreater(strip.coordIndex.getNum(), 0)
         SG.remove(h)
+
+    # ---- repair R112: nested selection, placement, deleted target, failed showDialog
+    def _placed(self, x, deg):
+        return FreeCAD.Placement(V(x, 0, 0), FreeCAD.Rotation(V(0, 0, 1), deg))
+
+    def _nested_box(self):
+        part = self.doc.addObject("App::Part", "Part")
+        part.Placement = self._placed(100, 90)
+        box = self.doc.addObject("Part::Box", "NBox")
+        part.addObject(box)
+        box.Placement = self._placed(5, 0)
+        self.doc.recompute()
+        return part, box
+
+    def _overlay_points(self, node):
+        coords = _find_all(node, "SoCoordinate3")[0]
+        return [V(*coords.point[i].getValue()) for i in range(coords.point.getNum())]
+
+    def test_nested_face_selection_gives_that_face_only(self):
+        part, box = self._nested_box()
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.doc.Name, part.Name, "NBox.Face6")
+        _pump()
+        import SurfaceAnalysisCommands as SC
+
+        targets = SC.selected_targets()
+        truth = Part.getShape(part, "NBox.Face6", needSubElement=True)
+        self.assertEqual(len(targets), 1)
+        self.assertIsInstance(targets[0], Part.Face)
+        self.assertLess((targets[0].CenterOfMass - truth.CenterOfMass).Length, 1e-6)
+        self.assertTrue(SC._has_analysable_selection())
+        FreeCADGui.runCommand(CURVATURE)
+        _pump()
+        node = self._panel_overlay()
+        for p in self._overlay_points(node):
+            self.assertLess(Part.Vertex(p).distToShape(truth)[0], 1e-4)
+
+    def test_nested_object_path_gives_placed_object_and_edges_are_ignored(self):
+        part, box = self._nested_box()
+        import SurfaceAnalysisCommands as SC
+
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.doc.Name, part.Name, "NBox.")
+        got = SC.selected_targets()
+        self.assertEqual(len(got), 1)
+        truth = Part.getShape(part, "NBox.", needSubElement=False)
+        self.assertLess((got[0].CenterOfMass - truth.CenterOfMass).Length, 1e-6)
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.doc.Name, part.Name, "NBox.Edge1")
+        self.assertEqual(SC.selected_targets(), [])
+        self.assertFalse(SC._has_analysable_selection())
+        self.assertEqual([i["type"] for i in SC.selected_subshapes(("Edge",))], ["Edge"])
+
+    def test_api_on_nested_objects_draws_where_they_are_shown(self):
+        part, box = self._nested_box()
+        inner = self.doc.addObject("App::Part", "Inner")
+        inner.Placement = self._placed(0, 90)
+        outer = self.doc.addObject("App::Part", "Outer")
+        outer.Placement = self._placed(50, 90)
+        outer.addObject(inner)
+        leaf = self.doc.addObject("Part::Box", "Leaf")
+        inner.addObject(leaf)
+        leaf.Placement = self._placed(3, 0)
+        self.doc.recompute()
+        cases = ((box, part, "NBox."), (leaf, outer, "Inner.Leaf."))
+        for obj, top, path in cases:
+            truth = Part.getShape(top, path, needSubElement=False)
+            for fn, kw in (("show_curvature", {}), ("show_draft", {"pull": (0, 0, 1)}), ("show_zebra", {})):
+                h = getattr(SG, fn)(obj, view=self.view, **kw)
+                for v in h.vertices:
+                    self.assertLess(Part.Vertex(v["point"]).distToShape(truth)[0], 1e-6, (obj.Name, fn))
+                SG.remove(h)
+
+    def test_api_on_body_pad_and_link_in_placed_part(self):
+        part = self.doc.addObject("App::Part", "PartB")
+        part.Placement = self._placed(100, 90)
+        body = self.doc.addObject("PartDesign::Body", "Body")
+        part.addObject(body)
+        body.Placement = self._placed(0, 0)
+        body.Placement.Base = V(0, 20, 0)
+        sk = body.newObject("Sketcher::SketchObject", "Sk")
+        sk.AttachmentSupport = [(body.Origin.OriginFeatures[3], "")]
+        sk.MapMode = "FlatFace"
+        import Sketcher  # noqa: F401
+
+        pts = ((0, 0), (10, 0), (10, 10), (0, 10))
+        for i in range(4):
+            a, b = pts[i], pts[(i + 1) % 4]
+            sk.addGeometry(Part.LineSegment(V(a[0], a[1], 0), V(b[0], b[1], 0)))
+        pad = body.newObject("PartDesign::Pad", "Pad")
+        pad.Profile = sk
+        pad.Length = 10
+        src = self.doc.addObject("Part::Box", "LinkSrc")
+        link = self.doc.addObject("App::Link", "Lnk")
+        link.LinkedObject = src
+        link.Placement = self._placed(0, 90)
+        part.addObject(link)
+        self.doc.recompute()
+        for obj, path in ((pad, "Body.Pad."), (body, "Body."), (link, "Lnk.")):
+            truth = Part.getShape(part, path, needSubElement=False)
+            self.assertFalse(truth.isNull(), path)
+            h = SG.show_curvature(obj, view=self.view)
+            for v in h.vertices:
+                self.assertLess(Part.Vertex(v["point"]).distToShape(truth)[0], 1e-6, path)
+            SG.remove(h)
+
+    def test_unnested_object_keeps_its_own_shape(self):
+        self.box.Placement = self._placed(30, 30)
+        self.assertIsNone(SG.parent_placement(self.box))
+        self.assertTrue(SG.placed_shape(self.box).isSame(self.box.Shape))
+        h = SG.show_zebra(self.box, view=self.view)
+        for v in h.vertices:
+            self.assertLess(Part.Vertex(v["point"]).distToShape(self.box.Shape)[0], 1e-6)
+        SG.remove(h)
+
+    def test_deleted_target_drops_overlay_and_panel_still_closes(self):
+        for button in ("OK", "Cancel"):
+            part, box = self._nested_box()
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.Selection.addSelection(self.doc.Name, part.Name, "NBox.Face6")
+            FreeCADGui.runCommand(CURVATURE)
+            _pump()
+            status = self._w("G09_AnalysisStatus")
+            old = status.text()
+            self.assertIn("target", old)
+            self.assertIsNotNone(self._panel_overlay())
+            self.doc.removeObject(part.Name)
+            self.doc.removeObject("NBox")
+            _pump()
+            self.assertEqual(self._overlays(), [])
+            self.assertEqual(self._legends(), [])
+            self.assertNotEqual(status.text(), old)
+            self.assertIn("deleted", status.text())
+            self._w("G09_AnalysisType").setCurrentIndex(1)  # a later refresh must not raise or draw
+            _pump()
+            self.assertEqual(self._overlays(), [])
+            self._button(button).click()
+            _pump()
+            self.assertFalse(FreeCADGui.Control.activeDialog())
+            self.assertEqual(self.ufs.getNumChildren(), self.base)
+
+    def test_failed_show_dialog_leaves_nothing_behind(self):
+        FreeCADGui.Selection.addSelection(self.doc.Name, self.sphere.Name, "")
+        before = self.ufs.getNumChildren()
+        import types
+
+        import SurfaceAnalysisCommands as SC
+
+        def boom(panel):
+            raise RuntimeError("no dialog")
+
+        real = SC.Gui
+        # the Control object cannot be patched, so the module's own FreeCADGui name gets a stand-in
+        class _Gui:
+            Control = types.SimpleNamespace(showDialog=staticmethod(boom), activeDialog=real.Control.activeDialog)
+
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+        SC.Gui = _Gui()
+        try:
+            with self.assertRaises(RuntimeError):
+                SC._CurvatureCommand().Activated()
+        finally:
+            SC.Gui = real
+        self.assertEqual(self.ufs.getNumChildren(), before)
+        self.assertEqual(self._legends(), [])
