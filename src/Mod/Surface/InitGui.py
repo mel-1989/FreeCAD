@@ -30,6 +30,8 @@ import os
 import FreeCAD as App
 import FreeCADGui as Gui
 
+App.__unit_test__ += ["TestSurfaceGui"]
+
 
 class SurfaceWorkbench(Gui.Workbench):
     """Surface workbench object."""

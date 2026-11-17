@@ -18,10 +18,11 @@ set(Surface_TestScripts
     SurfaceTests/TestBlendCurve.py
     SurfaceTests/TestReferenceErrors.py
     SurfaceTests/TestSurfaceAnalysis.py
+    SurfaceTests/TestSurfaceAnalysisGui.py
 )
 
 if(BUILD_GUI)
-    list (APPEND Surface_Scripts InitGui.py)
+    list (APPEND Surface_Scripts InitGui.py SurfaceAnalysisGui.py TestSurfaceGui.py)
 endif(BUILD_GUI)
 
 add_custom_target(SurfaceScripts ALL
