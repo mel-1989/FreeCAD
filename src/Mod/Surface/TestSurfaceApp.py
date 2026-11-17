@@ -23,6 +23,7 @@
 
 # Unit test for the Surface module
 from SurfaceTests.TestBlendCurve import TestBlendCurve
+from SurfaceTests.TestSurfaceAnalysis import TestSurfaceAnalysis
 from SurfaceTests.TestReferenceErrors import (
     TestReferenceErrors,
     TestFillingFollowsSupportFace,
