@@ -370,7 +370,7 @@ def show_curvature(target, kind="mean", range=None, view=None, deflection=None):
         uvs = _uv_for(face, verts)
         for p, (u, v) in zip(verts, uvs):
             records.append(
-                {"point": _f32(p), "face": fi, "u": u, "v": v, "value": _curv_value(ctx, kind, u, v)}
+                {"point": p, "face": fi, "u": u, "v": v, "value": _curv_value(ctx, kind, u, v)}
             )
         per_face.append(([_f32(p) for p in verts], tris))
 
@@ -417,7 +417,7 @@ def show_draft(target, pull, min_draft=1.0, view=None, deflection=None):
             else:
                 color = _DRAFT_COLOR[SA._classify(angle, min_draft)]
             records.append(
-                {"point": _f32(pt), "face": fi, "u": u, "v": v, "value": angle, "color": color}
+                {"point": pt, "face": fi, "u": u, "v": v, "value": angle, "color": color}
             )
         per_face.append(([_f32(p) for p in verts], tris))
     colors = [r["color"] for r in records]
@@ -451,7 +451,7 @@ def show_zebra(target, direction=(1, 0, 0), bands=16, view=None, deflection=None
                 color, tex = (val, val, val), t
             ts.append(tex)
             records.append(
-                {"point": _f32(pt), "face": fi, "u": u, "v": v, "value": t, "color": color}
+                {"point": pt, "face": fi, "u": u, "v": v, "value": t, "color": color}
             )
         per_face.append(([_f32(p) for p in verts], tris))
     return _finish(

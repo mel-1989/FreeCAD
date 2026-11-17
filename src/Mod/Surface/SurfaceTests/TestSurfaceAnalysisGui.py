@@ -112,11 +112,10 @@ class TestSurfaceAnalysisGui(unittest.TestCase):
             seen = set()
             for rec, q in zip(h.vertices, pts):
                 seen.add(rec["face"])
-                self.assertLess((rec["point"] - V(*q)).Length, 1e-9)
+                # the node stores the single-precision rounding of the exact vertex
+                self.assertLess((SG._f32(rec["point"]) - V(*q)).Length, 1e-9)
                 face = shp.Faces[rec["face"] - 1]
-                # the node stores single-precision floats, so a vertex 25 mm from the origin can sit
-                # up to about 1.6e-6 off the face
-                self.assertLess(Part.Vertex(rec["point"]).distToShape(face)[0], 2e-6)
+                self.assertLess(Part.Vertex(rec["point"]).distToShape(face)[0], 1e-6)
             self.assertEqual(seen, set(range(1, nfaces + 1)))
             SG.remove(h)
         self.assertClean()
