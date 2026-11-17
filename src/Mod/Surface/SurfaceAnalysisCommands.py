@@ -442,6 +442,9 @@ class _ClearCommand:
     def GetResources(self):
         return {
             "Pixmap": "Surface_ClearAnalysis",
+            # ForEdit: FreeCAD disables every command without it while a task dialog is open, and the
+            # frozen rule keeps Clear active whenever a 3D view is (an analysis panel may be open)
+            "CmdType": "ForEdit",
             "MenuText": QtCore.QT_TRANSLATE_NOOP("Surface_ClearAnalysis", "Clear analysis"),
             "ToolTip": QtCore.QT_TRANSLATE_NOOP(
                 "Surface_ClearAnalysis", "Remove every analysis overlay and legend from the active 3D view"
