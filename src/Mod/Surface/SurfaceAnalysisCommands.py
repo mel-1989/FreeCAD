@@ -28,8 +28,14 @@ import SurfaceAnalysisGui as SG
 
 __all__ = ["AnalysisPanel", "selected_targets", "selected_subshapes"]
 
-CURVATURE, DRAFT, ZEBRA = "curvature", "draft", "zebra"
-_TYPES = ((CURVATURE, "Curvature"), (DRAFT, "Draft"), (ZEBRA, "Zebra stripes"))
+CURVATURE, DRAFT, ZEBRA, ISOPHOTE, COMB = "curvature", "draft", "zebra", "isophote", "comb"
+_TYPES = (
+    (CURVATURE, "Curvature"),
+    (DRAFT, "Draft"),
+    (ZEBRA, "Zebra stripes"),
+    (ISOPHOTE, "Isophote lines"),
+    (COMB, "Curvature combs"),
+)
 _CURVATURE_KINDS = (
     ("gauss", "Gaussian"),
     ("mean", "Mean"),
@@ -46,6 +52,8 @@ _PULLS = (
 )
 _ZEBRA_DIRS = (("X", (1, 0, 0)), ("Y", (0, 1, 0)), ("Z", (0, 0, 1)))
 _BANDS = (4, 8, 16, 32, 64)
+_ISOPHOTE_COUNTS = (4, 6, 8, 12, 18)
+_COMB_SAMPLES = (9, 17, 33, 65)
 DEFAULT_MIN_DRAFT = 1.0
 
 
@@ -148,6 +156,45 @@ def _selected_entries():
     return out
 
 
+def _edges_of(shape):
+    return list(shape.Edges) if isinstance(shape, Part.Shape) else []
+
+
+def _comb_edges(items):
+    """The edges the combs command draws on: selected edges, the edges of selected faces and every edge
+    of a whole object, in selection order, each with the placements of its path applied, without
+    duplicates."""
+    edges = []
+    for item in items:
+        if item["type"] == "Edge":
+            found = [item["shape"]]
+        elif item["shape"] is not None:
+            found = _edges_of(item["shape"])
+        else:
+            found = _edges_of(SG.placed_shape(item["object"]))
+        for e in found:
+            if not any(e.isSame(x) for x in edges):
+                edges.append(e)
+    return edges
+
+
+def _has_edge_selection():
+    try:
+        for sel in Gui.Selection.getSelectionEx("", 0):
+            names = [n for n in sel.SubElementNames if n]
+            if not names:
+                shape = getattr(sel.Object, "Shape", None)
+                if isinstance(shape, Part.Shape) and not shape.isNull() and shape.Edges:
+                    return True
+                continue
+            for name in names:
+                if _sub_type(name) in ("Face", "Edge", "object"):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 def _has_analysable_selection():
     try:
         for sel in Gui.Selection.getSelectionEx("", 0):
@@ -223,10 +270,26 @@ class AnalysisPanel:
         if targets is not None:
             self.targets = list(targets)
             self._owners = [n for t in self.targets if not isinstance(t, Part.Shape) for n in [(t.Document.Name, t.Name)]]
+            self.edge_targets = []
+            for t in self.targets:
+                if isinstance(t, Part.Shape):
+                    self.edge_targets.extend(_edges_of(t))
+                else:
+                    self.edge_targets.extend(_edges_of(SG.placed_shape(t)))
         else:
-            entries = _selected_entries()
+            items = selected_subshapes(("Face", "Edge", "object"))
+            entries = [
+                (it["object"] if it["shape"] is None else it["shape"], it["owners"])
+                for it in items
+                if it["type"] != "Edge"
+            ]
             self.targets = [t for t, _o in entries]
-            self._owners = [n for _t, owners in entries for n in owners]
+            self.edge_targets = _comb_edges(items)
+            self._owners = []
+            for it in items:
+                for n in it["owners"]:
+                    if n not in self._owners:
+                        self._owners.append(n)
         self.view = view
         self.handle = None
         self._gone = False
@@ -298,6 +361,36 @@ class AnalysisPanel:
         self._row(pf, "Bands:", self.bands_box)
         self.stack.addWidget(page)
 
+        # isophote page
+        page = QtWidgets.QWidget(self.stack)
+        page.setObjectName("G09_IsophotePage")
+        pf = QtWidgets.QFormLayout(page)
+        self.iso_dir_box = self._combo("G09_IsophoteDirection", [(label, vec) for label, vec in _ZEBRA_DIRS])
+        self.iso_dir_box.setCurrentIndex(2)  # Z
+        self._row(pf, "Direction:", self.iso_dir_box)
+        self.iso_count_box = self._combo("G09_IsophoteCount", [(str(n), n) for n in _ISOPHOTE_COUNTS])
+        self.iso_count_box.setCurrentIndex(_ISOPHOTE_COUNTS.index(8))
+        self._row(pf, "Count:", self.iso_count_box)
+        self.stack.addWidget(page)
+
+        # comb page
+        page = QtWidgets.QWidget(self.stack)
+        page.setObjectName("G09_CombPage")
+        pf = QtWidgets.QFormLayout(page)
+        self.comb_auto_box = QtWidgets.QCheckBox(_tr("Automatic scale"), form)
+        self.comb_auto_box.setObjectName("G09_CombAutoScale")
+        self.comb_auto_box.setChecked(True)
+        self.comb_auto_box.setToolTip(_tr("Make the longest tooth a fifth of the diagonal of the edges"))
+        pf.addRow(self.comb_auto_box)
+        self.comb_scale_spin = self._double("G09_CombScale", 1.0)
+        self.comb_scale_spin.setRange(1e-9, 1e9)
+        self._row(pf, "Scale:", self.comb_scale_spin)
+        self.comb_scale_spin.setEnabled(False)
+        self.comb_samples_box = self._combo("G09_CombSamples", [(str(n), n) for n in _COMB_SAMPLES])
+        self.comb_samples_box.setCurrentIndex(_COMB_SAMPLES.index(33))
+        self._row(pf, "Samples:", self.comb_samples_box)
+        self.stack.addWidget(page)
+
         self.status = QtWidgets.QLabel(form)
         self.status.setObjectName("G09_AnalysisStatus")
         self.status.setWordWrap(True)
@@ -308,6 +401,7 @@ class AnalysisPanel:
 
         self._relay_type = _Relay(self._type_changed, form)
         self._relay_auto = _Relay(self._auto_toggled, form)
+        self._relay_comb_auto = _Relay(self._comb_auto_toggled, form)
         self._relay = _Relay(self._changed, form)
         # the spin box is made by the UI loader, so Shiboken does not see it die with the form; drop its
         # wrapper at once, or a later widget made at the same address comes back as this stale wrapper
@@ -316,9 +410,13 @@ class AnalysisPanel:
         QtCore.QObject.connect(form, QtCore.SIGNAL("destroyed()"), self._relay_done, QtCore.SLOT("finished()"))
         self.type_box.currentIndexChanged.connect(self._relay_type.changed)
         self.auto_box.toggled.connect(self._relay_auto.toggled)
-        for widget in (self.kind_box, self.pull_box, self.zebra_dir_box, self.bands_box):
+        self.comb_auto_box.toggled.connect(self._relay_comb_auto.toggled)
+        for widget in (
+            self.kind_box, self.pull_box, self.zebra_dir_box, self.bands_box,
+            self.iso_dir_box, self.iso_count_box, self.comb_samples_box,
+        ):
             widget.currentIndexChanged.connect(self._relay.changed)
-        for widget in (self.low_spin, self.high_spin, self.draft_spin):
+        for widget in (self.low_spin, self.high_spin, self.draft_spin, self.comb_scale_spin):
             # by signature, not through the Python attribute (see above)
             QtCore.QObject.connect(widget, QtCore.SIGNAL("valueChanged(double)"), self._relay, QtCore.SLOT("changed()"))
 
@@ -373,6 +471,15 @@ class AnalysisPanel:
                     "min_draft": float(self.draft_spin.property("rawValue")),
                 },
             )
+        if a == ISOPHOTE:
+            return (
+                "show_isophotes",
+                (),
+                {"direction": self.iso_dir_box.currentData(), "count": int(self.iso_count_box.currentData())},
+            )
+        if a == COMB:
+            scale = None if self.comb_auto_box.isChecked() else self.comb_scale_spin.value()
+            return "show_combs", (), {"scale": scale, "samples": int(self.comb_samples_box.currentData())}
         return (
             "show_zebra",
             (),
@@ -393,6 +500,16 @@ class AnalysisPanel:
             try:
                 self.low_spin.setValue(lo)
                 self.high_spin.setValue(hi)
+            finally:
+                self._busy = False
+        self._changed()
+
+    def _comb_auto_toggled(self, on=True):
+        self.comb_scale_spin.setEnabled(not on)
+        if not on and self.handle is not None and getattr(self.handle, "kind", "") == "comb":
+            self._busy = True  # start from the automatic scale the user was looking at
+            try:
+                self.comb_scale_spin.setValue(self.handle.scale)
             finally:
                 self._busy = False
         self._changed()
@@ -442,7 +559,7 @@ class AnalysisPanel:
         App.addDocumentObserver(self._observer)
 
     def _unwatch_owners(self):
-        if self._observer is not None:
+        if getattr(self, "_observer", None) is not None:
             try:
                 App.removeDocumentObserver(self._observer)
             except Exception:
@@ -470,15 +587,23 @@ class AnalysisPanel:
         if self._gone or not self._owners_alive():
             self._target_gone()
             return
-        if not self.targets:
+        name, args, kwargs = self.parameters()
+        if name == "show_combs":
+            if not self.edge_targets:
+                self._say(_tr("Select an edge, a face or a shape with edges first."))
+                return
+        elif not self.targets:
             self._say(_tr("Select a shape or faces first."))
             return
-        name, args, kwargs = self.parameters()
         try:
             view = self.view if self.view is not None else SG._active_view(None)
+            if name == "show_combs":
+                self.handle = SG.show_combs(list(self.edge_targets), view=view, **kwargs)
+                self._say(self._summary())
+                return
             target = _one_target(self.targets)
-            if name == "show_zebra":
-                self.handle = SG.show_zebra(target, view=view, **kwargs)
+            if name in ("show_zebra", "show_isophotes"):
+                self.handle = getattr(SG, name)(target, view=view, **kwargs)
             else:
                 self.handle = getattr(SG, name)(target, view=view, legend=True, **kwargs)
         except (ValueError, RuntimeError) as e:
@@ -488,6 +613,10 @@ class AnalysisPanel:
         self._say(self._summary())
 
     def _summary(self):
+        if self.handle.kind == "comb":
+            return _tr("%d edge(s), %d teeth") % (len(self.edge_targets), len(self.handle.teeth))
+        if self.handle.kind == "isophote":
+            return _tr("%d target(s), %d line segments") % (len(self.targets), len(self.handle.segments))
         n = len(self.targets)
         return _tr("%d target(s), %d vertices") % (n, len(self.handle.vertices))
 
@@ -572,6 +701,29 @@ class _ZebraCommand(_AnalysisCommand):
     status = "Show zebra stripes on the selection in the 3D view"
 
 
+class _IsophoteCommand(_AnalysisCommand):
+    analysis = ISOPHOTE
+    pixmap = "Surface_IsophoteAnalysis"
+    menu = "Isophote lines"
+    tip = "Draw isophote lines on the selected shapes or faces to judge how smoothly surfaces join"
+    status = "Show isophote lines of the selection in the 3D view"
+
+
+class _CombCommand(_AnalysisCommand):
+    analysis = COMB
+    pixmap = "Surface_CurvatureComb"
+    menu = "Curvature combs"
+    tip = "Draw curvature combs on the selected edges, on the edges of the selected faces or on every edge of the selected shapes"
+    status = "Show curvature combs of the selected edges in the 3D view"
+
+    def IsActive(self):
+        return (
+            Gui.ActiveDocument is not None
+            and not Gui.Control.activeDialog()
+            and _has_edge_selection()
+        )
+
+
 class _ClearCommand:
     def GetResources(self):
         return {
@@ -601,6 +753,8 @@ COMMANDS = (
     ("Surface_CurvatureAnalysis", _CurvatureCommand),
     ("Surface_DraftAnalysis", _DraftCommand),
     ("Surface_ZebraAnalysis", _ZebraCommand),
+    ("Surface_IsophoteAnalysis", _IsophoteCommand),
+    ("Surface_CurvatureComb", _CombCommand),
     ("Surface_ClearAnalysis", _ClearCommand),
 )
 

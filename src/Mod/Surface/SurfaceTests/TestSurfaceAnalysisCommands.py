@@ -23,6 +23,8 @@ CURVATURE = "Surface_CurvatureAnalysis"
 DRAFT = "Surface_DraftAnalysis"
 ZEBRA = "Surface_ZebraAnalysis"
 CLEAR = "Surface_ClearAnalysis"
+ISOPHOTE = "Surface_IsophoteAnalysis"
+COMB = "Surface_CurvatureComb"
 ALL = (CURVATURE, DRAFT, ZEBRA, CLEAR)
 
 
@@ -553,3 +555,152 @@ class TestSurfaceAnalysisCommands(unittest.TestCase):
             SC.Gui = real
         self.assertEqual(self.ufs.getNumChildren(), before)
         self.assertEqual(self._legends(), [])
+
+    # ---------------------------------------------------------------- slice 2c
+
+    def _all_points(self, node):
+        out = []
+        for coords in _find_all(node, "SoCoordinate3"):
+            out.extend(tuple(coords.point[i].getValue()) for i in range(coords.point.getNum()))
+        return out
+
+    def test_new_commands_exist_placed_and_follow_active_rules(self):
+        new = (ISOPHOTE, COMB)
+        for name in new:
+            res = FreeCADGui.Command.get(name).getInfo()
+            self.assertTrue(res["menuText"] and res["toolTip"] and res["statusTip"] and res["pixmap"], name)
+            self.assertFalse(res["shortcut"], name)
+            self.assertFalse(QtGui.QIcon(":/icons/" + name + ".svg").isNull(), name)
+        self.assertEqual(FreeCADGui.Command.get(ISOPHOTE).getInfo()["menuText"], "Isophote lines")
+        self.assertEqual(FreeCADGui.Command.get(COMB).getInfo()["menuText"], "Curvature combs")
+        tb = [t for t in self.mw.findChildren(QtWidgets.QToolBar) if t.objectName() == "Surface analysis"][0]
+        in_tb = [a.objectName() for a in tb.actions() if a.objectName() in ALL + new]
+        self.assertEqual(in_tb, [CURVATURE, DRAFT, ZEBRA, ISOPHOTE, COMB, CLEAR])
+        surface = [a.menu() for a in self.mw.menuBar().actions() if a.text().replace("&", "") == "Surface"][0]
+        sub = [a.menu() for a in surface.actions() if a.menu() and a.text().replace("&", "") == "Analysis"][0]
+        self.assertEqual([a.objectName() for a in sub.actions() if a.objectName() in ALL + new],
+                         [CURVATURE, DRAFT, ZEBRA, ISOPHOTE, COMB, CLEAR])
+
+        def active(name):
+            return FreeCADGui.Command.get(name).isActive()
+
+        for name in new:
+            self.assertFalse(active(name), name)
+        FreeCADGui.Selection.addSelection(self.doc.Name, self.box.Name, "Edge1")
+        self.assertTrue(active(COMB))
+        self.assertFalse(active(ISOPHOTE))  # an edge alone is nothing for isophotes
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.doc.Name, self.sphere.Name)
+        self.assertTrue(active(ISOPHOTE) and active(COMB))
+        FreeCADGui.runCommand(ISOPHOTE)
+        _pump()
+        self.assertFalse(active(ISOPHOTE) or active(COMB))
+
+    def test_panel_type_selector_holds_five_types_and_new_inputs_have_labels(self):
+        self._open(COMB, [(self.box, "")])
+        sel = self._w("G09_AnalysisType")
+        self.assertEqual([sel.itemText(i) for i in range(sel.count())],
+                         ["Curvature", "Draft", "Zebra stripes", "Isophote lines", "Curvature combs"])
+        self.assertEqual(sel.currentText(), "Curvature combs")
+        panel = self._w("G09_AnalysisPanel")
+        buddies = {lbl.buddy(): lbl.text() for lbl in panel.findChildren(QtWidgets.QLabel) if lbl.buddy() is not None}
+        for name, text in (("G09_IsophoteDirection", "Direction:"), ("G09_IsophoteCount", "Count:"),
+                           ("G09_CombScale", "Scale:"), ("G09_CombSamples", "Samples:")):
+            self.assertEqual(buddies.get(self._w(name)), text, name)
+        self.assertEqual(self._w("G09_CombAutoScale").text(), "Automatic scale")
+        self.assertTrue(self._w("G09_CombAutoScale").isChecked())
+        self.assertFalse(self._w("G09_CombScale").isEnabled())
+
+    def test_isophote_panel_matches_api(self):
+        self._open(ISOPHOTE, [(self.sphere, "")])
+        direction = self._w("G09_IsophoteDirection")
+        count = self._w("G09_IsophoteCount")
+        self.assertEqual([count.itemText(i) for i in range(count.count())], ["4", "6", "8", "12", "18"])
+        self.assertEqual((direction.currentText(), count.currentText()), ("Z", "8"))
+        self.assertEqual(self._overlays(), ["G09_OVERLAY_isophote"])
+        for dname, d in (("X", (1, 0, 0)), ("Z", (0, 0, 1))):
+            direction.setCurrentIndex(direction.findText(dname))
+            for i in range(count.count()):
+                count.setCurrentIndex(i)
+                _pump(1)
+                self.assertEqual(self._overlays(), ["G09_OVERLAY_isophote"])
+                h = SG.show_isophotes(self.sphere, d, count=int(count.itemText(i)), view=self.view)
+                a, b = self._all_points(self._panel_overlay()), self._all_points(h.node)
+                self.assertEqual(len(a), len(b))
+                for p, q in zip(a, b):
+                    self.assertLess(max(abs(x - y) for x, y in zip(p, q)), 1e-9)
+                SG.remove(h)
+
+    def test_comb_panel_matches_api_and_scale_rules(self):
+        edge = self.box.Shape.Edges[0]
+        self._open(COMB, [(self.box, "Edge1")])
+        self.assertEqual(self._overlays(), ["G09_OVERLAY_comb"])
+        samples = self._w("G09_CombSamples")
+        self.assertEqual([samples.itemText(i) for i in range(samples.count())], ["9", "17", "33", "65"])
+        for i in range(samples.count()):
+            samples.setCurrentIndex(i)
+            _pump(1)
+            self.assertEqual(len(self._overlays()), 1)
+            h = SG.show_combs([edge], samples=int(samples.itemText(i)), view=self.view)
+            self.assertEqual(self._all_points(self._panel_overlay()), self._all_points(h.node))
+            SG.remove(h)
+        auto = self._w("G09_CombAutoScale")
+        spin = self._w("G09_CombScale")
+        auto.setChecked(False)
+        _pump(2)
+        self.assertTrue(spin.isEnabled())
+        spin.setValue(2.5)
+        _pump(2)
+        h = SG.show_combs([edge], scale=2.5, samples=int(samples.currentText()), view=self.view)
+        self.assertEqual(self._all_points(self._panel_overlay()), self._all_points(h.node))
+        SG.remove(h)
+        auto.setChecked(True)
+        _pump(2)
+        self.assertFalse(spin.isEnabled())
+
+    def test_comb_targets_edges_faces_objects_and_placed_edges(self):
+        import SurfaceAnalysisCommands as SC
+
+        def edge_count(selection):
+            FreeCADGui.Selection.clearSelection()
+            for obj, sub in selection:
+                FreeCADGui.Selection.addSelection(self.doc.Name, obj.Name, sub)
+            _pump()
+            panel = SC.AnalysisPanel(SC.COMB)
+            n = len(panel.edge_targets)
+            panel.reject()
+            return n
+
+        self.assertEqual(edge_count([(self.box, "Edge1"), (self.box, "Edge2")]), 2)
+        self.assertEqual(edge_count([(self.box, "Face2")]), len(self.box.Shape.Faces[1].Edges))
+        self.assertEqual(edge_count([(self.box, "")]), len(self.box.Shape.Edges))
+        part, nbox = self._nested_box()
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.doc.Name, part.Name, "NBox.Edge1")
+        _pump()
+        panel = SC.AnalysisPanel(SC.COMB)
+        truth = Part.getShape(part, "NBox.Edge1", needSubElement=True)
+        self.assertEqual(len(panel.edge_targets), 1)
+        self.assertLess((panel.edge_targets[0].CenterOfMass - truth.CenterOfMass).Length, 1e-6)
+        panel.reject()
+
+    def test_new_panel_types_ok_cancel_and_no_side_effects(self):
+        self.doc.openTransaction("probe")
+        self.doc.commitTransaction()
+        undo, objs = self.doc.UndoCount, len(self.doc.Objects)
+        modified = FreeCADGui.getDocument(self.doc.Name).Modified
+        for command, name in ((ISOPHOTE, "isophote"), (COMB, "comb")):
+            self._open(command, [(self.box, "")])
+            self.assertEqual(self._overlays(), ["G09_OVERLAY_" + name])
+            self._button("OK").click()
+            _pump()
+            self.assertFalse(FreeCADGui.Control.activeDialog())
+            self.assertEqual(self._overlays(), ["G09_OVERLAY_" + name])
+            self.assertEqual(self._legends(), [])
+            SG.clear(self.view)
+            self._open(command, [(self.box, "")])
+            self._button("Cancel").click()
+            _pump()
+            self.assertEqual(self.ufs.getNumChildren(), self.base)
+        self.assertEqual((self.doc.UndoCount, len(self.doc.Objects)), (undo, objs))
+        self.assertEqual(FreeCADGui.getDocument(self.doc.Name).Modified, modified)

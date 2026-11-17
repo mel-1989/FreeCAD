@@ -3,6 +3,8 @@
         <file>icons/Surface_ClearAnalysis.svg</file>
         <file>icons/Surface_CurvatureAnalysis.svg</file>
         <file>icons/Surface_DraftAnalysis.svg</file>
+        <file>icons/Surface_IsophoteAnalysis.svg</file>
+        <file>icons/Surface_CurvatureComb.svg</file>
         <file>icons/Surface_ZebraAnalysis.svg</file>
         <file>icons/Surface_BezierSurface.svg</file>
         <file>icons/Surface_BSplineSurface.svg</file>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="64px" height="64px" viewBox="0 0 64 64">
+  <title>Surface_CurvatureComb</title>
+  <path d="M 8,50 C 18,50 20,34 32,34 C 44,34 46,50 56,50" style="fill:none;stroke:#1f2430;stroke-width:3;stroke-linecap:round" />
+  <g style="fill:none;stroke:#c000c0;stroke-width:2;stroke-linecap:round">
+    <path d="M 14,50 L 13,46" />
+    <path d="M 20,45 L 15,40" />
+    <path d="M 25,37 L 20,29" />
+    <path d="M 32,34 L 32,18" />
+    <path d="M 39,37 L 44,29" />
+    <path d="M 44,45 L 49,40" />
+    <path d="M 50,50 L 51,46" />
+    <path d="M 13,46 L 15,40 L 20,29 L 32,18 L 44,29 L 49,40 L 51,46" style="stroke-width:2.5" />
+  </g>
+</svg>
