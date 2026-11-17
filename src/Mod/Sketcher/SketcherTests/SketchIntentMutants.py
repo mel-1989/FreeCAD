@@ -54,7 +54,7 @@ mutant("hook_ignored", "the intent schemes fall through to the baseline order", 
 mutant("no_nested_offsets", "pieces nested inside another are never offset from it", "        nested = _nested_ids(model)\n        movers &= nested", "        nested = _nested_ids(model)\n        movers = set()")
 mutant("no_overall_size_for_frames", "the outer outline of a frame gets no overall width and height", "        if nested:\n            # a frame or wall profile", "        if False:\n            # a frame or wall profile")
 mutant("no_gap_dimension", "a small unjoined gap is not dimensioned", "    pool += _gap_proposals(model)", "    pass")
-mutant("no_carrier", "construction lines carry no dimension", '        if m.construction and _is_line(m) and first(m):', '        if False:')
+mutant("no_carrier", "construction lines carry no dimension", '        if m.construction and _is_line(m) and _is_hv(m) and first(m):', '        if False:')
 mutant("no_sizes", "circle diameters and arc radii are not proposed first", '        if m.kind == "circle" and first(m):', '        if False:')
 mutant("equal_group_sized_twice", "every member of an equal group is sized", "        root = find(m.i)\n        if root in sized:\n            return False", "        root = m.i\n        if root in sized:\n            return False")
 mutant("angle_sign_flipped", "the neighbour angle is measured the other way round", "    return v\n\n\ndef _angle_neighbour", "    return -v\n\n\ndef _angle_neighbour")

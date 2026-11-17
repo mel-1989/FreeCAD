@@ -533,7 +533,7 @@ def proposals(model, scheme, accepted=()):
             pool.append(("size", ("Radius", m.i, m.r)))
     # construction lines carry dimensions
     for m in model:
-        if m.construction and _is_line(m) and first(m):
+        if m.construction and _is_line(m) and _is_hv(m) and first(m):
             pool.append(("carrier", _length_spec(m, scheme == "intent_origin")))
     if scheme != "intent":
         pool += _extent_proposals(model, flip, None, scheme == "intent_origin")

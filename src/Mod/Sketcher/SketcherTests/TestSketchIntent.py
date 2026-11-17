@@ -185,6 +185,17 @@ class TestSketchIntent(unittest.TestCase):
         # the carrier is the first dimension after the sizes (there are none)
         self.assertIn(c, _ids(top[0]), top)
 
+    def test_inclined_construction_line_is_not_a_carrier(self):
+        sk = self.sketch()
+        a = _loop(sk, 0, 0, 20, 10)
+        d = _line(sk, 0, 0, 20, 10, True)
+        sk.addConstraint(Sketcher.Constraint("Coincident", d, 1, a, 1))
+        sk.addConstraint(Sketcher.Constraint("Coincident", d, 2, a + 2, 1))
+        sk.solve()
+        for cand in self.propose(sk)["candidates"]:
+            for dim in _dims(cand):
+                self.assertNotIn(d, _ids(dim), dim)
+
     def test_small_gap_is_dimensioned_between_the_two_pieces(self):
         sk = self.sketch()
         a = _line(sk, 0, 0, 30, 0)
