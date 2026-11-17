@@ -164,7 +164,9 @@ STABILITY_BUDGET = 0.3  # seconds; slower sketches skip the repeats and the full
 REDUCED_GATE_RUNS = 3  # solves of the real sketch ``apply_candidate`` asks for when its own apply was too slow for the full gate
 GATE_RUNS = 10  # consecutive clean solves a result must give (on the sketch and on a serialised copy)
 NEAR_AXIS = 0.03  # a line within about 1.7 degrees of an axis is dimensioned by its extent
-SCHEMES = ("baseline", "chain", "symmetric")
+import SketcherIntent as _Intent
+
+SCHEMES = tuple(_Intent.INTENT_SCHEMES) + ("baseline", "chain", "symmetric")
 _MAX_BATCH = 400
 _DATUM_TYPES = {"Distance", "DistanceX", "DistanceY", "Radius", "Diameter", "Angle", "Weight"}
 _GEOMETRIC = {
@@ -623,6 +625,15 @@ def _union_find(n):
 def _dimension_proposals(model, accepted, scheme):
     """Ordered dimension specs.  `accepted` are the relation specs already
     on the copy, used to skip dimensions the relations make redundant."""
+    if scheme in _Intent.INTENT_SCHEMES:
+        # design-intent order first; the baseline order after it as the verified fallback
+        out, seen = [], set()
+        for spec in _Intent.proposals(model, scheme, accepted) + _dimension_proposals(model, accepted, "baseline"):
+            key = _Intent._norm_key(spec)
+            if key not in seen:
+                seen.add(key)
+                out.append(spec)
+        return out
     n = len(model)
     f_eq, u_eq = _union_find(n)
     f_dir, u_dir = _union_find(n)
@@ -1085,7 +1096,7 @@ class _Build:
     @staticmethod
     def _targets(spec):
         t = spec[0]
-        if t in ("DistanceX", "DistanceY"):
+        if t in ("DistanceX", "DistanceY", "Distance", "Angle"):
             return {spec[1]} | ({spec[3]} if len(spec) == 6 else set())
         return {spec[1]}
 
