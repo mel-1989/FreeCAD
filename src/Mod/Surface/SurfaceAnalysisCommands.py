@@ -120,19 +120,8 @@ def _active_3d_view():
 
 
 def _quantity_spin_box():
-    """A ``Gui::QuantitySpinBox``. The Python wrapper of a widget made by the UI loader is looked up
-    by address, and after an earlier panel's spin box was deleted by C++ the new one can come back
-    as that stale (invalid) wrapper; make another until the wrapper is valid."""
-    import shiboken6
-
-    loader = Gui.UiLoader()
-    stale = []  # kept alive so the allocator hands out a different address next time
-    for _ in range(20):
-        w = loader.createWidget("Gui::QuantitySpinBox")
-        if shiboken6.isValid(w):
-            return w
-        stale.append(w)
-    raise RuntimeError("could not create a quantity spin box")
+    """A ``Gui::QuantitySpinBox`` made by the UI loader (a widget class the Python bindings do not wrap)."""
+    return Gui.UiLoader().createWidget("Gui::QuantitySpinBox")
 
 
 class _Relay(QtCore.QObject):
@@ -187,6 +176,7 @@ class AnalysisPanel:
 
         # curvature page
         page = QtWidgets.QWidget(self.stack)
+        page.setObjectName("G09_CurvaturePage")
         pf = QtWidgets.QFormLayout(page)
         self.kind_box = self._combo("G09_CurvatureKind", [(label, key) for key, label in _CURVATURE_KINDS])
         self.kind_box.setCurrentIndex(1)  # mean, as show_curvature's default
@@ -206,6 +196,7 @@ class AnalysisPanel:
 
         # draft page
         page = QtWidgets.QWidget(self.stack)
+        page.setObjectName("G09_DraftPage")
         pf = QtWidgets.QFormLayout(page)
         self.pull_box = self._combo("G09_DraftPull", [(label, vec) for label, vec in _PULLS])
         self.pull_box.setCurrentIndex(4)  # +Z
@@ -223,6 +214,7 @@ class AnalysisPanel:
 
         # zebra page
         page = QtWidgets.QWidget(self.stack)
+        page.setObjectName("G09_ZebraPage")
         pf = QtWidgets.QFormLayout(page)
         self.zebra_dir_box = self._combo("G09_ZebraDirection", [(label, vec) for label, vec in _ZEBRA_DIRS])
         self._row(pf, "Direction:", self.zebra_dir_box)
@@ -242,8 +234,9 @@ class AnalysisPanel:
         self._relay_type = _Relay(self._type_changed, form)
         self._relay_auto = _Relay(self._auto_toggled, form)
         self._relay = _Relay(self._changed, form)
-        # a UI-loader widget has no Shiboken parent link: when the form dies its wrapper must be dropped
-        # at once, or a later widget made at the same address comes back as this stale wrapper
+        # the spin box is made by the UI loader, so Shiboken does not see it die with the form; drop its
+        # wrapper at once, or a later widget made at the same address comes back as this stale wrapper
+        # (a "Signal source has been deleted" error on the second panel)
         self._relay_done = _Relay(self._release_wrappers, form)
         QtCore.QObject.connect(form, QtCore.SIGNAL("destroyed()"), self._relay_done, QtCore.SLOT("finished()"))
         self.type_box.currentIndexChanged.connect(self._relay_type.changed)
@@ -251,8 +244,7 @@ class AnalysisPanel:
         for widget in (self.kind_box, self.pull_box, self.zebra_dir_box, self.bands_box):
             widget.currentIndexChanged.connect(self._relay.changed)
         for widget in (self.low_spin, self.high_spin, self.draft_spin):
-            # by signature, not through the Python attribute: the wrapper of a UI-loader widget can be
-            # stale after an earlier panel's spin box was freed at the same address
+            # by signature, not through the Python attribute (see above)
             QtCore.QObject.connect(widget, QtCore.SIGNAL("valueChanged(double)"), self._relay, QtCore.SLOT("changed()"))
 
         self._busy = False
