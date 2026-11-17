@@ -188,12 +188,12 @@ class TestGordonGui(unittest.TestCase):
         self._open()
         FreeCADGui.Selection.clearSelection()
         for o in objs[:4]:
-            FreeCADGui.Selection.addSelection(self.doc.Name, part.Name, "%s.Edge1." % o.Name)
+            FreeCADGui.Selection.addSelection(self.doc.Name, part.Name, "%s.Edge1" % o.Name)
         _pump()
         self._w("G09_GordonProfiles_Add").click()
         FreeCADGui.Selection.clearSelection()
         for o in objs[4:]:
-            FreeCADGui.Selection.addSelection(self.doc.Name, part.Name, "%s.Edge1." % o.Name)
+            FreeCADGui.Selection.addSelection(self.doc.Name, part.Name, "%s.Edge1" % o.Name)
         _pump()
         self._w("G09_GordonGuides_Add").click()
         _pump()
