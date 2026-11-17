@@ -151,13 +151,14 @@ def _length_spec(m):
     return ("Distance", m.i, m.length)
 
 
-def _extent_points(model, axis, scale):
+def _extent_points(model, axis, scale, els=None):
     """The overall extent of the drawn outline along `axis` (0 for x, 1 for
     y): (lo, hi, lo points, hi points), or None when a circle or arc reaches
     beyond the points that can be dimensioned (then no point pair carries the
     overall size)."""
     pts = []
-    for m in _drawn(model):
+    els = _drawn(model) if els is None else els
+    for m in els:
         for p, xy in m.pts.items():
             if p == 3 and m.kind in ("circle", "arc", "ellipse", "ellipse_arc"):
                 continue
@@ -168,7 +169,7 @@ def _extent_points(model, axis, scale):
     lo = min(xy[axis] for _, _, xy in pts)
     hi = max(xy[axis] for _, _, xy in pts)
     tol = 1e-6 * scale
-    for m in _drawn(model):
+    for m in els:
         if m.kind in ("circle", "arc", "ellipse", "ellipse_arc"):
             if m.kind == "circle" or m.kind == "arc":
                 if m.c[axis] - m.r < lo - tol or m.c[axis] + m.r > hi + tol:
@@ -201,23 +202,29 @@ def _arc_reaches(m, axis, lo, hi, tol):
     return False
 
 
-def _extent_proposals(model, flip):
+def _extent_proposals(model, flip, els=None, line_form=False):
     """Overall width and height of the outline.  `flip` swaps which of the
     equally good end points and edges is used."""
     out = []
     scale = _scale(model)
     for axis, kind in ((0, "DistanceX"), (1, "DistanceY")):
-        ext = _extent_points(model, axis, scale)
+        ext = _extent_points(model, axis, scale, els)
         if ext is None:
             continue
         lo, hi, lop, hip = ext
         other = 1 - axis
         # a single edge that spans the whole extent carries the size
-        span = [m for m in _drawn(model) if _is_line(m) and _is_hv(m) and abs(m.pts[1][other] - m.pts[2][other]) <= _TOL and min(m.pts[1][axis], m.pts[2][axis]) <= lo + 1e-6 * scale and max(m.pts[1][axis], m.pts[2][axis]) >= hi - 1e-6 * scale]
+        span = [m for m in (_drawn(model) if els is None else els) if _is_line(m) and _is_hv(m) and abs(m.pts[1][other] - m.pts[2][other]) <= _TOL and min(m.pts[1][axis], m.pts[2][axis]) <= lo + 1e-6 * scale and max(m.pts[1][axis], m.pts[2][axis]) >= hi - 1e-6 * scale]
         if span:
-            span.sort(key=lambda m: (m.pts[1][other], m.i))
-            m = span[0] if flip else span[-1]
-            out.append(("extent", _signed(kind, m.i, 1, m.i, 2, m.pts[2][axis] - m.pts[1][axis])))
+            span.sort(key=lambda m: (m.pts[1][other], m.i))  # axis 0: bottom first; axis 1: left first
+            if axis == 0:
+                m = span[-1] if flip else span[0]  # width on the lowest edge
+            else:
+                m = span[0] if flip else span[-1]  # height on the rightmost edge
+            if line_form:
+                out.append(("extent", (kind, m.i, abs(m.pts[2][axis] - m.pts[1][axis]))))
+            else:
+                out.append(("extent", _signed(kind, m.i, 1, m.i, 2, m.pts[2][axis] - m.pts[1][axis])))
             low = [(g, p, xy) for g, p, xy in lop if g == m.i]
             low = low[0] if low else lop[0]
         else:
@@ -521,6 +528,12 @@ def proposals(model, scheme, accepted=()):
             pool.append(("carrier", _length_spec(m)))
     if scheme != "intent":
         pool += _extent_proposals(model, flip)
+    else:
+        nested = _nested_ids(model)
+        if nested:
+            # a frame or wall profile: the surrounding outline gets its overall width and height
+            outer = [m for m in drawn if m.i not in nested]
+            pool += [(k, sp) for k, sp in _extent_proposals(model, flip, outer, True) if k == "extent"]
     if scheme == "intent":
         pool += _angle_axis_proposals(model, accepted)
     else:
@@ -555,6 +568,8 @@ def _norm_key(spec):
     t = spec[0]
     if t in ("DistanceX", "DistanceY") and len(spec) == 6:
         return (t, frozenset({(spec[1], spec[2]), (spec[3], spec[4])}))
+    if t in ("DistanceX", "DistanceY") and len(spec) == 3:
+        return (t, spec[1])
     if t in ("Distance", "Angle") and len(spec) == 6:
         return (t, frozenset({(spec[1], spec[2]), (spec[3], spec[4])}))
     return (t, tuple(spec[1:-1]))

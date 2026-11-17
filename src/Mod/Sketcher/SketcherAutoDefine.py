@@ -829,7 +829,9 @@ class _Axes:
             self.union("y" if spec[3] == -1 else "x", P(spec[1], spec[2]), "o")
         elif t in ("DistanceX", "DistanceY"):
             ax = "x" if t == "DistanceX" else "y"
-            if len(spec) == 4:
+            if len(spec) == 3:
+                self.union(ax, P(spec[1], 1), P(spec[1], 2))
+            elif len(spec) == 4:
                 self.union(ax, P(spec[1], spec[2]), "o")
             else:
                 self.union(ax, P(spec[1], spec[2]), P(spec[3], spec[4]))
@@ -839,6 +841,8 @@ class _Axes:
         P = self.point
         if t in ("DistanceX", "DistanceY"):
             ax = "x" if t == "DistanceX" else "y"
+            if len(spec) == 3:
+                return self.same(ax, P(spec[1], 1), P(spec[1], 2))
             if len(spec) == 4:
                 return self.same(ax, P(spec[1], spec[2]), "o")
             return self.same(ax, P(spec[1], spec[2]), P(spec[3], spec[4]))
