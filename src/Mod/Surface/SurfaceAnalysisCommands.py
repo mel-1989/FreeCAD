@@ -291,6 +291,7 @@ class AnalysisPanel:
                     if n not in self._owners:
                         self._owners.append(n)
         self.view = view
+        self._target_refs = [None if isinstance(t, Part.Shape) else (t.Document.Name, t.Name) for t in self.targets]
         self.handle = None
         self._gone = False
         self._observer = None
@@ -555,6 +556,12 @@ class AnalysisPanel:
                 if any(d == name for d, _o in panel._owners):
                     panel._target_gone()
 
+            def slotUndoDocument(self, doc):
+                panel._maybe_restored(doc)
+
+            def slotRedoDocument(self, doc):
+                panel._maybe_restored(doc)
+
         self._observer = _Observer()
         App.addDocumentObserver(self._observer)
 
@@ -579,6 +586,22 @@ class AnalysisPanel:
         self._drop()
         self.error = ""
         self._say(_tr("The target was deleted; there is nothing left to analyse."))
+
+    def _maybe_restored(self, doc):
+        """Undo brought the deleted targets back: look them up again and redraw the overlay."""
+        try:
+            name = doc.Name
+        except Exception:
+            return
+        if not self._gone or not any(d == name for d, _o in self._owners) or not self._owners_alive():
+            return
+        self._gone = False
+        # the wrappers of the deleted objects are dead; the restored objects carry the same names
+        self.targets = [
+            t if ref is None else App.getDocument(ref[0]).getObject(ref[1])
+            for t, ref in zip(self.targets, self._target_refs)
+        ]
+        self.refresh()
 
     def refresh(self):
         """Replace the panel's overlay with one built from the current widgets."""
