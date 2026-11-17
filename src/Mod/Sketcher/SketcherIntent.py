@@ -69,6 +69,7 @@ PRIORITY = {
     "intent": {
         "size": 0,
         "carrier": 1,
+        "gap": 1.5,
         "extent": 2,
         "extent_origin": 3,
         "angle_nb": 4,
@@ -81,6 +82,7 @@ PRIORITY = {
     "intent_offset": {
         "size": 0,
         "carrier": 1,
+        "gap": 1.5,
         "offset": 2,
         "extent": 3,
         "extent_origin": 4,
@@ -248,7 +250,48 @@ def _anchor(m):
     return p, m.pts[p]
 
 
-def _offset_proposals(model, flip):
+def _nested_ids(model):
+    """Ids of the line elements in closed-up pieces that sit inside another
+    piece's bounding box close to its edges (a wall, a frame, an offset
+    loop): such a piece is sized and placed from the piece around it."""
+    els = [m for m in _drawn(model) if m.kind == 'line' and m.d is not None]
+    parent = {m.i: m.i for m in els}
+
+    def find(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    scale = _scale(model)
+    tol = 1e-6 * scale
+    for a in els:
+        for b in els:
+            if a.i < b.i and any(abs(p[0] - q[0]) <= tol and abs(p[1] - q[1]) <= tol for p in a.pts.values() for q in b.pts.values()):
+                parent[find(b.i)] = find(a.i)
+    pieces = {}
+    for m in els:
+        pieces.setdefault(find(m.i), []).append(m)
+    box = {}
+    for r, ms in pieces.items():
+        xs = [p[0] for m in ms for p in m.pts.values()]
+        ys = [p[1] for m in ms for p in m.pts.values()]
+        box[r] = (min(xs), min(ys), max(xs), max(ys))
+    out = set()
+    for r, (x0, y0, x1, y1) in box.items():
+        for q, (X0, Y0, X1, Y1) in box.items():
+            if q == r:
+                continue
+            margin = min(x0 - X0, y0 - Y0, X1 - x1, Y1 - y1)
+            if margin <= tol:
+                continue
+            if max(x0 - X0, y0 - Y0, X1 - x1, Y1 - y1) <= 0.25 * min(X1 - X0, Y1 - Y0):
+                out.update(m.i for m in pieces[r])
+                break
+    return out
+
+
+def _offset_proposals(model, flip, curves, nested_only=False):
     """Place each feature from the nearest feature already placed: the
     feature's anchor points are tied to the closest point of a placed
     element by a horizontal and a vertical distance (a zero offset is an
@@ -256,13 +299,23 @@ def _offset_proposals(model, flip):
     els = [m for m in _drawn(model) if m.pts]
     if len(els) < 2:
         return []
+    movers = set(m.i for m in els if curves or m.kind in ("line", "point"))
+    if nested_only:
+        nested = _nested_ids(model)
+        movers &= nested
+        if not movers:
+            return []
     scale = _scale(model)
     out = []
     # start from the element holding the lowest-left point; the rest follow
     # nearest first
-    start = min(els, key=lambda m: (min((xy[0], xy[1]) for xy in m.pts.values()), m.i))
-    placed = [start]
-    left = [m for m in els if m is not start]
+    if nested_only:
+        placed = [m for m in els if m.i not in movers]
+        left = [m for m in els if m.i in movers]
+    else:
+        start = min(els, key=lambda m: (min((xy[0], xy[1]) for xy in m.pts.values()), m.i))
+        placed = [start]
+        left = [m for m in els if m is not start]
 
     def pts_of(m):
         return [(m.i, p, xy) for p, xy in sorted(m.pts.items())]
@@ -277,6 +330,7 @@ def _offset_proposals(model, flip):
                     best = (key, (g, p, xy), (h, q, zy))
         return best
 
+    left = [m for m in left if m.i in movers]
     while left:
         cand = [(gap(m), m) for m in left]
         (key, mine, theirs), m = min(cand, key=lambda t: (t[0][0][0], t[1].i))
@@ -301,6 +355,54 @@ def _offset_proposals(model, flip):
                 if abs(v) <= 1e-6 * scale:
                     continue
                 out.append(("offset", _signed(kind, h, q, g, other, v)))
+    return out
+
+
+def _gap_proposals(model):
+    """Two pieces of drawn geometry whose nearest end points are close but
+    not joined (a deliberate small gap or step): the gap is dimensioned
+    along each axis it has."""
+    scale = _scale(model)
+    tol = 1e-6 * scale
+    els = [m for m in _drawn(model) if m.kind in ("line", "arc")]
+    if len(els) < 2 or len(els) > 60:
+        return []
+    parent = {m.i: m.i for m in els}
+
+    def find(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    ends = [(m.i, p, xy) for m in els for p, xy in sorted(m.pts.items()) if p != 3]
+    for a in ends:
+        for b in ends:
+            if a[0] < b[0] and abs(a[2][0] - b[2][0]) <= tol and abs(a[2][1] - b[2][1]) <= tol:
+                parent[find(b[0])] = find(a[0])
+    xs = [xy[0] for _, _, xy in ends]
+    ys = [xy[1] for _, _, xy in ends]
+    diag = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+    best = {}
+    for a in ends:
+        for b in ends:
+            ra, rb = find(a[0]), find(b[0])
+            if ra >= rb:
+                continue
+            d = math.hypot(a[2][0] - b[2][0], a[2][1] - b[2][1])
+            if d <= tol or d > 0.02 * diag:
+                continue
+            key = (ra, rb)
+            cand = (d, a[0], a[1], b[0], b[1], a[2], b[2])
+            if key not in best or cand[:5] < best[key][:5]:
+                best[key] = cand
+    out = []
+    for key in sorted(best):
+        d, g1, p1, g2, p2, a, b = best[key]
+        for ax, kind in ((0, "DistanceX"), (1, "DistanceY")):
+            v = b[ax] - a[ax]
+            if abs(v) > tol:
+                out.append(("gap", _signed(kind, g1, p1, g2, p2, v)))
     return out
 
 
@@ -353,6 +455,32 @@ def _angle_neighbour_proposals(model, flip):
     return out
 
 
+def _angle_axis_proposals(model, accepted):
+    """One angle against the x axis for each group of parallel inclined lines."""
+    parent = list(range(len(model)))
+
+    def find(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    for s in accepted:
+        if s[0] in ("Parallel", "Perpendicular"):
+            a, b = find(s[1]), find(s[2])
+            if a != b:
+                parent[max(a, b)] = min(a, b)
+    seen, out = set(), []
+    for m in _drawn(model):
+        if _is_line(m) and not _is_hv(m):
+            root = find(m.i)
+            if root not in seen:
+                seen.add(root)
+                (x1, y1), (x2, y2) = m.pts[1], m.pts[2]
+                out.append(("angle_axis", ("Angle", m.i, math.atan2(y2 - y1, x2 - x1))))
+    return out
+
+
 def proposals(model, scheme, accepted=()):
     """The ranked dimension specs for an intent scheme.  `accepted` are the
     relation specs already on the copy; of a group of equal elements only one
@@ -391,11 +519,16 @@ def proposals(model, scheme, accepted=()):
     for m in model:
         if m.construction and _is_line(m) and first(m):
             pool.append(("carrier", _length_spec(m)))
-    pool += _extent_proposals(model, flip)
-    pool += _angle_neighbour_proposals(model, flip)
-    pool += _offset_proposals(model, flip)
+    if scheme != "intent":
+        pool += _extent_proposals(model, flip)
+    if scheme == "intent":
+        pool += _angle_axis_proposals(model, accepted)
+    else:
+        pool += _angle_neighbour_proposals(model, flip)
+    pool += _gap_proposals(model)
+    pool += _offset_proposals(model, flip, scheme != "intent", scheme == "intent")
     # remaining line lengths, longest first
-    for m in sorted((m for m in drawn if _is_line(m)), key=lambda m: (-m.length, m.i)):
+    for m in sorted((m for m in drawn if _is_line(m)), key=lambda m: m.i):
         if first(m):
             pool.append(("length", _length_spec(m)))
     # origin placements of every feature anchor
@@ -405,7 +538,11 @@ def proposals(model, scheme, accepted=()):
         pool.append(("origin", ("DistanceY", m.i, p, xy[1])))
     seen = set()
     out = []
+    import os
+    drop = set(os.environ.get('INTENT_DROP', '').split(','))
     for _kind, spec in rank(pool, scheme):
+        if _kind in drop:
+            continue
         key = _norm_key(spec)
         if key in seen:
             continue
