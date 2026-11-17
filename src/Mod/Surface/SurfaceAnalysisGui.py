@@ -8,6 +8,11 @@ polygon offset, so it sits over the shape without taking part in selection. It
 never creates a document object, never touches a view provider property and is
 never saved with the document. The input shapes are never modified.
 
+An overlay is a snapshot: it is computed once from the shape as it is when shown
+and does not follow later recomputes; show it again to refresh. ``clear()``
+without a view acts on the active view only. The default tessellation deflection
+is 0.2% of the shape's bounding-box diagonal, never below 0.01 mm.
+
 Values are computed at exactly the rendered vertices: each face is tessellated, the
 (u, v) of every vertex is found from the surface (B-spline faces match
 ``getUVNodes()`` by position, which is much cheaper than projecting), and the
@@ -71,6 +76,10 @@ _KINDS = ("gauss", "mean", "kmax", "kmin")
 _TEX_W = 256
 _RANGE_FLOOR = 1e-9
 _DEFAULT_DEFLECTION_FRACTION = 2e-3
+# absolute floor of the default (mm): tessellation cost grows with 1/deflection^2 whatever the
+# part's size (a sphere at 0.002 mm takes about 10 s, at 0.01 mm about 0.1 s), so small parts
+# would otherwise hang the GUI
+_DEFAULT_DEFLECTION_FLOOR = 0.01
 
 
 class Overlay:
@@ -205,7 +214,7 @@ def _tessellate(shape, deflection):
     faces = shape.Faces
     if deflection is None:
         bb = shape.BoundBox
-        deflection = max(bb.DiagonalLength * _DEFAULT_DEFLECTION_FRACTION, 1e-6)
+        deflection = max(bb.DiagonalLength * _DEFAULT_DEFLECTION_FRACTION, _DEFAULT_DEFLECTION_FLOOR)
     out = []
     for i, f in enumerate(faces):
         verts, tris = f.tessellate(deflection)
