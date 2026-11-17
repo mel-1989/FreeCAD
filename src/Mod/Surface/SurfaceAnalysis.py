@@ -511,6 +511,9 @@ def edge_continuity(shape, edge, samples=11, faces=None, tol=None):
     box = FreeCAD.BoundBox(ca.face.BoundBox)
     box.add(cb.face.BoundBox)
     size = box.DiagonalLength
+    c = limits["floor"]
+    if isinstance(c, bool) or not isinstance(c, (int, float)) or not (c > 0.0) or math.isinf(c):
+        raise ValueError("tol['floor'] must be a positive finite number")
     if limits["gap"] is None:
         limits["gap"] = max(_GAP_ABS, _GAP_REL * size)
     floor1 = limits["floor"] / size

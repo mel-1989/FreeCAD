@@ -475,6 +475,28 @@ class TestSurfaceAnalysisGui(unittest.TestCase):
                 SG.show_isophotes(shp, view=self.view, **kw)
             self.assertClean()
 
+    def test_isophote_constant_angle_face_at_a_level_draws_no_noise(self):
+        # A 45 degree cone with d = Z has theta = 45 at every vertex of its side; level 45 must give
+        # no segment there (run 112 verifier: rounding drew 108 noise segments).
+        cone = Part.makeCone(10, 0, 10)
+        side = [f for f in cone.Faces if f.Surface.__class__.__name__ == "Cone"][0]
+        for kw in ({"count": 8}, {"angles": [45]}):
+            h = SG.show_isophotes(side, direction=(0, 0, 1), view=self.view, **kw)
+            self.assertEqual([s for s in h.segments if abs(s["level"] - 45.0) < 1e-12], [], str(kw))
+            SG.remove(h)
+        self.assertClean()
+
+    def test_isophote_and_comb_reject_wrong_types(self):
+        shp = Part.makeSphere(5)
+        for kw in ({"angles": "45"}, {"angles": [True]}, {"angles": 45}):
+            with self.assertRaises(ValueError, msg=str(kw)):
+                SG.show_isophotes(shp, view=self.view, **kw)
+        circle = Part.makeCircle(0.1)  # curvature 10: scale 1e308 gives an infinite tooth
+        for scale in ("2.0", 1e308):
+            with self.assertRaises(ValueError, msg=repr(scale)):
+                SG.show_combs(circle, scale=scale, view=self.view)
+        self.assertClean()
+
     def test_isophote_lines_are_visible_on_a_shaded_cylinder(self):
         from PySide import QtGui
 

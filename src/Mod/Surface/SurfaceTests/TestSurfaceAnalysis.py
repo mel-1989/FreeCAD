@@ -440,6 +440,12 @@ class TestSurfaceAnalysis(unittest.TestCase):
         r = SA.edge_continuity(big, big.Edges[0])
         self.assertEqual(r["level"], "G0")
 
+    def test_edge_floor_key_must_be_positive_finite(self):
+        box = Part.makeBox(10, 10, 10)
+        for c in (0, -1.0, float("nan"), float("inf"), True, "0.1"):
+            with self.assertRaises(ValueError, msg=repr(c)):
+                SA.edge_continuity(box, box.Edges[0], tol={"floor": c})
+
     def test_edge_errors(self):
         box = Part.makeBox(10, 10, 10)
         other = Part.makeBox(5, 5, 5, V(100, 0, 0))

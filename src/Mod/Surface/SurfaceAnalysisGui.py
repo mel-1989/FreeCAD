@@ -695,8 +695,17 @@ _ISOPHOTE_COLOR = (0.0, 0.0, 0.0)
 _COMB_COLOR = (0.8, 0.0, 0.8)
 
 
+# A vertex within this many degrees of a level counts as at the level (not above it), so a face whose
+# angle to the direction is constant at a level (a 45 degree cone at level 45) draws no noise lines.
+_ISO_LEVEL_EPS = 1e-9
+
+
 def _parse_isophote_levels(angles, count):
     if angles is not None:
+        if not isinstance(angles, (list, tuple)) or any(
+            isinstance(a, (bool, str, bytes)) for a in angles
+        ):
+            raise ValueError("angles must be a list of numbers")
         try:
             levels = [float(a) for a in angles]
         except (TypeError, ValueError):
@@ -801,7 +810,7 @@ def show_isophotes(target, direction=(0, 0, 1), angles=None, count=8, view=None,
             if any(x != x for x in vals):
                 continue
             for level in levels:
-                above = [x > level for x in vals]
+                above = [x > level + _ISO_LEVEL_EPS for x in vals]
                 if all(above) or not any(above):
                     continue
                 ends = []
@@ -865,7 +874,7 @@ def show_combs(target, scale=None, samples=33, view=None):
             user = float(scale)
         except (TypeError, ValueError):
             raise ValueError("scale must be a positive finite number") from None
-        if isinstance(scale, bool) or not (user > 0.0) or math.isinf(user):
+        if isinstance(scale, (bool, str, bytes)) or not (user > 0.0) or math.isinf(user):
             raise ValueError("scale must be a positive finite number")
     edges = _comb_edges(target)
     if not edges:
@@ -910,7 +919,10 @@ def show_combs(target, scale=None, samples=33, view=None):
         if th["_dir"] is None:
             th["tip"] = FreeCAD.Vector(th["point"])
         else:
-            th["tip"] = th["point"] + th["_dir"] * (scale_used * th["_k"])
+            length = scale_used * th["_k"]
+            if not math.isfinite(length) or not all(math.isfinite(c) for c in th["point"] + th["_dir"] * length):
+                raise ValueError("scale is too large: a tooth would have no finite tip")
+            th["tip"] = th["point"] + th["_dir"] * length
         del th["_dir"], th["_k"]
 
     tooth_lines = [[(th["point"].x, th["point"].y, th["point"].z), (th["tip"].x, th["tip"].y, th["tip"].z)] for th in teeth]
