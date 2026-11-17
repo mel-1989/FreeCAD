@@ -310,6 +310,8 @@ void DrawViewPart::onChanged(const App::Property* prop)
 
 void DrawViewPart::partExec(TopoDS_Shape& shape)
 {
+    //the face task of the previous cycle reads m_saveShape and geometryObject, which this cycle rewrites
+    waitForFaceThread();
     if (waitingForHlr()) {
         //finish what we are already doing before starting a new cycle
         return;
@@ -409,6 +411,7 @@ TechDraw::GeometryObjectPtr DrawViewPart::buildGeometryObject(const TopoDS_Shape
     //note that &m_hlrWatcher in the third parameter is not strictly required, but using the
     //4 parameter signature instead of the 3 parameter signature prevents clazy warning:
     //https://github.com/KDE/clazy/blob/1.11/docs/checks/README-connect-3arg-lambda.md
+    QObject::disconnect(connectHlrWatcher);  //never leave a stale connection behind
     connectHlrWatcher = QObject::connect(&m_hlrWatcher, &QFutureWatcherBase::finished,
                                          &m_hlrWatcher, [this] { this->onHlrFinished(); });
 
@@ -436,6 +439,9 @@ void DrawViewPart::dropDetachedResult()
 //! continue processing after hlr thread completes
 void DrawViewPart::onHlrFinished()
 {
+    //the face task of the previous cycle reads geometryObject and the section face members, which are
+    //replaced below and in postHlrTasks: let it finish first
+    waitForFaceThread();
     if (!isAttachedToDocument()) {
         //the view was deleted (inside a transaction, so undo keeps it alive) while its thread ran:
         //its queued result must not run the code below on a view that has no document
@@ -518,6 +524,10 @@ void DrawViewPart::onHlrFinished()
             //note that &m_faceWatcher in the third parameter is not strictly required, but using the
             //4 parameter signature instead of the 3 parameter signature prevents clazy warning:
             //https://github.com/KDE/clazy/blob/1.11/docs/checks/README-connect-3arg-lambda.md
+            //setFuture below drops the previous task's queued finished signal, so the onFacesFinished
+            //that would have disconnected the previous connection never runs: disconnect it here, or
+            //every later face result runs onFacesFinished once per leaked connection
+            QObject::disconnect(connectFaceWatcher);
             connectFaceWatcher =
                 QObject::connect(&m_faceWatcher, &QFutureWatcherBase::finished, &m_faceWatcher,
                                  [this] { this->onFacesFinished(); });
