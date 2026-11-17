@@ -61,6 +61,10 @@ def _points(node):
     return [tuple(p.getValue()) for p in c.point.getValues(0)][: c.point.getNum()]
 
 
+def _lateral_cyl():
+    return next(f for f in Part.makeCylinder(5, 10).Faces if f.Surface.TypeId == "Part::GeomCylinder")
+
+
 class TestSurfaceAnalysisGui(unittest.TestCase):
     def setUp(self):
         self.doc = FreeCAD.newDocument("G09Gui")
@@ -395,3 +399,229 @@ class TestSurfaceAnalysisGui(unittest.TestCase):
             self.assertAlmostEqual(r["value"], ref, delta=1e-9 * max(1.0, abs(ref)))
             p = bs.valueAt(r["u"], r["v"])
             self.assertLess((p - r["point"]).Length, 1e-6)
+
+    # ------------------------------------------------------- slice 2c: isophotes
+
+    def test_isophote_values_and_segment_endpoints(self):
+        d = V(0, 0, 1)
+        rev = Part.makeSphere(10).Faces[0].copy()
+        rev.reverse()
+        for shp, sign in ((Part.makeSphere(10), 1.0), (rev, -1.0)):
+            for kw in ({"count": 4}, {"count": 8}, {"angles": [30, 60, 120]}):
+                h = SG.show_isophotes(shp, d, view=self.view, **kw)
+                self.assertEqual(h.kind, "isophote")
+                self.assertIsNone(h.range)
+                self.assertIsNone(h.legend)
+                for r in h.vertices:
+                    if math.isnan(r["value"]):
+                        continue
+                    p = r["point"]
+                    want = math.degrees(math.acos(max(-1.0, min(1.0, sign * p.z / 10.0))))
+                    self.assertAlmostEqual(r["value"], want, delta=1e-6)
+                    self.assertEqual(r["color"], (0.0, 0.0, 0.0))
+                self.assertGreater(len(h.segments), 0)
+                levels = {s["level"] for s in h.segments}
+                want_levels = kw.get("angles") or [k * 180.0 / kw["count"] for k in range(1, kw["count"])]
+                self.assertTrue(levels <= set(float(x) for x in want_levels))
+                SG.remove(h)
+
+    def test_isophote_geometry_sphere_cylinder_plane(self):
+        h = SG.show_isophotes(Part.makeSphere(10), (0, 0, 1), count=4, view=self.view)
+        for lvl in (45.0, 90.0, 135.0):
+            total = sum((s["p1"] - s["p0"]).Length for s in h.segments if s["level"] == lvl)
+            want = 2 * math.pi * 10 * math.sin(math.radians(lvl))
+            self.assertLess(abs(total - want) / want, 0.02, (lvl, total, want))
+            for s in h.segments:
+                if s["level"] == lvl:
+                    for p in (s["p0"], s["p1"]):
+                        th = math.degrees(math.acos(max(-1, min(1, p.z / p.Length))))
+                        self.assertLess(abs(th - lvl), 0.5)
+        SG.remove(h)
+        cyl = _lateral_cyl()
+        h = SG.show_isophotes(cyl, (1, 0, 0), count=4, view=self.view)
+        for lvl in (45.0, 90.0, 135.0):
+            total = sum((s["p1"] - s["p0"]).Length for s in h.segments if s["level"] == lvl)
+            self.assertLess(abs(total - 2 * 10.0) / 20.0, 0.02, (lvl, total))
+        SG.remove(h)
+        h = SG.show_isophotes(Part.makePlane(10, 10), (0, 0, 1), count=8, view=self.view)
+        self.assertEqual(h.segments, [])
+        SG.remove(h)
+        self.assertClean()
+
+    def test_isophote_overlay_is_unlit_unpickable_black_and_clearable(self):
+        from pivy import coin
+
+        o = self.obj(Part.makeSphere(5))
+        h = SG.show_isophotes(o, view=self.view)
+        self.assertEqual(h.node.getName().getString(), "G09_OVERLAY_isophote")
+        self.assertEqual(_child(h.node, "SoPickStyle").style.getValue(), coin.SoPickStyle.UNPICKABLE)
+        self.assertEqual(_child(h.node, "SoLightModel").model.getValue(), coin.SoLightModel.BASE_COLOR)
+        self.assertEqual(self.ufs.getNumChildren(), self.base_children + 1)
+        SG.remove(h)
+        self.assertClean()
+        SG.remove(h)
+        self.assertClean()
+        SG.show_isophotes(o, view=self.view)
+        SG.show_combs(o, view=self.view)
+        self.assertEqual(self.ufs.getNumChildren(), self.base_children + 2)
+        SG.clear(self.view)
+        self.assertClean()
+
+    def test_isophote_errors_leave_scene_untouched(self):
+        shp = Part.makeSphere(5)
+        for kw in ({"count": 1}, {"count": 91}, {"count": True}, {"count": 2.5}, {"angles": [0]},
+                   {"angles": [180]}, {"angles": [30, -1]}, {"angles": []}, {"direction": (0, 0, 0)}):
+            with self.assertRaises(ValueError, msg=str(kw)):
+                SG.show_isophotes(shp, view=self.view, **kw)
+            self.assertClean()
+
+    def test_isophote_constant_angle_face_at_a_level_draws_no_noise(self):
+        # A 45 degree cone with d = Z has theta = 45 at every vertex of its side; level 45 must give
+        # no segment there (run 112 verifier: rounding drew 108 noise segments).
+        cone = Part.makeCone(10, 0, 10)
+        side = [f for f in cone.Faces if f.Surface.__class__.__name__ == "Cone"][0]
+        for kw in ({"count": 8}, {"angles": [45]}):
+            h = SG.show_isophotes(side, direction=(0, 0, 1), view=self.view, **kw)
+            self.assertEqual([s for s in h.segments if abs(s["level"] - 45.0) < 1e-12], [], str(kw))
+            SG.remove(h)
+        self.assertClean()
+
+    def test_isophote_and_comb_reject_wrong_types(self):
+        shp = Part.makeSphere(5)
+        for kw in ({"angles": "45"}, {"angles": [True]}, {"angles": 45}):
+            with self.assertRaises(ValueError, msg=str(kw)):
+                SG.show_isophotes(shp, view=self.view, **kw)
+        circle = Part.makeCircle(0.1)  # curvature 10: scale 1e308 gives an infinite tooth
+        for scale in ("2.0", 1e308):
+            with self.assertRaises(ValueError, msg=repr(scale)):
+                SG.show_combs(circle, scale=scale, view=self.view)
+        self.assertClean()
+
+    def test_isophote_lines_are_visible_on_a_shaded_cylinder(self):
+        from PySide import QtGui
+
+        o = self.obj(Part.makeCylinder(5, 10, V(0, 0, -5)), "Cyl")
+        self.view.setCameraType("Orthographic")
+        self.view.setCamera(
+            "#Inventor V2.1 ascii\nOrthographicCamera { position 0 -50 0 orientation 1 0 0 1.5707963 "
+            "nearDistance 1 farDistance 200 aspectRatio 1.3333 focalDistance 50 height 30 }"
+        )
+        self.doc.getObject("Anchor").ViewObject.Visibility = False
+        h = SG.show_isophotes(o, (1, 0, 0), count=8, view=self.view)
+        _pump(8)
+        path = os.path.join(tempfile.mkdtemp(prefix="g09gui-"), "iso.png")
+        self.view.saveImage(path, 480, 360, "White")
+        img = QtGui.QImage(path).convertToFormat(QtGui.QImage.Format_RGB888)
+        for k in range(1, 8):
+            px = 240 + 5.0 * math.cos(k * math.pi / 8) * 12.0
+            dark = [x for x in range(int(px) - 2, int(px) + 4) if img.pixelColor(x, 150).red() < 80]
+            self.assertTrue(dark, "no dark pixel near x = %.1f for k = %d" % (px, k))
+        SG.remove(h)
+
+    # ---------------------------------------------------- slice 2c: curvature combs
+
+    def test_comb_values_circle_ellipse_helix(self):
+        cases = [
+            (Part.makeCircle(10), lambda p: 0.1),
+            (Part.Ellipse(V(0, 0, 0), 10, 4).toShape(), None),
+        ]
+        for edge, truth in cases:
+            h = SG.show_combs(edge, samples=9, view=self.view)
+            self.assertEqual(h.kind, "comb")
+            self.assertEqual(h.vertices, [])
+            self.assertEqual(len(h.teeth), 9)
+            first, last = edge.FirstParameter, edge.LastParameter
+            for i, th in enumerate(h.teeth):
+                self.assertAlmostEqual(th["t"], first + i * (last - first) / 8, delta=1e-12)
+                if truth is not None:
+                    want = truth(th["point"])
+                else:
+                    t = math.atan2(th["point"].y / 4.0, th["point"].x / 10.0)
+                    want = 10 * 4 / (100 * math.sin(t) ** 2 + 16 * math.cos(t) ** 2) ** 1.5
+                self.assertLess(abs(th["curvature"] - want) / want, 1e-9)
+                away = th["tip"] - th["point"]
+                self.assertLess(abs(away.Length - h.scale * th["curvature"]), 1e-9 * max(1.0, away.Length))
+                # a tooth points outward: against the inward normal of a convex curve
+                self.assertGreater(away.dot(th["point"]), 0.0)
+            SG.remove(h)
+        helix = Part.makeHelix(8, 16, 5)
+        h = SG.show_combs(helix, samples=9, view=self.view)
+        c = 8 / (2 * math.pi)
+        for th in h.teeth:
+            self.assertLess(abs(th["curvature"] - 5 / (25 + c * c)) / th["curvature"], 1e-3)  # OCCT's helix is a spline approximation
+        SG.remove(h)
+
+    def test_comb_scale_rule_and_lines(self):
+        edge = Part.makeCircle(10)
+        h = SG.show_combs(edge, view=self.view)
+        longest = max((th["tip"] - th["point"]).Length for th in h.teeth)
+        self.assertLess(abs(longest - 0.2 * edge.BoundBox.DiagonalLength) / longest, 1e-9)
+        SG.remove(h)
+        h = SG.show_combs(edge, scale=2.5, view=self.view)
+        self.assertEqual(h.scale, 2.5)
+        SG.remove(h)
+        line = Part.makeLine(V(0, 0, 0), V(5, 0, 0))
+        h = SG.show_combs([line], view=self.view)
+        self.assertEqual(h.scale, 1.0)
+        for th in h.teeth:
+            self.assertEqual(th["curvature"], 0.0)
+            self.assertLess((th["tip"] - th["point"]).Length, 1e-12)
+        SG.remove(h)
+
+    def test_comb_drawing_lifecycle_and_errors(self):
+        from pivy import coin
+
+        circ = Part.makeCircle(10)
+        h = SG.show_combs(circ, view=self.view)
+        self.assertEqual(h.node.getName().getString(), "G09_OVERLAY_comb")
+        self.assertEqual(_child(h.node, "SoPickStyle").style.getValue(), coin.SoPickStyle.UNPICKABLE)
+        self.assertEqual(_child(h.node, "SoLightModel").model.getValue(), coin.SoLightModel.BASE_COLOR)
+        SG.remove(h)
+        self.assertClean()
+        for kw in ({"samples": 1}, {"samples": 2.5}, {"samples": True}, {"scale": 0}, {"scale": -1},
+                   {"scale": float("nan")}, {"scale": float("inf")}):
+            with self.assertRaises(ValueError, msg=str(kw)):
+                SG.show_combs(circ, view=self.view, **kw)
+            self.assertClean()
+        with self.assertRaises(ValueError):
+            SG.show_combs(Part.Vertex(V(1, 2, 3)), view=self.view)
+        with self.assertRaises(ValueError):
+            SG.show_combs([], view=self.view)
+        self.assertClean()
+
+    def test_comb_on_object_in_placed_part_follows_placement(self):
+        part = self.doc.addObject("App::Part", "Holder")
+        part.Placement = FreeCAD.Placement(V(100, 0, 0), FreeCAD.Rotation(V(0, 0, 1), 90))
+        box = self.doc.addObject("Part::Box", "Box")
+        part.addObject(box)
+        self.doc.recompute()
+        want = SG.placed_shape(box)
+        h = SG.show_combs(box, view=self.view)
+        self.assertEqual(len(h.teeth), 12 * 33)
+        for th in h.teeth[::17]:
+            self.assertLess(Part.Vertex(th["point"]).distToShape(want)[0], 1e-6)
+        SG.remove(h)
+
+    def test_comb_pixels_magenta_on_rays(self):
+        from PySide import QtGui
+
+        self.doc.getObject("Anchor").ViewObject.Visibility = False
+        self.view.setCameraType("Orthographic")
+        self.view.setCamera(
+            "#Inventor V2.1 ascii\nOrthographicCamera { position 0 0 50 orientation 0 0 1 0 "
+            "nearDistance 1 farDistance 200 aspectRatio 1.3333 focalDistance 50 height 40 }"
+        )
+        h = SG.show_combs(Part.makeCircle(10), scale=20, samples=33, view=self.view)
+        _pump(8)
+        path = os.path.join(tempfile.mkdtemp(prefix="g09gui-"), "comb.png")
+        self.view.saveImage(path, 480, 360, "White")
+        img = QtGui.QImage(path).convertToFormat(QtGui.QImage.Format_RGB888)
+        hits = 0
+        for ang in range(0, 360, 45):
+            r = 11.5 * 9.0
+            x = int(round(240 + r * math.cos(math.radians(ang))))
+            y = int(round(180 - r * math.sin(math.radians(ang))))
+            near = [img.pixelColor(x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)]
+            hits += any(abs(c.red() - 204) < 30 and c.green() < 60 and abs(c.blue() - 204) < 30 for c in near)
+        self.assertEqual(hits, 8)
+        SG.remove(h)

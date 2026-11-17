@@ -26,10 +26,16 @@ from PySide import QtCore, QtWidgets
 
 import SurfaceAnalysisGui as SG
 
-__all__ = ["AnalysisPanel", "selected_targets"]
+__all__ = ["AnalysisPanel", "selected_targets", "selected_subshapes"]
 
-CURVATURE, DRAFT, ZEBRA = "curvature", "draft", "zebra"
-_TYPES = ((CURVATURE, "Curvature"), (DRAFT, "Draft"), (ZEBRA, "Zebra stripes"))
+CURVATURE, DRAFT, ZEBRA, ISOPHOTE, COMB = "curvature", "draft", "zebra", "isophote", "comb"
+_TYPES = (
+    (CURVATURE, "Curvature"),
+    (DRAFT, "Draft"),
+    (ZEBRA, "Zebra stripes"),
+    (ISOPHOTE, "Isophote lines"),
+    (COMB, "Curvature combs"),
+)
 _CURVATURE_KINDS = (
     ("gauss", "Gaussian"),
     ("mean", "Mean"),
@@ -46,6 +52,8 @@ _PULLS = (
 )
 _ZEBRA_DIRS = (("X", (1, 0, 0)), ("Y", (0, 1, 0)), ("Z", (0, 0, 1)))
 _BANDS = (4, 8, 16, 32, 64)
+_ISOPHOTE_COUNTS = (4, 6, 8, 12, 18)
+_COMB_SAMPLES = (9, 17, 33, 65)
 DEFAULT_MIN_DRAFT = 1.0
 
 
@@ -63,35 +71,141 @@ def _object_shape(obj):
     return None
 
 
-def selected_targets():
-    """The analysis targets of the selection: a list of document objects (the whole object) and
-    ``Part.Face`` (selected faces), in selection order. Objects without a usable shape are skipped."""
+def _sub_type(subname):
+    """``"object"`` for a path that ends in ``.``, else the element type from the last name: ``"Face"``,
+    ``"Edge"``, ``"Vertex"`` or ``""``."""
+    last = subname.rsplit(".", 1)[-1]
+    if not last:
+        return "object"
+    for kind in ("Face", "Edge", "Vertex"):
+        if last.startswith(kind):
+            return kind
+    return ""
+
+
+def _owner_names(top, subname):
+    """The (document, object) names along a selection path: the top object, then each container down
+    to the leaf, so the panel can notice when any of them is deleted."""
+    names = [(top.Document.Name, top.Name)]
+    try:
+        for owner in top.getSubObjectList(subname):
+            names.append((owner.Document.Name, owner.Name))
+    except Exception:
+        pass
+    return names
+
+
+def selected_subshapes(types=("Face", "object")):
+    """The selection resolved to the shapes the 3D view shows, as a list of dicts with keys ``type``
+    (``"Face"``, ``"Edge"``, ``"Vertex"`` or ``"object"``), ``object`` (the top selected object),
+    ``subname`` (the dotted path, ``""`` for a whole-object entry), ``shape`` (a ``Part.Shape`` with every
+    placement on the path applied, or the object itself for a whole-object entry) and ``owners`` (the
+    ``(document, object)`` names along the path).
+
+    Each selection entry is read unresolved (the top object and its dotted sub-names) and each sub-name
+    goes through ``Part.getShape(top, subname, needSubElement=True)``, which applies the placement of
+    every container on the path. ``types`` filters the result. An entry without sub-names is the top
+    object (``type "object"``, ``shape`` ``None``: the caller gets the object itself)."""
     out = []
     try:
         selection = Gui.Selection.getSelectionEx("", 0)
     except Exception:
         return out
     for sel in selection:
-        obj = sel.Object
-        shape = _object_shape(obj)
-        if shape is None:
+        top = sel.Object
+        names = [n for n in sel.SubElementNames if n]
+        if not names:
+            if "object" in types and _object_shape(top) is not None:
+                out.append({"type": "object", "object": top, "subname": "", "shape": None,
+                            "owners": [(top.Document.Name, top.Name)]})
             continue
-        faces = []
-        for name in sel.SubElementNames:
-            if name.startswith("Face"):
-                try:
-                    faces.append(shape.getElement(name))
-                except Exception:
-                    pass
-        out.extend(faces if faces else [obj])
+        for name in names:
+            kind = _sub_type(name)
+            if kind not in types:
+                continue
+            try:
+                if kind == "object":
+                    shape = Part.getShape(top, name, needSubElement=False, transform=True)
+                else:
+                    shape = Part.getShape(top, name, needSubElement=True)
+            except Exception:
+                continue
+            if shape is None or shape.isNull():
+                continue
+            if kind == "object" and not shape.Faces:
+                continue
+            if kind != "object" and shape.ShapeType != kind:
+                continue
+            out.append({"type": kind, "object": top, "subname": name, "shape": shape,
+                        "owners": _owner_names(top, name)})
     return out
+
+
+def selected_targets():
+    """The analysis targets of the selection: a document object (an entry without sub-names), a
+    ``Part.Face`` (a picked face) or a ``Part.Shape`` (a named sub-object), in selection order, every
+    shape with the placements of its containers applied. Edges and vertices are ignored."""
+    return [t for t, _owners in _selected_entries()]
+
+
+def _selected_entries():
+    out = []
+    for item in selected_subshapes():
+        target = item["object"] if item["shape"] is None else item["shape"]
+        out.append((target, item["owners"]))
+    return out
+
+
+def _edges_of(shape):
+    return list(shape.Edges) if isinstance(shape, Part.Shape) else []
+
+
+def _comb_edges(items):
+    """The edges the combs command draws on: selected edges, the edges of selected faces and every edge
+    of a whole object, in selection order, each with the placements of its path applied, without
+    duplicates."""
+    edges = []
+    for item in items:
+        if item["type"] == "Edge":
+            found = [item["shape"]]
+        elif item["shape"] is not None:
+            found = _edges_of(item["shape"])
+        else:
+            found = _edges_of(SG.placed_shape(item["object"]))
+        for e in found:
+            if not any(e.isSame(x) for x in edges):
+                edges.append(e)
+    return edges
+
+
+def _has_edge_selection():
+    try:
+        for sel in Gui.Selection.getSelectionEx("", 0):
+            names = [n for n in sel.SubElementNames if n]
+            if not names:
+                shape = getattr(sel.Object, "Shape", None)
+                if isinstance(shape, Part.Shape) and not shape.isNull() and shape.Edges:
+                    return True
+                continue
+            for name in names:
+                if _sub_type(name) in ("Face", "Edge", "object"):
+                    return True
+    except Exception:
+        pass
+    return False
 
 
 def _has_analysable_selection():
     try:
-        for obj in Gui.Selection.getSelection("", 0):
-            if _object_shape(obj) is not None:
-                return True
+        for sel in Gui.Selection.getSelectionEx("", 0):
+            names = [n for n in sel.SubElementNames if n]
+            if not names:
+                if _object_shape(sel.Object) is not None:
+                    return True
+                continue
+            for name in names:
+                if _sub_type(name) in ("Face", "object"):
+                    return True
     except Exception:
         pass
     return False
@@ -101,7 +215,7 @@ def _one_target(targets):
     """One argument for the 2a API: the target itself, or a compound of several."""
     if len(targets) == 1:
         return targets[0]
-    shapes = [t if isinstance(t, Part.Shape) else t.Shape for t in targets]
+    shapes = [t if isinstance(t, Part.Shape) else SG.placed_shape(t) for t in targets]
     return Part.makeCompound(shapes)
 
 
@@ -153,9 +267,33 @@ class AnalysisPanel:
     """
 
     def __init__(self, analysis=CURVATURE, targets=None, view=None):
-        self.targets = list(targets) if targets is not None else selected_targets()
+        if targets is not None:
+            self.targets = list(targets)
+            self._owners = [n for t in self.targets if not isinstance(t, Part.Shape) for n in [(t.Document.Name, t.Name)]]
+            self.edge_targets = []
+            for t in self.targets:
+                if isinstance(t, Part.Shape):
+                    self.edge_targets.extend(_edges_of(t))
+                else:
+                    self.edge_targets.extend(_edges_of(SG.placed_shape(t)))
+        else:
+            items = selected_subshapes(("Face", "Edge", "object"))
+            entries = [
+                (it["object"] if it["shape"] is None else it["shape"], it["owners"])
+                for it in items
+                if it["type"] != "Edge"
+            ]
+            self.targets = [t for t, _o in entries]
+            self.edge_targets = _comb_edges(items)
+            self._owners = []
+            for it in items:
+                for n in it["owners"]:
+                    if n not in self._owners:
+                        self._owners.append(n)
         self.view = view
         self.handle = None
+        self._gone = False
+        self._observer = None
         self.error = ""
         self._busy = True
 
@@ -223,6 +361,36 @@ class AnalysisPanel:
         self._row(pf, "Bands:", self.bands_box)
         self.stack.addWidget(page)
 
+        # isophote page
+        page = QtWidgets.QWidget(self.stack)
+        page.setObjectName("G09_IsophotePage")
+        pf = QtWidgets.QFormLayout(page)
+        self.iso_dir_box = self._combo("G09_IsophoteDirection", [(label, vec) for label, vec in _ZEBRA_DIRS])
+        self.iso_dir_box.setCurrentIndex(2)  # Z
+        self._row(pf, "Direction:", self.iso_dir_box)
+        self.iso_count_box = self._combo("G09_IsophoteCount", [(str(n), n) for n in _ISOPHOTE_COUNTS])
+        self.iso_count_box.setCurrentIndex(_ISOPHOTE_COUNTS.index(8))
+        self._row(pf, "Count:", self.iso_count_box)
+        self.stack.addWidget(page)
+
+        # comb page
+        page = QtWidgets.QWidget(self.stack)
+        page.setObjectName("G09_CombPage")
+        pf = QtWidgets.QFormLayout(page)
+        self.comb_auto_box = QtWidgets.QCheckBox(_tr("Automatic scale"), form)
+        self.comb_auto_box.setObjectName("G09_CombAutoScale")
+        self.comb_auto_box.setChecked(True)
+        self.comb_auto_box.setToolTip(_tr("Make the longest tooth a fifth of the diagonal of the edges"))
+        pf.addRow(self.comb_auto_box)
+        self.comb_scale_spin = self._double("G09_CombScale", 1.0)
+        self.comb_scale_spin.setRange(1e-9, 1e9)
+        self._row(pf, "Scale:", self.comb_scale_spin)
+        self.comb_scale_spin.setEnabled(False)
+        self.comb_samples_box = self._combo("G09_CombSamples", [(str(n), n) for n in _COMB_SAMPLES])
+        self.comb_samples_box.setCurrentIndex(_COMB_SAMPLES.index(33))
+        self._row(pf, "Samples:", self.comb_samples_box)
+        self.stack.addWidget(page)
+
         self.status = QtWidgets.QLabel(form)
         self.status.setObjectName("G09_AnalysisStatus")
         self.status.setWordWrap(True)
@@ -233,6 +401,7 @@ class AnalysisPanel:
 
         self._relay_type = _Relay(self._type_changed, form)
         self._relay_auto = _Relay(self._auto_toggled, form)
+        self._relay_comb_auto = _Relay(self._comb_auto_toggled, form)
         self._relay = _Relay(self._changed, form)
         # the spin box is made by the UI loader, so Shiboken does not see it die with the form; drop its
         # wrapper at once, or a later widget made at the same address comes back as this stale wrapper
@@ -241,13 +410,18 @@ class AnalysisPanel:
         QtCore.QObject.connect(form, QtCore.SIGNAL("destroyed()"), self._relay_done, QtCore.SLOT("finished()"))
         self.type_box.currentIndexChanged.connect(self._relay_type.changed)
         self.auto_box.toggled.connect(self._relay_auto.toggled)
-        for widget in (self.kind_box, self.pull_box, self.zebra_dir_box, self.bands_box):
+        self.comb_auto_box.toggled.connect(self._relay_comb_auto.toggled)
+        for widget in (
+            self.kind_box, self.pull_box, self.zebra_dir_box, self.bands_box,
+            self.iso_dir_box, self.iso_count_box, self.comb_samples_box,
+        ):
             widget.currentIndexChanged.connect(self._relay.changed)
-        for widget in (self.low_spin, self.high_spin, self.draft_spin):
+        for widget in (self.low_spin, self.high_spin, self.draft_spin, self.comb_scale_spin):
             # by signature, not through the Python attribute (see above)
             QtCore.QObject.connect(widget, QtCore.SIGNAL("valueChanged(double)"), self._relay, QtCore.SLOT("changed()"))
 
         self._busy = False
+        self._watch_owners()
         self.refresh()
 
     # ---- widget helpers
@@ -297,6 +471,15 @@ class AnalysisPanel:
                     "min_draft": float(self.draft_spin.property("rawValue")),
                 },
             )
+        if a == ISOPHOTE:
+            return (
+                "show_isophotes",
+                (),
+                {"direction": self.iso_dir_box.currentData(), "count": int(self.iso_count_box.currentData())},
+            )
+        if a == COMB:
+            scale = None if self.comb_auto_box.isChecked() else self.comb_scale_spin.value()
+            return "show_combs", (), {"scale": scale, "samples": int(self.comb_samples_box.currentData())}
         return (
             "show_zebra",
             (),
@@ -321,11 +504,22 @@ class AnalysisPanel:
                 self._busy = False
         self._changed()
 
+    def _comb_auto_toggled(self, on=True):
+        self.comb_scale_spin.setEnabled(not on)
+        if not on and self.handle is not None and getattr(self.handle, "kind", "") == "comb":
+            self._busy = True  # start from the automatic scale the user was looking at
+            try:
+                self.comb_scale_spin.setValue(self.handle.scale)
+            finally:
+                self._busy = False
+        self._changed()
+
     def _changed(self, *_a):
         if not self._busy:
             self.refresh()
 
     def _release_wrappers(self):
+        self._unwatch_owners()
         import shiboken6
 
         try:
@@ -338,19 +532,78 @@ class AnalysisPanel:
             SG.remove(self.handle)
             self.handle = None
 
+    # ---- deleted targets
+    def _watch_owners(self):
+        if not self._owners:
+            return
+        panel = self
+
+        class _Observer:
+            def slotDeletedObject(self, obj):
+                try:
+                    key = (obj.Document.Name, obj.Name)
+                except Exception:
+                    return
+                if key in panel._owners:
+                    panel._target_gone()
+
+            def slotDeletedDocument(self, doc):
+                try:
+                    name = doc.Name
+                except Exception:
+                    return
+                if any(d == name for d, _o in panel._owners):
+                    panel._target_gone()
+
+        self._observer = _Observer()
+        App.addDocumentObserver(self._observer)
+
+    def _unwatch_owners(self):
+        if getattr(self, "_observer", None) is not None:
+            try:
+                App.removeDocumentObserver(self._observer)
+            except Exception:
+                pass
+            self._observer = None
+
+    def _owners_alive(self):
+        for doc_name, obj_name in self._owners:
+            doc = App.getDocument(doc_name) if doc_name in App.listDocuments() else None
+            if doc is None or doc.getObject(obj_name) is None:
+                return False
+        return True
+
+    def _target_gone(self):
+        """A target object was deleted: drop the overlay, forget the targets and say so."""
+        self._gone = True
+        self._drop()
+        self.error = ""
+        self._say(_tr("The target was deleted; there is nothing left to analyse."))
+
     def refresh(self):
         """Replace the panel's overlay with one built from the current widgets."""
         self._drop()
         self.error = ""
-        if not self.targets:
-            self._say(_tr("Select a shape or faces first."))
+        if self._gone or not self._owners_alive():
+            self._target_gone()
             return
         name, args, kwargs = self.parameters()
+        if name == "show_combs":
+            if not self.edge_targets:
+                self._say(_tr("Select an edge, a face or a shape with edges first."))
+                return
+        elif not self.targets:
+            self._say(_tr("Select a shape or faces first."))
+            return
         try:
             view = self.view if self.view is not None else SG._active_view(None)
+            if name == "show_combs":
+                self.handle = SG.show_combs(list(self.edge_targets), view=view, **kwargs)
+                self._say(self._summary())
+                return
             target = _one_target(self.targets)
-            if name == "show_zebra":
-                self.handle = SG.show_zebra(target, view=view, **kwargs)
+            if name in ("show_zebra", "show_isophotes"):
+                self.handle = getattr(SG, name)(target, view=view, **kwargs)
             else:
                 self.handle = getattr(SG, name)(target, view=view, legend=True, **kwargs)
         except (ValueError, RuntimeError) as e:
@@ -360,6 +613,10 @@ class AnalysisPanel:
         self._say(self._summary())
 
     def _summary(self):
+        if self.handle.kind == "comb":
+            return _tr("%d edge(s), %d teeth") % (len(self.edge_targets), len(self.handle.teeth))
+        if self.handle.kind == "isophote":
+            return _tr("%d target(s), %d line segments") % (len(self.targets), len(self.handle.segments))
         n = len(self.targets)
         return _tr("%d target(s), %d vertices") % (n, len(self.handle.vertices))
 
@@ -374,10 +631,12 @@ class AnalysisPanel:
         return True
 
     def accept(self):
+        self._unwatch_owners()
         self.handle = None  # the overlay and its legend stay in the view
         return True
 
     def reject(self):
+        self._unwatch_owners()
         self._drop()
         return True
 
@@ -411,7 +670,11 @@ class _AnalysisCommand:
 
     def Activated(self):
         panel = AnalysisPanel(self.analysis)
-        Gui.Control.showDialog(panel)
+        try:
+            Gui.Control.showDialog(panel)
+        except Exception:
+            panel.reject()  # no overlay, legend or observer outlives a dialog that never opened
+            raise
 
 
 class _CurvatureCommand(_AnalysisCommand):
@@ -436,6 +699,29 @@ class _ZebraCommand(_AnalysisCommand):
     menu = "Zebra stripes"
     tip = "Draw zebra stripes on the selected shapes or faces to judge how smoothly surfaces join"
     status = "Show zebra stripes on the selection in the 3D view"
+
+
+class _IsophoteCommand(_AnalysisCommand):
+    analysis = ISOPHOTE
+    pixmap = "Surface_IsophoteAnalysis"
+    menu = "Isophote lines"
+    tip = "Draw isophote lines on the selected shapes or faces to judge how smoothly surfaces join"
+    status = "Show isophote lines of the selection in the 3D view"
+
+
+class _CombCommand(_AnalysisCommand):
+    analysis = COMB
+    pixmap = "Surface_CurvatureComb"
+    menu = "Curvature combs"
+    tip = "Draw curvature combs on the selected edges, on the edges of the selected faces or on every edge of the selected shapes"
+    status = "Show curvature combs of the selected edges in the 3D view"
+
+    def IsActive(self):
+        return (
+            Gui.ActiveDocument is not None
+            and not Gui.Control.activeDialog()
+            and _has_edge_selection()
+        )
 
 
 class _ClearCommand:
@@ -467,6 +753,8 @@ COMMANDS = (
     ("Surface_CurvatureAnalysis", _CurvatureCommand),
     ("Surface_DraftAnalysis", _DraftCommand),
     ("Surface_ZebraAnalysis", _ZebraCommand),
+    ("Surface_IsophoteAnalysis", _IsophoteCommand),
+    ("Surface_CurvatureComb", _CombCommand),
     ("Surface_ClearAnalysis", _ClearCommand),
 )
 

@@ -387,6 +387,65 @@ class TestSurfaceAnalysis(unittest.TestCase):
         r = SA.edge_continuity(fa, edge, faces=(fa, fb), tol={"gap": 0.02})
         self.assertIn(r["level"], ("G1", "G2", "G3"))
 
+    def _scaled_cases(self, k):
+        """Labels and measures of three joins scaled uniformly by k."""
+        out = []
+        box = Part.makeBox(10, 10, 10)
+        box.scale(k)
+        out.append(SA.edge_continuity(box, box.Edges[0]))
+        raw = Part.makeBox(10, 10, 10)
+        fil = raw.makeFillet(2, [raw.Edges[0]])
+        fil.scale(k)
+        for e in _shared_edges(fil):
+            out.append(SA.edge_continuity(fil, e))
+        for shape in (_split_cylinder(), _split_sphere()):
+            shape.scale(k)
+            for e in _shared_edges(shape):
+                out.append(SA.edge_continuity(shape, e))
+        return out
+
+    def test_edge_floor_scale_invariance(self):
+        base = self._scaled_cases(1.0)
+        for k in (1e-2, 1e2, 1e4):
+            got = self._scaled_cases(k)
+            self.assertEqual(len(got), len(base))
+            for a, b in zip(got, base):
+                self.assertEqual(a["level"], b["level"], (k, a, b))
+                _close(self, a["curvature_jump"], b["curvature_jump"], rel=1e-4, ab=1e-9)
+                _close(self, a["g3_jump"], b["g3_jump"], rel=1e-4, ab=1e-9)
+
+    def test_edge_large_fillet_reads_g1(self):
+        for radius in (1e5, 1e6):
+            side = 20 * radius
+            box = Part.makeBox(side, side, side)
+            fil = box.makeFillet(radius, [box.Edges[0]])
+            g1 = [
+                SA.edge_continuity(fil, e)
+                for e in _shared_edges(fil)
+                if SA.edge_continuity(fil, e)["angle"] < 1e-3
+            ]
+            self.assertEqual(len(g1), 2, radius)
+            for r in g1:
+                self.assertEqual(r["level"], "G1", (radius, r))
+                _close(self, r["curvature_jump"], 1.0, rel=0, ab=1e-6)
+
+    def test_edge_floor_key_and_gap_tolerance(self):
+        shape = _cubic_join()
+        e = next(e for e in _shared_edges(shape) if abs(e.Length - 5) < 1e-6)
+        r_lo = SA.edge_continuity(shape, e, tol={"floor": 1e-6})
+        r_hi = SA.edge_continuity(shape, e, tol={"floor": 1e6})
+        self.assertGreater(r_lo["g3_jump"], r_hi["g3_jump"] + 0.1)
+        self.assertLess(r_hi["g3_jump"], 1e-3)
+        big = Part.makeBox(1e6, 1e6, 1e6)
+        r = SA.edge_continuity(big, big.Edges[0])
+        self.assertEqual(r["level"], "G0")
+
+    def test_edge_floor_key_must_be_positive_finite(self):
+        box = Part.makeBox(10, 10, 10)
+        for c in (0, -1.0, float("nan"), float("inf"), True, "0.1"):
+            with self.assertRaises(ValueError, msg=repr(c)):
+                SA.edge_continuity(box, box.Edges[0], tol={"floor": c})
+
     def test_edge_errors(self):
         box = Part.makeBox(10, 10, 10)
         other = Part.makeBox(5, 5, 5, V(100, 0, 0))

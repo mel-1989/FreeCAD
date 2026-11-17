@@ -59,6 +59,8 @@ Gui::MenuItem* Workbench::setupMenuBar() const
     *analysis << "Surface_CurvatureAnalysis"
               << "Surface_DraftAnalysis"
               << "Surface_ZebraAnalysis"
+              << "Surface_IsophoteAnalysis"
+              << "Surface_CurvatureComb"
               << "Surface_ClearAnalysis";
     *surface << analysis;
     /*
@@ -89,6 +91,8 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
     *analysis << "Surface_CurvatureAnalysis"
               << "Surface_DraftAnalysis"
               << "Surface_ZebraAnalysis"
+              << "Surface_IsophoteAnalysis"
+              << "Surface_CurvatureComb"
               << "Surface_ClearAnalysis";
 
     return root;

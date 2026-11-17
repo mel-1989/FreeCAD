@@ -40,9 +40,23 @@ Zebra
     texture is 256 x 1; band ``k`` (0-based, at increasing ``t``) is black for even
     ``k`` and white for odd ``k``. Stripe edges lie where ``n . d = cos(k pi / N)``.
 
+Isophotes
+    ``theta = acos(clamp(n . d, -1, 1))`` in degrees at the rendered vertices, with ``n`` the
+    orientation-aware face normal. Levels are ``angles`` or ``k 180 / count`` for
+    ``k = 1 ... count - 1``. In each tessellation triangle a segment joins the points on the
+    triangle's edges where the linear interpolation of ``theta`` equals the level; a vertex exactly
+    at a level counts as not above it, and a segment of zero length is dropped.
+Curvature combs
+    On each edge, ``samples`` parameters ``first + i (last - first) / (samples - 1)``; at each, the
+    tooth runs from the point ``P`` to ``P + scale kappa u``, ``u`` the unit vector from the centre
+    of curvature to ``P``. The automatic scale makes the longest tooth ``0.2 D``, ``D`` the diagonal
+    of the edges' bounding box.
+
 Sources (clean room): the published reflection-line and zebra technique, Klass,
 "Correction of local surface irregularities using reflection lines",
-Computer-Aided Design 12(2), 1980; the public Coin3D (Open Inventor) API
+Computer-Aided Design 12(2), 1980; Poeschl, "Detecting surface irregularities using isophotes",
+Computer Aided Geometric Design 1(2), 1984; Farin, Curves and Surfaces for CAGD, on curvature
+plots; the public Coin3D (Open Inventor) API
 documentation for the scene-graph nodes; FreeCAD's own ``Part`` bindings and
 :mod:`SurfaceAnalysis`.
 """
@@ -55,7 +69,17 @@ import Part
 
 import SurfaceAnalysis as SA
 
-__all__ = ["show_curvature", "show_draft", "show_zebra", "remove", "clear", "Overlay"]
+__all__ = [
+    "show_curvature",
+    "show_draft",
+    "show_zebra",
+    "show_isophotes",
+    "show_combs",
+    "remove",
+    "clear",
+    "Overlay",
+    "placed_shape",
+]
 
 _PREFIX = "G09_OVERLAY_"
 _LEGEND_PREFIX = "G09_LEGEND_"
@@ -151,11 +175,47 @@ def _percentile(values, q):
     return vals[lo] + (pos - lo) * (vals[hi] - vals[lo])
 
 
+def parent_placement(obj):
+    """The product of the placements of the containers (``App::Part``, ``PartDesign::Body`` and other
+    geometry feature groups) that hold ``obj``, outermost first, or ``None`` when it has no container.
+    Only ancestors count: a feature's own ``Shape`` already carries its own placement, and a Body's
+    placement is counted once, as the Body's own ancestors are walked from the Body upwards."""
+    chain = None
+    cur = obj
+    for _ in range(64):  # containers cannot nest forever; the bound only guards a corrupt document
+        try:
+            parent = cur.getParentGeoFeatureGroup()
+        except Exception:
+            return chain
+        if parent is None:
+            return chain
+        pl = parent.Placement
+        chain = pl if chain is None else pl.multiply(chain)
+        cur = parent
+    return chain
+
+
+def placed_shape(obj):
+    """The shape of a document object where it is shown: its own ``Shape`` (own placement and link
+    transform included) with the placements of all its containers applied. An object with no container
+    gives its ``Shape`` untouched. Source: FreeCAD's ``GeoFeature.getParentGeoFeatureGroup`` and
+    ``Part.getShape`` bindings."""
+    shape = getattr(obj, "Shape", None)
+    if not isinstance(shape, Part.Shape) or shape.isNull():
+        return shape
+    chain = parent_placement(obj)
+    if chain is None:
+        return shape
+    placed = shape.copy()
+    placed.Placement = chain.multiply(shape.Placement)
+    return placed
+
+
 def _shape_of(target):
     if isinstance(target, Part.Shape):
         shape = target
     else:
-        shape = getattr(target, "Shape", None)
+        shape = placed_shape(target)
         if not isinstance(shape, Part.Shape):
             raise ValueError("target must be a document object with a Shape, a Part.Shape or a Part.Face")
     if shape.isNull():
@@ -218,15 +278,20 @@ def _active_view(view):
     return v
 
 
+def _effective_deflection(shape, deflection):
+    if deflection is None:
+        bb = shape.BoundBox
+        deflection = max(bb.DiagonalLength * _DEFAULT_DEFLECTION_FRACTION, _DEFAULT_DEFLECTION_FLOOR)
+    return deflection
+
+
 def _tessellate(shape, deflection):
     """Per face: (index, face, vertices, triangles) with the tessellation of ``deflection``."""
     # tessellating a copy keeps the triangulation off the caller's shared TShapes (it would otherwise
     # show up in their BREP export)
     shape = shape.copy()
     faces = shape.Faces
-    if deflection is None:
-        bb = shape.BoundBox
-        deflection = max(bb.DiagonalLength * _DEFAULT_DEFLECTION_FRACTION, _DEFAULT_DEFLECTION_FLOOR)
+    deflection = _effective_deflection(shape, deflection)
     out = []
     for i, f in enumerate(faces):
         verts, tris = f.tessellate(deflection)
@@ -624,6 +689,248 @@ def show_zebra(target, direction=(1, 0, 0), bands=16, view=None, deflection=None
         "zebra", per_face, records, None, None, view,
         texcoords={"t": ts, "image": _band_image(bands)},
     )
+
+
+_ISOPHOTE_COLOR = (0.0, 0.0, 0.0)
+_COMB_COLOR = (0.8, 0.0, 0.8)
+
+
+# A vertex within this many degrees of a level counts as at the level (not above it), so a face whose
+# angle to the direction is constant at a level (a 45 degree cone at level 45) draws no noise lines.
+_ISO_LEVEL_EPS = 1e-9
+
+
+def _parse_isophote_levels(angles, count):
+    if angles is not None:
+        if not isinstance(angles, (list, tuple)) or any(
+            isinstance(a, (bool, str, bytes)) for a in angles
+        ):
+            raise ValueError("angles must be a list of numbers")
+        try:
+            levels = [float(a) for a in angles]
+        except (TypeError, ValueError):
+            raise ValueError("angles must be a list of numbers") from None
+        if not levels:
+            raise ValueError("angles must not be empty")
+        for a in levels:
+            if not (0.0 < a < 180.0):
+                raise ValueError("every angle must lie strictly between 0 and 180 degrees")
+        return levels
+    if isinstance(count, bool) or not isinstance(count, int) or not (2 <= count <= 90):
+        raise ValueError("count must be an integer from 2 to 90")
+    return [k * 180.0 / count for k in range(1, count)]
+
+
+def _line_node(kind, groups):
+    """A separator of unlit, unpickable, constant-colour lines. ``groups`` is a list of
+    ``(color, width, polylines, offset)`` with ``polylines`` a list of point lists."""
+    coin = _coin()
+    sep = coin.SoSeparator()
+    sep.setName(_PREFIX + kind)
+    ps = coin.SoPickStyle()
+    ps.style = coin.SoPickStyle.UNPICKABLE
+    sep.addChild(ps)
+    lm = coin.SoLightModel()
+    lm.model = coin.SoLightModel.BASE_COLOR
+    sep.addChild(lm)
+    for color, width, polylines, offset in groups:
+        grp = coin.SoSeparator()
+        if offset:
+            po = coin.SoPolygonOffset()
+            po.factor = -2.0
+            po.units = -8.0
+            po.styles = coin.SoPolygonOffset.LINES
+            grp.addChild(po)
+        mat = coin.SoMaterial()
+        mat.diffuseColor = color
+        grp.addChild(mat)
+        st = coin.SoDrawStyle()
+        st.style = coin.SoDrawStyle.LINES
+        st.lineWidth = float(width)
+        grp.addChild(st)
+        pts = [q for line in polylines for q in line]
+        cd = coin.SoCoordinate3()
+        if pts:
+            cd.point.setValues(0, len(pts), pts)
+        grp.addChild(cd)
+        ls = coin.SoLineSet()
+        counts = [len(line) for line in polylines]
+        if counts:
+            ls.numVertices.setValues(0, len(counts), counts)
+        grp.addChild(ls)
+        sep.addChild(grp)
+    return sep
+
+
+def _attach(kind, node, view, extra):
+    view = _active_view(view)
+    ufs = _find_selection_node(view)
+    ufs.addChild(node)
+    handle = Overlay(node, kind, None, [], view, None)
+    for k, v in extra.items():
+        setattr(handle, k, v)
+    return handle
+
+
+def show_isophotes(target, direction=(0, 0, 1), angles=None, count=8, view=None, deflection=None):
+    """Draw isophote lines: the curves where the angle between the face normal and ``direction`` is
+    constant. Levels are ``angles`` (degrees, strictly between 0 and 180) or ``k 180 / count`` for
+    ``k = 1 ... count - 1`` (``count`` from 2 to 90).
+
+    Returns an :class:`Overlay` with ``kind`` ``isophote``, ``vertices`` (``value`` is the angle in
+    degrees) and ``segments``, a list of dicts ``level``, ``face``, ``p0`` and ``p1``.
+    """
+    d = _unit_vector(direction, "direction")
+    levels = _parse_isophote_levels(angles, count)
+    deflection = _check_deflection(deflection)
+    shape = _shape_of(target)
+    view = _active_view(view)
+    _find_selection_node(view)
+    lift = _effective_deflection(shape, deflection)
+
+    records, segments, drawn = [], [], []
+    for fi, face, verts, tris in _tessellate(shape, deflection):
+        uvs = _uv_for(face, verts)
+        theta, normals = [], []
+        for pt, (u, v) in zip(verts, uvs):
+            try:
+                n = face.normalAt(u, v)
+                th = math.degrees(math.acos(max(-1.0, min(1.0, n.dot(d)))))
+            except Exception:
+                th, n = _NAN, None
+            if th != th:
+                th, n = _NAN, None
+            theta.append(th)
+            normals.append(n)
+            records.append(
+                {"point": pt, "face": fi, "u": u, "v": v, "value": th, "color": _ISOPHOTE_COLOR}
+            )
+        for tri in tris:
+            vals = [theta[i] for i in tri]
+            if any(x != x for x in vals):
+                continue
+            for level in levels:
+                above = [x > level + _ISO_LEVEL_EPS for x in vals]
+                if all(above) or not any(above):
+                    continue
+                ends = []
+                for a, b in ((0, 1), (1, 2), (2, 0)):
+                    if above[a] == above[b]:
+                        continue
+                    ia, ib = tri[a], tri[b]
+                    t = (level - theta[ia]) / (theta[ib] - theta[ia])
+                    t = max(0.0, min(1.0, t))
+                    p = verts[ia] + (verts[ib] - verts[ia]) * t
+                    na, nb = normals[ia], normals[ib]
+                    nn = na + (nb - na) * t
+                    nn = nn * (1.0 / nn.Length) if nn.Length > 1e-12 else na
+                    ends.append((p, p + nn * lift))
+                if len(ends) != 2 or (ends[0][0] - ends[1][0]).Length <= 1e-12:
+                    continue
+                segments.append(
+                    {"level": level, "face": fi, "p0": ends[0][0], "p1": ends[1][0]}
+                )
+                drawn.append([_f32(ends[0][1]), _f32(ends[1][1])])
+    node = _line_node(
+        "isophote",
+        [(_ISOPHOTE_COLOR, 2, [[(q.x, q.y, q.z) for q in seg] for seg in drawn], True)],
+    )
+    handle = _attach("isophote", node, view, {"segments": segments})
+    handle.vertices = records
+    return handle
+
+
+def _comb_edges(target):
+    """The edges of a combs target in order: a document object (placed), a shape, an edge or a list."""
+    if isinstance(target, (list, tuple)):
+        edges = []
+        for e in target:
+            if not isinstance(e, Part.Shape) or e.isNull() or e.ShapeType != "Edge":
+                raise ValueError("a list target must hold only edges")
+            edges.append(e)
+        return edges
+    shape = target if isinstance(target, Part.Shape) else placed_shape(target)
+    if not isinstance(shape, Part.Shape):
+        raise ValueError("target must be a document object with a Shape, a Part.Shape or edges")
+    if shape.isNull():
+        raise ValueError("target has a null shape")
+    return list(shape.Edges)
+
+
+def show_combs(target, scale=None, samples=33, view=None):
+    """Draw curvature combs on edges: a tooth at each of ``samples`` points, pointing away from the
+    centre of curvature with length ``scale * curvature``, and an envelope through the tips.
+
+    ``target`` is a document object (all edges of its shape), a shape, an edge or a list of edges.
+    With no ``scale`` the longest tooth is 0.2 of the diagonal of the edges' bounding box. Returns an
+    :class:`Overlay` with ``kind`` ``comb``, ``scale`` and ``teeth`` (dicts ``edge``, ``t``, ``point``,
+    ``curvature``, ``tip``).
+    """
+    if isinstance(samples, bool) or not isinstance(samples, int) or samples < 2:
+        raise ValueError("samples must be an integer of at least 2")
+    user = None
+    if scale is not None:
+        try:
+            user = float(scale)
+        except (TypeError, ValueError):
+            raise ValueError("scale must be a positive finite number") from None
+        if isinstance(scale, (bool, str, bytes)) or not (user > 0.0) or math.isinf(user):
+            raise ValueError("scale must be a positive finite number")
+    edges = _comb_edges(target)
+    if not edges:
+        raise ValueError("target has no edges")
+    view = _active_view(view)
+    _find_selection_node(view)
+
+    teeth = []
+    for ei, edge in enumerate(edges, 1):
+        first, last = edge.FirstParameter, edge.LastParameter
+        length = edge.Length
+        for i in range(samples):
+            t = first + i * (last - first) / (samples - 1)
+            point = edge.valueAt(t)
+            try:
+                kappa = float(edge.curvatureAt(t))
+            except Exception:
+                kappa = 0.0
+            direction = None
+            if kappa * length > 1e-9:
+                try:
+                    away = point - edge.centerOfCurvatureAt(t)
+                    if away.Length > 0.0:
+                        direction = away * (1.0 / away.Length)
+                except Exception:
+                    direction = None
+            if direction is None:
+                kappa_used = 0.0
+            else:
+                kappa_used = kappa
+            teeth.append(
+                {"edge": ei, "t": t, "point": point, "curvature": kappa, "tip": None,
+                 "_dir": direction, "_k": kappa_used}
+            )
+    if user is not None:
+        scale_used = user
+    else:
+        box = Part.Compound(edges).BoundBox
+        top = max((th["_k"] for th in teeth), default=0.0)
+        scale_used = 0.2 * box.DiagonalLength / top if top > 0.0 else 1.0
+    for th in teeth:
+        if th["_dir"] is None:
+            th["tip"] = FreeCAD.Vector(th["point"])
+        else:
+            length = scale_used * th["_k"]
+            if not math.isfinite(length) or not all(math.isfinite(c) for c in th["point"] + th["_dir"] * length):
+                raise ValueError("scale is too large: a tooth would have no finite tip")
+            th["tip"] = th["point"] + th["_dir"] * length
+        del th["_dir"], th["_k"]
+
+    tooth_lines = [[(th["point"].x, th["point"].y, th["point"].z), (th["tip"].x, th["tip"].y, th["tip"].z)] for th in teeth]
+    envelopes = []
+    for ei in range(1, len(edges) + 1):
+        envelopes.append([(th["tip"].x, th["tip"].y, th["tip"].z) for th in teeth if th["edge"] == ei])
+    node = _line_node("comb", [(_COMB_COLOR, 1, tooth_lines, False), (_COMB_COLOR, 2, envelopes, False)])
+    return _attach("comb", node, view, {"scale": scale_used, "teeth": teeth})
 
 
 def remove(handle):
