@@ -58,6 +58,17 @@ import SurfaceAnalysis as SA
 __all__ = ["show_curvature", "show_draft", "show_zebra", "remove", "clear", "Overlay"]
 
 _PREFIX = "G09_OVERLAY_"
+_LEGEND_PREFIX = "G09_LEGEND_"
+_KIND_TITLES = {
+    "gauss": "Gaussian curvature",
+    "mean": "Mean curvature",
+    "kmax": "Max principal curvature",
+    "kmin": "Min principal curvature",
+}
+# screen-space layout of the legend, as fractions of the view (x to the right, y up)
+_LEGEND_X0, _LEGEND_X1 = 0.90, 0.96
+_LEGEND_Y0, _LEGEND_Y1 = 0.10, 0.90
+_LEGEND_FONT_PX = 12
 _NAN = float("nan")
 _GREY = (0.5, 0.5, 0.5)
 _RAMP = [
@@ -85,11 +96,12 @@ _DEFAULT_DEFLECTION_FLOOR = 0.01
 class Overlay:
     """Handle of one overlay: ``node``, ``kind``, ``range`` and ``vertices``."""
 
-    def __init__(self, node, kind, range_, vertices, view):
+    def __init__(self, node, kind, range_, vertices, view, legend=None):
         self.node = node
         self.kind = kind
         self.range = range_
         self.vertices = vertices
+        self.legend = legend
         self._view = view
 
     def __repr__(self):
@@ -329,12 +341,147 @@ def _build_node(kind, per_face, colors, texcoords):
     return sep
 
 
-def _finish(kind, per_face, records, colors, range_, view, texcoords=None):
+def _legend_group(coin):
+    """A group that the bounding-box action skips (``Gui::SoSkipBoundingGroup``), so the legend's
+    screen-space geometry does not enter "fit all"; a plain group when that class is unavailable."""
+    for name in ("SoSkipBoundingGroup", "Gui::SoSkipBoundingGroup"):
+        try:
+            inp = coin.SoInput()
+            inp.setBuffer("#Inventor V2.1 ascii\n%s { mode EXCLUDE_BBOX }\n" % name)
+            grp = coin.SoDB.readAll(inp)
+            if grp is not None and grp.getNumChildren() == 1:
+                return grp.getChild(0)
+        except Exception:
+            pass
+    return coin.SoGroup()
+
+
+def _legend_text(coin, text, x, y, justification):
+    sep = coin.SoSeparator()
+    tr = coin.SoTranslation()
+    tr.translation = (x, y, 0.0)
+    sep.addChild(tr)
+    t = coin.SoText2()
+    t.string = text
+    t.justification = justification
+    sep.addChild(t)
+    return sep
+
+
+def _legend_swatch(coin, color, y0, y1):
+    sep = coin.SoSeparator()
+    mat = coin.SoMaterial()
+    mat.diffuseColor = color
+    sep.addChild(mat)
+    cd = coin.SoCoordinate3()
+    cd.point.setValues(
+        0, 4, [(_LEGEND_X0, y0, 0.0), (_LEGEND_X1, y0, 0.0), (_LEGEND_X1, y1, 0.0), (_LEGEND_X0, y1, 0.0)]
+    )
+    sep.addChild(cd)
+    fs = coin.SoFaceSet()
+    fs.numVertices.setValue(4)
+    sep.addChild(fs)
+    return sep
+
+
+def _build_legend(kind, info):
+    """Screen-space legend ``G09_LEGEND_<kind>`` with its own orthographic camera.
+
+    The camera maps the view to the unit square (``LEAVE_ALONE``), so positions are fractions of
+    the view width and height and the legend stays put when the scene camera turns. It is unlit,
+    unpickable and drawn on top of the scene (depth test and write off).
+    """
+    coin = _coin()
+    sep = coin.SoSeparator()
+    sep.setName(_LEGEND_PREFIX + kind)
+    grp = _legend_group(coin)
+    sep.addChild(grp)
+
+    ps = coin.SoPickStyle()
+    ps.style = coin.SoPickStyle.UNPICKABLE
+    grp.addChild(ps)
+    lm = coin.SoLightModel()
+    lm.model = coin.SoLightModel.BASE_COLOR
+    grp.addChild(lm)
+    db = coin.SoDepthBuffer()
+    db.test = False
+    db.write = False
+    grp.addChild(db)
+    cam = coin.SoOrthographicCamera()
+    cam.viewportMapping = coin.SoCamera.LEAVE_ALONE
+    cam.position = (0.5, 0.5, 5.0)
+    cam.orientation = coin.SbRotation(coin.SbVec3f(0, 0, 1), 0.0)
+    cam.aspectRatio = 1.0
+    cam.height = 1.0
+    cam.nearDistance = 1.0
+    cam.farDistance = 10.0
+    grp.addChild(cam)
+    font = coin.SoFont()
+    font.size = _LEGEND_FONT_PX
+    grp.addChild(font)
+    grp.addChild(coin.SoTexture2())  # no texture: the scene's own state never leaks in (own separator, belt and braces)
+
+    ink = coin.SoMaterial()
+    ink.diffuseColor = (0.0, 0.0, 0.0)
+    left = _LEGEND_X0 - 0.01
+    if kind == "curvature":
+        lo, hi = info["range"]
+        pts, cols, idx = [], [], []
+        for i, (s, c) in enumerate(_RAMP):
+            y = _LEGEND_Y0 + (_LEGEND_Y1 - _LEGEND_Y0) * s
+            pts += [(_LEGEND_X0, y, 0.0), (_LEGEND_X1, y, 0.0)]
+            cols += [c, c]
+            if i:
+                idx += [2 * (i - 1), 2 * (i - 1) + 1, 2 * i + 1, 2 * i, -1]
+        strip = coin.SoSeparator()
+        strip.setName("G09_LEGEND_STRIP")
+        mat = coin.SoMaterial()
+        mat.diffuseColor.setValues(0, len(cols), cols)
+        strip.addChild(mat)
+        mb = coin.SoMaterialBinding()
+        mb.value = coin.SoMaterialBinding.PER_VERTEX_INDEXED
+        strip.addChild(mb)
+        cd = coin.SoCoordinate3()
+        cd.point.setValues(0, len(pts), pts)
+        strip.addChild(cd)
+        fs = coin.SoIndexedFaceSet()
+        fs.coordIndex.setValues(0, len(idx), idx)
+        strip.addChild(fs)
+        grp.addChild(strip)
+        grp.addChild(ink)
+        right = coin.SoText2.RIGHT
+        for text, y in (
+            ("%.3g" % lo, _LEGEND_Y0),
+            ("%.3g" % ((lo + hi) / 2.0), 0.5 * (_LEGEND_Y0 + _LEGEND_Y1)),
+            ("%.3g" % hi, _LEGEND_Y1),
+        ):
+            grp.addChild(_legend_text(coin, text, left, y, right))
+        grp.addChild(_legend_text(coin, _KIND_TITLES[info["kind"]], _LEGEND_X1, _LEGEND_Y1 + 0.05, right))
+    else:
+        grp.addChild(ink)
+        right = coin.SoText2.RIGHT
+        rows = [("Positive", "positive"), ("Negative", "negative"), ("Insufficient", "insufficient")]
+        h, gap = 0.08, 0.02
+        for i, (label, cls) in enumerate(rows):
+            y1 = _LEGEND_Y1 - i * (h + gap)
+            grp.addChild(_legend_swatch(coin, _DRAFT_COLOR[cls], y1 - h, y1))
+            grp.addChild(ink)
+            grp.addChild(_legend_text(coin, label, left, y1 - h / 2.0, right))
+        y = _LEGEND_Y1 - 3 * (h + gap) - 0.02
+        grp.addChild(_legend_text(coin, "Minimum draft %.3g deg" % info["min_draft"], _LEGEND_X1, y, right))
+        grp.addChild(_legend_text(coin, "Draft", _LEGEND_X1, _LEGEND_Y1 + 0.05, right))
+    return sep
+
+
+def _finish(kind, per_face, records, colors, range_, view, texcoords=None, legend=None):
     view = _active_view(view)
     ufs = _find_selection_node(view)  # fail before building when there is no view
     node = _build_node(kind, per_face, colors, texcoords)
+    lg = _build_legend(kind, legend) if legend is not None else None
     ufs.addChild(node)
-    return Overlay(node, kind, range_, records, view)
+    if lg is not None:
+        ufs.addChild(lg)
+    return Overlay(node, kind, range_, records, view, lg)
 
 
 def _band_image(bands):
@@ -350,11 +497,12 @@ def _band_image(bands):
 # ------------------------------------------------------------------- API
 
 
-def show_curvature(target, kind="mean", range=None, view=None, deflection=None):
+def show_curvature(target, kind="mean", range=None, view=None, deflection=None, legend=True):
     """Colour the target by curvature (``gauss``, ``mean``, ``kmax`` or ``kmin``).
 
     Returns an :class:`Overlay`. ``range=(lo, hi)`` replaces the automatic symmetric
-    range; the range used is in ``handle.range``.
+    range; the range used is in ``handle.range``. With ``legend=True`` (the default) a
+    screen-space colour legend is added and returned as ``handle.legend``.
     """
     if not isinstance(kind, str) or kind.lower() not in _KINDS:
         raise ValueError("kind must be one of %s" % ", ".join(_KINDS))
@@ -396,11 +544,17 @@ def show_curvature(target, kind="mean", range=None, view=None, deflection=None):
         else:
             r["color"] = ramp_color((val - lo) / (hi - lo))
     colors = [r["color"] for r in records]
-    return _finish("curvature", per_face, records, colors, (lo, hi), view)
+    return _finish(
+        "curvature", per_face, records, colors, (lo, hi), view,
+        legend={"kind": kind, "range": (lo, hi)} if legend else None,
+    )
 
 
-def show_draft(target, pull, min_draft=1.0, view=None, deflection=None):
-    """Colour the target by draft class (positive, negative, insufficient) about ``pull``."""
+def show_draft(target, pull, min_draft=1.0, view=None, deflection=None, legend=True):
+    """Colour the target by draft class (positive, negative, insufficient) about ``pull``.
+
+    With ``legend=True`` (the default) a three-swatch legend is returned as ``handle.legend``.
+    """
     p = _unit_vector(pull, "pull")
     try:
         min_draft = float(min_draft)
@@ -430,7 +584,10 @@ def show_draft(target, pull, min_draft=1.0, view=None, deflection=None):
             )
         per_face.append(([_f32(p) for p in verts], tris))
     colors = [r["color"] for r in records]
-    return _finish("draft", per_face, records, colors, None, view)
+    return _finish(
+        "draft", per_face, records, colors, None, view,
+        legend={"min_draft": min_draft} if legend else None,
+    )
 
 
 def show_zebra(target, direction=(1, 0, 0), bands=16, view=None, deflection=None):
@@ -479,15 +636,19 @@ def remove(handle):
         ufs = _find_selection_node(view)
     except Exception:
         return
-    i = ufs.findChild(node)
-    if i >= 0:
-        ufs.removeChild(i)
+    for n in (node, getattr(handle, "legend", None)):
+        if n is None:
+            continue
+        i = ufs.findChild(n)
+        if i >= 0:
+            ufs.removeChild(i)
 
 
 def clear(view=None):
-    """Take every G09 overlay out of the view."""
+    """Take every G09 overlay and legend out of the view."""
     ufs = _find_selection_node(_active_view(view))
     for i in reversed(range(ufs.getNumChildren())):
         ch = ufs.getChild(i)
-        if ch.getName().getString().startswith(_PREFIX):
+        name = ch.getName().getString()
+        if name.startswith(_PREFIX) or name.startswith(_LEGEND_PREFIX):
             ufs.removeChild(i)

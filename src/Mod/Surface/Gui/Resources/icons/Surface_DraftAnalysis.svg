@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="64px" height="64px" viewBox="0 0 64 64">
+  <title>Surface_DraftAnalysis</title>
+  <path d="M 10,54 L 54,54 L 46,12 L 18,12 Z" style="fill:#e8eaee;stroke:#1f2430;stroke-width:2;stroke-linejoin:round" />
+  <path d="M 18,12 L 46,12 L 46,18 L 18,18 Z" style="fill:#00aa00;stroke:#1f2430;stroke-width:1.5;stroke-linejoin:round" />
+  <path d="M 10,54 L 18,12 L 23,13 L 15,54 Z" style="fill:#dc0000;stroke:#1f2430;stroke-width:1.5;stroke-linejoin:round" />
+  <path d="M 54,54 L 46,12 L 41,13 L 49,54 Z" style="fill:#ffc800;stroke:#1f2430;stroke-width:1.5;stroke-linejoin:round" />
+  <path d="M 32,58 L 32,26" style="fill:none;stroke:#1f2430;stroke-width:2;stroke-dasharray:4,3" />
+  <path d="M 27,32 L 32,22 L 37,32 Z" style="fill:#1f2430;stroke:none" />
+</svg>

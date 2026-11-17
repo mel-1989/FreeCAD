@@ -46,6 +46,7 @@ class SurfaceWorkbench(Gui.Workbench):
         """Initialize the module."""
         import Surface
         import SurfaceGui
+        import SurfaceAnalysisCommands  # noqa: F401  (registers the analysis commands)
 
     def GetClassName(self):
         return "SurfaceGui::Workbench"

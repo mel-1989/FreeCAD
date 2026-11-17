@@ -3,3 +3,4 @@
 """GUI test suite of the Surface module: ``FreeCAD -t TestSurfaceGui``."""
 
 from SurfaceTests.TestSurfaceAnalysisGui import TestSurfaceAnalysisGui  # noqa: F401
+from SurfaceTests.TestSurfaceAnalysisCommands import TestSurfaceAnalysisCommands  # noqa: F401

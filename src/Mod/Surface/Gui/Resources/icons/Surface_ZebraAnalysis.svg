@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="64px" height="64px" viewBox="0 0 64 64">
+  <title>Surface_ZebraAnalysis</title>
+  <defs>
+    <clipPath id="body">
+      <path d="M 6,44 C 8,18 26,8 40,10 C 52,12 58,26 58,40 C 50,36 40,40 34,50 C 26,60 14,58 6,44 Z" />
+    </clipPath>
+  </defs>
+  <g style="clip-path:url(#body)">
+    <rect x="0" y="0" width="64" height="64" style="fill:#ffffff" />
+    <path d="M -10,12 L 30,-10 L 38,-2 L -4,22 Z M -14,32 L 46,-2 L 54,6 L -6,42 Z M -12,52 L 62,12 L 70,20 L -4,62 Z M 20,66 L 70,38 L 78,46 L 32,72 Z" style="fill:#1f2430" />
+  </g>
+  <path d="M 6,44 C 8,18 26,8 40,10 C 52,12 58,26 58,40 C 50,36 40,40 34,50 C 26,60 14,58 6,44 Z" style="fill:none;stroke:#1f2430;stroke-width:2;stroke-linejoin:round" />
+</svg>
