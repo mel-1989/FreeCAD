@@ -244,9 +244,9 @@ class TestSurfaceAnalysisGui(unittest.TestCase):
         a = self.obj(Part.makeBox(10, 10, 10), "A")
         b = self.obj(Part.makeSphere(5), "B")
         before_objs = len(self.doc.Objects)
-        h1 = SG.show_curvature(a, view=self.view)
+        h1 = SG.show_curvature(a, view=self.view, legend=False)  # the legend is tested in TestSurfaceAnalysisCommands
         h2 = SG.show_zebra(b, view=self.view)
-        h3 = SG.show_draft(a, (0, 0, 1), view=self.view)
+        h3 = SG.show_draft(a, (0, 0, 1), view=self.view, legend=False)
         self.assertEqual(self.ufs.getNumChildren(), self.base_children + 3)
         self.assertEqual(h1.node.getName().getString(), "G09_OVERLAY_curvature")
         self.assertEqual(h2.node.getName().getString(), "G09_OVERLAY_zebra")

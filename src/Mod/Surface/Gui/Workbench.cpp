@@ -53,6 +53,14 @@ Gui::MenuItem* Workbench::setupMenuBar() const
              << "Surface_ExtendFace"
              << "Surface_CurveOnMesh"
              << "Surface_BlendCurve";
+
+    Gui::MenuItem* analysis = new Gui::MenuItem;
+    analysis->setCommand("&Analysis");
+    *analysis << "Surface_CurvatureAnalysis"
+              << "Surface_DraftAnalysis"
+              << "Surface_ZebraAnalysis"
+              << "Surface_ClearAnalysis";
+    *surface << analysis;
     /*
      *surface << "Surface_Cut";
      */
@@ -75,6 +83,13 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
     /*
      *surface << "Surface_Cut";
      */
+
+    Gui::ToolBarItem* analysis = new Gui::ToolBarItem(root);
+    analysis->setCommand("Surface analysis");
+    *analysis << "Surface_CurvatureAnalysis"
+              << "Surface_DraftAnalysis"
+              << "Surface_ZebraAnalysis"
+              << "Surface_ClearAnalysis";
 
     return root;
 }
