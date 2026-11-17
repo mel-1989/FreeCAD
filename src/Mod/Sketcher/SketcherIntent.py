@@ -83,10 +83,10 @@ PRIORITY = {
         "size": 0,
         "carrier": 1,
         "gap": 1.5,
+        "angle_nb": 1.7,
         "offset": 2,
         "extent": 3,
         "extent_origin": 4,
-        "angle_nb": 5,
         "length": 6,
         "angle_axis": 7,
         "arcspan": 8,
@@ -94,13 +94,14 @@ PRIORITY = {
     },
     "intent_origin": {
         "size": 0,
-        "origin": 1,
-        "carrier": 2,
-        "extent": 3,
+        "carrier": 1,
+        "gap": 1.5,
+        "extent": 2,
+        "extent_origin": 3,
         "angle_nb": 4,
         "length": 5,
-        "offset": 6,
-        "extent_origin": 7,
+        "origin": 6,
+        "offset": 7,
         "angle_axis": 8,
         "arcspan": 9,
     },
@@ -139,15 +140,18 @@ def _is_line(m):
     return m.kind == "line" and m.d is not None and m.length > 10 * _TOL
 
 
-def _length_spec(m):
+def _length_spec(m, line_form=False):
     """The length of line `m`: a horizontal or vertical distance for a line
-    near an axis (the dominant extent is well conditioned), else a distance."""
+    near an axis (the dominant extent is well conditioned), else a distance.
+    `line_form` gives the single-argument form (the line itself, not its two
+    end points), which is how a script or a user who picks the whole edge
+    writes the same dimension."""
     (x1, y1), (x2, y2) = m.pts[1], m.pts[2]
     dx, dy = x2 - x1, y2 - y1
     if abs(dy) <= _TOL or (min(abs(dx), abs(dy)) < NEAR_AXIS * m.length and abs(dx) >= abs(dy)):
-        return _signed("DistanceX", m.i, 1, m.i, 2, dx)
+        return ("DistanceX", m.i, abs(dx)) if line_form else _signed("DistanceX", m.i, 1, m.i, 2, dx)
     if abs(dx) <= _TOL or min(abs(dx), abs(dy)) < NEAR_AXIS * m.length:
-        return _signed("DistanceY", m.i, 1, m.i, 2, dy)
+        return ("DistanceY", m.i, abs(dy)) if line_form else _signed("DistanceY", m.i, 1, m.i, 2, dy)
     return ("Distance", m.i, m.length)
 
 
@@ -525,9 +529,9 @@ def proposals(model, scheme, accepted=()):
     # construction lines carry dimensions
     for m in model:
         if m.construction and _is_line(m) and first(m):
-            pool.append(("carrier", _length_spec(m)))
+            pool.append(("carrier", _length_spec(m, scheme == "intent_origin")))
     if scheme != "intent":
-        pool += _extent_proposals(model, flip)
+        pool += _extent_proposals(model, flip, None, scheme == "intent_origin")
     else:
         nested = _nested_ids(model)
         if nested:
@@ -543,7 +547,7 @@ def proposals(model, scheme, accepted=()):
     # remaining line lengths, longest first
     for m in sorted((m for m in drawn if _is_line(m)), key=lambda m: m.i):
         if first(m):
-            pool.append(("length", _length_spec(m)))
+            pool.append(("length", _length_spec(m, scheme == "intent_origin")))
     # origin placements of every feature anchor
     for m in drawn:
         p, xy = _anchor(m)
@@ -551,11 +555,7 @@ def proposals(model, scheme, accepted=()):
         pool.append(("origin", ("DistanceY", m.i, p, xy[1])))
     seen = set()
     out = []
-    import os
-    drop = set(os.environ.get('INTENT_DROP', '').split(','))
     for _kind, spec in rank(pool, scheme):
-        if _kind in drop:
-            continue
         key = _norm_key(spec)
         if key in seen:
             continue

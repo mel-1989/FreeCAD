@@ -34,6 +34,7 @@ from SketcherTests.TestSketcherEllipse import TestSketcherEllipse
 from SketcherTests.TestSketchDiagnosis import TestSketchDiagnosis
 from SketcherTests.TestSketchDiagnosis import TestSketchDiagnosisRepairs
 from SketcherTests.TestSketchAutoDefine import TestSketchAutoDefine
+from SketcherTests.TestSketchIntent import TestSketchIntent
 from SketcherTests.TestSketchBlocks import TestBlockDOF
 from SketcherTests.TestSketchBlocks import TestBlockRigidity
 from SketcherTests.TestSketchBlocks import TestBlockPlacement

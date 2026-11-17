@@ -14,6 +14,7 @@ set(Sketcher_Scripts
     Profiles.py
     SketcherDiagnosis.py
     SketcherAutoDefine.py
+    SketcherIntent.py
     SketcherBlocks.py
 )
 
@@ -35,6 +36,8 @@ set(Sketcher_TestScripts
     SketcherTests/SketchAutoDefineOracle.py
     SketcherTests/SketchAutoDefineRun.py
     SketcherTests/SketchAutoDefineMutants.py
+    SketcherTests/TestSketchIntent.py
+    SketcherTests/SketchIntentMutants.py
     SketcherTests/TestSketchSolverCore.py
     SketcherTests/SketchSolverBaseline.py
     SketcherTests/SolverCoreMutants.py
