@@ -415,6 +415,24 @@ TopoDS_Shape DrawViewSection::getShapeForDetail() const
     return ShapeUtils::rotateShape(getCutShape(), getProjectionCS(), Rotation.getValue());
 }
 
+bool DrawViewSection::cutPendingAt(int depth) const
+{
+    if (waitingForCut()) {
+        return true;
+    }
+    if (depth >= 64) {          //chains are acyclic; the guard only stops a malformed document
+        return false;
+    }
+    auto* baseObj = BaseView.getValue();
+    if (auto* baseSection = freecad_cast<DrawViewSection*>(baseObj)) {
+        return baseSection->cutPendingAt(depth + 1);
+    }
+    if (auto* baseDetail = freecad_cast<DrawViewDetail*>(baseObj)) {
+        return baseDetail->detailPendingAt(depth + 1);
+    }
+    return false;
+}
+
 App::DocumentObjectExecReturn* DrawViewSection::execute()
 {
     if (!keepUpdated()) {
@@ -425,9 +443,12 @@ App::DocumentObjectExecReturn* DrawViewSection::execute()
         return new App::DocumentObjectExecReturn("BaseView object not found");
     }
 
-    auto* baseSection = freecad_cast<DrawViewSection*>(BaseView.getValue());
-    if (baseSection && baseSection->waitingForCut()) {
-        //the base's cut is still running: its postSectionCutTasks executes this view against the new cut
+    auto* baseObj = BaseView.getValue();
+    auto* baseSection = freecad_cast<DrawViewSection*>(baseObj);
+    auto* baseDetail = freecad_cast<DrawViewDetail*>(baseObj);
+    if ((baseSection && baseSection->cutPending()) || (baseDetail && baseDetail->detailPending())) {
+        //a base section's cut (or a base detail, or their own bases) is still running: the base's
+        //postSectionCutTasks / postDetailTasks executes this view against the new result (R27)
         return DrawView::execute();     //NOLINT
     }
 

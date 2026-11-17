@@ -131,6 +131,9 @@ public:
     virtual void postSectionCutTasks();
     void waitingForCut(bool s) { m_waitingForCut = s; }
     bool waitingForCut() const { return m_waitingForCut; }
+    //true while this view's cut, or the cut/detail of the chain of bases it depends on, is still running (G04 R27)
+    bool cutPending() const { return cutPendingAt(0); }
+    bool cutPendingAt(int depth) const;     //depth-guarded step shared with DrawViewDetail::detailPendingAt
     bool waitingForResult() const override;
 
     virtual TopoDS_Shape makeCuttingTool(double shapeSize);

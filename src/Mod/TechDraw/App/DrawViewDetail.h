@@ -86,6 +86,10 @@ public:
     void postHlrTasks(void) override;
     void waitingForDetail(bool s) { m_waitingForDetail = s; }
     bool waitingForDetail(void) const { return m_waitingForDetail; }
+    //true while this detail's thread, or the cut of its section base chain, is still running (G04 R27)
+    bool detailPending() const { return detailPendingAt(0); }
+    bool detailPendingAt(int depth) const;  //depth-guarded step shared with DrawViewSection::cutPendingAt
+    void postDetailTasks();
     bool waitingForResult() const override;
 
     double getFudgeRadius(void);

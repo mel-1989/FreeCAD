@@ -213,9 +213,10 @@ App::DocumentObjectExecReturn* DrawViewDetail::execute()
         dvs = static_cast<TechDraw::DrawViewSection*>(dvp);
     }
 
-    if (dvs && dvs->waitingForCut()) {
-        //the base's cut is still running: starting now would use the old cut and be dropped when
-        //the cut finishes.  The base's postSectionCutTasks executes this view against the new cut.
+    if (dvs && dvs->cutPending()) {
+        //the base's cut (or the cut/detail chain below it) is still running: starting now would use
+        //the old cut and be dropped when it finishes.  The base's postSectionCutTasks executes this
+        //view against the new cut.
         return DrawView::execute();
     }
 
@@ -481,6 +482,31 @@ TopoDS_Shape DrawViewDetail::getShapeForGeometryBuild() const
     return m_scaledShape;
 }
 
+bool DrawViewDetail::detailPendingAt(int depth) const
+{
+    if (waitingForDetail()) {
+        return true;
+    }
+    if (depth >= 64) {          //chains are acyclic; the guard only stops a malformed document
+        return false;
+    }
+    auto* baseSection = freecad_cast<DrawViewSection*>(BaseView.getValue());
+    return baseSection && baseSection->cutPendingAt(depth + 1);
+}
+
+//mirrors DrawViewSection::postSectionCutTasks: execute the sections whose base is this detail
+void DrawViewDetail::postDetailTasks()
+{
+    std::vector<App::DocumentObject*> children = getInList();
+    for (auto* c : children) {
+        if (auto* dvs = freecad_cast<DrawViewSection*>(c)) {
+            if (dvs->BaseView.getValue() == this) {
+                dvs->recomputeFeature();
+            }
+        }
+    }
+}
+
 //continue processing after makeDetailShape thread is finished
 void DrawViewDetail::onMakeDetailFinished(void)
 {
@@ -491,6 +517,11 @@ void DrawViewDetail::onMakeDetailFinished(void)
         dropDetachedResult();
         m_tempGeometryObject = nullptr;
         return;
+    }
+
+    if (DU::isGuiUp()) {
+        //re-execute sections of this detail now that its result is ready (headless is ordered by recompute)
+        postDetailTasks();
     }
 
     m_tempGeometryObject = buildGeometryObject(getShapeForGeometryBuild(), m_viewAxis);
