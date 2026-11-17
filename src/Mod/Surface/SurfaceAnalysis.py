@@ -63,10 +63,12 @@ Edge continuity
     are consistently oriented; opposed orientations read 180), ``curvature_jump``
     (relative difference of normal curvature, taken along the edge tangent, the
     across-edge direction and their bisector, each projected into the face's
-    tangent plane; floor 1e-3 per mm) and ``g3_jump`` (relative difference of
+    tangent plane; floor ``c / L`` per mm, see ruling below) and ``g3_jump`` (relative difference of
     the derivative of normal curvature along the direction of travel from the
     first face into the second, along the edge tangent and the across
-    direction; floor 1e-3 per mm squared).
+    direction; floor ``c / L**2`` per mm squared). ``L`` is the DiagonalLength of
+    the combined bounding box of the two faces compared and ``c`` is 0.1 (the
+    ``floor`` key of ``tol``). The gap tolerance is ``max(1e-4 mm, 1e-7 L)``.
 G3 measure
     A one-sided, second-order finite difference ``(3 k0 - 4 k1 + k2) / (2 h)``
     on each side, with ``k_i`` the normal curvature after ``i`` steps of
@@ -104,8 +106,9 @@ __all__ = [
 
 _NAN = float("nan")
 _DEGENERATE_RATIO = 1e-7
-_DEFAULT_TOL = {"gap": 1e-4, "angle": 0.05, "curvature": 0.01, "g3": 0.05}
-_CURV_FLOOR = 1e-3
+_DEFAULT_TOL = {"gap": None, "angle": 0.05, "curvature": 0.01, "g3": 0.05, "floor": 0.1}
+_GAP_ABS = 1e-4
+_GAP_REL = 1e-7
 _G3_STEP_FRACTION = 1e-3
 
 
@@ -205,7 +208,9 @@ class _FaceCtx:
                 continue
             dp = dp * (1.0 / length)
             if c["dmax"] is None or c["dmin"] is None:
-                if abs(c["kmax"] - c["kmin"]) <= 1e-9 * max(1.0, abs(c["kmax"])):
+                scale = max(abs(c["kmax"]), abs(c["kmin"]))
+                diag = self.face.BoundBox.DiagonalLength
+                if abs(c["kmax"] - c["kmin"]) <= 1e-9 * max(scale, 1e-12 / max(diag, 1e-300)):
                     out.append(c["kmax"])
                 else:
                     out.append(_NAN)
@@ -382,7 +387,7 @@ def _locate(ctx, edge, tparam, point, has_edge):
             uv = c2.value(tparam)
             u, v = uv.x, uv.y
             p = face.valueAt(u, v)
-            if (p - point).Length <= 1e-4 * max(1.0, face.BoundBox.DiagonalLength):
+            if (p - point).Length <= 1e-4 * face.BoundBox.DiagonalLength:
                 return u, v, p
         except Exception:
             pass
@@ -476,17 +481,21 @@ def edge_continuity(shape, edge, samples=11, faces=None, tol=None):
     ``g3_jump`` (relative, see the module docstring; maxima over the samples),
     ``level`` (``none``, ``G0``, ``G1``, ``G2`` or ``G3``) and ``faces`` (1-based
     indices into ``shape.Faces``, or ``None`` when ``faces`` was given as
-    faces). ``tol`` overrides any of ``gap`` (1e-4 mm), ``angle`` (0.05 deg),
-    ``curvature`` (0.01) and ``g3`` (0.05).
+    faces). ``tol`` overrides any of ``gap`` (``max(1e-4 mm, 1e-7 L)``),
+    ``angle`` (0.05 deg), ``curvature`` (0.01), ``g3`` (0.05) and ``floor``
+    (``c``, 0.1).
 
     Raises ``ValueError`` when the edge is not an edge, is not in the shape,
     has one adjacent face, has more than two, or is a seam (one face on both
     sides).
 
-    Limit: the curvature floors (1e-3 per mm and per mm squared) and the gap
-    tolerance are absolute, so on very large parts the labels depend on size:
-    a plane-to-fillet join of radius 1e5 mm or more reads G2 or G3, not G1.
-    Pass ``tol`` scaled to the part, or read the measured values.
+    Scale rule: ``L`` is the DiagonalLength of the combined bounding box of the
+    two faces compared. The curvature floor is ``c / L`` per mm and the G3
+    derivative floor is ``c / L**2`` per mm squared, with ``c = 0.1`` unless
+    ``tol['floor']`` gives another value. The gap tolerance is
+    ``max(1e-4 mm, 1e-7 L)``. Labels, ``curvature_jump`` and ``g3_jump`` are
+    therefore unchanged by a uniform scaling of the geometry, except where a
+    designed gap meets the absolute part of the gap tolerance.
     """
     if not isinstance(edge, Part.Edge):
         raise ValueError("edge must be a Part.Edge")
@@ -499,6 +508,13 @@ def edge_continuity(shape, edge, samples=11, faces=None, tol=None):
     ca, cb, indices = _faces_of(shape, edge, faces)
     has_a, has_b = _contains_edge(ca.face, edge), _contains_edge(cb.face, edge)
     first, last = edge.FirstParameter, edge.LastParameter
+    box = FreeCAD.BoundBox(ca.face.BoundBox)
+    box.add(cb.face.BoundBox)
+    size = box.DiagonalLength
+    if limits["gap"] is None:
+        limits["gap"] = max(_GAP_ABS, _GAP_REL * size)
+    floor1 = limits["floor"] / size
+    floor2 = limits["floor"] / (size * size)
     h0 = _G3_STEP_FRACTION * max(
         ca.face.BoundBox.DiagonalLength, cb.face.BoundBox.DiagonalLength
     )
@@ -542,7 +558,7 @@ def edge_continuity(shape, edge, samples=11, faces=None, tol=None):
         dirs = [t, travel, diag]
         ka = ca.normal_curvatures(ua, va, dirs)
         kb = cb.normal_curvatures(ub, vb, dirs)
-        jumps.append(_nanmax(_rel(x, y, _CURV_FLOOR) for x, y in zip(ka, kb)))
+        jumps.append(_nanmax(_rel(x, y, floor1) for x, y in zip(ka, kb)))
 
         if step_a is None or step_b is None:
             g3s.append(_NAN)
@@ -567,7 +583,7 @@ def edge_continuity(shape, edge, samples=11, faces=None, tol=None):
                 ]
             )
         g3s.append(
-            _nanmax(_rel(sides[0][j], sides[1][j], _CURV_FLOOR) for j in range(2))
+            _nanmax(_rel(sides[0][j], sides[1][j], floor2) for j in range(2))
         )
 
     gap = max(gaps)
