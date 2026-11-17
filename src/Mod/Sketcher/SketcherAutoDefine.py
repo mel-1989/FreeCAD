@@ -1175,7 +1175,7 @@ def _build_scheme(scratch, model, existing, scheme, deadline, cache=None):
 
 
 def _candidate_key(specs):
-    return frozenset(_spec_key(s) for s in specs)
+    return frozenset(_Intent._norm_key(s) if _is_datum(s) else _spec_key(s) for s in specs)
 
 
 def _verify(scratch, specs, batches, keep, stability_budget=None):
