@@ -50,6 +50,7 @@ class SurfaceWorkbench(Gui.Workbench):
         import SurfaceGordonCommands  # noqa: F401  (registers the Gordon surface command)
         import SurfaceTwoRailCommands  # noqa: F401  (registers the two-rail sweep command)
         import SurfaceBlendSurfaceCommands  # noqa: F401  (registers the blend surface command)
+        import SurfacePoleEditCommands  # noqa: F401  (registers the control point editing command)
 
     def GetClassName(self):
         return "SurfaceGui::Workbench"

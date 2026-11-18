@@ -38,6 +38,11 @@ from SurfaceTests.TestBlendSurface import (
     TestCrossDocumentCopy,
     TestCopyOfFailedFeature,
 )
+from SurfaceTests.TestPoleEdit import (
+    TestPoleEditApi,
+    TestPoleEditLocks,
+    TestPoleEditFeature,
+)
 from SurfaceTests.TestReferenceErrors import (
     TestReferenceErrors,
     TestFillingFollowsSupportFace,
