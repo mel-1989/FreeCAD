@@ -1072,6 +1072,7 @@
 {"menu": "Activate Window", "name": "Std_WindowsMenu", "tip": "Activates this window", "wb": ""},
 {"menu": "Workbench", "name": "Std_Workbench", "tip": "Switches between workbenches", "wb": ""},
 {"menu": "Blend Curve", "name": "Surface_BlendCurve", "tip": "Joins 2 edges with continuity", "wb": "SurfaceWorkbench"},
+{"menu": "Blend surface", "name": "Surface_BlendSurface", "tip": "Bridge the gap between an edge of one face and an edge of another with a surface that meets each face with G0, G1 or G2 continuity", "wb": "SurfaceWorkbench"},
 {"menu": "Clear analysis", "name": "Surface_ClearAnalysis", "tip": "Remove every analysis overlay and legend from the active 3D view", "wb": "SurfaceWorkbench"},
 {"menu": "Curvature analysis", "name": "Surface_CurvatureAnalysis", "tip": "Colour the selected shapes or faces by Gaussian, mean or principal curvature, with a colour legend", "wb": "SurfaceWorkbench"},
 {"menu": "Curvature combs", "name": "Surface_CurvatureComb", "tip": "Draw curvature combs on the selected edges, on the edges of the selected faces or on every edge of the selected shapes", "wb": "SurfaceWorkbench"},
