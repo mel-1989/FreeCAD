@@ -454,6 +454,9 @@ class TwoRailSweep:
         obj.Sections = int(result["sections"])
         SG.record_inputs(obj)
 
+    def onChanged(self, obj, prop):
+        SG.note_link_change(self, obj, prop)
+
     def onDocumentRestored(self, obj):
         obj.Proxy = self
         for name in ("IsApproximate", "MaxDeviation", "Sections"):

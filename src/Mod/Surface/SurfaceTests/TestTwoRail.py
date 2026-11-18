@@ -493,6 +493,40 @@ class TestDeletedInputs(unittest.TestCase):
         self.assertTrue(feat.isValid(), feat.getStatusString())
         self.assertAlmostEqual(feat.Shape.Area, area, places=9)
 
+    def test_two_rail_relink_after_delete_recovers(self):
+        r1, r2 = cylinder_rails()
+        o = self.objs("T", [half_circle(), r1, r2])
+        spare = self.objs("S", [line(V(10, 0, 0), V(10, 50, 0))])[0]
+        feat = SurfaceTwoRail.makeTwoRailFeature(self.doc, (o[0], "Edge1"), (o[1], "Edge1"), (o[2], "Edge1"))
+        self.doc.recompute()
+        area = feat.Shape.Area
+        self.doc.removeObject(o[2].Name)
+        self.doc.recompute()
+        self.assertIn("InputDeleted", feat.getStatusString())
+        feat.Rail2 = (spare, ["Edge1"])
+        self.doc.recompute()
+        self.assertTrue(feat.isValid(), feat.getStatusString())
+        self.assertAlmostEqual(feat.Shape.Area, area, places=6)
+
+    def test_gordon_relink_after_delete_recovers(self):
+        feat = self.gordon()
+        area = feat.Shape.Area
+        spare = self.objs("X", [Part.ArcOfCircle(Part.Circle(V(0, 0, 20), Z, 10), 0, math.pi / 2)])[0]
+        self.doc.removeObject(self.p[2].Name)
+        self.doc.recompute()
+        self.assertIn("InputDeleted", feat.getStatusString())
+        feat.Profiles = [(self.p[0], ["Edge1"]), (self.p[1], ["Edge1"]), (spare, ["Edge1"]), (self.p[3], ["Edge1"])]
+        self.doc.recompute()
+        self.assertTrue(feat.isValid(), feat.getStatusString())
+        self.assertNotIn("InputDeleted", feat.getStatusString())
+        self.assertAlmostEqual(feat.Shape.Area, area, places=6)
+
+    def test_tolerance_is_validated_first(self):
+        for bad in (0, -1, float("nan"), float("inf")):
+            with self.assertRaises(ValueError) as cm:
+                SurfaceTwoRail.makeTwoRailSweep(5, 6, 7, tolerance=bad)
+            self.assertTrue(str(cm.exception).startswith("InvalidTolerance"), bad)
+
     def test_file_without_the_guard_still_opens(self):
         """A file saved before R114a has no ``InputNames``: it opens and recomputes with the same shape."""
         feat = self.gordon()

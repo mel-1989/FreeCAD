@@ -26,6 +26,7 @@ __all__ = [
     "ensure_input_guard",
     "check_inputs_alive",
     "record_inputs",
+    "note_link_change",
 ]
 
 _GUARD = "InputNames"
@@ -106,6 +107,40 @@ def record_inputs(obj):
         setattr(obj, _GUARD, names)
 
 
+def _link_signature(obj):
+    sig = []
+    for prop in _LINK_PROPS:
+        if prop in obj.PropertiesList:
+            value = getattr(obj, prop)
+            entries = value if prop in ("Profiles", "Guides") else ([value] if value else [])
+            for e in entries:
+                if e and e[0] is not None:
+                    subs = e[1] if not isinstance(e[1], str) else (e[1],)
+                    sig.append((prop, e[0].Name, tuple(subs)))
+    return tuple(sig)
+
+
+def note_link_change(proxy, obj, prop):
+    """Call from ``onChanged``. The first change of a link property after an input vanished is the
+    link dropping the dead object (the delete itself); any later change of a link property is a
+    deliberate assignment (a relink) and clears the deleted state by recording the links as they are."""
+    if prop not in _LINK_PROPS or _GUARD not in obj.PropertiesList:
+        return
+    doc = obj.Document
+    if doc is None:
+        return
+    if all(doc.getObject(e.partition("\t")[0]) is not None for e in getattr(obj, _GUARD)):
+        proxy._drop_sig = None
+        return
+    sig = _link_signature(obj)
+    dropped = getattr(proxy, "_drop_sig", None)
+    if dropped is None:
+        proxy._drop_sig = sig
+    elif sig != dropped:
+        proxy._drop_sig = None
+        record_inputs(obj)
+
+
 def ensure_input_guard(obj):
     """Add the hidden list when the object has none (a new feature, or a file from before R114a)."""
     if _GUARD in obj.PropertiesList:
@@ -121,6 +156,7 @@ def check_inputs_alive(obj):
     for entry in getattr(obj, _GUARD, ()):
         name, _tab, label = entry.partition("\t")
         if doc.getObject(name) is None:
+            obj.Proxy._drop_sig = _link_signature(obj)  # later link assignments differ from this
             raise ValueError("InputDeleted: %s was deleted" % (label or name))
 
 
@@ -172,6 +208,9 @@ class GordonSurface:
         obj.IsApproximate = bool(result["approximate"])
         obj.MaxDeviation = max(result["max_profile_deviation"], result["max_guide_deviation"])
         record_inputs(obj)
+
+    def onChanged(self, obj, prop):
+        note_link_change(self, obj, prop)
 
     def onDocumentRestored(self, obj):
         obj.Proxy = self
