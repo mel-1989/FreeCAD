@@ -87,8 +87,22 @@ class TestSurfaceAnalysisCommands(unittest.TestCase):
 
     def _close_panel(self):
         if FreeCADGui.Control.activeDialog():
-            self._button("Cancel").click()
+            # on a slow start the Cancel button is not visible after one pump: poll for it, and fall back to
+            # closing the dialog, so one failure cannot leave the task view occupied for the tests after it
+            for _ in range(100):
+                cancel = [
+                    b
+                    for b in self.mw.findChildren(QtWidgets.QPushButton)
+                    if b.text().replace("&", "") == "Cancel" and b.isVisible()
+                ]
+                if cancel:
+                    cancel[0].click()
+                    break
+                _pump(1)
             _pump()
+            if FreeCADGui.Control.activeDialog():
+                FreeCADGui.Control.closeDialog()
+                _pump()
 
     def _button(self, text):
         for b in self.mw.findChildren(QtWidgets.QPushButton):

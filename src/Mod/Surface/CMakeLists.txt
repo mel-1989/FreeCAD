@@ -11,6 +11,7 @@ set(Surface_Scripts
     Init.py
     SurfaceAnalysis.py
     SurfaceGordon.py
+    SurfaceTwoRail.py
     TestSurfaceApp.py
 )
 
@@ -19,6 +20,8 @@ set(Surface_TestScripts
     SurfaceTests/TestBlendCurve.py
     SurfaceTests/TestGordon.py
     SurfaceTests/TestGordonGui.py
+    SurfaceTests/TestTwoRail.py
+    SurfaceTests/TestTwoRailGui.py
     SurfaceTests/TestReferenceErrors.py
     SurfaceTests/TestSurfaceAnalysis.py
     SurfaceTests/TestSurfaceAnalysisCommands.py
@@ -26,7 +29,7 @@ set(Surface_TestScripts
 )
 
 if(BUILD_GUI)
-    list (APPEND Surface_Scripts InitGui.py SurfaceAnalysisGui.py SurfaceAnalysisCommands.py SurfaceGordonCommands.py TestSurfaceGui.py)
+    list (APPEND Surface_Scripts InitGui.py SurfaceAnalysisGui.py SurfaceAnalysisCommands.py SurfaceGordonCommands.py SurfaceTwoRailCommands.py TestSurfaceGui.py)
 endif(BUILD_GUI)
 
 add_custom_target(SurfaceScripts ALL

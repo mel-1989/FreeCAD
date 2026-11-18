@@ -25,6 +25,12 @@
 from SurfaceTests.TestBlendCurve import TestBlendCurve
 from SurfaceTests.TestGordon import TestGordonApi, TestGordonUsable, TestGordonFeature
 from SurfaceTests.TestSurfaceAnalysis import TestSurfaceAnalysis
+from SurfaceTests.TestTwoRail import (
+    TestTwoRailApi,
+    TestTwoRailUsable,
+    TestTwoRailFeature,
+    TestDeletedInputs,
+)
 from SurfaceTests.TestReferenceErrors import (
     TestReferenceErrors,
     TestFillingFollowsSupportFace,
