@@ -161,8 +161,13 @@ class TestPoleEditGui(unittest.TestCase):
             SAG.remove(h)
 
     def _gl(self):
-        for g in self.mw.findChildren(QtWidgets.QWidget):
-            if g.metaObject().className() == "QOpenGLWidget" and g.parentWidget() is not None and g.parentWidget().metaObject().className() == "Gui::View3DInventorViewer" and g.isVisible():
+        """The viewer's OpenGL widget. It is found as a typed ``QOpenGLWidget``: a wrapper made any other
+        way (``findChildren(QWidget)``, ``QApplication.widgetAt``) is a bare QWidget to Shiboken and the
+        process crashes at exit while Shiboken tears it down, which the GUI lane sees as signal 11."""
+        from PySide6 import QtOpenGLWidgets
+
+        for g in self.mw.findChildren(QtOpenGLWidgets.QOpenGLWidget):
+            if g.isVisible() and g.parentWidget() is not None and g.parentWidget().metaObject().className() == "Gui::View3DInventorViewer":
                 return g
         self.fail("no 3D view widget")
 
@@ -345,6 +350,7 @@ class TestPoleEditGui(unittest.TestCase):
         surf = PE.editable_surface(self.src.Shape.Faces[0])
         screen = {(i, j): self.view.getPointOnScreen(*tuple(surf.getPole(i, j))) for i in range(1, 7) for j in range(1, 9)}
         gl = self._gl()
+        self.assertEqual(type(gl).__name__, "QOpenGLWidget")  # a bare QWidget wrapper crashes the process at exit
         want = (4, 5)
         x, y = screen[want]
         others = min(((x - sx) ** 2 + (y - sy) ** 2) ** 0.5 for k, (sx, sy) in screen.items() if k != want)
