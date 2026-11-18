@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="64px" height="64px" viewBox="0 0 64 64">
+  <title>Surface_Gordon</title>
+  <path d="M 8,20 Q 32,10 56,20 L 56,48 Q 32,58 8,48 Z" style="fill:#c9d8ee;stroke:none" />
+  <g style="fill:none;stroke:#1f2430;stroke-width:2.5;stroke-linecap:round">
+    <path d="M 8,20 Q 32,10 56,20" />
+    <path d="M 8,34 Q 32,28 56,34" />
+    <path d="M 8,48 Q 32,58 56,48" />
+  </g>
+  <g style="fill:none;stroke:#b4442a;stroke-width:2.5;stroke-linecap:round">
+    <path d="M 8,20 Q 14,34 8,48" />
+    <path d="M 26,15 Q 32,33 26,54" />
+    <path d="M 44,16 Q 38,33 44,54" />
+    <path d="M 56,20 Q 50,34 56,48" />
+  </g>
+  <g style="fill:#1f2430;stroke:none">
+    <circle cx="8" cy="20" r="2.4" /><circle cx="56" cy="20" r="2.4" />
+    <circle cx="8" cy="48" r="2.4" /><circle cx="56" cy="48" r="2.4" />
+  </g>
+</svg>
