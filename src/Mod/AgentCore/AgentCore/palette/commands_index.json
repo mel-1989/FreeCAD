@@ -1078,6 +1078,7 @@
 {"menu": "Curvature combs", "name": "Surface_CurvatureComb", "tip": "Draw curvature combs on the selected edges, on the edges of the selected faces or on every edge of the selected shapes", "wb": "SurfaceWorkbench"},
 {"menu": "Curve on Mesh", "name": "Surface_CurveOnMesh", "tip": "Creates an approximated curve on top of a mesh. This command only works with a mesh object.", "wb": "SurfaceWorkbench"},
 {"menu": "Draft analysis", "name": "Surface_DraftAnalysis", "tip": "Colour the selected shapes or faces by draft angle about a pull direction, with a legend", "wb": "SurfaceWorkbench"},
+{"menu": "Edit control points", "name": "Surface_EditPoles", "tip": "Move the control points of the selected face by numeric offsets or by clicking a pole marker, keep the continuity of chosen sides, and watch curvature, zebra or isophotes update", "wb": "SurfaceWorkbench"},
 {"menu": "Extend Face", "name": "Surface_ExtendFace", "tip": "Extrapolates the selected face or surface at its boundaries with its local U and V parameters", "wb": "SurfaceWorkbench"},
 {"menu": "Filling", "name": "Surface_Filling", "tip": "Creates a surface from a series of selected boundary edges. Additionally, the surface may be constrained by edges and vertices that are not on the boundary.", "wb": "SurfaceWorkbench"},
 {"menu": "Fill Boundary Curves", "name": "Surface_GeomFillSurface", "tip": "Creates a surface from 2, 3, or 4 boundary edges", "wb": "SurfaceWorkbench"},
