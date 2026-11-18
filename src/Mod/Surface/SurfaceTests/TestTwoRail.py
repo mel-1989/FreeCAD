@@ -467,7 +467,7 @@ class TestDeletedInputs(unittest.TestCase):
 
     def test_deliberate_shorter_list_recomputes(self):
         feat = self.gordon()
-        feat.Profiles = [(o, ["Edge1"]) for o in self.p[:3]]
+        feat.Profiles = [(self.p[i], ["Edge1"]) for i in (0, 2, 3)]
         feat.Guides = [(self.g[0], ["Edge1"]), (self.g[3], ["Edge1"])]
         self.doc.recompute()
         self.assertTrue(feat.isValid(), feat.getStatusString())
