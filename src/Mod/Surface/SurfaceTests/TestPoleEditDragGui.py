@@ -504,3 +504,83 @@ class TestPoleEditDragGui(_Helpers, unittest.TestCase):
         print("\ndrag latency 18x18 mean curvature: median %.1f ms, worst %.1f ms" % (1000 * statistics.median(times), 1000 * max(times)))
         self.assertLess(statistics.median(times), 0.06)
         self.assertLess(max(times), 0.3)
+
+
+class TestPoleEditDragTallViewGui(_Helpers, unittest.TestCase):
+    """Repair R118: a 3D view taller than wide. Coin's camera mapping rescales the view volume by
+    1 / aspect when the aspect is below 1, under both cameras; the marker hit test and the drag ray
+    must follow the same volume. The truth is the rendered framebuffer: the chosen marker's centroid
+    (base colour (1.0, 0.8, 0.0))."""
+
+    setUpClass = TestPoleEditDragGui.__dict__["setUpClass"]
+    tearDownClass = TestPoleEditDragGui.__dict__["tearDownClass"]
+    for _name in ("_panel", "_send", "_press", "_move", "_release", "_drag", "_camera"):
+        locals()[_name] = TestPoleEditDragGui.__dict__[_name]
+    del _name
+
+    def setUp(self):
+        TestPoleEditDragGui.setUp(self)
+        mw = FreeCADGui.getMainWindow()
+        self._was_max = mw.isMaximized()
+        self._was_size = mw.size()
+        mw.showNormal()
+        mw.resize(700, 1010)
+        _pump(8)
+
+    def tearDown(self):
+        mw = FreeCADGui.getMainWindow()
+        if self._was_max:
+            mw.showMaximized()
+        else:
+            mw.resize(self._was_size)
+        _pump(4)
+        TestPoleEditDragGui.tearDown(self)
+
+    def _chosen_centroid(self):
+        """Centroid ``(x, y)`` in device pixels, origin top left, of the rendered chosen marker."""
+        img = self._gl().grabFramebuffer()
+        xs = ys = n = 0
+        for yy in range(img.height()):
+            for xx in range(img.width()):
+                c = img.pixelColor(xx, yy)
+                if c.red() > 220 and 160 < c.green() < 235 and c.blue() < 70:
+                    xs += xx
+                    ys += yy
+                    n += 1
+        self.assertGreater(n, 0, "the chosen marker is not visible")
+        return xs / n, ys / n
+
+    def _tall_case(self, camera):
+        FreeCADGui.runCommand(camera)
+        self.view.viewIsometric()
+        self.view.fitAll()
+        _pump(4)
+        self._open()
+        panel = self._panel()
+        gl = self._gl()
+        if gl.height() <= gl.width():
+            self.skipTest("the window manager did not give a view taller than wide")
+        dpr = gl.devicePixelRatioF()
+        self._choose(3, 4)
+        _pump(3)
+        cx, cy = self._chosen_centroid()
+        # the hit test projects the chosen pole onto its rendered marker (Coin pixel, origin bottom left)
+        hit = panel.nearest_pole(cx, gl.height() * dpr - 1.0 - cy, panel._cb_view)
+        self.assertEqual(hit[0], (3, 4))
+        self.assertLessEqual(hit[1], 1.5)
+        # a press on the rendered marker is claimed and the dragged pole is drawn under the cursor
+        camera_before = self._camera()
+        x, y = cx / dpr, cy / dpr
+        ex, ey = self._drag(x, y, gl.width() * 0.25, -gl.height() * 0.3, steps=6)
+        self._release(ex, ey)
+        _pump(6)
+        self.assertIn((3, 4), panel.moves)
+        self.assertEqual(self._camera(), camera_before)
+        ax, ay = self._chosen_centroid()
+        self.assertLessEqual(((ax - ex * dpr) ** 2 + (ay - ey * dpr) ** 2) ** 0.5, 1.5)
+
+    def test_tall_view_orthographic_marker_and_drag_match_the_render(self):
+        self._tall_case("Std_OrthographicCamera")
+
+    def test_tall_view_perspective_marker_and_drag_match_the_render(self):
+        self._tall_case("Std_PerspectiveCamera")

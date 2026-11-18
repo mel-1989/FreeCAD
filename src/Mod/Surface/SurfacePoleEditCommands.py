@@ -702,19 +702,74 @@ class PoleEditPanel:
     # ---- clicking a marker
     def nearest_pole(self, x, y, view=None):
         """``((i, j), distance in px)`` of the pole whose projection is nearest to the pixel
-        ``(x, y)`` (origin bottom left); ``None`` when there are no poles."""
+        ``(x, y)`` (device pixels, origin bottom left); ``None`` when there are no poles.
+
+        Poles are projected through the same view volume as the drag ray (``_view_frame``), which
+        follows Coin's camera mapping, including its rescale when the view is taller than wide."""
         view = view or self._cb_view or self._view()
         poles = self.edited.getPoles() if self.edited is not None else None
         if view is None or not poles:
             return None
+        frame = self._view_frame(view)
         best = None
         for i, row in enumerate(poles):
             for j, p in enumerate(row):
-                px, py = view.getPointOnScreen(p.x, p.y, p.z)
+                px, py = self._project(frame, p)
                 d = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
                 if best is None or d < best[1]:
                     best = ((i + 1, j + 1), d)
         return best
+
+    def _view_frame(self, view=None):
+        """The view volume the 3D view renders with, in double precision: ``(position, forward,
+        right, up, half_w, half_h, orthographic, width_px, height_px)``, widths in device pixels.
+
+        Coin's ``SoCamera`` (viewport mapping ``ADJUST_CAMERA``) takes ``getViewVolume(aspect)`` and,
+        when the aspect is below 1, scales the volume by ``1 / aspect``; both cameras get that rule."""
+        view = view or self._cb_view or self._view()
+        cam = view.getCameraNode()
+        pos = App.Vector(*cam.position.getValue().getValue())
+        rot = App.Rotation(*cam.orientation.getValue().getValue())
+        fwd, right, up = rot.multVec(App.Vector(0, 0, -1)), rot.multVec(App.Vector(1, 0, 0)), rot.multVec(App.Vector(0, 1, 0))
+        gl = self._gl or self._gl_widget()  # typed lookup only (a bare wrapper crashes at exit)
+        if gl is not None:
+            dpr = float(gl.devicePixelRatioF())
+            wd, hd = float(gl.width()) * dpr, float(gl.height()) * dpr
+        else:
+            wd, hd = (float(v) for v in view.getSize())
+        aspect = wd / hd
+        ortho = not hasattr(cam, "heightAngle")  # an orthographic camera has a height, not an angle
+        half_h = 0.5 * float(cam.height.getValue()) if ortho else math.tan(0.5 * float(cam.heightAngle.getValue()))
+        half_w = half_h * aspect
+        if aspect < 1.0:  # Coin's ADJUST_CAMERA: the volume is scaled by 1 / aspect
+            half_w, half_h = half_w / aspect, half_h / aspect
+        return pos, fwd, right, up, half_w, half_h, ortho, wd, hd
+
+    @staticmethod
+    def _project(frame, p):
+        """Device pixel ``(x, y)`` (origin bottom left) of the point ``p`` through ``frame``;
+        the inverse of the ray ``_ray_at`` builds."""
+        pos, fwd, right, up, half_w, half_h, ortho, wd, hd = frame
+        d = App.Vector(p) - pos
+        sx, sy = d.dot(right) / half_w, d.dot(up) / half_h
+        if not ortho:
+            z = d.dot(fwd)
+            if z <= 0.0:
+                return float("inf"), float("inf")
+            sx, sy = sx / z, sy / z
+        return (sx + 1.0) * 0.5 * wd, (sy + 1.0) * 0.5 * hd
+
+    @staticmethod
+    def _ray_at(frame, px, py):
+        """The view ray ``(origin, unit direction)`` through the device pixel ``(px, py)``
+        (normalised by the viewport size as Coin's events are, ruling 14)."""
+        pos, fwd, right, up, half_w, half_h, ortho, wd, hd = frame
+        nx, ny = 2.0 * px / wd - 1.0, 2.0 * py / hd - 1.0
+        if ortho:
+            return pos + right * (nx * half_w) + up * (ny * half_h), fwd
+        d = fwd + right * (nx * half_w) + up * (ny * half_h)
+        d.normalize()
+        return pos, d
 
     # ---- the dragger (Qt event filter on the view's QOpenGLWidget)
     @staticmethod
@@ -723,11 +778,13 @@ class PoleEditPanel:
         return bool(event.modifiers() & (m.ShiftModifier | m.ControlModifier | m.AltModifier | m.MetaModifier))
 
     def _pixel(self, event):
-        """``(coin_x, coin_y, dpr)`` of a mouse event: device pixels, origin bottom left."""
+        """``(coin_x, coin_y, dpr)`` of a mouse event: the Coin pixel the view's own events carry
+        (Quarter's ``InputDevice::toDevicePixelPosition``: rounded, y flipped about h - 1)."""
         gl = self._gl
         dpr = float(gl.devicePixelRatioF())
         pos = event.position()
-        return pos.x() * dpr, (gl.height() - pos.y()) * dpr, dpr
+        h = float(gl.height())
+        return math.floor(pos.x() * dpr + 0.5), math.floor((h - pos.y() - 1.0) * dpr + 0.5), dpr
 
     def _marker_under(self, event):
         """The pole whose marker lies within ``PICK_RADIUS`` px of the event, else ``None``."""
@@ -803,34 +860,10 @@ class PoleEditPanel:
         self._set_app_filter(True)
 
     def _ray(self, event):
-        """The view ray ``(origin, unit direction)`` through the event's position, from the view's own
-        camera (position, orientation and view volume) and the viewport size."""
-        cam = self._cb_view.getCameraNode()
-        pos = App.Vector(*cam.position.getValue().getValue())
-        rot = App.Rotation(*cam.orientation.getValue().getValue())
-        fwd, right, up = rot.multVec(App.Vector(0, 0, -1)), rot.multVec(App.Vector(1, 0, 0)), rot.multVec(App.Vector(0, 1, 0))
-        w, h = float(self._gl.width()), float(self._gl.height())
-        dpr = float(self._gl.devicePixelRatioF())
-        p = event.position()
-        # the Coin pixel the view's own events carry (Quarter's InputDevice::toDevicePixelPosition:
-        # rounded, y flipped about h - 1), normalised by the viewport size in device pixels
-        px = math.floor(p.x() * dpr + 0.5)
-        py = math.floor((h - p.y() - 1.0) * dpr + 0.5)
-        wd, hd = w * dpr, h * dpr
-        nx, ny = 2.0 * px / wd - 1.0, 2.0 * py / hd - 1.0
-        aspect = w / h
-        if not hasattr(cam, "heightAngle"):  # an orthographic camera has a height, not an angle
-            half_h = 0.5 * float(cam.height.getValue())
-            half_w = half_h * aspect
-            origin = pos + right * (nx * half_w) + up * (ny * half_h)
-            return origin, fwd
-        half_h = math.tan(0.5 * float(cam.heightAngle.getValue()))
-        half_w = half_h * aspect
-        if aspect < 1.0:  # Coin applies the height angle to the shorter side
-            half_w, half_h = half_h, half_h / aspect
-        d = fwd + right * (nx * half_w) + up * (ny * half_h)
-        d.normalize()
-        return pos, d
+        """The view ray ``(origin, unit direction)`` through the event's Coin pixel, from the same
+        view volume the marker hit test projects through."""
+        px, py, _dpr = self._pixel(event)
+        return self._ray_at(self._view_frame(self._cb_view), px, py)
 
     def _target(self, event):
         """The dragged pole's new position for the event, or ``None`` when the ray gives none."""
