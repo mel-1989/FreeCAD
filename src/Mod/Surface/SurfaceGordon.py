@@ -30,6 +30,7 @@ __all__ = [
 ]
 
 _GUARD = "InputNames"
+_GUARD_LINKS = "InputLinks"
 _LINK_PROPS = ("Profiles", "Guides", "Profile", "Rail1", "Rail2")
 
 
@@ -100,54 +101,81 @@ def _linked_objects(obj):
     return out
 
 
+def _link_triples(obj):
+    """Every link entry as ``"prop<TAB>name<TAB>sub,sub"``, in property order."""
+    out = []
+    for prop in _LINK_PROPS:
+        if prop not in obj.PropertiesList:
+            continue
+        value = getattr(obj, prop)
+        entries = value if prop in ("Profiles", "Guides") else ([value] if value else [])
+        for e in entries:
+            if e and e[0] is not None:
+                linked, subs = _split(e)
+                out.append("%s\t%s\t%s" % (prop, linked.Name, ",".join(subs)))
+    return out
+
+
 def record_inputs(obj):
-    """Remember the objects ``obj`` links now (call after a good recompute)."""
+    """Remember the objects ``obj`` links now, and each link entry (call after a good recompute)."""
     names = ["%s\t%s" % (o.Name, o.Label) for o in _linked_objects(obj)]
     if list(getattr(obj, _GUARD)) != names:
         setattr(obj, _GUARD, names)
-
-
-def _link_signature(obj):
-    sig = []
-    for prop in _LINK_PROPS:
-        if prop in obj.PropertiesList:
-            value = getattr(obj, prop)
-            entries = value if prop in ("Profiles", "Guides") else ([value] if value else [])
-            for e in entries:
-                if e and e[0] is not None:
-                    subs = e[1] if not isinstance(e[1], str) else (e[1],)
-                    sig.append((prop, e[0].Name, tuple(subs)))
-    return tuple(sig)
+    if _GUARD_LINKS in obj.PropertiesList:
+        triples = _link_triples(obj)
+        if list(getattr(obj, _GUARD_LINKS)) != triples:
+            setattr(obj, _GUARD_LINKS, triples)
 
 
 def note_link_change(proxy, obj, prop):
-    """Call from ``onChanged``. The first change of a link property after an input vanished is the
-    link dropping the dead object (the delete itself); any later change of a link property is a
-    deliberate assignment (a relink) and clears the deleted state by recording the links as they are."""
-    if prop not in _LINK_PROPS or _GUARD not in obj.PropertiesList:
+    """Call from ``onChanged``. While a recorded input is gone from the document, a change of a link
+    property counts as a relink only where it adds a link entry that was not recorded; each added entry
+    accounts for one deleted input recorded under the same property. A change that only drops entries
+    (the delete itself, a second delete, a removal) accounts for nothing, so every deleted input not
+    accounted for keeps the feature failing with ``InputDeleted``. Stateless, so it holds after a reopen."""
+    if prop not in _LINK_PROPS or _GUARD not in obj.PropertiesList or _GUARD_LINKS not in obj.PropertiesList:
         return
     doc = obj.Document
     if doc is None:
         return
-    if all(doc.getObject(e.partition("\t")[0]) is not None for e in getattr(obj, _GUARD)):
-        proxy._drop_sig = None
+    entries = list(getattr(obj, _GUARD))
+    missing = [e for e in entries if doc.getObject(e.partition("\t")[0]) is None]
+    if not missing:
         return
-    sig = _link_signature(obj)
-    dropped = getattr(proxy, "_drop_sig", None)
-    if dropped is None:
-        proxy._drop_sig = sig
-    elif sig != dropped:
-        proxy._drop_sig = None
-        record_inputs(obj)
+    recorded = list(getattr(obj, _GUARD_LINKS))
+    now = _link_triples(obj)
+    added = [t for t in now if t not in recorded]
+    if not added:
+        return
+    unmatched = list(missing)
+    for t in added:
+        p = t.split("\t", 1)[0]
+        for m in unmatched:
+            name = m.partition("\t")[0]
+            if any(r.split("\t")[0] == p and r.split("\t")[1] == name for r in recorded):
+                unmatched.remove(m)
+                break
+    if len(unmatched) == len(missing):
+        return
+    keep = set(m.partition("\t")[0] for m in unmatched)
+    names = ["%s\t%s" % (o.Name, o.Label) for o in _linked_objects(obj)] + unmatched
+    triples = now + [r for r in recorded if r.split("\t")[1] in keep]
+    setattr(obj, _GUARD, names)
+    setattr(obj, _GUARD_LINKS, triples)
 
 
 def ensure_input_guard(obj):
-    """Add the hidden list when the object has none (a new feature, or a file from before R114a)."""
-    if _GUARD in obj.PropertiesList:
-        return
-    obj.addProperty("App::PropertyStringList", _GUARD, "Base", "Objects linked at the last good recompute")
-    obj.setPropertyStatus(_GUARD, ["Hidden", "ReadOnly"])
-    record_inputs(obj)
+    """Add the hidden lists when the object lacks them (a new feature, or a file from before R114a)."""
+    if _GUARD not in obj.PropertiesList:
+        obj.addProperty("App::PropertyStringList", _GUARD, "Base", "Objects linked at the last good recompute")
+        obj.setPropertyStatus(_GUARD, ["Hidden", "ReadOnly"])
+        record_inputs(obj)
+    if _GUARD_LINKS not in obj.PropertiesList:
+        obj.addProperty("App::PropertyStringList", _GUARD_LINKS, "Base", "Link entries at the last good recompute")
+        obj.setPropertyStatus(_GUARD_LINKS, ["Hidden", "ReadOnly"])
+        doc = obj.Document
+        if doc is not None and all(doc.getObject(e.partition("\t")[0]) is not None for e in getattr(obj, _GUARD)):
+            setattr(obj, _GUARD_LINKS, _link_triples(obj))
 
 
 def check_inputs_alive(obj):
@@ -156,7 +184,6 @@ def check_inputs_alive(obj):
     for entry in getattr(obj, _GUARD, ()):
         name, _tab, label = entry.partition("\t")
         if doc.getObject(name) is None:
-            obj.Proxy._drop_sig = _link_signature(obj)  # later link assignments differ from this
             raise ValueError("InputDeleted: %s was deleted" % (label or name))
 
 

@@ -521,6 +521,53 @@ class TestDeletedInputs(unittest.TestCase):
         self.assertNotIn("InputDeleted", feat.getStatusString())
         self.assertAlmostEqual(feat.Shape.Area, area, places=6)
 
+    def test_second_delete_after_recompute_stays_deleted(self):
+        """Run 114 second verifier: a second delete after the first recompute is not a relink."""
+        feat = self.gordon()
+        self.doc.removeObject(self.p[1].Name)
+        self.doc.recompute()
+        self.assertIn("InputDeleted", feat.getStatusString())
+        self.doc.removeObject(self.p[2].Name)
+        self.doc.recompute()
+        self.assertFalse(feat.isValid())
+        self.assertIn("InputDeleted", feat.getStatusString())
+
+    def test_delete_profile_then_guide_stays_deleted(self):
+        feat = self.gordon()
+        self.doc.removeObject(self.p[1].Name)
+        self.doc.recompute()
+        self.doc.removeObject(self.g[1].Name)
+        self.doc.recompute()
+        self.assertFalse(feat.isValid())
+        self.assertIn("InputDeleted", feat.getStatusString())
+
+    def test_relinking_one_of_two_deleted_names_the_other(self):
+        feat = self.gordon()
+        label2 = self.p[2].Label
+        spare = self.objs("X", [Part.ArcOfCircle(Part.Circle(V(0, 0, 20), Z, 10), 0, math.pi / 2)])[0]
+        self.doc.removeObject(self.p[1].Name)
+        self.doc.removeObject(self.p[2].Name)
+        self.doc.recompute()
+        self.assertIn("InputDeleted", feat.getStatusString())
+        feat.Profiles = [(self.p[0], ["Edge1"]), (spare, ["Edge1"]), (self.p[3], ["Edge1"])]
+        self.doc.recompute()
+        self.assertFalse(feat.isValid())
+        self.assertIn("InputDeleted: %s" % label2, feat.getStatusString())
+
+    def test_two_rail_relinking_the_other_rail_stays_deleted(self):
+        r1, r2 = cylinder_rails()
+        o = self.objs("T", [half_circle(), r1, r2])
+        spare = self.objs("S", [line(V(0, 0, 0), V(0, 50, 0))])[0]
+        feat = SurfaceTwoRail.makeTwoRailFeature(self.doc, (o[0], "Edge1"), (o[1], "Edge1"), (o[2], "Edge1"))
+        self.doc.recompute()
+        label = o[2].Label
+        self.doc.removeObject(o[2].Name)
+        self.doc.recompute()
+        feat.Rail1 = (spare, ["Edge1"])
+        self.doc.recompute()
+        self.assertFalse(feat.isValid())
+        self.assertIn("InputDeleted: %s" % label, feat.getStatusString())
+
     def test_tolerance_is_validated_first(self):
         for bad in (0, -1, float("nan"), float("inf")):
             with self.assertRaises(ValueError) as cm:
