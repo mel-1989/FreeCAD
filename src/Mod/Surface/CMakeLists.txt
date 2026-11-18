@@ -28,6 +28,7 @@ set(Surface_TestScripts
     SurfaceTests/TestBlendSurfaceGui.py
     SurfaceTests/TestPoleEdit.py
     SurfaceTests/TestPoleEditGui.py
+    SurfaceTests/TestPoleEditDragGui.py
     SurfaceTests/TestReferenceErrors.py
     SurfaceTests/TestSurfaceAnalysis.py
     SurfaceTests/TestSurfaceAnalysisCommands.py
