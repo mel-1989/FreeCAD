@@ -11,6 +11,13 @@ its marker (the nearest within 8 px). Three length fields set the chosen pole's 
 Isophotes) is drawn with the functions of ``SurfaceAnalysisGui`` on the edited face. Every change
 redraws the preview face, the net and the chosen analysis; nothing recomputes the document.
 
+A left press within 8 px of a marker is claimed by the panel under every navigation style (a Qt event filter
+on the 3D view's typed ``QOpenGLWidget``, which runs before any navigation style): it chooses that pole and
+starts a drag, in the view plane or along a global axis (the "Drag in" choice), with the ray taken from the
+view's own camera. Release ends the drag; Escape or a right press during it puts the pole back. A document
+observer follows the source while the panel is open (same pole grid: reload and keep the moves; another
+grid: ``PoleGridChanged``; deleted source or closed document: the panel closes).
+
 OK on a selected face creates one ``PoleEdit`` feature, on a re-edit it updates the feature's
 properties, in one undo transaction named "Edit control points". OK with a refused state (the status
 line shows its name) leaves the panel open and changes nothing. Cancel changes nothing, opens no
@@ -19,6 +26,9 @@ transaction, restores the source's visibility and leaves no ``G09_`` node in the
 Sources (clean room): FreeCAD's own Python task panels and commands, the Qt documentation, the public
 Coin3D (Open Inventor) scene-graph API, and L. Piegl and W. Tiller, *The NURBS Book*, 2nd ed., 1997.
 """
+
+import contextlib
+import math
 
 import FreeCAD as App
 import FreeCADGui as Gui
@@ -29,7 +39,9 @@ import SurfaceAnalysisGui as SAG
 import SurfacePoleEdit as SPE
 from SurfaceAnalysisCommands import _Relay, _quantity_spin_box, selected_subshapes
 
-__all__ = ["PoleEditPanel", "ViewProviderPoleEdit", "PICK_RADIUS"]
+__all__ = ["PoleEditPanel", "ViewProviderPoleEdit", "PICK_RADIUS", "active_panel"]
+
+_ACTIVE = []  # the open panel, for tests and scripts
 
 TRANSACTION = "Edit control points"
 PICK_RADIUS = 8.0
@@ -42,6 +54,57 @@ _ANALYSES = (
 )
 _LOCKS = (("Free", None), ("G0", 0), ("G1", 1), ("G2", 2))
 _NODE_NAMES = ("G09_POLES", "G09_PREVIEW")
+
+
+_DRAG_MODES = (("View plane", "view"), ("X", "X"), ("Y", "Y"), ("Z", "Z"))
+_AXES = {"X": App.Vector(1, 0, 0), "Y": App.Vector(0, 1, 0), "Z": App.Vector(0, 0, 1)}
+
+
+class _DragFilter(QtCore.QObject):
+    """Qt event filter. On the view's ``QOpenGLWidget`` it claims marker presses, drag moves and the
+    release; at application level (installed only while a drag runs) it keeps Escape from reaching the
+    task dialog, whose Escape is Cancel."""
+
+    def __init__(self, panel, app_level=False):
+        super().__init__()
+        self._panel = panel
+        self._app_level = app_level
+
+    def eventFilter(self, obj, event):
+        try:
+            if self._app_level:
+                return self._panel._app_event(event)
+            return self._panel._view_event(event)
+        except Exception as e:  # a failing handler must never break the view's own event handling
+            App.Console.PrintWarning("Surface_EditPoles: %s\n" % e)
+            return False
+
+
+class _SourceObserver:
+    """Document observer: reports changes of the objects the panel's source depends on."""
+
+    def __init__(self, panel):
+        self._panel = panel
+
+    def slotChangedObject(self, obj, prop):
+        self._panel._source_changed(obj, prop)
+
+    def slotDeletedObject(self, obj):
+        self._panel._object_deleted(obj)
+
+    def slotDeletedDocument(self, doc):
+        self._panel._document_deleted(doc)
+
+    def slotUndoDocument(self, doc):
+        self._panel._source_changed(None, "Undo")
+
+    def slotRedoDocument(self, doc):
+        self._panel._source_changed(None, "Redo")
+
+
+def active_panel():
+    """The open pole edit panel, or ``None``."""
+    return _ACTIVE[-1] if _ACTIVE else None
 
 
 def _tr(text):
@@ -141,8 +204,19 @@ class PoleEditPanel:
         self._busy = True
         self._cb = None
         self._cb_view = None
+        self._node_ufs = None  # the selection node the panel's G09_ nodes were added to
         self._hidden = []  # (object, visibility before the panel opened)
         self._torn_down = False
+        self._drag = None  # state of a drag: dict, or None
+        self._swallow = None  # a claimed press that started no drag: swallow its moves and release
+        self._gl = None
+        self._view_filter = None
+        self._app_filter = None
+        self._observer = None
+        self._reload_pending = False
+        self._busy_accept = False
+        self._regridded = False  # the source's pole grid changed while the panel was open
+        self._grid_ref = None
         self.source = None
         self.grid_changed = False
         if feature is not None:
@@ -160,6 +234,8 @@ class PoleEditPanel:
         self._sync_pole_fields()
         self._hide_inputs()
         self._connect_view()
+        self._connect_observer()
+        _ACTIVE.append(self)
         self.refresh()
 
     # ---- widgets
@@ -216,6 +292,9 @@ class PoleEditPanel:
             self.lock_boxes[side] = box
         self.analysis_box = self._combo("G09_PoleEdit_Analysis", _ANALYSES)
         self._row(lock, "Analysis:", self.analysis_box)
+        self.drag_box = self._combo("G09_PoleEdit_DragMode", _DRAG_MODES)
+        self.drag_box.setToolTip(_tr("Drag a pole marker in the view plane or along a global axis"))
+        self._row(lock, "Drag in:", self.drag_box)
         self.status = QtWidgets.QLabel(form)
         self.status.setObjectName("G09_PoleEditStatus")
         self.status.setWordWrap(True)
@@ -266,6 +345,7 @@ class PoleEditPanel:
             self.error = str(e) or e.__class__.__name__
             return
         nu, nv = self.surface.NbUPoles, self.surface.NbVPoles
+        self._grid_ref = SPE.grid_signature(self.surface)
         self.u_spin.setRange(1, nu)
         self.v_spin.setRange(1, nv)
         if self.document is None:
@@ -334,45 +414,115 @@ class PoleEditPanel:
         except Exception:
             return None
 
+    def _view_alive(self):
+        """Whether the view the panel opened in still exists, judged on its typed GL widget (asking a
+        closed view's own wrapper can crash the process)."""
+        if self._gl is None:
+            return self._cb_view is not None
+        try:
+            import shiboken6
+
+            return bool(shiboken6.isValid(self._gl))
+        except Exception:
+            return False
+
+    def _panel_view(self):
+        """The one 3D view the panel draws in and takes presses from: the view it opened in while
+        that view exists; after it closes, the active view (the dragger hook moves with it)."""
+        if self._cb_view is not None and self._view_alive():
+            return self._cb_view
+        if self._cb_view is not None:  # the panel's view closed: a drag in it ends where it was
+            self._drag = self._swallow = None
+            self._disconnect_view()
+            self._connect_view()
+            if self._cb_view is not None:
+                return self._cb_view
+        return self._view()
+
     def _ufs(self):
-        v = self._view()
+        v = self._panel_view()
         return None if v is None else SAG._find_selection_node(v)
+
+    def _gl_widget(self):
+        """The 3D view's ``QOpenGLWidget``, found as that type: a wrapper made any other way (a bare
+        ``QWidget``) crashes the process at exit while Shiboken tears it down."""
+        from PySide6 import QtOpenGLWidgets
+
+        mw = Gui.getMainWindow()
+        found = [
+            g
+            for g in mw.findChildren(QtOpenGLWidgets.QOpenGLWidget)
+            if g.isVisible() and g.parentWidget() is not None and g.parentWidget().metaObject().className() == "Gui::View3DInventorViewer"
+        ]
+        if len(found) > 1:  # several views: the one inside the active sub window
+            try:
+                from PySide6 import QtWidgets as QW6
+
+                area = mw.findChild(QW6.QMdiArea)
+                sub = area.activeSubWindow() if area is not None else None
+                if sub is not None:
+                    mine = [g for g in found if sub.isAncestorOf(g)]
+                    found = mine or found
+            except Exception:
+                pass
+        return found[0] if found else None
 
     def _connect_view(self):
         v = self._view()
         if v is None or self.surface is None:
             return
-        coin = SAG._coin()
-        self._cb = self._on_mouse
         self._cb_view = v
-        v.addEventCallbackPivy(coin.SoMouseButtonEvent.getClassTypeId(), self._cb)
+        self._gl = self._gl_widget()
+        if self._gl is not None:
+            self._view_filter = _DragFilter(self)
+            self._gl.installEventFilter(self._view_filter)
 
     def _disconnect_view(self):
-        if self._cb is not None and self._cb_view is not None:
+        if self._gl is not None and self._view_filter is not None:
             try:
-                coin = SAG._coin()
-                self._cb_view.removeEventCallbackPivy(coin.SoMouseButtonEvent.getClassTypeId(), self._cb)
+                self._gl.removeEventFilter(self._view_filter)
             except Exception:
                 pass
+        self._gl = self._view_filter = None
+        self._set_app_filter(False)
         self._cb = self._cb_view = None
+
+    def _set_app_filter(self, on):
+        app = QtWidgets.QApplication.instance()
+        if on and self._app_filter is None:
+            self._app_filter = _DragFilter(self, app_level=True)
+            app.installEventFilter(self._app_filter)
+        elif not on and self._app_filter is not None:
+            with contextlib.suppress(Exception):
+                app.removeEventFilter(self._app_filter)
+            self._app_filter = None
 
     def _remove_nodes(self):
         SAG.remove(self.handle)
         self.handle = None
+        held, self._node_ufs = self._node_ufs, None
+        targets = [held]
         try:
-            ufs = self._ufs()
+            targets.append(self._ufs())
         except Exception:
-            ufs = None
-        if ufs is None:
-            return
-        for i in reversed(range(ufs.getNumChildren())):
-            if ufs.getChild(i).getName().getString() in _NODE_NAMES:
-                ufs.removeChild(i)
+            pass
+        done = []
+        for ufs in targets:
+            if ufs is None or any(ufs is d for d in done):
+                continue
+            done.append(ufs)
+            with contextlib.suppress(Exception):
+                for i in reversed(range(ufs.getNumChildren())):
+                    if ufs.getChild(i).getName().getString() in _NODE_NAMES:
+                        ufs.removeChild(i)
+        if held is not None:  # the reference taken in _redraw keeps it valid after its view closed
+            with contextlib.suppress(Exception):
+                held.unref()
 
     def _pole_grid(self, surface):
         return surface.getPoles()
 
-    def _preview_node(self, face):
+    def _preview_node(self, verts, tris):
         coin = SAG._coin()
         sep = coin.SoSeparator()
         sep.setName("G09_PREVIEW")
@@ -386,7 +536,6 @@ class PoleEditPanel:
         hints.vertexOrdering = coin.SoShapeHints.UNKNOWN_ORDERING
         hints.shapeType = coin.SoShapeHints.UNKNOWN_SHAPE_TYPE
         sep.addChild(hints)
-        verts, tris = face.tessellate(SAG._effective_deflection(face, None))
         cd = coin.SoCoordinate3()
         cd.point.setValues(0, len(verts), [(p.x, p.y, p.z) for p in verts])
         sep.addChild(cd)
@@ -465,27 +614,39 @@ class PoleEditPanel:
         sep.addChild(self._points_node("G09_POLES_CHOSEN", chosen, (1.0, 0.8, 0.0), 12))
         return sep
 
-    def _analysis_overlay(self, face, view):
+    def _analysis_overlay(self, face, view, tess):
         kind = self.analysis_box.currentData()
         if kind == "none":
             return None
-        if kind in ("mean", "gauss"):
-            return SAG.show_curvature(face, kind=kind, view=view)
-        if kind == "zebra":
-            return SAG.show_zebra(face, view=view)
-        return SAG.show_isophotes(face, view=view)
+        # the overlay reuses the tessellation of the preview (one tessellate call per redraw, not two)
+        original = SAG._tessellate
+        SAG._tessellate = lambda shape, deflection: [(1, tess[0], tess[1], tess[2])]
+        try:
+            if kind in ("mean", "gauss"):
+                return SAG.show_curvature(face, kind=kind, view=view)
+            if kind == "zebra":
+                return SAG.show_zebra(face, view=view)
+            return SAG.show_isophotes(face, view=view)
+        finally:
+            SAG._tessellate = original
 
     def _redraw(self):
         """Replace the preview face, the net and the analysis overlay by ones of the current state."""
         self._remove_nodes()
-        view = self._view()
+        if self._torn_down:
+            return
+        view = self._panel_view()
         if view is None or self.edited is None:
             return
         ufs = SAG._find_selection_node(view)
+        ufs.ref()  # released in _remove_nodes, so removing from it is safe even after its view closed
+        self._node_ufs = ufs
         face = SPE._face_of(self.edited, self.face)
-        ufs.addChild(self._preview_node(face))
+        copy = face.copy()  # the triangulation stays off the shared shape
+        verts, tris = copy.tessellate(SAG._effective_deflection(copy, None))
+        ufs.addChild(self._preview_node(verts, tris))
         ufs.addChild(self._net_node(self.edited))
-        self.handle = self._analysis_overlay(face, view)
+        self.handle = self._analysis_overlay(face, view, (copy, verts, tris))
 
     # ---- state
     def _locks_dict(self):
@@ -510,6 +671,8 @@ class PoleEditPanel:
         text = _tr("%d pole(s) moved, maximum deviation %.6g mm") % (moved, self._deviation)
         if self.grid_changed:
             text = _tr("PoleGridChanged: the source's pole grid is no longer the one this edit was made on; the stored moves are not loaded and OK replaces the stored edit. ") + text
+        elif self._regridded:
+            text = _tr("PoleGridChanged: the source's pole grid changed while the panel was open; the moves made on the old grid were dropped and OK records the moves made on the new grid. ") + text
         self.say(text)
         self._redraw()
         return True
@@ -578,33 +741,344 @@ class PoleEditPanel:
     # ---- clicking a marker
     def nearest_pole(self, x, y, view=None):
         """``((i, j), distance in px)`` of the pole whose projection is nearest to the pixel
-        ``(x, y)`` (origin bottom left); ``None`` when there are no poles."""
+        ``(x, y)`` (device pixels, origin bottom left); ``None`` when there are no poles.
+
+        Poles are projected through the same view volume as the drag ray (``_view_frame``), which
+        follows Coin's camera mapping, including its rescale when the view is taller than wide."""
         view = view or self._cb_view or self._view()
         poles = self.edited.getPoles() if self.edited is not None else None
         if view is None or not poles:
             return None
+        frame = self._view_frame(view)
         best = None
         for i, row in enumerate(poles):
             for j, p in enumerate(row):
-                px, py = view.getPointOnScreen(p.x, p.y, p.z)
+                px, py = self._project(frame, p)
                 d = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
                 if best is None or d < best[1]:
                     best = ((i + 1, j + 1), d)
         return best
 
-    def _on_mouse(self, cb):
+    def _view_frame(self, view=None):
+        """The view volume the 3D view renders with, in double precision: ``(position, forward,
+        right, up, half_w, half_h, orthographic, width_px, height_px)``, widths in device pixels.
+
+        Coin's ``SoCamera`` (viewport mapping ``ADJUST_CAMERA``) takes ``getViewVolume(aspect)`` and,
+        when the aspect is below 1, scales the volume by ``1 / aspect``; both cameras get that rule."""
+        view = view or self._cb_view or self._view()
+        cam = view.getCameraNode()
+        pos = App.Vector(*cam.position.getValue().getValue())
+        rot = App.Rotation(*cam.orientation.getValue().getValue())
+        fwd, right, up = rot.multVec(App.Vector(0, 0, -1)), rot.multVec(App.Vector(1, 0, 0)), rot.multVec(App.Vector(0, 1, 0))
+        gl = self._gl or self._gl_widget()  # typed lookup only (a bare wrapper crashes at exit)
+        if gl is not None:
+            dpr = float(gl.devicePixelRatioF())
+            wd, hd = float(gl.width()) * dpr, float(gl.height()) * dpr
+        else:
+            wd, hd = (float(v) for v in view.getSize())
+        aspect = wd / hd
+        ortho = not hasattr(cam, "heightAngle")  # an orthographic camera has a height, not an angle
+        half_h = 0.5 * float(cam.height.getValue()) if ortho else math.tan(0.5 * float(cam.heightAngle.getValue()))
+        half_w = half_h * aspect
+        if aspect < 1.0:  # Coin's ADJUST_CAMERA: the volume is scaled by 1 / aspect
+            half_w, half_h = half_w / aspect, half_h / aspect
+        return pos, fwd, right, up, half_w, half_h, ortho, wd, hd
+
+    @staticmethod
+    def _project(frame, p):
+        """Device pixel ``(x, y)`` (origin bottom left) of the point ``p`` through ``frame``;
+        the inverse of the ray ``_ray_at`` builds."""
+        pos, fwd, right, up, half_w, half_h, ortho, wd, hd = frame
+        d = App.Vector(p) - pos
+        sx, sy = d.dot(right) / half_w, d.dot(up) / half_h
+        if not ortho:
+            z = d.dot(fwd)
+            if z <= 0.0:
+                return float("inf"), float("inf")
+            sx, sy = sx / z, sy / z
+        return (sx + 1.0) * 0.5 * wd, (sy + 1.0) * 0.5 * hd
+
+    @staticmethod
+    def _ray_at(frame, px, py):
+        """The view ray ``(origin, unit direction)`` through the device pixel ``(px, py)``
+        (normalised by the viewport size as Coin's events are, ruling 14)."""
+        pos, fwd, right, up, half_w, half_h, ortho, wd, hd = frame
+        nx, ny = 2.0 * px / wd - 1.0, 2.0 * py / hd - 1.0
+        if ortho:
+            return pos + right * (nx * half_w) + up * (ny * half_h), fwd
+        d = fwd + right * (nx * half_w) + up * (ny * half_h)
+        d.normalize()
+        return pos, d
+
+    # ---- the dragger (Qt event filter on the view's QOpenGLWidget)
+    @staticmethod
+    def _mods(event):
+        m = QtCore.Qt
+        return bool(event.modifiers() & (m.ShiftModifier | m.ControlModifier | m.AltModifier | m.MetaModifier))
+
+    def _pixel(self, event):
+        """``(coin_x, coin_y, dpr)`` of a mouse event: the Coin pixel the view's own events carry
+        (Quarter's ``InputDevice::toDevicePixelPosition``: rounded, y flipped about h - 1)."""
+        gl = self._gl
+        dpr = float(gl.devicePixelRatioF())
+        pos = event.position()
+        h = float(gl.height())
+        return math.floor(pos.x() * dpr + 0.5), math.floor((h - pos.y() - 1.0) * dpr + 0.5), dpr
+
+    def _marker_under(self, event):
+        """The pole whose marker lies within ``PICK_RADIUS`` px of the event, else ``None``."""
+        if self.edited is None:
+            return None
+        x, y, dpr = self._pixel(event)
+        hit = self.nearest_pole(x, y, self._cb_view)
+        if hit is not None and hit[1] / dpr <= PICK_RADIUS:
+            return hit[0]
+        return None
+
+    def _view_event(self, event):
+        et = event.type()
+        E = QtCore.QEvent
+        if et in (E.MouseButtonPress, E.MouseButtonDblClick):
+            button = event.button()
+            if self._drag is not None:
+                if button == QtCore.Qt.RightButton:  # a right press during a drag: back to the press
+                    self.cancel_drag()
+                    self._swallow = "right"
+                    return True
+                return True  # no other press reaches the navigation style mid-drag
+            if button != QtCore.Qt.LeftButton or self._mods(event):
+                return False
+            hit = self._marker_under(event)
+            if hit is None:
+                return False
+            self._press(hit, event)
+            return True
+        if et == E.MouseMove:
+            if self._drag is not None:
+                self._move(event)
+                return True
+            return self._swallow is not None
+        if et == E.MouseButtonRelease:
+            button = event.button()
+            if self._drag is not None and button == QtCore.Qt.LeftButton:
+                self.end_drag()
+                return True
+            if self._swallow is not None and button == (QtCore.Qt.RightButton if self._swallow == "right" else QtCore.Qt.LeftButton):
+                self._swallow = None
+                return True
+            return self._drag is not None
+        return False
+
+    def _app_event(self, event):
+        et = event.type()
+        if self._drag is None:
+            return False
+        if et in (QtCore.QEvent.ShortcutOverride, QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease):
+            if event.key() == QtCore.Qt.Key_Escape:
+                if et == QtCore.QEvent.KeyPress:
+                    self.cancel_drag()
+                    self._swallow = "left"
+                event.accept()
+                return et != QtCore.QEvent.ShortcutOverride
+        return False
+
+    def _press(self, index, event):
+        self.choose(*index)
+        if index in SPE.locked_poles(self.surface, self._locks_dict()):
+            self._swallow = "left"
+            self.say(_tr("LockedPole: pole (%d, %d) is locked by the side locks and cannot be dragged") % index)
+            return
+        self._swallow = None
+        base = self.edited.getPole(*index)
+        self._drag = {
+            "index": index,
+            "start": self.moves.get(index, App.Vector()),
+            "pole": App.Vector(base),
+            "mode": self.drag_box.currentData(),
+        }
+        self._set_app_filter(True)
+
+    def _ray(self, event):
+        """The view ray ``(origin, unit direction)`` through the event's Coin pixel, from the same
+        view volume the marker hit test projects through."""
+        px, py, _dpr = self._pixel(event)
+        return self._ray_at(self._view_frame(self._cb_view), px, py)
+
+    def _target(self, event):
+        """The dragged pole's new position for the event, or ``None`` when the ray gives none."""
+        drag = self._drag
+        origin, direction = self._ray(event)
+        p0 = drag["pole"]
+        mode = drag["mode"]
+        if mode == "view":
+            fwd = self._cb_view.getCameraNode().orientation.getValue()
+            normal = App.Rotation(*fwd.getValue()).multVec(App.Vector(0, 0, -1))
+            denom = direction.dot(normal)
+            if abs(denom) < 1e-12:
+                return None
+            t = (p0 - origin).dot(normal) / denom
+            return origin + direction * t
+        axis = _AXES[mode]
+        w0 = p0 - origin
+        b = axis.dot(direction)
+        denom = 1.0 - b * b
+        if denom < 1e-12:
+            return None
+        s = (b * direction.dot(w0) - axis.dot(w0)) / denom
+        return p0 + axis * s
+
+    def _move(self, event):
+        drag = self._drag
+        drag["last"] = event.position()
+        if drag.get("busy"):  # a move that arrives while one is processed: only the newest is kept
+            drag["pending"] = event
+            return
+        drag["busy"] = True
         try:
-            coin = SAG._coin()
-            event = cb.getEvent()
-            if event.getButton() != coin.SoMouseButtonEvent.BUTTON1 or event.getState() != coin.SoButtonEvent.DOWN:
-                return
-            x, y = event.getPosition().getValue()
-            hit = self.nearest_pole(x, y)
-            if hit is not None and hit[1] <= PICK_RADIUS:
-                self.choose(*hit[0])
-                cb.setHandled()
-        except Exception as e:  # a failing handler must never break the view's own event handling
-            App.Console.PrintWarning("Surface_EditPoles: %s\n" % e)
+            while event is not None and self._drag is drag:
+                self._apply_move(event)
+                event, drag["pending"] = drag.get("pending"), None
+        finally:
+            drag["busy"] = False
+
+    def _apply_move(self, event):
+        drag = self._drag
+        target = self._target(event)
+        if target is None:
+            return
+        offset = drag["start"] + (target - drag["pole"])
+        self._set_chosen_offset(drag["index"], offset)
+
+    def _set_chosen_offset(self, index, offset):
+        if offset.Length > 0.0:
+            self.moves[index] = offset
+        else:
+            self.moves.pop(index, None)
+        self._sync_pole_fields()
+        self.refresh()
+
+    def end_drag(self):
+        """The release: the drag is one panel change; the state is the one a typed offset gives."""
+        drag, self._drag = self._drag, None
+        self._set_app_filter(False)
+        if drag is None:
+            return
+        pending = drag.get("pending")
+        if pending is not None:  # the newest move before the release is always processed
+            self._drag = drag
+            self._apply_move(pending)
+            self._drag = None
+        self._swallow = None
+
+    def cancel_drag(self):
+        """Escape or a right press: the pole goes back to its offset at the press, the drag ends."""
+        drag, self._drag = self._drag, None
+        self._set_app_filter(False)
+        if drag is None:
+            return
+        self._set_chosen_offset(drag["index"], drag["start"])
+
+    # ---- update hooks
+    def _connect_observer(self):
+        if self.surface is None:
+            return
+        self._observer = _SourceObserver(self)
+        App.addDocumentObserver(self._observer)
+
+    def _disconnect_observer(self):
+        if self._observer is not None:
+            with contextlib.suppress(Exception):
+                App.removeDocumentObserver(self._observer)
+        self._observer = None
+
+    def _watched(self, obj):
+        try:
+            if obj is None or self.feature is not None and obj == self.feature:
+                return False
+            return obj.Document == self.document
+        except Exception:
+            return False
+
+    def _source_changed(self, obj, prop):
+        if self._torn_down or self._busy_accept or self._reload_pending:
+            return
+        if obj is not None and (prop not in ("Shape", "Placement") or not self._watched(obj)):
+            return
+        self._reload_pending = True
+        QtCore.QTimer.singleShot(0, self._reload_source)
+
+    def _reload_source(self):
+        self._reload_pending = False
+        if self._torn_down or self._busy_accept:
+            return
+        try:
+            face = SPE.resolve_face(self.source)
+            surface = SPE.editable_surface(face)
+        except Exception:
+            self._close_panel()  # the source is gone or no longer one face
+            return
+        if self._drag is not None:
+            self.cancel_drag()
+        if SPE.grid_signature(surface) != self._grid_ref:
+            # as 4a's re-edit on a changed grid: the pending moves' indices do not carry over to the new
+            # grid, so they are dropped; the panel shows the new grid and OK records moves made on it
+            self._grid_ref = SPE.grid_signature(surface)
+            self.moves.clear()
+            self._regridded = True
+            self._busy = True
+            self.u_spin.setRange(1, surface.NbUPoles)
+            self.v_spin.setRange(1, surface.NbVPoles)
+            self._busy = False
+            self.chosen = (self.u_spin.value(), self.v_spin.value())
+            self.face, self.surface = face, surface
+            self._sync_pole_fields()
+            self.error = ""
+            self.refresh()
+            return
+        self.face, self.surface = face, surface
+        self.error = ""
+        self.refresh()
+
+    def _object_deleted(self, obj):
+        if self._torn_down:
+            return
+        try:
+            chain = {self.source[0], _leaf_object(self.source)}
+            hit = obj in chain or (self.feature is not None and obj == self.feature)
+        except Exception:
+            hit = True
+        if hit:
+            self._close_panel()
+
+    def _document_deleted(self, doc):
+        try:
+            mine = doc == self.document
+        except Exception:
+            mine = True
+        if mine:
+            self._close_panel()
+
+    def _close_panel(self):
+        """Close the panel without touching the document: the nodes and event filters go at once; the
+        observer (which is calling us) and the dialog go from the event loop."""
+        if self._torn_down:
+            return
+        self._drag = None
+        self._swallow = None
+        self._torn_down = True
+        self._forget()
+        with contextlib.suppress(Exception):
+            self._remove_nodes()
+        self._disconnect_view()
+        QtCore.QTimer.singleShot(0, self._close_dialog)
+
+    def _close_dialog(self):
+        self._disconnect_observer()
+        try:
+            if Gui.Control.activeDialog():
+                Gui.Control.closeDialog()
+        except Exception:
+            pass
 
     # ---- task dialog protocol
     def getStandardButtons(self):
@@ -621,9 +1095,17 @@ class PoleEditPanel:
         if self._torn_down:
             return
         self._torn_down = True
-        self._disconnect_view()
+        self._forget()
+        self._drag = None
+        self._swallow = None
+        self._disconnect_observer()
         self._remove_nodes()
+        self._disconnect_view()
         self._leave_edit_mode()
+
+    def _forget(self):
+        if self in _ACTIVE:
+            _ACTIVE.remove(self)
 
     def _leave_edit_mode(self):
         """The panel may have been opened by ``setEdit``; leave the edit mode with it."""
@@ -636,6 +1118,7 @@ class PoleEditPanel:
             pass
 
     def accept(self):
+        self.end_drag()
         if self.surface is None:
             self.say(self.error)
             return False
@@ -651,6 +1134,7 @@ class PoleEditPanel:
         source_leaf = None if self.feature is not None else _leaf_object(self.source)
         shown = [o for o, _v in self._hidden]
         self._restore_inputs()
+        self._busy_accept = True
         doc.openTransaction(TRANSACTION)
         try:
             if self.feature is None:
@@ -672,6 +1156,7 @@ class PoleEditPanel:
                 except Exception:
                     pass
             self._hidden = [(o, True) for o in shown]
+            self._busy_accept = False
             self.say(str(e) or e.__class__.__name__)
             return False
         doc.commitTransaction()
@@ -680,6 +1165,7 @@ class PoleEditPanel:
         return True
 
     def reject(self):
+        self._drag = None  # a drag in progress ends first; nothing was written
         self._teardown()
         self._restore_inputs()
         return True
