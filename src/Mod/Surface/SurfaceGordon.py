@@ -197,9 +197,53 @@ def adopt_if_copied(obj):
     if getattr(obj, _GUARD_DOC) == uid:
         return
     setattr(obj, _GUARD_DOC, uid)
-    setattr(obj, _GUARD, [_entry(o) for o in _linked_objects(obj)])
-    if _GUARD_LINKS in obj.PropertiesList:
-        setattr(obj, _GUARD_LINKS, _link_triples(obj))
+    if _GUARD_LINKS not in obj.PropertiesList:
+        setattr(obj, _GUARD, [_entry(o) for o in _linked_objects(obj)])
+        return
+    recorded = list(getattr(obj, _GUARD_LINKS))
+    names = {e.split("\t")[0]: e for e in getattr(obj, _GUARD)}
+    now = {}
+    for t in _link_triples(obj):
+        now.setdefault(t.split("\t")[0], []).append(t.split("\t"))
+    triples, entries, taken, kept = [], {}, set(), []
+    rec = [r.split("\t") for r in recorded]
+    used = set()  # (prop, index into now[prop]) already accounted for
+    match = {}  # index into rec -> current triple
+    for i, (prop, name, subs, _rid) in enumerate(rec):  # pass 1: the same object name (no rename on copy)
+        for k, c in enumerate(now.get(prop, [])):
+            if (prop, k) not in used and c[1] == name and c[2] == subs:
+                used.add((prop, k))
+                match[i] = c
+                break
+    for i, (prop, name, subs, _rid) in enumerate(rec):  # pass 2: in order, by sub-names (renamed copies)
+        if i in match:
+            continue
+        for k, c in enumerate(now.get(prop, [])):
+            if (prop, k) not in used and c[2] == subs:
+                used.add((prop, k))
+                match[i] = c
+                break
+    for i, r in enumerate(recorded):
+        name = rec[i][1]
+        if i in match:
+            c = match[i]
+            triples.append("\t".join(c))
+            entries[c[1]] = _entry(doc.getObject(c[1]))
+            taken.add(name)
+        else:
+            kept.append((r, name))  # no current link entry accounts for it: still a deleted input
+    for r, name in kept:
+        triples.append(r)
+        if name not in taken and name in names:
+            entries.setdefault("\t" + name, names[name])
+    # current entries that no recorded entry matched (a link added before the copy) are adopted too
+    for prop, cand in now.items():
+        for k, c in enumerate(cand):
+            if (prop, k) not in used:
+                triples.append("\t".join(c))
+                entries[c[1]] = _entry(doc.getObject(c[1]))
+    setattr(obj, _GUARD, list(entries.values()))
+    setattr(obj, _GUARD_LINKS, triples)
 
 
 def ensure_input_guard(obj):

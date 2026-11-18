@@ -36,6 +36,7 @@ from SurfaceTests.TestBlendSurface import (
     TestBlendSurfaceUsable,
     TestBlendSurfaceFeature,
     TestCrossDocumentCopy,
+    TestCopyOfFailedFeature,
 )
 from SurfaceTests.TestReferenceErrors import (
     TestReferenceErrors,

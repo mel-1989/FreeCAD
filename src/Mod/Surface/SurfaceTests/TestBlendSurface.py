@@ -511,3 +511,54 @@ class TestCrossDocumentCopy(unittest.TestCase):
         self.dst.recompute()
         self.assertFalse(merged.isValid())
         self.assertIn("InputDeleted: %s " % label, merged.getStatusString())
+
+
+class TestCopyOfFailedFeature(TestCrossDocumentCopy):
+    """R115c: a feature that already fails with InputDeleted keeps failing in a copy or a merge."""
+
+    def failed_gordon(self):
+        feat, p = self.gordon()
+        self.src.removeObject(p[1].Name)
+        self.src.recompute()
+        self.assertFalse(feat.isValid())
+        return feat, [p[0], p[2], p[3]]
+
+    def test_gordon_copy_with_dependencies_keeps_failing(self):
+        feat, p = self.failed_gordon()
+        self.dst.copyObject(feat, True)
+        self.dst.recompute()
+        copy = [o for o in self.dst.Objects if o.TypeId == feat.TypeId][-1]
+        self.assertFalse(copy.isValid())
+        self.assertIn("InputDeleted", copy.getStatusString())
+        self.assertIn("PLabel1", copy.getStatusString())
+
+    def test_gordon_copy_with_name_clashes_keeps_failing(self):
+        feat, p = self.failed_gordon()
+        self.clash(p)
+        self.dst.copyObject(feat, True)
+        self.dst.recompute()
+        copy = [o for o in self.dst.Objects if o.TypeId == feat.TypeId][-1]
+        self.assertFalse(copy.isValid())
+        self.assertIn("InputDeleted", copy.getStatusString())
+
+    def test_gordon_merge_keeps_failing(self):
+        feat, p = self.failed_gordon()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "src.FCStd")
+            self.src.saveAs(path)
+            self.dst.mergeProject(path)
+        merged = [o for o in self.dst.Objects if o.TypeId == feat.TypeId][0]
+        self.dst.recompute()
+        self.assertFalse(merged.isValid())
+        self.assertIn("InputDeleted", merged.getStatusString())
+        self.assertIn("PLabel1", merged.getStatusString())
+
+    def test_two_rail_copy_of_failed_feature_says_inputdeleted(self):
+        feat, o = self.two_rail()
+        self.src.removeObject(o[1].Name)
+        self.src.recompute()
+        self.dst.copyObject(feat, True)
+        self.dst.recompute()
+        copy = [x for x in self.dst.Objects if x.TypeId == feat.TypeId][-1]
+        self.assertFalse(copy.isValid())
+        self.assertIn("InputDeleted", copy.getStatusString())
