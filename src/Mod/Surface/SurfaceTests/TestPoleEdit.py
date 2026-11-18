@@ -119,6 +119,20 @@ class TestPoleEditApi(unittest.TestCase):
             self.assertEqual(r["moved"], 3)
             self.assertTrue(r["face"].isValid())
 
+    def test_a_reversed_face_keeps_its_orientation_and_normals(self):
+        face = cubic_face()
+        rev = face.copy()
+        rev.reverse()
+        a = PE.edit_poles(face, {(3, 3): V(0, 0, 2)})["face"]
+        b = PE.edit_poles(rev, {(3, 3): V(0, 0, 2)})["face"]
+        self.assertEqual(b.Orientation, rev.Orientation)
+        self.assertNotEqual(a.Orientation, b.Orientation)
+        for u, v in ((0.5, 0.5), (0.2, 0.7)):
+            ur = rev.ParameterRange
+            uu, vv = ur[0] + (ur[1] - ur[0]) * u, ur[2] + (ur[3] - ur[2]) * v
+            self.assertGreater(b.normalAt(uu, vv).dot(rev.normalAt(uu, vv)), 0.99)
+            self.assertLess(b.normalAt(uu, vv).dot(a.normalAt(uu, vv)), -0.99)
+
     def test_index_is_i_along_u_and_poles_are_one_based(self):
         face = cubic_face(6, 8)
         src = PE.editable_surface(face)

@@ -144,6 +144,7 @@ class PoleEditPanel:
         self._hidden = []  # (object, visibility before the panel opened)
         self._torn_down = False
         self.source = None
+        self.grid_changed = False
         if feature is not None:
             self.source = (feature.Source[0], list(feature.Source[1]))
             if self.document is None:
@@ -271,8 +272,11 @@ class PoleEditPanel:
             self.document = self.source[0].Document
         if self.feature is not None:
             rot = self.face.Placement.Rotation
-            for index, vec in SPE.stored_moves(self.feature):
-                self.moves[index] = rot.multVec(vec)
+            stored = self.feature.GridSignature
+            self.grid_changed = bool(stored) and stored != SPE.grid_signature(self.surface)
+            if not self.grid_changed:  # never apply stored indices to another grid
+                for index, vec in SPE.stored_moves(self.feature):
+                    self.moves[index] = rot.multVec(vec)
             self.locks = {s: k for s, k in SPE.stored_locks(self.feature).items() if k is not None}
             for side, box in self.lock_boxes.items():
                 box.setCurrentIndex(_index_of(box, self.locks.get(side)))
@@ -503,7 +507,10 @@ class PoleEditPanel:
         self.edited = edited
         self._moved = moved
         self._deviation = SPE._max_deviation(self.surface, edited)
-        self.say(_tr("%d pole(s) moved, maximum deviation %.6g mm") % (moved, self._deviation))
+        text = _tr("%d pole(s) moved, maximum deviation %.6g mm") % (moved, self._deviation)
+        if self.grid_changed:
+            text = _tr("PoleGridChanged: the source's pole grid is no longer the one this edit was made on; the stored moves are not loaded and OK replaces the stored edit. ") + text
+        self.say(text)
         self._redraw()
         return True
 
