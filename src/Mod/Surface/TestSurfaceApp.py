@@ -31,6 +31,12 @@ from SurfaceTests.TestTwoRail import (
     TestTwoRailFeature,
     TestDeletedInputs,
 )
+from SurfaceTests.TestBlendSurface import (
+    TestBlendSurfaceApi,
+    TestBlendSurfaceUsable,
+    TestBlendSurfaceFeature,
+    TestCrossDocumentCopy,
+)
 from SurfaceTests.TestReferenceErrors import (
     TestReferenceErrors,
     TestFillingFollowsSupportFace,

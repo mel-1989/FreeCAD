@@ -24,6 +24,7 @@ __all__ = [
     "resolve_links",
     "build_gordon",
     "ensure_input_guard",
+    "adopt_if_copied",
     "check_inputs_alive",
     "record_inputs",
     "note_link_change",
@@ -31,7 +32,8 @@ __all__ = [
 
 _GUARD = "InputNames"
 _GUARD_LINKS = "InputLinks"
-_LINK_PROPS = ("Profiles", "Guides", "Profile", "Rail1", "Rail2")
+_GUARD_DOC = "InputDoc"
+_LINK_PROPS = ("Profiles", "Guides", "Profile", "Rail1", "Rail2", "Edge1", "Edge2")
 
 
 def _split(entry):
@@ -184,8 +186,28 @@ def note_link_change(proxy, obj, prop):
     setattr(obj, _GUARD_LINKS, triples)
 
 
+def adopt_if_copied(obj):
+    """A feature copied or merged from another document keeps that document's object IDs in its
+    records (and its document's UID in ``InputDoc``): re-record the inputs against the objects the
+    links name in this document, so the copy recomputes and a later delete names the right object."""
+    doc = obj.Document
+    if doc is None or _GUARD_DOC not in obj.PropertiesList:
+        return
+    uid = str(doc.Uid)
+    if getattr(obj, _GUARD_DOC) == uid:
+        return
+    setattr(obj, _GUARD_DOC, uid)
+    setattr(obj, _GUARD, [_entry(o) for o in _linked_objects(obj)])
+    if _GUARD_LINKS in obj.PropertiesList:
+        setattr(obj, _GUARD_LINKS, _link_triples(obj))
+
+
 def ensure_input_guard(obj):
     """Add the hidden lists when the object lacks them (a new feature, or a file from before R114a)."""
+    if _GUARD_DOC not in obj.PropertiesList and obj.Document is not None:
+        obj.addProperty("App::PropertyString", _GUARD_DOC, "Base", "Document the inputs were recorded in")
+        obj.setPropertyStatus(_GUARD_DOC, ["Hidden", "ReadOnly"])
+        setattr(obj, _GUARD_DOC, str(obj.Document.Uid))
     if _GUARD not in obj.PropertiesList:
         obj.addProperty("App::PropertyStringList", _GUARD, "Base", "Objects linked at the last good recompute")
         obj.setPropertyStatus(_GUARD, ["Hidden", "ReadOnly"])
@@ -196,10 +218,12 @@ def ensure_input_guard(obj):
         doc = obj.Document
         if doc is not None and all(_alive(doc, e) for e in getattr(obj, _GUARD)):
             setattr(obj, _GUARD_LINKS, _link_triples(obj))
+    adopt_if_copied(obj)
 
 
 def check_inputs_alive(obj):
     """Raise ``InputDeleted`` naming the first recorded input object that is gone from the document."""
+    adopt_if_copied(obj)
     doc = obj.Document
     for entry in getattr(obj, _GUARD, ()):
         if not _alive(doc, entry):

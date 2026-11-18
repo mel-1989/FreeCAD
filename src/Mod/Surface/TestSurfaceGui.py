@@ -6,3 +6,4 @@ from SurfaceTests.TestSurfaceAnalysisGui import TestSurfaceAnalysisGui  # noqa: 
 from SurfaceTests.TestSurfaceAnalysisCommands import TestSurfaceAnalysisCommands  # noqa: F401
 from SurfaceTests.TestGordonGui import TestGordonGui  # noqa: F401
 from SurfaceTests.TestTwoRailGui import TestTwoRailGui  # noqa: F401
+from SurfaceTests.TestBlendSurfaceGui import TestBlendSurfaceGui  # noqa: F401
