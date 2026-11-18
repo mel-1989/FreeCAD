@@ -1083,6 +1083,7 @@
 {"menu": "Gordon surface", "name": "Surface_Gordon", "tip": "Create one B-spline surface through a network of profile and guide curves that cross each other", "wb": "SurfaceWorkbench"},
 {"menu": "Isophote lines", "name": "Surface_IsophoteAnalysis", "tip": "Draw isophote lines on the selected shapes or faces to judge how smoothly surfaces join", "wb": "SurfaceWorkbench"},
 {"menu": "Sections", "name": "Surface_Sections", "tip": "Creates a surface from a series of sectional edges", "wb": "SurfaceWorkbench"},
+{"menu": "Two-rail sweep", "name": "Surface_TwoRailSweep", "tip": "Sweep a profile curve along two rail curves; the profile turns and scales with the chord between the rails", "wb": "SurfaceWorkbench"},
 {"menu": "Zebra stripes", "name": "Surface_ZebraAnalysis", "tip": "Draw zebra stripes on the selected shapes or faces to judge how smoothly surfaces join", "wb": "SurfaceWorkbench"},
 {"menu": "Centerline Between 2 Lines", "name": "TechDraw_2LineCenterLine", "tip": "Adds a centerline between 2 selected lines", "wb": "TechDrawWorkbench"},
 {"menu": "Centerline Between 2 Points", "name": "TechDraw_2PointCenterLine", "tip": "Adds a centerline between 2 selected points", "wb": "TechDrawWorkbench"},
