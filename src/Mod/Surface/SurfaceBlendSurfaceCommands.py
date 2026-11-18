@@ -117,6 +117,7 @@ class BlendPanel:
             size.setDecimals(3)
             size.setRange(0.001, 100.0)
             size.setSingleStep(0.1)
+            size.setSuffix(_tr(" \u00d7 chord"))
             size.setValue(1.0)
             size_label.setBuddy(size)
             row2 = QtWidgets.QHBoxLayout()
