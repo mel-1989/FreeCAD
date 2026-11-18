@@ -101,8 +101,28 @@ def _linked_objects(obj):
     return out
 
 
+def _entry(o):
+    """One ``InputNames`` entry: name, label and the document's object ID (IDs are never reused, names are)."""
+    return "%s\t%s\t%s" % (o.Name, o.Label, o.ID)
+
+
+def _alive(doc, entry):
+    """Is the object an ``InputNames`` entry recorded still in ``doc``? An entry from before the ID was
+    recorded (two fields) is matched by name only."""
+    parts = entry.split("\t")
+    o = doc.getObject(parts[0])
+    if o is None:
+        return False
+    return len(parts) < 3 or not parts[2] or str(o.ID) == parts[2]
+
+
+def _label(entry):
+    parts = entry.split("\t")
+    return (parts[1] if len(parts) > 1 and parts[1] else parts[0])
+
+
 def _link_triples(obj):
-    """Every link entry as ``"prop<TAB>name<TAB>sub,sub"``, in property order."""
+    """Every link entry as ``"prop<TAB>name<TAB>sub,sub<TAB>id"``, in property order."""
     out = []
     for prop in _LINK_PROPS:
         if prop not in obj.PropertiesList:
@@ -112,13 +132,13 @@ def _link_triples(obj):
         for e in entries:
             if e and e[0] is not None:
                 linked, subs = _split(e)
-                out.append("%s\t%s\t%s" % (prop, linked.Name, ",".join(subs)))
+                out.append("%s\t%s\t%s\t%s" % (prop, linked.Name, ",".join(subs), linked.ID))
     return out
 
 
 def record_inputs(obj):
     """Remember the objects ``obj`` links now, and each link entry (call after a good recompute)."""
-    names = ["%s\t%s" % (o.Name, o.Label) for o in _linked_objects(obj)]
+    names = [_entry(o) for o in _linked_objects(obj)]
     if list(getattr(obj, _GUARD)) != names:
         setattr(obj, _GUARD, names)
     if _GUARD_LINKS in obj.PropertiesList:
@@ -139,7 +159,7 @@ def note_link_change(proxy, obj, prop):
     if doc is None:
         return
     entries = list(getattr(obj, _GUARD))
-    missing = [e for e in entries if doc.getObject(e.partition("\t")[0]) is None]
+    missing = [e for e in entries if not _alive(doc, e)]
     if not missing:
         return
     recorded = list(getattr(obj, _GUARD_LINKS))
@@ -158,7 +178,7 @@ def note_link_change(proxy, obj, prop):
     if len(unmatched) == len(missing):
         return
     keep = set(m.partition("\t")[0] for m in unmatched)
-    names = ["%s\t%s" % (o.Name, o.Label) for o in _linked_objects(obj)] + unmatched
+    names = [_entry(o) for o in _linked_objects(obj)] + unmatched
     triples = now + [r for r in recorded if r.split("\t")[1] in keep]
     setattr(obj, _GUARD, names)
     setattr(obj, _GUARD_LINKS, triples)
@@ -174,7 +194,7 @@ def ensure_input_guard(obj):
         obj.addProperty("App::PropertyStringList", _GUARD_LINKS, "Base", "Link entries at the last good recompute")
         obj.setPropertyStatus(_GUARD_LINKS, ["Hidden", "ReadOnly"])
         doc = obj.Document
-        if doc is not None and all(doc.getObject(e.partition("\t")[0]) is not None for e in getattr(obj, _GUARD)):
+        if doc is not None and all(_alive(doc, e) for e in getattr(obj, _GUARD)):
             setattr(obj, _GUARD_LINKS, _link_triples(obj))
 
 
@@ -182,9 +202,8 @@ def check_inputs_alive(obj):
     """Raise ``InputDeleted`` naming the first recorded input object that is gone from the document."""
     doc = obj.Document
     for entry in getattr(obj, _GUARD, ()):
-        name, _tab, label = entry.partition("\t")
-        if doc.getObject(name) is None:
-            raise ValueError("InputDeleted: %s was deleted" % (label or name))
+        if not _alive(doc, entry):
+            raise ValueError("InputDeleted: %s was deleted" % _label(entry))
 
 
 def build_gordon(profile_links, guide_links, tolerance=1e-4, approximate=False):

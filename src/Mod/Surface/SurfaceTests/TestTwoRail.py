@@ -568,6 +568,27 @@ class TestDeletedInputs(unittest.TestCase):
         self.assertFalse(feat.isValid())
         self.assertIn("InputDeleted: %s" % label, feat.getStatusString())
 
+    def test_new_object_reusing_a_deleted_name_is_not_the_input(self):
+        """Run 114 third verifier: FreeCAD reuses a freed Name; the guard matches the object ID too."""
+        feat = self.gordon()
+        name = self.p[1].Name
+        self.doc.removeObject(name)
+        self.doc.recompute()
+        self.assertIn("InputDeleted", feat.getStatusString())
+        self.assertEqual(self.doc.addObject("Part::Feature", name).Name, name)
+        self.doc.recompute()
+        self.assertFalse(feat.isValid())
+        self.assertIn("InputDeleted", feat.getStatusString())
+
+    def test_name_reused_before_the_recompute(self):
+        feat = self.gordon()
+        name = self.p[1].Name
+        self.doc.removeObject(name)
+        self.doc.addObject("Part::Feature", name)
+        self.doc.recompute()
+        self.assertFalse(feat.isValid())
+        self.assertIn("InputDeleted", feat.getStatusString())
+
     def test_tolerance_is_validated_first(self):
         for bad in (0, -1, float("nan"), float("inf")):
             with self.assertRaises(ValueError) as cm:
