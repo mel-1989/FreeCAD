@@ -238,6 +238,16 @@ class PoleEditPanel:
         self.reset_button.clicked.connect(self._r_reset.changed)
 
     def _release_wrappers(self):
+        # the offset spin boxes are made by the UI loader, so Shiboken does not see them die with the form:
+        # drop their wrappers at once, or a later widget made at the same address comes back as a stale one
+        # (a spin box of the next panel found as a QAbstractSpinBox)
+        import shiboken6
+
+        for spin in list(self.offset.values()):
+            try:
+                shiboken6.invalidate(spin)
+            except Exception:
+                pass
         self.offset = {}
 
     def say(self, text):
