@@ -204,6 +204,7 @@ class PoleEditPanel:
         self._busy = True
         self._cb = None
         self._cb_view = None
+        self._node_ufs = None  # the selection node the panel's G09_ nodes were added to
         self._hidden = []  # (object, visibility before the panel opened)
         self._torn_down = False
         self._drag = None  # state of a drag: dict, or None
@@ -413,8 +414,33 @@ class PoleEditPanel:
         except Exception:
             return None
 
+    def _view_alive(self):
+        """Whether the view the panel opened in still exists, judged on its typed GL widget (asking a
+        closed view's own wrapper can crash the process)."""
+        if self._gl is None:
+            return self._cb_view is not None
+        try:
+            import shiboken6
+
+            return bool(shiboken6.isValid(self._gl))
+        except Exception:
+            return False
+
+    def _panel_view(self):
+        """The one 3D view the panel draws in and takes presses from: the view it opened in while
+        that view exists; after it closes, the active view (the dragger hook moves with it)."""
+        if self._cb_view is not None and self._view_alive():
+            return self._cb_view
+        if self._cb_view is not None:  # the panel's view closed: a drag in it ends where it was
+            self._drag = self._swallow = None
+            self._disconnect_view()
+            self._connect_view()
+            if self._cb_view is not None:
+                return self._cb_view
+        return self._view()
+
     def _ufs(self):
-        v = self._cb_view or self._view()
+        v = self._panel_view()
         return None if v is None else SAG._find_selection_node(v)
 
     def _gl_widget(self):
@@ -474,15 +500,24 @@ class PoleEditPanel:
     def _remove_nodes(self):
         SAG.remove(self.handle)
         self.handle = None
+        held, self._node_ufs = self._node_ufs, None
+        targets = [held]
         try:
-            ufs = self._ufs()
+            targets.append(self._ufs())
         except Exception:
-            ufs = None
-        if ufs is None:
-            return
-        for i in reversed(range(ufs.getNumChildren())):
-            if ufs.getChild(i).getName().getString() in _NODE_NAMES:
-                ufs.removeChild(i)
+            pass
+        done = []
+        for ufs in targets:
+            if ufs is None or any(ufs is d for d in done):
+                continue
+            done.append(ufs)
+            with contextlib.suppress(Exception):
+                for i in reversed(range(ufs.getNumChildren())):
+                    if ufs.getChild(i).getName().getString() in _NODE_NAMES:
+                        ufs.removeChild(i)
+        if held is not None:  # the reference taken in _redraw keeps it valid after its view closed
+            with contextlib.suppress(Exception):
+                held.unref()
 
     def _pole_grid(self, surface):
         return surface.getPoles()
@@ -598,10 +633,14 @@ class PoleEditPanel:
     def _redraw(self):
         """Replace the preview face, the net and the analysis overlay by ones of the current state."""
         self._remove_nodes()
-        view = self._view()
+        if self._torn_down:
+            return
+        view = self._panel_view()
         if view is None or self.edited is None:
             return
         ufs = SAG._find_selection_node(view)
+        ufs.ref()  # released in _remove_nodes, so removing from it is safe even after its view closed
+        self._node_ufs = ufs
         face = SPE._face_of(self.edited, self.face)
         copy = face.copy()  # the triangulation stays off the shared shape
         verts, tris = copy.tessellate(SAG._effective_deflection(copy, None))

@@ -584,3 +584,65 @@ class TestPoleEditDragTallViewGui(_Helpers, unittest.TestCase):
 
     def test_tall_view_perspective_marker_and_drag_match_the_render(self):
         self._tall_case("Std_PerspectiveCamera")
+
+
+def _net_count(view):
+    """How many ``G09_POLES_NET`` nodes the view's scene graph holds."""
+    from pivy import coin
+
+    sa = coin.SoSearchAction()
+    sa.setInterest(coin.SoSearchAction.ALL)
+    sa.setSearchingAll(True)
+    sa.setName("G09_POLES_NET")
+    sa.apply(view.getSceneGraph())
+    return sa.getPaths().getLength()
+
+
+class TestPoleEditTwoViewsGui(_Helpers, unittest.TestCase):
+    """Repair R118b: two 3D views of one document. The panel draws in, and removes from, the view it
+    opened in; when that view closes it moves to the remaining one and leaves no node behind."""
+
+    setUpClass = TestPoleEditDragGui.__dict__["setUpClass"]
+    tearDownClass = TestPoleEditDragGui.__dict__["tearDownClass"]
+    setUp = TestPoleEditDragGui.__dict__["setUp"]
+    tearDown = TestPoleEditDragGui.__dict__["tearDown"]
+
+    def _second_view(self):
+        first = FreeCADGui.ActiveDocument.ActiveView
+        FreeCADGui.runCommand("Std_ViewCreate")
+        _pump(6)
+        second = FreeCADGui.ActiveDocument.ActiveView
+        second.viewIsometric()
+        second.fitAll()
+        _pump(4)
+        area = self.mw.findChild(QtWidgets.QMdiArea)
+        return first, second, area, area.subWindowList()
+
+    def test_edits_after_switching_views_draw_one_net_in_the_panel_view(self):
+        first, second, area, subs = self._second_view()
+        self._open()
+        self.assertEqual((_net_count(first), _net_count(second)), (0, 1))
+        area.setActiveSubWindow(subs[0])
+        _pump(6)
+        counts = []
+        for val in (1.0, 2.0, 3.0):
+            self._w("G09_PoleEdit_OffsetX").setProperty("rawValue", val)
+            _pump(3)
+            counts.append((_net_count(first), _net_count(second)))
+        self.assertEqual(counts, [(0, 1)] * 3)
+        self._button("Cancel").click()
+        _pump(4)
+        self.assertEqual((_net_count(first), _net_count(second)), (0, 0))
+
+    def test_closing_the_panel_view_then_ok_leaves_no_node(self):
+        first, second, area, subs = self._second_view()
+        self._open()
+        self._w("G09_PoleEdit_OffsetX").setProperty("rawValue", 1.0)
+        _pump(3)
+        subs[-1].close()
+        _pump(8)
+        self._button("OK").click()
+        _pump(4)
+        self.assertEqual(_net_count(first), 0)
+        self.assertEqual(self._g09_nodes(), [])
+        self.assertEqual(len([o for o in self.doc.Objects if o.TypeId != "Part::Feature" or o.Name != "Src"]), 1)
