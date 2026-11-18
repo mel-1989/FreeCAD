@@ -418,10 +418,18 @@ class TestPoleEditDragGui(_Helpers, unittest.TestCase):
         self.doc.recompute()
         _pump(3)
         self.assertTrue(self._status().startswith("PoleGridChanged"), self._status())
-        self._button("OK").click()  # refused, nothing created
+        panel = self._panel()
+        self.assertEqual((panel.surface.NbUPoles, panel.surface.NbVPoles), (7, 8))  # the new grid is shown
+        self.assertEqual(panel.moves, {})  # the old grid's indices are dropped
+        self.assertEqual(len(panel.edited.getPoles()), 7)
+        self._choose(2, 2)
+        self._set_offset(0.0, 0.0, 0.4)
+        self._button("OK").click()  # records the move made on the new grid
         _pump()
-        self.assertEqual(self._features(), [])
-        self.assertTrue(FreeCADGui.Control.activeDialog())
+        feats = self._features()
+        self.assertEqual(len(feats), 1)
+        self.assertEqual(list(feats[0].PoleIndices), [2, 2])
+        self.assertTrue(feats[0].isValid())
 
     def test_deleting_the_source_closes_the_panel_cleanly(self):
         self._open()

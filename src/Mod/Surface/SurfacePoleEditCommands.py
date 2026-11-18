@@ -214,7 +214,7 @@ class PoleEditPanel:
         self._observer = None
         self._reload_pending = False
         self._busy_accept = False
-        self._stale = False  # the source's pole grid changed since the panel loaded it
+        self._regridded = False  # the source's pole grid changed while the panel was open
         self._grid_ref = None
         self.source = None
         self.grid_changed = False
@@ -619,10 +619,6 @@ class PoleEditPanel:
         if self.surface is None:
             self.say(self.error)
             return False
-        if self._stale:
-            self.error = self._stale_text()
-            self.say(self.error)
-            return False
         try:
             edited, moved = SPE._apply(self.surface, list(self.moves.items()), self._locks_dict())
         except ValueError as e:
@@ -636,6 +632,8 @@ class PoleEditPanel:
         text = _tr("%d pole(s) moved, maximum deviation %.6g mm") % (moved, self._deviation)
         if self.grid_changed:
             text = _tr("PoleGridChanged: the source's pole grid is no longer the one this edit was made on; the stored moves are not loaded and OK replaces the stored edit. ") + text
+        elif self._regridded:
+            text = _tr("PoleGridChanged: the source's pole grid changed while the panel was open; the moves made on the old grid were dropped and OK records the moves made on the new grid. ") + text
         self.say(text)
         self._redraw()
         return True
@@ -812,8 +810,14 @@ class PoleEditPanel:
         rot = App.Rotation(*cam.orientation.getValue().getValue())
         fwd, right, up = rot.multVec(App.Vector(0, 0, -1)), rot.multVec(App.Vector(1, 0, 0)), rot.multVec(App.Vector(0, 1, 0))
         w, h = float(self._gl.width()), float(self._gl.height())
+        dpr = float(self._gl.devicePixelRatioF())
         p = event.position()
-        nx, ny = 2.0 * p.x() / w - 1.0, 1.0 - 2.0 * p.y() / h
+        # the Coin pixel the view's own events carry (Quarter's InputDevice::toDevicePixelPosition:
+        # rounded, y flipped about h - 1), normalised by the viewport size in device pixels
+        px = math.floor(p.x() * dpr + 0.5)
+        py = math.floor((h - p.y() - 1.0) * dpr + 0.5)
+        wd, hd = w * dpr, h * dpr
+        nx, ny = 2.0 * px / wd - 1.0, 2.0 * py / hd - 1.0
         aspect = w / h
         if not hasattr(cam, "heightAngle"):  # an orthographic camera has a height, not an angle
             half_h = 0.5 * float(cam.height.getValue())
@@ -941,19 +945,27 @@ class PoleEditPanel:
         except Exception:
             self._close_panel()  # the source is gone or no longer one face
             return
-        if SPE.grid_signature(surface) != self._grid_ref:
-            self._stale = True
-            self.refresh()
-            return
-        self._stale = False
         if self._drag is not None:
             self.cancel_drag()
+        if SPE.grid_signature(surface) != self._grid_ref:
+            # as 4a's re-edit on a changed grid: the pending moves' indices do not carry over to the new
+            # grid, so they are dropped; the panel shows the new grid and OK records moves made on it
+            self._grid_ref = SPE.grid_signature(surface)
+            self.moves.clear()
+            self._regridded = True
+            self._busy = True
+            self.u_spin.setRange(1, surface.NbUPoles)
+            self.v_spin.setRange(1, surface.NbVPoles)
+            self._busy = False
+            self.chosen = (self.u_spin.value(), self.v_spin.value())
+            self.face, self.surface = face, surface
+            self._sync_pole_fields()
+            self.error = ""
+            self.refresh()
+            return
         self.face, self.surface = face, surface
         self.error = ""
         self.refresh()
-
-    def _stale_text(self):
-        return _tr("PoleGridChanged: the source's pole grid changed while the panel was open; the moves cannot be applied to the new grid, Cancel and open the edit again")
 
     def _object_deleted(self, obj):
         if self._torn_down:
