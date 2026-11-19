@@ -128,6 +128,22 @@ class ViewProviderMatch:
         return None
 
 
+class _DocumentCloseObserver:
+    """Closes the panel when the document it was opened on is closed."""
+
+    def __init__(self, panel):
+        self.panel = panel
+
+    def slotDeletedDocument(self, gdoc):
+        panel = self.panel
+        try:
+            mine = gdoc.Document == panel.document
+        except Exception:
+            mine = False
+        if mine:
+            panel.document_closed()
+
+
 class MatchPanel:
     """Task panel for one match surface: source face and side, target edge, continuity and level."""
 
@@ -144,6 +160,7 @@ class MatchPanel:
         self.handle = None
         self._busy = True
         self._torn_down = False
+        self._observer = None
         self._node_ufs = None
         self._hidden = []  # (object, visibility before the panel opened)
         self._relays = []
@@ -153,10 +170,14 @@ class MatchPanel:
             self.tolerance = feature.Tolerance
             if self.document is None:
                 self.document = feature.Document
+        if self.document is None:  # the document the panel was opened on, whatever becomes active later
+            self.document = Gui.ActiveDocument.Document if Gui.ActiveDocument is not None else App.ActiveDocument
         self._build_form()
         self._busy = False
         self._hide_inputs()
         _ACTIVE.append(self)
+        self._observer = _DocumentCloseObserver(self)
+        Gui.addDocumentObserver(self._observer)
         self.refresh()
 
     # ---- widgets
@@ -441,7 +462,7 @@ class MatchPanel:
             self.error = _tr("InvalidInput: set the source face and the target edge")
             self.say(self.error)
             return False
-        if not (_alive(self.source) and _alive(self.target)):
+        if not (_alive(self.source) and _alive(self.target) and (self.feature is None or _alive((self.feature,)))):
             self.error = _tr("InputDeleted: the source or the target was deleted")
             self.say(self.error)
             return False
@@ -479,6 +500,10 @@ class MatchPanel:
         self._torn_down = True
         if self in _ACTIVE:
             _ACTIVE.remove(self)
+        observer, self._observer = self._observer, None
+        if observer is not None:
+            with contextlib.suppress(Exception):
+                Gui.removeDocumentObserver(observer)
         self._remove_nodes()
         with contextlib.suppress(Exception):  # the panel may have been opened by setEdit
             gdoc = Gui.ActiveDocument
@@ -538,6 +563,14 @@ class MatchPanel:
 
     def closed(self):
         self._teardown()
+
+    def document_closed(self):
+        """The panel's document is closing: close the panel without a transaction or any change."""
+        self._teardown()
+        self._hidden = []  # the objects go with the document
+        with contextlib.suppress(Exception):
+            if Gui.Control.activeDialog():
+                Gui.Control.closeDialog()
 
 
 class _MatchSurfaceCommand:
