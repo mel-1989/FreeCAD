@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="64px" height="64px" viewBox="0 0 64 64">
+  <title>Surface_MatchSurface</title>
+  <path d="M 4,40 L 30,48 L 30,34 L 4,26 Z" style="fill:#b9c2d3;stroke:#8a93a6;stroke-width:1.5;stroke-linejoin:round" />
+  <path d="M 30,34 C 40,32 46,20 60,14 L 60,28 C 46,34 40,46 30,48 Z" style="fill:#c9d8ee;stroke:#8a93a6;stroke-width:1.5;stroke-linejoin:round" />
+  <path d="M 30,34 L 30,48" style="fill:none;stroke:#b4442a;stroke-width:3;stroke-linecap:round" />
+  <g style="fill:none;stroke:#8a93a6;stroke-width:1">
+    <path d="M 45,25 C 48,26 52,23 56,21" />
+    <path d="M 40,35 C 46,34 50,30 56,26" />
+  </g>
+  <g style="fill:#1f2430;stroke:none">
+    <circle cx="30" cy="34" r="2.5" />
+    <circle cx="30" cy="48" r="2.5" />
+  </g>
+</svg>

@@ -33,7 +33,7 @@ __all__ = [
 _GUARD = "InputNames"
 _GUARD_LINKS = "InputLinks"
 _GUARD_DOC = "InputDoc"
-_LINK_PROPS = ("Profiles", "Guides", "Profile", "Rail1", "Rail2", "Edge1", "Edge2", "Source")
+_LINK_PROPS = ("Profiles", "Guides", "Profile", "Rail1", "Rail2", "Edge1", "Edge2", "Source", "Target")
 
 
 def _split(entry):

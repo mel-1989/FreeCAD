@@ -50,6 +50,11 @@ from SurfaceTests.TestSurfaceMatch import (
     TestMatchRefusals,
     TestMatchUsable,
 )
+from SurfaceTests.TestMatchSurfaceFeature import (
+    TestMatchSurfaceFeature,
+    TestAdjacentSideWarning,
+    TestRepairR120,
+)
 from SurfaceTests.TestReferenceErrors import (
     TestReferenceErrors,
     TestFillingFollowsSupportFace,
