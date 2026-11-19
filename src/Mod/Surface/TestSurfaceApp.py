@@ -43,6 +43,13 @@ from SurfaceTests.TestPoleEdit import (
     TestPoleEditLocks,
     TestPoleEditFeature,
 )
+from SurfaceTests.TestSurfaceMatch import (
+    TestMatchPlane,
+    TestMatchCurved,
+    TestMatchFold,
+    TestMatchRefusals,
+    TestMatchUsable,
+)
 from SurfaceTests.TestReferenceErrors import (
     TestReferenceErrors,
     TestFillingFollowsSupportFace,

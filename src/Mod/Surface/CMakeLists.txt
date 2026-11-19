@@ -14,6 +14,7 @@ set(Surface_Scripts
     SurfaceTwoRail.py
     SurfaceBlendSurface.py
     SurfacePoleEdit.py
+    SurfaceMatch.py
     TestSurfaceApp.py
 )
 
@@ -29,6 +30,7 @@ set(Surface_TestScripts
     SurfaceTests/TestPoleEdit.py
     SurfaceTests/TestPoleEditGui.py
     SurfaceTests/TestPoleEditDragGui.py
+    SurfaceTests/TestSurfaceMatch.py
     SurfaceTests/TestReferenceErrors.py
     SurfaceTests/TestSurfaceAnalysis.py
     SurfaceTests/TestSurfaceAnalysisCommands.py
