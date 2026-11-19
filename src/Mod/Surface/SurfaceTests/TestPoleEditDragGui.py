@@ -606,6 +606,9 @@ class TestPoleEditTwoViewsGui(_Helpers, unittest.TestCase):
     tearDownClass = TestPoleEditDragGui.__dict__["tearDownClass"]
     setUp = TestPoleEditDragGui.__dict__["setUp"]
     tearDown = TestPoleEditDragGui.__dict__["tearDown"]
+    for _name in ("_panel", "_send", "_press", "_move", "_release"):
+        locals()[_name] = TestPoleEditDragGui.__dict__[_name]
+    del _name
 
     def _second_view(self):
         first = FreeCADGui.ActiveDocument.ActiveView
@@ -646,3 +649,35 @@ class TestPoleEditTwoViewsGui(_Helpers, unittest.TestCase):
         self.assertEqual(_net_count(first), 0)
         self.assertEqual(self._g09_nodes(), [])
         self.assertEqual(len([o for o in self.doc.Objects if o.TypeId != "Part::Feature" or o.Name != "Src"]), 1)
+
+    def test_a_drag_in_the_remaining_view_still_moves_a_pole_after_the_panel_view_closed(self):
+        """Repair R119 (run 118's verifier): the panel's own view closes, the panel reconnects to the
+        remaining view of the document, and a drag there moves the pole. Without the reconnect the
+        press is never claimed and nothing moves."""
+        first, second, area, subs = self._second_view()
+        self._open()
+        panel = self._panel()
+        subs[-1].close()
+        _pump(8)
+        self._w("G09_PoleEdit_OffsetX").setProperty("rawValue", 0.5)  # the redraw moves the panel to the remaining view
+        _pump(3)
+        gl = self._gl()
+        dpr = gl.devicePixelRatioF()
+        ij = (max(2, panel.edited.NbUPoles // 2), max(2, panel.edited.NbVPoles // 2))
+        p0 = V(panel.edited.getPole(*ij))
+        sx, sy = first.getPointOnScreen(p0.x, p0.y, p0.z)
+        x, y = sx / dpr, gl.height() - sy / dpr
+        self._press(x, y)
+        _pump(1)
+        self.assertIsNotNone(panel._drag, "the press in the remaining view was not claimed")
+        for k in range(1, 4):
+            self._move(x + 8 * k, y - 5 * k)
+        self._release(x + 24, y - 15)
+        _pump(3)
+        self.assertEqual(tuple(panel.chosen), ij)
+        self.assertGreater((V(panel.edited.getPole(*ij)) - p0).Length, 0.05)
+        self.assertEqual(_net_count(first), 1)
+        self._button("OK").click()
+        _pump(4)
+        self.assertEqual(_net_count(first), 0)
+        self.assertEqual(self._g09_nodes(), [])
