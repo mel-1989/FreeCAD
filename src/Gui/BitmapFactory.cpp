@@ -26,6 +26,7 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QMap>
 #include <QImageReader>
 #include <QPainter>
@@ -52,6 +53,9 @@ class BitmapFactoryInstP
 {
 public:
     QMap<std::string, QPixmap> xpmCache;
+    // Rendered SVG pixmaps keyed by name, size, colour map, device pixel ratio and everything
+    // that decides which file the name resolves to (icon search paths, external theme)
+    QHash<QString, QPixmap> svgCache;
 
     bool useIconTheme;
     QString externalThemePath;
@@ -243,6 +247,7 @@ bool BitmapFactoryInst::findPixmapInCache(const char* name, QPixmap& px) const
 void BitmapFactoryInst::clearCache()
 {
     d->xpmCache.clear();
+    d->svgCache.clear();
 }
 
 void BitmapFactoryInst::reloadExternalThemeSettings()
@@ -505,10 +510,35 @@ QPixmap BitmapFactoryInst::pixmapFromSvg(
 {
     static qreal dpr = getMaximumDPR();
 
-    // If an absolute path is given
     QPixmap icon;
     QString iconPath;
     QString fn = QString::fromUtf8(name);
+
+    // Resolving a name and rendering its SVG is expensive, and callers such as the tree ask
+    // for the same overlay once per object. Cache by name unless the name is a path to a file
+    // that may change on disk. The key includes everything that decides which file a name
+    // resolves to, so a new icon search path or theme setting is honoured as without a cache.
+    QString cacheKey;
+    const bool cacheable = !QDir::isAbsolutePath(fn);
+    if (cacheable) {
+        cacheKey = fn;
+        cacheKey += QLatin1Char('|') + QString::number(size.width()) + QLatin1Char('x')
+            + QString::number(size.height()) + QLatin1Char('|') + QString::number(dpr)
+            + QLatin1Char('|') + QString::number(d->externalThemeEnabled)
+            + QString::number(d->preferExternal) + QLatin1Char('|') + d->externalThemePath
+            + QLatin1Char('|') + QIcon::themeName() + QLatin1Char('|')
+            + QDir::searchPaths(QStringLiteral("icons")).join(QLatin1Char(';'));
+        for (const auto& colorToColor : colorMapping) {
+            cacheKey += QLatin1Char('|') + QString::number(colorToColor.first, 16)
+                + QLatin1Char('>') + QString::number(colorToColor.second, 16);
+        }
+        auto it = d->svgCache.constFind(cacheKey);
+        if (it != d->svgCache.constEnd()) {
+            return it.value();
+        }
+    }
+
+    // If an absolute path is given
     if (QFile(fn).exists()) {
         iconPath = fn;
     }
@@ -547,6 +577,12 @@ QPixmap BitmapFactoryInst::pixmapFromSvg(
 
     if (!icon.isNull()) {
         icon.setDevicePixelRatio(dpr);
+        if (cacheable) {
+            if (d->svgCache.size() > 512) {
+                d->svgCache.clear();
+            }
+            d->svgCache.insert(cacheKey, icon);
+        }
     }
 
     return icon;
