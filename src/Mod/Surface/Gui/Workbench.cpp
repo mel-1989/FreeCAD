@@ -56,7 +56,8 @@ Gui::MenuItem* Workbench::setupMenuBar() const
              << "Surface_Gordon"
              << "Surface_TwoRailSweep"
              << "Surface_BlendSurface"
-             << "Surface_EditPoles";
+             << "Surface_EditPoles"
+             << "Surface_MatchSurface";
 
     Gui::MenuItem* analysis = new Gui::MenuItem;
     analysis->setCommand("&Analysis");
@@ -89,7 +90,8 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
              << "Surface_Gordon"
              << "Surface_TwoRailSweep"
              << "Surface_BlendSurface"
-             << "Surface_EditPoles";
+             << "Surface_EditPoles"
+             << "Surface_MatchSurface";
     /*
      *surface << "Surface_Cut";
      */

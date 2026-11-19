@@ -35,9 +35,11 @@ import Part
 import numpy as np
 
 import SurfaceAnalysis as SA
+import SurfaceBlendSurface as SBS
+import SurfaceGordon as SG
 import SurfacePoleEdit as PE
 
-__all__ = ["matchSurface", "SIDES"]
+__all__ = ["matchSurface", "SIDES", "makeMatchSurfaceFeature", "MatchSurface", "build_match", "adjacent_side_shared"]
 
 SIDES = PE.SIDES
 
@@ -542,6 +544,8 @@ def matchSurface(face, side, target_face, target_edge, continuity=2, tolerance=1
     for item, kind, name in ((face, Part.Face, "face"), (target_face, Part.Face, "target_face"), (target_edge, Part.Edge, "target_edge")):
         if not isinstance(item, kind):
             raise TypeError("TypeError: %s must be a Part.%s" % (name, kind.__name__))
+    if not isinstance(approximate, bool):
+        raise TypeError("TypeError: approximate must be a bool, not %s" % type(approximate).__name__)
     if not _finite_positive(tolerance):
         raise ValueError("InvalidTolerance: tolerance must be finite and greater than 0")
     if isinstance(continuity, bool) or not isinstance(continuity, int) or continuity not in (0, 1, 2):
@@ -644,3 +648,268 @@ def matchSurface(face, side, target_face, target_edge, continuity=2, tolerance=1
         "max_move": move,
         "warnings": warnings,
     }
+
+
+# ------------------------------------------------------------------------------ feature (slice 5b)
+
+_CONTINUITY = ("G0", "G1", "G2")
+_ADJACENT = {"U0": ("V0", "V1"), "U1": ("V0", "V1"), "V0": ("U0", "U1"), "V1": ("U0", "U1")}
+_READONLY = (
+    "Level", "PolesAlong", "DegreeAlong", "IsApproximate", "MaxGap", "MaxAngle", "MaxCurvatureJump", "MaxMove", "Warnings"
+)
+
+
+def _container_placement(obj):
+    """Product of the placements of the containers that hold ``obj``, outermost first, or ``None``."""
+    chain = None
+    cur = obj
+    for _ in range(64):
+        try:
+            parent = cur.getParentGeoFeatureGroup()
+        except Exception:
+            return chain
+        if parent is None:
+            return chain
+        chain = parent.Placement if chain is None else parent.Placement.multiply(chain)
+        cur = parent
+    return chain
+
+
+def _owner_shape(link):
+    """``(shape, index)`` of the object that owns the first face or edge a link names, every placement on
+    the path applied; ``index`` is the 0-based face number when the sub-name is a face, else ``None``."""
+    obj, subs = link[0], link[1]
+    if isinstance(subs, str):
+        subs = (subs,)
+    sub = next((s for s in subs if s.rsplit(".", 1)[-1].startswith(("Face", "Edge"))), "")
+    prefix = sub.rpartition(".")[0]
+    shape = Part.getShape(obj, prefix + ".", needSubElement=False, transform=True) if prefix else getattr(obj, "Shape", None)
+    leaf = obj
+    if prefix:
+        try:
+            found = obj.getSubObject(prefix + ".", 1)
+            leaf = found if found is not None else obj
+        except Exception:
+            pass
+    index = None
+    last = sub.rsplit(".", 1)[-1]
+    if last.startswith("Face") and last[4:].isdigit():
+        index = int(last[4:]) - 1
+    return shape, index, leaf
+
+
+def _on_iso(edge, iso, tolerance):
+    if edge.isNull() or getattr(edge, "Degenerated", False):
+        return False
+    bb = iso.BoundBox
+    bb.enlarge(tolerance)
+    if not bb.intersect(edge.BoundBox):
+        return False
+    f, l = edge.FirstParameter, edge.LastParameter
+    return all(SBS._dist(edge.valueAt(f + (l - f) * k / 10.0), iso) <= tolerance for k in range(11))
+
+
+def _candidate_faces(source, target, feature):
+    """Faces that may neighbour the source, all in global coordinates (see the brief, "Adjacent-side
+    warning"): the other faces of the source object, the faces of the target object, and the faces of the
+    visible objects that do not depend on the source object or the feature."""
+    out = []
+    src_shape, src_index, src_leaf = _owner_shape(source)
+    tgt_shape, _ti, tgt_leaf = _owner_shape(target)
+    for shape in (src_shape, tgt_shape):
+        if shape is None or shape.isNull():
+            continue
+        for i, f in enumerate(shape.Faces):
+            if shape is src_shape and i == src_index:
+                continue
+            out.append(f)
+    skip = {source[0].Name, src_leaf.Name, target[0].Name, tgt_leaf.Name}
+    roots = [o for o in (source[0], src_leaf, feature) if o is not None]
+    doc = source[0].Document
+    for o in doc.Objects:
+        if o.Name in skip or (feature is not None and o.Name == feature.Name):
+            continue
+        try:
+            if not o.Visibility:
+                continue
+            shape = getattr(o, "Shape", None)
+            if not isinstance(shape, Part.Shape) or shape.isNull():
+                continue
+            below = o.OutListRecursive
+            if any(r.Name == b.Name for r in roots for b in below):
+                continue
+            chain = _container_placement(o)
+            if chain is not None:
+                shape = shape.copy()
+                shape.Placement = chain.multiply(shape.Placement)
+            out.extend(shape.Faces)
+        except Exception:
+            continue
+    # the source face itself is never a candidate, even when the target object is its own object
+    return out, src_shape, src_index
+
+
+def adjacent_side_shared(source, side, target, tolerance, feature=None, face=None):
+    """Does a candidate face share one of the two sides adjacent to ``side`` of the resolved source face?"""
+    face = face if face is not None else PE.resolve_face(source)
+    surface = PE.editable_surface(face)
+    isos = []
+    for name in _ADJACENT[side]:
+        try:
+            iso = _side_iso(surface, name)
+        except Exception:
+            continue
+        if iso.Length > 1e-9:
+            isos.append(iso)
+    if not isos:
+        return False
+    faces, src_shape, src_index = _candidate_faces(source, target, feature)
+    skip_source = None
+    if src_shape is not None and not src_shape.isNull() and src_index is None and len(src_shape.Faces) == 1:
+        skip_source = src_shape.Faces[0]
+    for f in faces:
+        try:
+            if skip_source is not None and f.isSame(skip_source):
+                continue
+            if f.isSame(face):
+                continue
+            for e in f.Edges:
+                if any(_on_iso(e, iso, tolerance) for iso in isos):
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def build_match(source, side, target, continuity, tolerance, max_level, approximate, feature=None):
+    """``matchSurface`` on the faces and edge two links name; ``warnings`` also carries
+    ``AdjacentSideShared`` when the rule of the brief finds a shared adjacent side."""
+    face = PE.resolve_face(source)
+    tface, tedge = SBS.resolve_edge_face(target, tolerance)
+    result = matchSurface(
+        face, side, tface, tedge, continuity=continuity, tolerance=tolerance, max_level=max_level, approximate=approximate
+    )
+    result["warnings"] = list(result["warnings"])
+    side_name = side if isinstance(side, str) else _resolve_side(side, face, PE.editable_surface(face), tolerance)
+    shared = False
+    try:
+        shared = adjacent_side_shared(source, side_name, target, tolerance, feature, face)
+    except Exception:
+        shared = False
+    if shared:
+        result["warnings"].append("AdjacentSideShared")
+    return result
+
+
+class MatchSurface:
+    """Proxy of the match surface feature."""
+
+    def __init__(self, obj):
+        obj.Proxy = self
+        add = obj.addProperty
+        add("App::PropertyLinkSub", "Source", "Match", "The face whose side is matched")
+        add("App::PropertyEnumeration", "Side", "Match", "The side of the source face that is moved onto the target edge")
+        add("App::PropertyLinkSub", "Target", "Match", "Edge of the target face (and optionally the face)")
+        add("App::PropertyEnumeration", "Continuity", "Match", "Continuity with the target face")
+        add("App::PropertyFloat", "Tolerance", "Match", "Largest gap between the matched side and the target edge, in mm")
+        add("App::PropertyInteger", "MaxLevel", "Match", "Most knot refinement levels along the side (0 to 8)")
+        add("App::PropertyBool", "AllowApproximation", "Match", "Accept a result that misses the continuity thresholds")
+        add("App::PropertyInteger", "Level", "Match", "Refinement level used")
+        add("App::PropertyInteger", "PolesAlong", "Match", "Number of poles along the matched side")
+        add("App::PropertyInteger", "DegreeAlong", "Match", "Degree along the matched side")
+        add("App::PropertyBool", "IsApproximate", "Match", "True if the continuity thresholds were waived")
+        add("App::PropertyFloat", "MaxGap", "Match", "Largest measured gap, in mm")
+        add("App::PropertyFloat", "MaxAngle", "Match", "Largest measured angle, in degrees")
+        add("App::PropertyFloat", "MaxCurvatureJump", "Match", "Largest measured relative curvature jump")
+        add("App::PropertyFloat", "MaxMove", "Match", "Largest pole displacement, in mm")
+        add("App::PropertyStringList", "Warnings", "Match", "Warnings of the last recompute")
+        obj.Side = list(SIDES)
+        obj.Side = "V0"
+        obj.Continuity = list(_CONTINUITY)
+        obj.Continuity = "G2"
+        obj.Tolerance = 1e-4
+        obj.MaxLevel = 5
+        obj.AllowApproximation = False
+        obj.Level = obj.PolesAlong = obj.DegreeAlong = 0
+        obj.IsApproximate = False
+        obj.MaxGap = obj.MaxAngle = obj.MaxCurvatureJump = obj.MaxMove = 0.0
+        self._readonly(obj)
+        SG.ensure_input_guard(obj)
+
+    @staticmethod
+    def _readonly(obj):
+        for name in _READONLY:
+            if name in obj.PropertiesList:
+                obj.setPropertyStatus(name, "ReadOnly")
+
+    def execute(self, obj):
+        SG.check_inputs_alive(obj)
+        r = build_match(
+            obj.Source,
+            obj.Side,
+            obj.Target,
+            _CONTINUITY.index(obj.Continuity),
+            obj.Tolerance,
+            obj.MaxLevel,
+            obj.AllowApproximation,
+            feature=obj,
+        )
+        obj.Shape = r["face"]
+        obj.Level = int(r["level"])
+        obj.PolesAlong = int(r["poles_along"])
+        obj.DegreeAlong = int(r["degree_along"])
+        obj.IsApproximate = bool(r["approximate"])
+        obj.MaxGap = float(r["gap"])
+        obj.MaxAngle = float(r["angle"])
+        obj.MaxCurvatureJump = float(r["curvature_jump"])
+        obj.MaxMove = float(r["max_move"])
+        obj.Warnings = list(r["warnings"])
+        SG.record_inputs(obj)
+
+    def onChanged(self, obj, prop):
+        SG.note_link_change(self, obj, prop)
+
+    def onDocumentRestored(self, obj):
+        obj.Proxy = self
+        self._readonly(obj)
+        SG.ensure_input_guard(obj)
+        _attach_view_provider(obj)
+
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        return None
+
+
+def _attach_view_provider(obj):
+    """Give the feature its view provider proxy (a double click opens the panel); nothing without the GUI."""
+    if not App.GuiUp:
+        return
+    try:
+        import SurfaceMatchCommands
+
+        vobj = obj.ViewObject
+        if vobj is not None and getattr(vobj, "Proxy", None) is None:
+            SurfaceMatchCommands.ViewProviderMatch(vobj)
+    except Exception:
+        pass
+
+
+def makeMatchSurfaceFeature(doc, source, side, target, name="MatchSurface"):
+    """Add a match surface feature to ``doc`` and return it (not yet recomputed).
+
+    ``source`` is ``(object, "FaceN")``, ``side`` one of ``U0``, ``U1``, ``V0``, ``V1`` and ``target`` is
+    ``(object, "EdgeN")`` or ``(object, ["FaceM", "EdgeN"])``."""
+    if side not in SIDES:
+        raise ValueError("InvalidSide: side must be one of U0, U1, V0, V1, not %r" % (side,))
+    so, ssubs = SG._split(source)
+    to, tsubs = SG._split(target)
+    obj = doc.addObject("Part::FeaturePython", name)
+    MatchSurface(obj)
+    obj.Source = (so, ssubs)
+    obj.Side = side
+    obj.Target = (to, tsubs)
+    SG.record_inputs(obj)
+    _attach_view_provider(obj)
+    return obj
