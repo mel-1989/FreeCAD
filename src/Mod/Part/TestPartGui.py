@@ -51,6 +51,7 @@ def findDockWidget(name):
 from parttests.ColorPerFaceTest import ColorPerFaceTest
 from parttests.ColorTransparencyTest import ColorTransparencyTest
 from parttests.TaskFaceAppearancesTest import TaskFaceAppearancesGuiTest
+from parttests.LinkIconTest import LinkIconTest
 
 
 # class PartGuiTestCases(unittest.TestCase):
