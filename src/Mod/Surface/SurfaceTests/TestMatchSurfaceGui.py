@@ -18,6 +18,7 @@ import Part
 from PySide import QtCore, QtWidgets
 
 import SurfaceAnalysisGui as SAG
+import SurfaceMatchCommands as MC
 import SurfaceMatch as SM
 from SurfaceTests.TestMatchSurfaceFeature import Scene, same_surface
 from SurfaceTests.TestSurfaceAnalysisGui import _pump
@@ -54,7 +55,8 @@ class TestMatchSurfaceGui(unittest.TestCase):
     def tearDown(self):
         self._close()
         FreeCADGui.Selection.clearSelection()
-        FreeCAD.closeDocument(self.doc.Name)
+        if self.doc.Name in FreeCAD.listDocuments():
+            FreeCAD.closeDocument(self.doc.Name)
 
     # ---- helpers
     @property
@@ -75,9 +77,9 @@ class TestMatchSurfaceGui(unittest.TestCase):
                 break
             _pump(1)
 
-    def _button(self, text):
+    def _button(self, text, hidden_ok=False):
         for b in self.mw.findChildren(QtWidgets.QPushButton):
-            if b.text().replace("&", "") == text and b.isVisible():
+            if b.text().replace("&", "") == text and (hidden_ok or b.isVisible()):
                 return b
         self.fail("no %s button" % text)
 
@@ -315,6 +317,75 @@ class TestMatchSurfaceGui(unittest.TestCase):
         self.assertTrue(self.src.Visibility)
         self.assertTrue(feat.Visibility)
         self.assertEqual(self._g09_nodes(), [])
+
+    def test_r121_ok_acts_on_the_document_the_panel_was_opened_on(self):
+        self._open()
+        self._fill()
+        other = FreeCAD.newDocument("G09Other")
+        try:
+            FreeCADGui.ActiveDocument = FreeCADGui.getDocument(other.Name)
+            _pump()
+            undo, other_undo = self.doc.UndoCount, other.UndoCount
+            self._button("OK", hidden_ok=True).click()
+            _pump()
+            self.assertFalse(FreeCADGui.Control.activeDialog())
+            self.assertEqual(len(self._features()), 1)
+            self.assertEqual(self.doc.UndoCount, undo + 1)
+            self.assertEqual(self.doc.UndoNames[0], "Match surface")
+            self.assertEqual((len(other.Objects), other.UndoCount), (0, other_undo))
+        finally:
+            FreeCAD.closeDocument(other.Name)
+            FreeCADGui.ActiveDocument = FreeCADGui.getDocument(self.doc.Name)
+            _pump()
+
+    def test_r121_closing_the_panels_document_closes_the_panel(self):
+        self._open()
+        self._fill()
+        self.assertEqual(self._g09_nodes().count("G09_MATCH"), 1)
+        panel = MC.active_panel()
+        other = FreeCAD.newDocument("G09Other")
+        try:
+            FreeCADGui.ActiveDocument = FreeCADGui.getDocument(other.Name)
+            _pump()
+            FreeCAD.closeDocument(self.doc.Name)
+            _pump()
+            self.assertFalse(FreeCADGui.Control.activeDialog())
+            self.assertIsNone(MC.active_panel())  # not left behind with deleted widgets
+            self.assertTrue(panel._torn_down)
+            self.assertIsNone(FreeCAD.getActiveTransaction())
+            self.assertEqual(other.UndoCount, 0)
+            self.assertEqual(len(other.Objects), 0)
+            FreeCADGui.ActiveDocument = FreeCADGui.getDocument(other.Name)
+            _pump()
+            view = FreeCADGui.ActiveDocument.ActiveView
+            ufs = SAG._find_selection_node(view)
+            names = [ufs.getChild(i).getName().getString() for i in range(ufs.getNumChildren())]
+            self.assertEqual([n for n in names if n.startswith("G09_")], [])
+        finally:
+            FreeCAD.closeDocument(other.Name)
+            _pump()
+            self.doc = FreeCAD.newDocument("G09Match")  # for tearDown
+            FreeCADGui.ActiveDocument = FreeCADGui.getDocument(self.doc.Name)
+
+    def test_r121_ok_after_the_re_edited_feature_was_deleted_keeps_the_panel(self):
+        feat = SM.makeMatchSurfaceFeature(self.doc, (self.src, "Face1"), "V0", self.scene.target)
+        self.doc.recompute()
+        _pump(10)
+        feat.ViewObject.Proxy.doubleClicked(feat.ViewObject)
+        _pump()
+        self.doc.removeObject(feat.Name)
+        _pump()
+        count, undo = len(self.doc.Objects), self.doc.UndoCount
+        self._button("OK").click()
+        _pump()
+        self.assertTrue(FreeCADGui.Control.activeDialog())
+        self.assertTrue(self._status().startswith("InputDeleted"), self._status())
+        self.assertEqual(len(self.doc.Objects), count)
+        self.assertEqual(self._features(), [])
+        self.assertEqual(self.doc.UndoCount, undo)
+        self._button("Cancel").click()
+        _pump()
+        self.assertFalse(FreeCADGui.Control.activeDialog())
 
     def test_live_latency_of_a_change(self):
         self._open()
