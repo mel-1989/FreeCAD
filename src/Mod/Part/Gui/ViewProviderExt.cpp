@@ -51,6 +51,8 @@
 #include <QAction>
 #include <QMenu>
 #include <sstream>
+#include <cstdint>
+#include <cstring>
 
 #include <Inventor/SoPickedPoint.h>
 #include <Inventor/details/SoFaceDetail.h>
@@ -1002,6 +1004,9 @@ void ViewProviderPartExt::finishRestoring()
         onChanged(&_diffuseColor);
     }
     Gui::ViewProviderGeometryObject::finishRestoring();
+    if (visualDeferredForKey && (isUpdateForced() || Visibility.getValue())) {
+        updateVisual();
+    }
 }
 
 void ViewProviderPartExt::setupContextMenu(QMenu* menu, QObject* receiver, const char* member)
@@ -1048,6 +1053,202 @@ void ViewProviderPartExt::unsetEdit(int ModNum)
     }
 }
 
+namespace
+{
+
+/// The deflection the view provider asks OCCT for. The bounds ignore any triangulation the
+/// shape carries so the value is the same for a freshly restored shape and a meshed one.
+Standard_Real requestedDeflection(const TopoDS_Shape& shape, double deviation)
+{
+    Bnd_Box bounds;
+    BRepBndLib::Add(shape, bounds, Standard_False);
+    bounds.SetGap(0.0);
+    return Part::Tools::getDeflection(bounds, deviation);
+}
+
+Standard_Real effectiveDeflection(Standard_Real deflection)
+{
+    // see setupCoinGeometry(): a value of zero is not allowed by OCCT
+    return deflection < gp::Resolution() ? Precision::Confusion() : deflection;
+}
+
+struct TessellationFingerprint
+{
+    bool complete = true;  // every face carries a triangulation
+    int faces = 0;
+    long nodes = 0;
+    long triangles = 0;
+    std::uint64_t hash = 0xcbf29ce484222325ULL;
+
+    void mix(std::uint64_t value)
+    {
+        hash ^= value;
+        hash *= 0x100000001b3ULL;
+        hash ^= hash >> 29;
+    }
+    void mixDouble(double value)
+    {
+        std::uint64_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        mix(bits);
+    }
+};
+
+TessellationFingerprint fingerprintOf(const TopoDS_Shape& shape)
+{
+    TessellationFingerprint fp;
+    TopTools_IndexedMapOfShape faceMap;
+    TopExp::MapShapes(shape, TopAbs_FACE, faceMap);
+    fp.faces = faceMap.Extent();
+    for (int i = 1; i <= faceMap.Extent(); i++) {
+        TopLoc_Location loc;
+        Handle(Poly_Triangulation) mesh = BRep_Tool::Triangulation(TopoDS::Face(faceMap(i)), loc);
+        if (mesh.IsNull()) {
+            fp.complete = false;
+            return fp;
+        }
+        const int nbNodes = mesh->NbNodes();
+        const int nbTris = mesh->NbTriangles();
+        fp.nodes += nbNodes;
+        fp.triangles += nbTris;
+        fp.mix(static_cast<std::uint64_t>(nbNodes) << 32 | static_cast<std::uint64_t>(nbTris));
+        for (int n = 1; n <= nbNodes; n++) {
+            const gp_Pnt p = mesh->Node(n);
+            fp.mixDouble(p.X());
+            fp.mixDouble(p.Y());
+            fp.mixDouble(p.Z());
+        }
+        for (int t = 1; t <= nbTris; t++) {
+            Standard_Integer a, b, c;
+            mesh->Triangle(t).Get(a, b, c);
+            fp.mix(static_cast<std::uint64_t>(a) << 42 ^ static_cast<std::uint64_t>(b) << 21
+                   ^ static_cast<std::uint64_t>(c));
+        }
+    }
+    return fp;
+}
+
+std::string makeTessellationKey(
+    const TessellationFingerprint& fp,
+    double deviation,
+    double angular,
+    double deflection
+)
+{
+    char buf[512];
+    std::snprintf(
+        buf,
+        sizeof(buf),
+        "v1;occt=%s;dev=%.9g;ang=%.9g;defl=%.9g;faces=%d;nodes=%ld;tris=%ld;hash=%016llx",
+        OCC_VERSION_STRING_EXT,
+        static_cast<float>(deviation),  // the properties are floats; XML keeps 16 digits
+        static_cast<float>(angular),
+        static_cast<float>(deflection),
+        fp.faces,
+        fp.nodes,
+        fp.triangles,
+        static_cast<unsigned long long>(fp.hash)
+    );
+    return buf;
+}
+
+bool tessellationStoredByPreference()
+{
+    return App::GetApplication()
+        .GetParameterGroupByPath("User parameter:BaseApp/Preferences/Mod/Part/General")
+        ->GetBool("SaveTessellation", true);
+}
+
+ViewProviderPartExt::TessellationCacheStats& tessellationStats()
+{
+    static ViewProviderPartExt::TessellationCacheStats stats;
+    return stats;
+}
+
+}  // namespace
+
+const ViewProviderPartExt::TessellationCacheStats& ViewProviderPartExt::tessellationCacheStats()
+{
+    return tessellationStats();
+}
+
+void ViewProviderPartExt::resetTessellationCacheStats()
+{
+    tessellationStats().used.clear();
+    tessellationStats().meshed.clear();
+}
+
+bool ViewProviderPartExt::storedTriangulationMatches(const TopoDS_Shape& shape) const
+{
+    const std::string key = tessellationKey();
+    if (key.empty() || Part::Tools::isShapeEmpty(shape)) {
+        return false;
+    }
+    const TessellationFingerprint fp = fingerprintOf(shape);
+    if (!fp.complete || fp.faces == 0) {
+        return false;
+    }
+    const double deviation = Deviation.getValue();
+    const double angular = AngularDeflection.getValue();
+    const double deflection = effectiveDeflection(requestedDeflection(shape, deviation));
+    // the key is rebuilt from the current parameters and the stored triangulation and must
+    // equal the saved one character for character
+    return key == makeTessellationKey(fp, deviation, angular, deflection);
+}
+
+std::string ViewProviderPartExt::tessellationKey() const
+{
+    auto* prop = freecad_cast<App::PropertyString*>(getDynamicPropertyByName("TessellationKey"));
+    return prop ? std::string(prop->getStrValue()) : std::string();
+}
+
+void ViewProviderPartExt::setTessellationKey(const std::string& key)
+{
+    auto* prop = freecad_cast<App::PropertyString*>(getDynamicPropertyByName("TessellationKey"));
+    if (key.empty()) {
+        if (prop) {
+            removeDynamicProperty("TessellationKey");
+        }
+        return;
+    }
+    if (!prop) {
+        prop = freecad_cast<App::PropertyString*>(addDynamicProperty(
+            "App::PropertyString",
+            "TessellationKey",
+            "Display Options",
+            "Parameters and fingerprint of the stored triangulation (internal).",
+            App::Prop_Hidden | App::Prop_NoRecompute,
+            false,
+            true
+        ));
+        if (!prop) {
+            return;
+        }
+        prop->setStatus(App::Property::NoModify, true);
+    }
+    if (prop->getStrValue() != key) {
+        prop->setValue(key.c_str());
+    }
+}
+
+void ViewProviderPartExt::recordTessellationKey(const TopoDS_Shape& shape)
+{
+    std::string key;
+    if (tessellationStoredByPreference() && !Part::Tools::isShapeEmpty(shape)) {
+        const TessellationFingerprint fp = fingerprintOf(shape);
+        if (fp.complete && fp.faces > 0) {
+            const double deviation = Deviation.getValue();
+            key = makeTessellationKey(
+                fp,
+                deviation,
+                AngularDeflection.getValue(),
+                effectiveDeflection(requestedDeflection(shape, deviation))
+            );
+        }
+    }
+    setTessellationKey(key);
+}
+
 void ViewProviderPartExt::setupCoinGeometry(
     TopoDS_Shape shape,
     SoCoordinate3* coords,
@@ -1057,7 +1258,8 @@ void ViewProviderPartExt::setupCoinGeometry(
     SoBrepPointSet* nodeset,
     double deviation,
     double angularDeflection,
-    bool normalsFromUV
+    bool normalsFromUV,
+    bool reuseTriangulation
 )
 {
     if (Part::Tools::isShapeEmpty(shape)) {
@@ -1080,38 +1282,40 @@ void ViewProviderPartExt::setupCoinGeometry(
 
     std::set<int> faceEdges;
 
-    // calculating the deflection value
-    Standard_Real deflection = Part::Tools::getDeflection(shape, deviation);
+    if (!reuseTriangulation) {
+        // calculating the deflection value
+        Standard_Real deflection = requestedDeflection(shape, deviation);
 
-    // Since OCCT 7.6 a value of equal 0 is not allowed any more, this can happen if a single
-    // vertex should be displayed.
-    if (deflection < gp::Resolution()) {
-        deflection = Precision::Confusion();
+        // Since OCCT 7.6 a value of equal 0 is not allowed any more, this can happen if a single
+        // vertex should be displayed.
+        if (deflection < gp::Resolution()) {
+            deflection = Precision::Confusion();
+        }
+
+        // For very big objects the computed deflection can become very high and thus leads to a
+        // useless tessellation. To avoid this the upper limit is set to 20.0 See also forum:
+        // https://forum.freecad.org/viewtopic.php?t=77521
+        // deflection = std::min(deflection, 20.0);
+
+        // create or use the mesh on the data structure
+        Standard_Real AngDeflectionRads = Base::toRadians(angularDeflection);
+
+        IMeshTools_Parameters meshParams;
+        meshParams.Deflection = deflection;
+        meshParams.Relative = Standard_False;
+        meshParams.Angle = AngDeflectionRads;
+        meshParams.InParallel = Standard_True;
+        meshParams.AllowQualityDecrease = Standard_True;
+
+        // Clear triangulation and PCurves from geometry which can slow down the process
+    #if OCC_VERSION_HEX < 0x070600
+        BRepTools::Clean(shape);
+    #else
+        BRepTools::Clean(shape, Standard_True);
+    #endif
+
+        BRepMesh_IncrementalMesh(shape, meshParams);
     }
-
-    // For very big objects the computed deflection can become very high and thus leads to a
-    // useless tessellation. To avoid this the upper limit is set to 20.0 See also forum:
-    // https://forum.freecad.org/viewtopic.php?t=77521
-    // deflection = std::min(deflection, 20.0);
-
-    // create or use the mesh on the data structure
-    Standard_Real AngDeflectionRads = Base::toRadians(angularDeflection);
-
-    IMeshTools_Parameters meshParams;
-    meshParams.Deflection = deflection;
-    meshParams.Relative = Standard_False;
-    meshParams.Angle = AngDeflectionRads;
-    meshParams.InParallel = Standard_True;
-    meshParams.AllowQualityDecrease = Standard_True;
-
-    // Clear triangulation and PCurves from geometry which can slow down the process
-#if OCC_VERSION_HEX < 0x070600
-    BRepTools::Clean(shape);
-#else
-    BRepTools::Clean(shape, Standard_True);
-#endif
-
-    BRepMesh_IncrementalMesh(shape, meshParams);
 
     // We must reset the location here because the transformation data
     // are set in the placement property
@@ -1528,6 +1732,16 @@ void ViewProviderPartExt::updateVisual()
         return;
     }
 
+    if (isRestoring() && fingerprintOf(shape).complete) {
+        // The shape came from a file with triangles; GuiDocument.xml, which holds the key that
+        // vouches for them, is read after the shapes. Wait for finishRestoring() instead of
+        // meshing now and again once the key is known.
+        visualDeferredForKey = true;
+        VisualTouched = true;
+        return;
+    }
+    visualDeferredForKey = false;
+
     Gui::SoUpdateVBOAction action;
     action.apply(this->faceset);
 
@@ -1544,6 +1758,7 @@ void ViewProviderPartExt::updateVisual()
     haction.apply(this->nodeset);
 
     try {
+        const bool reuse = storedTriangulationMatches(shape);
         setupCoinGeometry(
             shape,
             coords,
@@ -1553,8 +1768,23 @@ void ViewProviderPartExt::updateVisual()
             nodeset,
             Deviation.getValue(),
             AngularDeflection.getValue(),
-            NormalsFromUV
+            NormalsFromUV,
+            reuse
         );
+        if (pcObject && pcObject->getDocument() && pcObject->getNameInDocument()) {
+            auto& stats = tessellationStats();
+            (reuse ? stats.used : stats.meshed)
+                .emplace_back(
+                    std::string(pcObject->getDocument()->getName()) + "."
+                    + pcObject->getNameInDocument()
+                );
+        }
+        if (!reuse) {
+            recordTessellationKey(shape);
+        }
+        else if (!tessellationStoredByPreference()) {
+            recordTessellationKey(TopoDS_Shape());
+        }
 
         lastRenderedShape = shape;
 

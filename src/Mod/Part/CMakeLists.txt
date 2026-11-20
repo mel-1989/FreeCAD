@@ -90,6 +90,8 @@ set(Part_tests
     parttests/TaskFaceAppearancesTest.py
     parttests/LinkIconTest.py
     parttests/PlacementIndicatorTest.py
+    parttests/StoredTessellationGuiTest.py
+    parttests/StoredTessellationTest.py
     parttests/VisibilityBadgeIconTest.py
     parttests/TopoShapeTest.py
     parttests/TestTangentMode3-0.21.FCStd

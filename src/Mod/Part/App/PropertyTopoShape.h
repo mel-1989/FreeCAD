@@ -118,6 +118,8 @@ public:
 
 private:
     void saveToFile(Base::Writer& writer) const;
+    /// True when the shape is written as .bin with its triangulations (preference SaveTessellation)
+    bool savesTriangulation() const;
     void loadFromFile(Base::Reader& reader);
     void loadFromStream(Base::Reader& reader);
 

@@ -411,8 +411,12 @@ void PropertyPartShape::Save(Base::Writer& writer) const
     bool binary = writer.getMode("BinaryBrep");
     bool toXML = writer.isForceXML();
     if (!toXML) {
+        // A shape that carries triangulations is stored as .bin (BinTools, with the
+        // triangles) when the preference SaveTessellation is on; the .bin name is what
+        // makes RestoreDocFile() read it back with importBinary().
+        const bool withTriangles = savesTriangulation();
         writer.Stream() << " file=\""
-                        << writer.addFile(getFileName(binary ? ".bin" : ".brp").c_str(), this)
+                        << writer.addFile(getFileName(binary || withTriangles ? ".bin" : ".brp").c_str(), this)
                         << "\"/>\n";
     }
     else if (binary) {
@@ -728,6 +732,17 @@ void PropertyPartShape::loadFromStream(Base::Reader& reader)
     }
 }
 
+bool PropertyPartShape::savesTriangulation() const
+{
+    if (_Shape.getShape().IsNull()) {
+        return false;
+    }
+    bool enabled = App::GetApplication()
+                       .GetParameterGroupByPath("User parameter:BaseApp/Preferences/Mod/Part/General")
+                       ->GetBool("SaveTessellation", true);
+    return enabled && _Shape.hasTriangulation();
+}
+
 void PropertyPartShape::SaveDocFile(Base::Writer& writer) const
 {
     // If the shape is empty we simply store nothing. The file size will be 0 which
@@ -736,7 +751,14 @@ void PropertyPartShape::SaveDocFile(Base::Writer& writer) const
         return;
     }
     TopoDS_Shape myShape = _Shape.getShape();
-    if (writer.getMode("BinaryBrep")) {
+    if (savesTriangulation()) {
+        // Matches the .bin name chosen in Save(); this also bypasses saveToFile() whose
+        // BRepTools_Write copy never writes triangles.
+        TopoShape shape;
+        shape.setShape(myShape);
+        shape.exportBinaryWithTriangles(writer.Stream());
+    }
+    else if (writer.getMode("BinaryBrep")) {
         TopoShape shape;
         shape.setShape(myShape);
         shape.exportBinary(writer.Stream());

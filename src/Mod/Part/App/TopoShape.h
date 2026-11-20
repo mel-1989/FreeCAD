@@ -519,6 +519,10 @@ public:
     void exportBrep(const char* FileName) const;
     void exportBrep(std::ostream&) const;
     void exportBinary(std::ostream&) const;
+    /// Like exportBinary but the triangulations (with normals) carried by the faces are written too
+    void exportBinaryWithTriangles(std::ostream&) const;
+    /// True when at least one face of the shape carries a triangulation
+    bool hasTriangulation() const;
     void exportStl(const char* FileName, double deflection) const;
     void exportFaceSet(double, double, const std::vector<Base::Color>&, std::ostream&) const;
     void exportLineSet(std::ostream&) const;

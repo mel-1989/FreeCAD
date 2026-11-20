@@ -1005,6 +1005,47 @@ void TopoShape::exportBinary(std::ostream& out) const
     }
 }
 
+void TopoShape::exportBinaryWithTriangles(std::ostream& out) const
+{
+    // Same layout as exportBinary(); the shape set is told to store the triangulations
+    // (OCCT BinTools_ShapeSetBase::SetWithTriangles / SetWithNormals, format version 3).
+    BinTools_ShapeSet theShapeSet;
+    theShapeSet.SetFormatNb(3);
+    theShapeSet.SetWithTriangles(true);
+    theShapeSet.SetWithNormals(true);
+    if (this->_Shape.IsNull()) {
+        theShapeSet.Add(this->_Shape);
+        theShapeSet.Write(out);
+        BinTools::PutInteger(out, -1);
+        BinTools::PutInteger(out, -1);
+        BinTools::PutInteger(out, -1);
+    }
+    else {
+        Standard_Integer shapeId = theShapeSet.Add(this->_Shape);
+        Standard_Integer locId = theShapeSet.Locations().Index(this->_Shape.Location());
+        Standard_Integer orient = static_cast<int>(this->_Shape.Orientation());
+
+        theShapeSet.Write(out);
+        BinTools::PutInteger(out, shapeId);
+        BinTools::PutInteger(out, locId);
+        BinTools::PutInteger(out, orient);
+    }
+}
+
+bool TopoShape::hasTriangulation() const
+{
+    if (this->_Shape.IsNull()) {
+        return false;
+    }
+    for (TopExp_Explorer xp(this->_Shape, TopAbs_FACE); xp.More(); xp.Next()) {
+        TopLoc_Location loc;
+        if (!BRep_Tool::Triangulation(TopoDS::Face(xp.Current()), loc).IsNull()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void TopoShape::dump(std::ostream& out) const
 {
     BRepTools::Dump(this->_Shape, out);

@@ -28,6 +28,8 @@
 
 
 #include <map>
+#include <string>
+#include <vector>
 
 #include <App/PropertyUnits.h>
 #include <Gui/ViewProviderGeometryObject.h>
@@ -91,6 +93,14 @@ public:
     App::PropertyColor LineColor;
     App::PropertyMaterial LineMaterial;
     App::PropertyColorList LineColorArray;
+    /// Objects whose mesh came from stored triangles or was computed since the last reset
+    struct TessellationCacheStats
+    {
+        std::vector<std::string> used;
+        std::vector<std::string> meshed;
+    };
+    static const TessellationCacheStats& tessellationCacheStats();
+    static void resetTessellationCacheStats();
 
     void attach(App::DocumentObject*) override;
     void setDisplayMode(const char* ModeName) override;
@@ -189,7 +199,8 @@ public:
         SoBrepPointSet* nodeset,
         double deviation,
         double angularDeflection,
-        bool normalsFromUV = false
+        bool normalsFromUV = false,
+        bool reuseTriangulation = false
     );
 
     static void setupCoinGeometry(
@@ -210,6 +221,15 @@ protected:
     void onChanged(const App::Property* prop) override;
     bool loadParameter();
     void updateVisual();
+    /// True when the stored triangulation of the shape is vouched for by TessellationKey
+    bool storedTriangulationMatches(const TopoDS_Shape& shape) const;
+    /// Record the key of the triangulation just built (or clear it when the preference is off)
+    void recordTessellationKey(const TopoDS_Shape& shape);
+    /// The key of the triangulation this view provider built (empty if none), kept in the hidden
+    /// dynamic property TessellationKey that exists, and so is saved in GuiDocument.xml, only while
+    /// a key does
+    std::string tessellationKey() const;
+    void setTessellationKey(const std::string& key);
     void handleChangedPropertyName(
         Base::XMLReader& reader,
         const char* TypeName,
@@ -236,6 +256,8 @@ protected:
     bool VisualTouched;
     bool NormalsFromUV;
     bool faceHighlightActive = false;
+    /// updateVisual() waited for GuiDocument.xml so the stored triangulation can be vouched for
+    bool visualDeferredForKey = false;
 
 private:
     Gui::ViewProviderFaceTexture texture;

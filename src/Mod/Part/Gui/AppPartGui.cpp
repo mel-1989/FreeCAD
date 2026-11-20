@@ -106,10 +106,49 @@ public:
     Module()
         : Py::ExtensionModule<Module>("PartGui")
     {
+        add_varargs_method(
+            "tessellationCacheStats",
+            &Module::tessellationCacheStats,
+            "tessellationCacheStats() -> {'used': [...], 'meshed': [...]}\n"
+            "Names (Document.Object) of the objects whose view mesh came from stored triangles "
+            "and of those that were meshed, since the last resetTessellationCacheStats()."
+        );
+        add_varargs_method(
+            "resetTessellationCacheStats",
+            &Module::resetTessellationCacheStats,
+            "resetTessellationCacheStats() -> None\nClear the lists of tessellationCacheStats()."
+        );
         initialize("This module is the PartGui module.");  // register with Python
     }
 
 private:
+    Py::Object tessellationCacheStats(const Py::Tuple& args)
+    {
+        if (!PyArg_ParseTuple(args.ptr(), "")) {
+            throw Py::Exception();
+        }
+        const auto& stats = ViewProviderPartExt::tessellationCacheStats();
+        Py::List used;
+        for (const auto& name : stats.used) {
+            used.append(Py::String(name));
+        }
+        Py::List meshed;
+        for (const auto& name : stats.meshed) {
+            meshed.append(Py::String(name));
+        }
+        Py::Dict result;
+        result.setItem("used", used);
+        result.setItem("meshed", meshed);
+        return result;
+    }
+    Py::Object resetTessellationCacheStats(const Py::Tuple& args)
+    {
+        if (!PyArg_ParseTuple(args.ptr(), "")) {
+            throw Py::Exception();
+        }
+        ViewProviderPartExt::resetTessellationCacheStats();
+        return Py::None();
+    }
 };
 
 PyObject* initModule()
