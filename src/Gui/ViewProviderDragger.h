@@ -139,6 +139,9 @@ protected:
     CoinPtr<SoSwitch> pcPlacement;
 
 private:
+    /// Builds the placement indicator under pcPlacement on first use (G05 slice 2).
+    void ensurePlacementIndicator();
+
     static void dragStartCallback(void* data, SoDragger* d);
     static void dragFinishCallback(void* data, SoDragger* d);
     static void dragMotionCallback(void* data, SoDragger* d);
