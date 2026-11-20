@@ -518,8 +518,13 @@ QPixmap BitmapFactoryInst::pixmapFromSvg(
     // for the same overlay once per object. Cache by name unless the name is a path to a file
     // that may change on disk. The key includes everything that decides which file a name
     // resolves to, so a new icon search path or theme setting is honoured as without a cache.
+    // A relative name that exists relative to the current directory is read from there, so it is
+    // not cached either. Accepted limits: an icon file under a search path that is rewritten
+    // while the application runs keeps its old render, and the cache clears itself past 512
+    // entries.
     QString cacheKey;
-    const bool cacheable = !QDir::isAbsolutePath(fn);
+    const bool cacheable = !QDir::isAbsolutePath(fn)
+        && !(!fn.contains(QLatin1Char(':')) && QFileInfo::exists(fn));
     if (cacheable) {
         cacheKey = fn;
         cacheKey += QLatin1Char('|') + QString::number(size.width()) + QLatin1Char('x')
