@@ -52,6 +52,8 @@ from parttests.ColorPerFaceTest import ColorPerFaceTest
 from parttests.ColorTransparencyTest import ColorTransparencyTest
 from parttests.TaskFaceAppearancesTest import TaskFaceAppearancesGuiTest
 from parttests.LinkIconTest import LinkIconTest
+from parttests.PlacementIndicatorTest import PlacementIndicatorTest
+from parttests.VisibilityBadgeIconTest import VisibilityBadgeIconTest
 
 
 # class PartGuiTestCases(unittest.TestCase):

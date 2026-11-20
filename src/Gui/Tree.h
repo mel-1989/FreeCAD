@@ -493,6 +493,11 @@ public:
     DocumentObjectItem(DocumentItem* ownerDocItem, DocumentObjectDataPtr data);
     ~DocumentObjectItem() override;
 
+    /// Drops the shared visibility-badge icons (style, palette or icon settings changed).
+    static void clearVisibilityIconCache();
+    /// Number of cached visibility-badge icons (tests).
+    static std::size_t visibilityIconCacheSize();
+
     Gui::ViewProviderDocumentObject* object() const;
     void testStatus(bool resetStatus, QIcon& icon1, QIcon& icon2);
     void testStatus(bool resetStatus);

@@ -21,6 +21,10 @@
  ***************************************************************************/
 
 
+#include <array>
+#include <cmath>
+#include <map>
+
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
@@ -4006,6 +4010,9 @@ void TreeWidget::changeEvent(QEvent* e)
     if (e->type() == QEvent::LanguageChange) {
         setupText();
     }
+    else if (e->type() == QEvent::StyleChange || e->type() == QEvent::PaletteChange) {
+        DocumentObjectItem::clearVisibilityIconCache();
+    }
 
     QTreeWidget::changeEvent(e);
 }
@@ -4131,6 +4138,7 @@ void TreeWidget::synchronizeSelectionCheckBoxes()
 
 void TreeWidget::updateVisibilityIcons()
 {
+    DocumentObjectItem::clearVisibilityIconCache();
     for (auto tree : TreeWidget::Instances) {
         QSignalBlocker blocker(tree);
         for (QTreeWidgetItemIterator it(tree); *it; ++it) {
@@ -6409,6 +6417,27 @@ void DocumentObjectItem::generateIcon(int currentStatus, QIcon::Mode mode, QIcon
     icon.addPixmap(pxOff, QIcon::Normal, QIcon::Off);
 }
 
+namespace
+{
+// G05 slice 2: the composed tree icon with visibility badge is shared between items that have the
+// same source icon, visibility state and spacing (50k links hold two pixmaps and two painter
+// engines each otherwise). Keyed on the QPixmap cacheKeys, which change with any pixel change.
+// Bounded; cleared on style, palette and icon preference changes.
+constexpr std::size_t visibilityIconCacheLimit = 512;
+using VisibilityIconKey = std::array<qint64, 9>;
+std::map<VisibilityIconKey, QIcon> visibilityIconCache;
+}  // namespace
+
+void DocumentObjectItem::clearVisibilityIconCache()
+{
+    visibilityIconCache.clear();
+}
+
+std::size_t DocumentObjectItem::visibilityIconCacheSize()
+{
+    return visibilityIconCache.size();
+}
+
 QIcon DocumentObjectItem::getVisibilityIcon(int currentStatus, QIcon& original_icon)
 {
     static QPixmap pxVisible, pxInvisible;
@@ -6420,11 +6449,37 @@ QIcon DocumentObjectItem::getVisibilityIcon(int currentStatus, QIcon& original_i
     }
 
     // Prepend the visibility pixmap to the final icon pixmaps and use these as the icon.
-    QIcon new_icon;
     auto style = this->getTree()->style();
     int const spacing = style->pixelMetric(QStyle::PM_LayoutHorizontalSpacing);
+    const bool canToggle = object()->canToggleVisibility();
+    const bool visible = (currentStatus & Status::Visible) != 0;
+
+    const QPixmap pxOrgOn = original_icon.pixmap(0xFFFF, 0xFFFF, QIcon::Normal, QIcon::On);
+    const QPixmap pxOrgOff = original_icon.pixmap(0xFFFF, 0xFFFF, QIcon::Normal, QIcon::Off);
+    const QPixmap& badge = visible ? pxVisible : pxInvisible;
+    const VisibilityIconKey key {
+        pxOrgOn.cacheKey(),
+        pxOrgOff.cacheKey(),
+        static_cast<qint64>(std::lround(pxOrgOn.devicePixelRatio() * 1000)),
+        static_cast<qint64>(std::lround(pxOrgOff.devicePixelRatio() * 1000)),
+        badge.cacheKey(),
+        static_cast<qint64>(spacing),
+        canToggle ? 1 : 0,
+        visible ? 1 : 0,
+        0,
+    };
+    // Null source pixmaps all share cacheKey 0 and a null icon is cheap: never cache those.
+    const bool cacheable = !pxOrgOn.isNull() && !pxOrgOff.isNull();
+    if (cacheable) {
+        auto it = visibilityIconCache.find(key);
+        if (it != visibilityIconCache.end()) {
+            return it->second;
+        }
+    }
+
+    QIcon new_icon;
     for (auto state : {QIcon::On, QIcon::Off}) {
-        QPixmap px_org = original_icon.pixmap(0xFFFF, 0xFFFF, QIcon::Normal, state);
+        const QPixmap& px_org = state == QIcon::On ? pxOrgOn : pxOrgOff;
 
         QPixmap px(2 * px_org.width() + spacing, px_org.height());
         px.fill(Qt::transparent);
@@ -6432,19 +6487,20 @@ QIcon DocumentObjectItem::getVisibilityIcon(int currentStatus, QIcon& original_i
         QPainter pt;
         pt.begin(&px);
         pt.setPen(Qt::NoPen);
-        if (object()->canToggleVisibility()) {
-            pt.drawPixmap(
-                0,
-                0,
-                px_org.width(),
-                px_org.height(),
-                (currentStatus & Status::Visible) ? pxVisible : pxInvisible
-            );
+        if (canToggle) {
+            pt.drawPixmap(0, 0, px_org.width(), px_org.height(), badge);
         }
         pt.drawPixmap(px_org.width() + spacing, 0, px_org.width(), px_org.height(), px_org);
         pt.end();
 
         new_icon.addPixmap(px, QIcon::Normal, state);
+    }
+
+    if (cacheable) {
+        if (visibilityIconCache.size() >= visibilityIconCacheLimit) {
+            visibilityIconCache.clear();
+        }
+        visibilityIconCache.emplace(key, new_icon);
     }
     return new_icon;
 }

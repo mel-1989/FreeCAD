@@ -115,9 +115,13 @@ void ViewProviderDragger::onChanged(const App::Property* property)
         updateDraggerPosition();
     }
     else if (property == &ShowPlacement || property == &Visibility) {
-        pcPlacement->whichChild = (ShowPlacement.getValue() && Visibility.getValue())
-            ? SO_SWITCH_ALL
-            : SO_SWITCH_NONE;
+        // G05 slice 2: the indicator kit is expensive (about 30 KB per object), so it is built
+        // the first time it is actually shown (also covers a restored ShowPlacement = true).
+        const bool show = ShowPlacement.getValue() && Visibility.getValue();
+        if (show) {
+            ensurePlacementIndicator();
+        }
+        pcPlacement->whichChild = show ? SO_SWITCH_ALL : SO_SWITCH_NONE;
     }
 
     ViewProviderDocumentObject::onChanged(property);
@@ -482,6 +486,20 @@ void ViewProviderDragger::attach(App::DocumentObject* pcObject)
     ViewProviderDocumentObject::attach(pcObject);
 
     getOrCreateAnnotation()->addChild(pcPlacement);
+
+    // The indicator itself is built lazily, see ensurePlacementIndicator(). A property restored
+    // as ShowPlacement = true before attach is picked up here.
+    if (ShowPlacement.getValue() && Visibility.getValue()) {
+        ensurePlacementIndicator();
+        pcPlacement->whichChild = SO_SWITCH_ALL;
+    }
+}
+
+void ViewProviderDragger::ensurePlacementIndicator()
+{
+    if (pcPlacement->getNumChildren() > 0) {
+        return;
+    }
 
     auto* pcAxisCrossKit = new Gui::SoFCPlacementIndicatorKit();
 
