@@ -180,3 +180,36 @@ class StoredTessellationGuiTest(unittest.TestCase):
 
         self.assertEqual(points("Tri", True), 162)
         self.assertEqual(points("Bare", False), 97)
+
+    def testFacelessShapeIsNotDeferred(self):
+        # A shape without faces (a wire, like a sketch) is vacuously "complete"; it must mesh during
+        # the restore as stock does, not wait for the key in GuiDocument.xml, or a Body's origin
+        # is sized before the sketch is drawn. "A" carries triangles with a stale key, so it is
+        # deferred and meshed afresh after the key is read: "W" must be meshed before it.
+        import re
+
+        doc = FreeCAD.newDocument("StoredTessWire")
+        try:
+            doc.addObject("Part::Feature", "A").Shape = Part.makeBox(5, 5, 5)
+            V = FreeCAD.Vector
+            wire = Part.makePolygon([V(0, 0, 0), V(40, 0, 0), V(40, 30, 0), V(0, 0, 0)])
+            doc.addObject("Part::Feature", "W").Shape = wire
+            doc.recompute()
+            path = os.path.join(self.tmp, "wire.FCStd")
+            doc.saveAs(path)
+        finally:
+            FreeCAD.closeDocument(doc.Name)
+        stale = os.path.join(self.tmp, "wire-stale.FCStd")
+        with zipfile.ZipFile(path) as zin, zipfile.ZipFile(stale, "w") as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == "GuiDocument.xml":
+                    data, n = re.subn(
+                        rb'(name="TessellationKey".*?value=")[^"]*"', rb'\1stale"', data, flags=re.S
+                    )
+                    self.assertGreaterEqual(n, 1)
+                zout.writestr(item.filename, data)
+        self.doc = self._open(stale)
+        prefix = self.doc.Name + "."
+        meshed = [n[len(prefix) :] for n in PartGui.tessellationCacheStats()["meshed"] if n.startswith(prefix)]
+        self.assertEqual(meshed, ["W", "A"])

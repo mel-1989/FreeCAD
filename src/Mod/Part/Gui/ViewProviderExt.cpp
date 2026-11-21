@@ -1156,6 +1156,15 @@ bool tessellationStoredByPreference()
         ->GetBool("SaveTessellation", true);
 }
 
+bool hasStoredTriangulation(const TopoDS_Shape& shape)
+{
+    if (Part::Tools::isShapeEmpty(shape)) {
+        return false;
+    }
+    const TessellationFingerprint fp = fingerprintOf(shape);
+    return fp.complete && fp.faces > 0;
+}
+
 ViewProviderPartExt::TessellationCacheStats& tessellationStats()
 {
     static ViewProviderPartExt::TessellationCacheStats stats;
@@ -1178,7 +1187,8 @@ void ViewProviderPartExt::resetTessellationCacheStats()
 bool ViewProviderPartExt::storedTriangulationMatches(const TopoDS_Shape& shape) const
 {
     const std::string key = tessellationKey();
-    if (key.empty() || Part::Tools::isShapeEmpty(shape)) {
+    if (key.empty() || !tessellationStoredByPreference() || Part::Tools::isShapeEmpty(shape)) {
+        // with the preference off a stored mesh is never reused: every object meshes as stock
         return false;
     }
     const TessellationFingerprint fp = fingerprintOf(shape);
@@ -1729,10 +1739,11 @@ void ViewProviderPartExt::updateVisual()
         return;
     }
 
-    if (isRestoring() && fingerprintOf(shape).complete) {
+    if (isRestoring() && tessellationStoredByPreference() && hasStoredTriangulation(shape)) {
         // The shape came from a file with triangles; GuiDocument.xml, which holds the key that
         // vouches for them, is read after the shapes. Wait for finishRestoring() instead of
-        // meshing now and again once the key is known.
+        // meshing now and again once the key is known. With the preference off, or for a shape
+        // without faces (a sketch wire is vacuously "complete"), the order of work stays stock's.
         visualDeferredForKey = true;
         VisualTouched = true;
         return;
