@@ -54,6 +54,7 @@ from parttests.TaskFaceAppearancesTest import TaskFaceAppearancesGuiTest
 from parttests.LinkIconTest import LinkIconTest
 from parttests.PlacementIndicatorTest import PlacementIndicatorTest
 from parttests.VisibilityBadgeIconTest import VisibilityBadgeIconTest
+from parttests.DisplayTessellationDropTest import DisplayTessellationDropTest
 
 
 # class PartGuiTestCases(unittest.TestCase):

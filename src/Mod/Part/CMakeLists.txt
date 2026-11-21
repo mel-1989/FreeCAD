@@ -91,6 +91,7 @@ set(Part_tests
     parttests/LinkIconTest.py
     parttests/PlacementIndicatorTest.py
     parttests/VisibilityBadgeIconTest.py
+    parttests/DisplayTessellationDropTest.py
     parttests/TopoShapeTest.py
     parttests/TestTangentMode3-0.21.FCStd
     parttests/TestLinkArrayCircular.py

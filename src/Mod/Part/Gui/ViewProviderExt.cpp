@@ -1511,6 +1511,28 @@ void ViewProviderPartExt::setupCoinGeometry(
     );
 }
 
+namespace
+{
+// G05 slice 3b: true if any face of the shape already carries a triangulation
+bool shapeHasTriangulation(const TopoDS_Shape& shape)
+{
+    TopLoc_Location loc;
+    for (TopExp_Explorer xp(shape, TopAbs_FACE); xp.More(); xp.Next()) {
+        if (!BRep_Tool::Triangulation(TopoDS::Face(xp.Current()), loc).IsNull()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool keepDisplayTessellation()
+{
+    return App::GetApplication()
+        .GetParameterGroupByPath("User parameter:BaseApp/Preferences/Mod/Part/General")
+        ->GetBool("KeepDisplayTessellation", false);
+}
+}  // namespace
+
 void ViewProviderPartExt::updateVisual()
 {
     TopoDS_Shape shape = getRenderedShape().getShape();
@@ -1544,6 +1566,10 @@ void ViewProviderPartExt::updateVisual()
     haction.apply(this->nodeset);
 
     try {
+        // G05 slice 3b: a triangulation the shape carries before this view provider meshes it
+        // (Shape.tessellate, a file, another module) is never dropped afterwards
+        const bool dropAfter = !keepDisplayTessellation() && !shapeHasTriangulation(shape);
+
         setupCoinGeometry(
             shape,
             coords,
@@ -1557,6 +1583,12 @@ void ViewProviderPartExt::updateVisual()
         );
 
         lastRenderedShape = shape;
+
+        if (dropAfter) {
+            // the Coin nodes hold everything the display needs; free the OCCT copy now,
+            // object by object (faces and the edge polygons on triangulation)
+            BRepTools::Clean(shape, Standard_True);
+        }
 
         VisualTouched = false;
     }
