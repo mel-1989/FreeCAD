@@ -78,3 +78,44 @@ class DisplayTessellationDropTest(unittest.TestCase):
         FreeCADGui.updateGui()
         self.assertGreater(_nodes(box.Shape), 0)
         self.assertGreater(_coin_points(box), 0)
+
+    def _loft(self, name):
+        import math
+
+        def wire(z, r):
+            pts = [
+                FreeCAD.Vector(
+                    r * math.cos(t * math.pi / 4),
+                    r * math.sin(t * math.pi / 4) * (1 + 0.2 * math.sin(t)),
+                    z,
+                )
+                for t in range(8)
+            ]
+            bs = Part.BSplineCurve()
+            bs.interpolate(pts, PeriodicFlag=True)
+            return Part.Wire([bs.toShape()])
+
+        obj = self.doc.addObject("Part::Feature", name)
+        obj.Shape = Part.makeLoft([wire(0, 6), wire(10, 9), wire(20, 5)], True)
+        self.doc.recompute()
+        obj.ViewObject.show()
+        FreeCADGui.updateGui()
+        return obj
+
+    def _points_after_deviation_change(self, keep, name):
+        self.pref.SetBool("KeepDisplayTessellation", keep)
+        obj = self._loft(name)
+        first = _coin_points(obj)
+        obj.ViewObject.Deviation = 0.2
+        FreeCADGui.updateGui()
+        return first, _coin_points(obj), _nodes(obj.Shape)
+
+    def test_remesh_after_drop_matches_kept(self):
+        # the requested deflection of a remesh must not depend on whether the previous display
+        # triangulation was dropped (stock bounds read the triangulation left on the shape)
+        kept = self._points_after_deviation_change(True, "LoftKept")
+        dropped = self._points_after_deviation_change(False, "LoftDropped")
+        self.assertGreater(kept[2], 0)
+        self.assertEqual(dropped[2], 0)
+        self.assertEqual(dropped[0], kept[0])
+        self.assertEqual(dropped[1], kept[1])

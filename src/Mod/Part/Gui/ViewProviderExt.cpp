@@ -1057,7 +1057,8 @@ void ViewProviderPartExt::setupCoinGeometry(
     SoBrepPointSet* nodeset,
     double deviation,
     double angularDeflection,
-    bool normalsFromUV
+    bool normalsFromUV,
+    const Bnd_Box* deflectionBounds
 )
 {
     if (Part::Tools::isShapeEmpty(shape)) {
@@ -1081,7 +1082,9 @@ void ViewProviderPartExt::setupCoinGeometry(
     std::set<int> faceEdges;
 
     // calculating the deflection value
-    Standard_Real deflection = Part::Tools::getDeflection(shape, deviation);
+    Standard_Real deflection = deflectionBounds
+        ? Part::Tools::getDeflection(*deflectionBounds, deviation)
+        : Part::Tools::getDeflection(shape, deviation);
 
     // Since OCCT 7.6 a value of equal 0 is not allowed any more, this can happen if a single
     // vertex should be displayed.
@@ -1525,6 +1528,30 @@ bool shapeHasTriangulation(const TopoDS_Shape& shape)
     return false;
 }
 
+// G05 slice 3b: same TShape at the same placement; IsSame compares locations by identity, and the
+// rendered shape gets a fresh location object each time
+bool sameShapeAndPlacement(const TopoDS_Shape& a, const TopoDS_Shape& b)
+{
+    if (a.IsNull() || b.IsNull() || a.TShape() != b.TShape()) {
+        return false;
+    }
+    const gp_Trsf ta = a.Location().Transformation();
+    const gp_Trsf tb = b.Location().Transformation();
+    if (ta.ScaleFactor() != tb.ScaleFactor() || ta.TranslationPart().X() != tb.TranslationPart().X()
+        || ta.TranslationPart().Y() != tb.TranslationPart().Y()
+        || ta.TranslationPart().Z() != tb.TranslationPart().Z()) {
+        return false;
+    }
+    for (int r = 1; r <= 3; ++r) {
+        for (int c = 1; c <= 3; ++c) {
+            if (ta.Value(r, c) != tb.Value(r, c)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool keepDisplayTessellation()
 {
     return App::GetApplication()
@@ -1568,7 +1595,17 @@ void ViewProviderPartExt::updateVisual()
     try {
         // G05 slice 3b: a triangulation the shape carries before this view provider meshes it
         // (Shape.tessellate, a file, another module) is never dropped afterwards
-        const bool dropAfter = !keepDisplayTessellation() && !shapeHasTriangulation(shape);
+        const bool keep = keepDisplayTessellation();
+        const bool hasTriangulation = shapeHasTriangulation(shape);
+        const bool dropAfter = !keep && !hasTriangulation;
+
+        // the same shape remeshed after its triangulation was dropped: request the deflection
+        // from the bounds it had with that triangulation, as stock does
+        const bool useDroppedBounds = !keep && !hasTriangulation
+            && sameShapeAndPlacement(droppedShape, shape);
+        const Bnd_Box storedBounds = droppedBounds;
+        droppedShape.Nullify();
+        droppedBounds.SetVoid();
 
         setupCoinGeometry(
             shape,
@@ -1579,7 +1616,8 @@ void ViewProviderPartExt::updateVisual()
             nodeset,
             Deviation.getValue(),
             AngularDeflection.getValue(),
-            NormalsFromUV
+            NormalsFromUV,
+            useDroppedBounds ? &storedBounds : nullptr
         );
 
         lastRenderedShape = shape;
@@ -1587,6 +1625,8 @@ void ViewProviderPartExt::updateVisual()
         if (dropAfter) {
             // the Coin nodes hold everything the display needs; free the OCCT copy now,
             // object by object (faces and the edge polygons on triangulation)
+            droppedBounds = Part::Tools::getBounds(shape);
+            droppedShape = shape;
             BRepTools::Clean(shape, Standard_True);
         }
 

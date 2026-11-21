@@ -26,6 +26,8 @@
 
 #include "SoFCShapeObject.h"
 
+#include <Bnd_Box.hxx>
+
 
 #include <map>
 
@@ -189,7 +191,8 @@ public:
         SoBrepPointSet* nodeset,
         double deviation,
         double angularDeflection,
-        bool normalsFromUV = false
+        bool normalsFromUV = false,
+        const Bnd_Box* deflectionBounds = nullptr
     );
 
     static void setupCoinGeometry(
@@ -253,6 +256,12 @@ private:
 
     // shape that was last rendered so if it does not change we don't re-render it without need
     TopoDS_Shape lastRenderedShape;
+
+    // G05 slice 3b: the shape whose display triangulation was dropped after its last mesh, and its
+    // bounds taken with that triangulation present, so the next mesh of the same shape requests
+    // the deflection stock would (stock's bounds read the triangulation it leaves on the shape)
+    TopoDS_Shape droppedShape;
+    Bnd_Box droppedBounds;
 };
 
 }  // namespace PartGui
