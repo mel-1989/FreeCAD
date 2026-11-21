@@ -12,6 +12,7 @@ import zipfile
 
 import FreeCAD
 import FreeCADGui
+import Part
 import PartGui
 
 PREF = "User parameter:BaseApp/Preferences/Mod/Part/General"
@@ -143,3 +144,39 @@ class StoredTessellationGuiTest(unittest.TestCase):
                 zout.writestr(item.filename, data)
         self.doc = self._open(os.path.join(self.tmp, "mixed.FCStd"))
         self.assertEqual(_stats(self.doc), ([], sorted(NAMES)))
+
+    def testRequestedDeflectionIsStocks(self):
+        # a shape already carrying a triangulation gets the deflection stock computes: bounds
+        # taken with the triangulation (tighter than the B-spline pole hull here), so the same
+        # surface meshes finer than a bare copy of it (162 against 97 points on fork/main)
+        from pivy import coin
+
+        V = FreeCAD.Vector
+        poles = [[V(10 * i, 10 * j, 80 if i in (1, 2) and j in (1, 2) else 0) for j in range(4)] for i in range(4)]
+        mults = [4, 4]
+        knots = [0.0, 1.0]
+
+        def points(name, triangulated):
+            surface = Part.BSplineSurface()
+            surface.buildFromPolesMultsKnots(poles, mults, mults, knots, knots, False, False, 3, 3)
+            shape = surface.toShape()
+            if triangulated:
+                shape.tessellate(0.1)
+            doc = FreeCAD.newDocument("StoredTessDefl" + name)
+            try:
+                obj = doc.addObject("Part::Feature", name)
+                obj.ViewObject.Deviation = 2.0
+                obj.ViewObject.AngularDeflection = 180
+                obj.ViewObject.Visibility = True
+                obj.Shape = shape
+                doc.recompute()
+                sa = coin.SoSearchAction()
+                sa.setType(coin.SoCoordinate3.getClassTypeId())
+                sa.setInterest(coin.SoSearchAction.FIRST)
+                sa.apply(obj.ViewObject.RootNode)
+                return sa.getPath().getTail().point.getNum()
+            finally:
+                FreeCAD.closeDocument(doc.Name)
+
+        self.assertEqual(points("Tri", True), 162)
+        self.assertEqual(points("Bare", False), 97)

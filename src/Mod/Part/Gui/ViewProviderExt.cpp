@@ -1056,14 +1056,11 @@ void ViewProviderPartExt::unsetEdit(int ModNum)
 namespace
 {
 
-/// The deflection the view provider asks OCCT for. The bounds ignore any triangulation the
-/// shape carries so the value is the same for a freshly restored shape and a meshed one.
+/// The deflection the view provider asks OCCT for: exactly what stock computes, from the shape
+/// as it is (BRepBndLib::Add uses a triangulation when the shape carries one).
 Standard_Real requestedDeflection(const TopoDS_Shape& shape, double deviation)
 {
-    Bnd_Box bounds;
-    BRepBndLib::Add(shape, bounds, Standard_False);
-    bounds.SetGap(0.0);
-    return Part::Tools::getDeflection(bounds, deviation);
+    return Part::Tools::getDeflection(shape, deviation);
 }
 
 Standard_Real effectiveDeflection(Standard_Real deflection)
@@ -1773,11 +1770,16 @@ void ViewProviderPartExt::updateVisual()
         );
         if (pcObject && pcObject->getDocument() && pcObject->getNameInDocument()) {
             auto& stats = tessellationStats();
-            (reuse ? stats.used : stats.meshed)
-                .emplace_back(
-                    std::string(pcObject->getDocument()->getName()) + "."
-                    + pcObject->getNameInDocument()
-                );
+            auto& list = reuse ? stats.used : stats.meshed;
+            // keep the last 100,000 names only
+            constexpr std::size_t maxNames = 100000;
+            if (list.size() >= maxNames) {
+                list.erase(list.begin(), list.begin() + (list.size() - maxNames + 1));
+            }
+            list.emplace_back(
+                std::string(pcObject->getDocument()->getName()) + "."
+                + pcObject->getNameInDocument()
+            );
         }
         if (!reuse) {
             recordTessellationKey(shape);
